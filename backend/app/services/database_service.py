@@ -58,7 +58,7 @@ class DatabaseService:
                 if key == 'ssh_config_id' and val is not None:
                     val = int(val)
                 setattr(conn, key, val)
-        if 'password' in data:
+        if 'password' in data and data['password']:
             conn.set_password(data['password'])
         db.session.commit()
         logger.info(f"更新数据库连接: {conn.name}")

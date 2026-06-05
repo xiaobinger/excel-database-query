@@ -1,7 +1,6 @@
 version: '3.8'
 
 services:
-  # ==================== 后端服务 ====================
   backend:
     build:
       context: .
@@ -30,23 +29,6 @@ services:
     networks:
       - app-network
 
-  # ==================== 前端服务 ====================
-  frontend:
-    image: nginx:alpine
-    container_name: excel-query-frontend
-    restart: unless-stopped
-    ports:
-      - "80:80"
-    volumes:
-      - ./frontend/dist:/usr/share/nginx/html:ro
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-    depends_on:
-      backend:
-        condition: service_healthy
-    networks:
-      - app-network
-
-# ==================== 数据卷 ====================
 volumes:
   upload_data:
     driver: local
@@ -57,7 +39,6 @@ volumes:
   ssh_key_data:
     driver: local
 
-# ==================== 网络 ====================
 networks:
   app-network:
     driver: bridge

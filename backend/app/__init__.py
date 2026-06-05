@@ -52,13 +52,19 @@ def create_app(config_name='default'):
 
 
 def _setup_logging(app):
+    from logging.handlers import TimedRotatingFileHandler
+
     log_dir = app.config.get('LOG_FOLDER', 'logs')
     os.makedirs(log_dir, exist_ok=True)
 
     log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     log_file = os.path.join(log_dir, 'app.log')
 
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    # 按天分割日志，保留30天
+    file_handler = TimedRotatingFileHandler(
+        log_file, when='midnight', interval=1, backupCount=30, encoding='utf-8'
+    )
+    file_handler.suffix = '%Y-%m-%d.log'
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(logging.Formatter(log_format))
 

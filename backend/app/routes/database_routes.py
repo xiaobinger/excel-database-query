@@ -31,9 +31,12 @@ def create_database():
     if not data:
         return jsonify({'success': False, 'message': '请求数据为空'}), 400
 
-    required = ['name', 'host', 'database_name', 'username', 'password']
+    required = ['name', 'host', 'database_name', 'username']
+    ssh_enabled = data.get('ssh_enabled', False)
+    if not ssh_enabled:
+        required.append('password')
     for field in required:
-        if field not in data:
+        if field not in data or not str(data[field]).strip():
             return jsonify({'success': False, 'message': f'缺少必填字段: {field}'}), 400
 
     try:

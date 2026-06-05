@@ -1,7 +1,7 @@
 import logging
 from typing import Optional, Dict, Any, List, Tuple
 from sqlalchemy import create_engine, text, pool
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, URL
 from sqlalchemy.exc import SQLAlchemyError
 import time
 from contextlib import contextmanager
@@ -55,6 +55,8 @@ class DatabaseConnector:
             else:
                 raise ValueError(f"不支持的数据库类型: {db_type}")
             
+            logger.info(f"数据库连接配置: type={db_type}, host={self.config.get('host')}, port={self.config.get('port')}, database={self.config.get('database')}")
+            
             self.engine = create_engine(
                 connection_string,
                 pool_size=self.connection_pool_size,
@@ -63,7 +65,7 @@ class DatabaseConnector:
                 pool_recycle=3600,
                 echo=False
             )
-            logger.info(f"成功连接到 {db_type} 数据库{' (通过SSH隧道)' if self.ssh_enabled else ''}")
+            logger.info(f"成功创建 {db_type} 数据库引擎{' (通过SSH隧道)' if self.ssh_enabled else ''}")
             
         except Exception as e:
             logger.error(f"数据库连接失败: {str(e)}")
@@ -140,20 +142,29 @@ class DatabaseConnector:
                 self.ssh_tunnel = None
     
     def _build_mysql_connection_string(self) -> str:
-        """构建 MySQL 连接字符串"""
-        return (
-            f"mysql+pymysql://{self.config['username']}:{self.config['password']}"
-            f"@{self.config['host']}:{self.config.get('port', 3306)}"
-            f"/{self.config['database']}?charset=utf8mb4"
+        """构建 MySQL 连接字符串，使用 URL.create 避免 special characters 导致解析错误"""
+        url = URL.create(
+            drivername="mysql+pymysql",
+            username=self.config['username'],
+            password=self.config['password'],
+            host=self.config['host'],
+            port=int(self.config.get('port', 3306)),
+            database=self.config['database'],
+            query={"charset": "utf8mb4"}
         )
+        return str(url)
     
     def _build_postgresql_connection_string(self) -> str:
         """构建 PostgreSQL 连接字符串"""
-        return (
-            f"postgresql+psycopg2://{self.config['username']}:{self.config['password']}"
-            f"@{self.config['host']}:{self.config.get('port', 5432)}"
-            f"/{self.config['database']}"
+        url = URL.create(
+            drivername="postgresql+psycopg2",
+            username=self.config['username'],
+            password=self.config['password'],
+            host=self.config['host'],
+            port=int(self.config.get('port', 5432)),
+            database=self.config['database']
         )
+        return str(url)
     
     def _build_sqlite_connection_string(self) -> str:
         """构建 SQLite 连接字符串"""
@@ -163,19 +174,28 @@ class DatabaseConnector:
     def _build_sqlserver_connection_string(self) -> str:
         """构建 SQL Server 连接字符串"""
         driver = self.config.get('driver', 'ODBC Driver 17 for SQL Server')
-        return (
-            f"mssql+pyodbc://{self.config['username']}:{self.config['password']}"
-            f"@{self.config['host']}:{self.config.get('port', 1433)}"
-            f"/{self.config['database']}?driver={driver}"
+        url = URL.create(
+            drivername="mssql+pyodbc",
+            username=self.config['username'],
+            password=self.config['password'],
+            host=self.config['host'],
+            port=int(self.config.get('port', 1433)),
+            database=self.config['database'],
+            query={"driver": driver}
         )
+        return str(url)
     
     def _build_oracle_connection_string(self) -> str:
         """构建 Oracle 连接字符串"""
-        return (
-            f"oracle+cx_oracle://{self.config['username']}:{self.config['password']}"
-            f"@{self.config['host']}:{self.config.get('port', 1521)}"
-            f"/?service_name={self.config['database']}"
+        url = URL.create(
+            drivername="oracle+cx_oracle",
+            username=self.config['username'],
+            password=self.config['password'],
+            host=self.config['host'],
+            port=int(self.config.get('port', 1521)),
+            query={"service_name": self.config['database']}
         )
+        return str(url)
     
     @contextmanager
     def get_connection(self):

@@ -341,6 +341,16 @@ const dbRules = {
   port: [{ required: true, message: '请输入端口', trigger: 'blur' }],
   database_name: [{ required: true, message: '请输入数据库名', trigger: 'blur' }],
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
+  password: [{
+    validator: (rule, value, callback) => {
+      if (!isDbEdit.value && !dbForm.ssh_enabled && !value) {
+        callback(new Error('不通过SSH连接时密码不能为空'))
+      } else {
+        callback()
+      }
+    },
+    trigger: 'blur'
+  }],
   ssh_config_id: [{
     validator: (rule, value, callback) => {
       if (dbForm.ssh_enabled && !value) {
