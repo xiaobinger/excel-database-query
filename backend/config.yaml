@@ -1,0 +1,41 @@
+server:
+  host: "0.0.0.0"
+  port: 5000
+  debug: true
+
+database:
+  host: "192.168.10.204"
+  port: 3306
+  name: "excel_query_db"
+  username: "root"
+  password: "123456"
+  charset: "utf8mb4"
+  pool_size: 5
+  max_overflow: 10
+  pool_recycle: 3600
+
+security:
+  secret_key: "excel-query-secret-key-2024"
+  jwt_secret_key: "excel-query-jwt-secret-key-2024"
+  encryption_key: "your-encryption-key-32-bytes-long!"
+
+storage:
+  upload_folder: "./uploads"
+  output_folder: "./outputs"
+  log_folder: "./logs"
+  max_content_length_mb: 50
+  file_retention_hours: 24
+
+logging:
+  level: "INFO"
+
+smart_match:
+  enabled: true
+  direct: true
+  rules:
+    - filename_keywords: ["中付"]
+      script_tags: ["融付商户通","融聚金宝"]
+      default_param_column: ["中付"]
+    - filename_keywords: ["续费","交易明细","流量卡交易数据"]
+      script_tags: ["交易匹配"]
+      default_param_column: ["SN"]

@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# 环境变量
+.env
+.env.local
+.env.production
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 日志
+logs/
+*.log
+
+# 上传文件和结果
+uploads/
+results/
+
+# 数据库
+*.db
+*.sqlite3
+
+# SSH 密钥
+config/ssh_keys/
+
+# Docker
+docker-compose.override.yml
+
+# Node.js
+node_modules/
+frontend/dist/
+frontend/.nuxt/
+frontend/.output/
+
+# 临时文件
+*.tmp
+*.bak
+*.cache
+
+# Trae
+.trae/

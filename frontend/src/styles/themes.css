@@ -1,0 +1,374 @@
+:root,
+[data-theme="default"] {
+  --primary-color: #409eff;
+  --primary-light: #66b1ff;
+  --primary-dark: #3a8ee6;
+  --sidebar-bg: #1d1e1f;
+  --sidebar-text: #bfcbd9;
+  --sidebar-active: #409eff;
+  --header-bg: #ffffff;
+  --main-bg: #f5f7fa;
+  --card-bg: #ffffff;
+  --text-primary: #303133;
+  --text-secondary: #606266;
+  --text-muted: #909399;
+  --border-color: #dcdfe6;
+  --table-header-bg: #f5f7fa;
+  --logo-icon-color: #409eff;
+  --user-avatar-bg: #66b1ff;
+  --el-color-primary: #409eff;
+  --el-color-primary-light-3: #79bbff;
+  --el-color-primary-light-5: #a0cfff;
+  --el-color-primary-light-7: #c6e2ff;
+  --el-color-primary-light-8: #d9ecff;
+  --el-color-primary-light-9: #ecf5ff;
+  --el-color-primary-dark-2: #337ecc;
+}
+
+[data-theme="pink"] {
+  --primary-color: #f472b6;
+  --primary-light: #f9a8d4;
+  --primary-dark: #ec4899;
+  --sidebar-bg: #4a1942;
+  --sidebar-text: #e8b4d8;
+  --sidebar-active: #f472b6;
+  --header-bg: #fff0f6;
+  --main-bg: #fdf2f8;
+  --card-bg: #ffffff;
+  --text-primary: #4a1942;
+  --text-secondary: #831843;
+  --text-muted: #be185d;
+  --border-color: #fbcfe8;
+  --table-header-bg: #fce7f3;
+  --logo-icon-color: #f472b6;
+  --user-avatar-bg: #f9a8d4;
+  --el-color-primary: #f472b6;
+  --el-color-primary-light-3: #f9a8d4;
+  --el-color-primary-light-5: #fbcfe8;
+  --el-color-primary-light-7: #fce7f3;
+  --el-color-primary-light-8: #fdf2f8;
+  --el-color-primary-light-9: #fff0f6;
+  --el-color-primary-dark-2: #ec4899;
+}
+
+[data-theme="orange"] {
+  --primary-color: #f97316;
+  --primary-light: #fb923c;
+  --primary-dark: #ea580c;
+  --sidebar-bg: #431407;
+  --sidebar-text: #fdba74;
+  --sidebar-active: #f97316;
+  --header-bg: #fffbf5;
+  --main-bg: #fff8f0;
+  --card-bg: #ffffff;
+  --text-primary: #431407;
+  --text-secondary: #9a3412;
+  --text-muted: #c2410c;
+  --border-color: #fed7aa;
+  --table-header-bg: #ffedd5;
+  --logo-icon-color: #f97316;
+  --user-avatar-bg: #fb923c;
+  --el-color-primary: #f97316;
+  --el-color-primary-light-3: #fb923c;
+  --el-color-primary-light-5: #fdba74;
+  --el-color-primary-light-7: #fed7aa;
+  --el-color-primary-light-8: #ffedd5;
+  --el-color-primary-light-9: #fff8f0;
+  --el-color-primary-dark-2: #ea580c;
+}
+
+[data-theme="dark"] {
+  --primary-color: #818cf8;
+  --primary-light: #a5b4fc;
+  --primary-dark: #6366f1;
+  --sidebar-bg: #0f0f14;
+  --sidebar-text: #a5a6b8;
+  --sidebar-active: #818cf8;
+  --header-bg: #1a1a24;
+  --main-bg: #121218;
+  --card-bg: #1a1a24;
+  --text-primary: #e5e5f0;
+  --text-secondary: #a5a6b8;
+  --text-muted: #6b6b80;
+  --border-color: #2a2a3a;
+  --table-header-bg: #222233;
+  --logo-icon-color: #818cf8;
+  --user-avatar-bg: #6366f1;
+  --el-color-primary: #818cf8;
+  --el-color-primary-light-3: #a5b4fc;
+  --el-color-primary-light-5: #c7d2fe;
+  --el-color-primary-light-7: #ddd6fe;
+  --el-color-primary-light-8: #ede9fe;
+  --el-color-primary-light-9: #1e1e2e;
+  --el-color-primary-dark-2: #6366f1;
+  --el-bg-color: #1a1a24;
+  --el-bg-color-overlay: #222233;
+  --el-bg-color-page: #121218;
+  --el-text-color-primary: #e5e5f0;
+  --el-text-color-regular: #a5a6b8;
+  --el-text-color-secondary: #8b8ba0;
+  --el-text-color-placeholder: #6b6b80;
+  --el-border-color: #2a2a3a;
+  --el-border-color-light: #333345;
+  --el-border-color-lighter: #2a2a3a;
+  --el-fill-color-blank: #1a1a24;
+  --el-fill-color-light: #222233;
+  --el-mask-color: rgba(0,0,0,0.6);
+  --el-dialog-bg-color: #1a1a24;
+  --el-card-bg-color: #1a1a24;
+}
+
+[data-theme="green"] {
+  --primary-color: #22c55e;
+  --primary-light: #4ade80;
+  --primary-dark: #16a34a;
+  --sidebar-bg: #14261a;
+  --sidebar-text: #86efac;
+  --sidebar-active: #22c55e;
+  --header-bg: #f7fdf9;
+  --main-bg: #f0fdf4;
+  --card-bg: #ffffff;
+  --text-primary: #14261a;
+  --text-secondary: #166534;
+  --text-muted: #15803d;
+  --border-color: #bbf7d0;
+  --table-header-bg: #dcfce7;
+  --logo-icon-color: #22c55e;
+  --user-avatar-bg: #4ade80;
+  --el-color-primary: #22c55e;
+  --el-color-primary-light-3: #4ade80;
+  --el-color-primary-light-5: #86efac;
+  --el-color-primary-light-7: #bbf7d0;
+  --el-color-primary-light-8: #dcfce7;
+  --el-color-primary-light-9: #f0fdf4;
+  --el-color-primary-dark-2: #16a34a;
+}
+
+/* ===== 场景系主题 ===== */
+
+/* 学院系 - 牛津蓝+金色，庄重典雅的学院风 */
+[data-theme="academy"] {
+  --primary-color: #1d4ed8;
+  --primary-light: #3b82f6;
+  --primary-dark: #1e40af;
+  --sidebar-bg: #1e293b;
+  --sidebar-text: #cbd5e1;
+  --sidebar-active: #f59e0b;
+  --header-bg: rgba(255,254,245,0.92);
+  --main-bg: #f8f9fc;
+  --card-bg: rgba(255,255,255,0.92);
+  --text-primary: #1e293b;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --border-color: #e2e8f0;
+  --table-header-bg: rgba(241,245,249,0.92);
+  --logo-icon-color: #f59e0b;
+  --user-avatar-bg: #3b82f6;
+  --scene-bg: url('/themes/academy.jpg');
+  --el-color-primary: #1d4ed8;
+  --el-color-primary-light-3: #3b82f6;
+  --el-color-primary-light-5: #93c5fd;
+  --el-color-primary-light-7: #bfdbfe;
+  --el-color-primary-light-8: #dbeafe;
+  --el-color-primary-light-9: #eff6ff;
+  --el-color-primary-dark-2: #1e40af;
+}
+
+/* 户外风景系 - 天空蓝+草地绿，清新自然 */
+[data-theme="nature"] {
+  --primary-color: #0ea5e9;
+  --primary-light: #38bdf8;
+  --primary-dark: #0284c7;
+  --sidebar-bg: #134e4a;
+  --sidebar-text: #99f6e4;
+  --sidebar-active: #2dd4bf;
+  --header-bg: rgba(240,253,250,0.92);
+  --main-bg: #ecfdf5;
+  --card-bg: rgba(255,255,255,0.92);
+  --text-primary: #134e4a;
+  --text-secondary: #115e59;
+  --text-muted: #0f766e;
+  --border-color: #a7f3d0;
+  --table-header-bg: rgba(209,250,229,0.92);
+  --logo-icon-color: #0ea5e9;
+  --user-avatar-bg: #2dd4bf;
+  --scene-bg: url('/themes/nature.jpg');
+  --el-color-primary: #0ea5e9;
+  --el-color-primary-light-3: #38bdf8;
+  --el-color-primary-light-5: #7dd3fc;
+  --el-color-primary-light-7: #bae6fd;
+  --el-color-primary-light-8: #e0f2fe;
+  --el-color-primary-light-9: #f0f9ff;
+  --el-color-primary-dark-2: #0284c7;
+}
+
+/* 赛博科技系 - 霓虹紫+青色，未来科技感 */
+[data-theme="cyber"] {
+  --primary-color: #a855f7;
+  --primary-light: #c084fc;
+  --primary-dark: #9333ea;
+  --sidebar-bg: #0c0a1a;
+  --sidebar-text: #a78bfa;
+  --sidebar-active: #06b6d4;
+  --header-bg: rgba(26,16,48,0.92);
+  --main-bg: #0f0a1e;
+  --card-bg: rgba(26,16,48,0.92);
+  --text-primary: #e9d5ff;
+  --text-secondary: #c4b5fd;
+  --text-muted: #7c3aed;
+  --border-color: #3b1f6e;
+  --table-header-bg: rgba(35,21,72,0.92);
+  --logo-icon-color: #06b6d4;
+  --user-avatar-bg: #a855f7;
+  --scene-bg: url('/themes/cyber.jpg');
+  --el-color-primary: #a855f7;
+  --el-color-primary-light-3: #c084fc;
+  --el-color-primary-light-5: #d8b4fe;
+  --el-color-primary-light-7: #ede9fe;
+  --el-color-primary-light-8: #1a1030;
+  --el-color-primary-light-9: #0f0a1e;
+  --el-color-primary-dark-2: #9333ea;
+  --el-bg-color: rgba(26,16,48,0.92);
+  --el-bg-color-overlay: rgba(35,21,72,0.95);
+  --el-bg-color-page: #0f0a1e;
+  --el-text-color-primary: #e9d5ff;
+  --el-text-color-regular: #c4b5fd;
+  --el-text-color-secondary: #a78bfa;
+  --el-text-color-placeholder: #7c3aed;
+  --el-border-color: #3b1f6e;
+  --el-border-color-light: #4c2885;
+  --el-border-color-lighter: #3b1f6e;
+  --el-fill-color-blank: rgba(26,16,48,0.92);
+  --el-fill-color-light: rgba(35,21,72,0.9);
+  --el-mask-color: rgba(0,0,0,0.7);
+  --el-dialog-bg-color: rgba(26,16,48,0.95);
+  --el-card-bg-color: rgba(26,16,48,0.92);
+}
+
+/* 办公室系 - 沉稳灰蓝，专业商务 */
+[data-theme="office"] {
+  --primary-color: #475569;
+  --primary-light: #64748b;
+  --primary-dark: #334155;
+  --sidebar-bg: #1e293b;
+  --sidebar-text: #94a3b8;
+  --sidebar-active: #3b82f6;
+  --header-bg: rgba(255,255,255,0.92);
+  --main-bg: #f1f5f9;
+  --card-bg: rgba(255,255,255,0.92);
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --border-color: #cbd5e1;
+  --table-header-bg: rgba(226,232,240,0.92);
+  --logo-icon-color: #3b82f6;
+  --user-avatar-bg: #64748b;
+  --scene-bg: url('/themes/office.jpg');
+  --el-color-primary: #475569;
+  --el-color-primary-light-3: #64748b;
+  --el-color-primary-light-5: #94a3b8;
+  --el-color-primary-light-7: #cbd5e1;
+  --el-color-primary-light-8: #e2e8f0;
+  --el-color-primary-light-9: #f1f5f9;
+  --el-color-primary-dark-2: #334155;
+}
+
+/* 卧室系 - 暖棕+柔光，温馨舒适 */
+[data-theme="bedroom"] {
+  --primary-color: #d97706;
+  --primary-light: #f59e0b;
+  --primary-dark: #b45309;
+  --sidebar-bg: #292524;
+  --sidebar-text: #d6d3d1;
+  --sidebar-active: #f59e0b;
+  --header-bg: rgba(255,251,235,0.92);
+  --main-bg: #fef7ed;
+  --card-bg: rgba(255,251,240,0.92);
+  --text-primary: #292524;
+  --text-secondary: #44403c;
+  --text-muted: #78716c;
+  --border-color: #e7e5e4;
+  --table-header-bg: rgba(245,240,235,0.92);
+  --logo-icon-color: #d97706;
+  --user-avatar-bg: #f59e0b;
+  --scene-bg: url('/themes/bedroom.jpg');
+  --el-color-primary: #d97706;
+  --el-color-primary-light-3: #f59e0b;
+  --el-color-primary-light-5: #fbbf24;
+  --el-color-primary-light-7: #fde68a;
+  --el-color-primary-light-8: #fef3c7;
+  --el-color-primary-light-9: #fffbeb;
+  --el-color-primary-dark-2: #b45309;
+}
+
+/* 书房系 - 墨绿+古铜，沉静文雅 */
+[data-theme="study"] {
+  --primary-color: #6b7280;
+  --primary-light: #9ca3af;
+  --primary-dark: #4b5563;
+  --sidebar-bg: #1c1917;
+  --sidebar-text: #a8a29e;
+  --sidebar-active: #a16207;
+  --header-bg: rgba(250,248,245,0.92);
+  --main-bg: #f5f0eb;
+  --card-bg: rgba(253,252,250,0.92);
+  --text-primary: #1c1917;
+  --text-secondary: #44403c;
+  --text-muted: #78716c;
+  --border-color: #d6d3d1;
+  --table-header-bg: rgba(231,229,228,0.92);
+  --logo-icon-color: #a16207;
+  --user-avatar-bg: #9ca3af;
+  --scene-bg: url('/themes/study.jpg');
+  --el-color-primary: #6b7280;
+  --el-color-primary-light-3: #9ca3af;
+  --el-color-primary-light-5: #d1d5db;
+  --el-color-primary-light-7: #e5e7eb;
+  --el-color-primary-light-8: #f3f4f6;
+  --el-color-primary-light-9: #f9fafb;
+  --el-color-primary-dark-2: #4b5563;
+}
+
+/* ===== 场景主题背景图 ===== */
+[data-theme="academy"] .layout-main,
+[data-theme="nature"] .layout-main,
+[data-theme="cyber"] .layout-main,
+[data-theme="office"] .layout-main,
+[data-theme="bedroom"] .layout-main,
+[data-theme="study"] .layout-main {
+  background-image: var(--scene-bg);
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+  position: relative;
+}
+
+/* 场景主题背景半透明遮罩，确保内容可读 */
+[data-theme="academy"] .layout-main::before,
+[data-theme="nature"] .layout-main::before,
+[data-theme="cyber"] .layout-main::before,
+[data-theme="office"] .layout-main::before,
+[data-theme="bedroom"] .layout-main::before,
+[data-theme="study"] .layout-main::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--main-bg);
+  opacity: 0.88;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* 场景主题内容层级提升到遮罩之上 */
+[data-theme="academy"] .layout-main > *,
+[data-theme="nature"] .layout-main > *,
+[data-theme="cyber"] .layout-main > *,
+[data-theme="office"] .layout-main > *,
+[data-theme="bedroom"] .layout-main > *,
+[data-theme="study"] .layout-main > * {
+  position: relative;
+  z-index: 1;
+}
