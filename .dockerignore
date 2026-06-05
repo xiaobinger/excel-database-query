@@ -1,0 +1,7 @@
+.git
+frontend/node_modules
+backend/logs
+backend/uploads
+backend/outputs
+*.md
+.env
