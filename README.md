@@ -145,9 +145,6 @@ pip install -r requirements.txt
 # 修改配置
 # 编辑 config.yaml，配置数据库连接、密钥等
 
-# 初始化数据（首次运行）
-python seed_data.py
-
 # 启动服务
 python run.py
 ```
@@ -204,12 +201,12 @@ smart_match:
   enabled: true
   direct: false          # true时匹配到直接执行并下载，不弹窗确认
   rules:
-    - filename_keywords: ["中付"]
-      script_tags: ["融付商户通","融聚金宝"]
-      default_param_column: ["中付"]
-    - filename_keywords: ["续费","交易明细"]
-      script_tags: ["交易匹配"]
-      default_param_column: ["SN"]
+      #匹配上传文件名中的关键词
+    - filename_keywords: [""]
+      # 匹配的查询选项标签
+      script_tags: [""]
+      # 默认参数列名
+      default_param_column: [""]
 ```
 
 ## SQL模板功能
