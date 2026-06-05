@@ -33,7 +33,7 @@ desktop.ini
 
 # 日志
 logs/
-*.log
+*.log我司
 
 # 上传文件和结果
 uploads/

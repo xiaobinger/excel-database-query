@@ -1,113 +1,63 @@
 version: '3.8'
 
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: excel-query-mysql
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
-      MYSQL_DATABASE: excel_query_db
-      MYSQL_CHARACTER_SET_SERVER: utf8mb4
-      MYSQL_COLLATION_SERVER: utf8mb4_unicode_ci
-    ports:
-      - "3306:3306"
-    volumes:
-      - mysql_data:/var/lib/mysql
-      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
-    command: --default-authentication-plugin=mysql_native_password
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - excel-query-net
-
-  redis:
-    image: redis:7-alpine
-    container_name: excel-query-redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - excel-query-net
-
+  # ==================== 后端服务 ====================
   backend:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: excel-query-backend
     restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      - DB_HOST=mysql
-      - DB_PORT=3306
-      - DB_NAME=excel_query_db
-      - DB_USER=root
-      - DB_PASSWORD=${MYSQL_ROOT_PASSWORD:-root123}
     ports:
       - "5000:5000"
     volumes:
-      - ./uploads:/app/uploads
-      - ./results:/app/results
-      - ./logs:/app/logs
-      - ./config/ssh_keys:/app/config/ssh_keys
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - ./backend/config.yaml:/app/config.yaml:ro
+      - upload_data:/app/uploads
+      - output_data:/app/results
+      - log_data:/app/logs
+      - ssh_key_data:/app/config/ssh_keys
+    environment:
+      - FLASK_ENV=production
+      - CONFIG_FILE=/app/config.yaml
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
     networks:
-      - excel-query-net
+      - app-network
 
+  # ==================== 前端服务 ====================
   frontend:
-    image: node:18-alpine
-    container_name: excel-query-frontend
-    restart: unless-stopped
-    working_dir: /app
-    volumes:
-      - ./frontend:/app
-      - frontend_node_modules:/app/node_modules
-    ports:
-      - "3000:3000"
-    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
-    depends_on:
-      - backend
-    networks:
-      - excel-query-net
-
-  nginx:
     image: nginx:alpine
-    container_name: excel-query-nginx
+    container_name: excel-query-frontend
     restart: unless-stopped
     ports:
       - "80:80"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
-      - ./frontend/dist:/usr/share/nginx/html
+      - ./frontend/dist:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      - backend
-      - frontend
+      backend:
+        condition: service_healthy
     networks:
-      - excel-query-net
+      - app-network
 
+# ==================== 数据卷 ====================
 volumes:
-  mysql_data:
+  upload_data:
     driver: local
-  redis_data:
+  output_data:
     driver: local
-  frontend_node_modules:
+  log_data:
+    driver: local
+  ssh_key_data:
     driver: local
 
+# ==================== 网络 ====================
 networks:
-  excel-query-net:
+  app-network:
     driver: bridge
