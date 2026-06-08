@@ -83,10 +83,10 @@
                     style="width: 100%"
                   >
                     <el-option
-                      v-for="val in p.enum_values.filter(v => v)"
-                      :key="val"
-                      :label="val"
-                      :value="val"
+                      v-for="item in p.enum_values"
+                      :key="item.value"
+                      :label="item.label"
+                      :value="item.value"
                     />
                   </el-select>
                   <el-input
@@ -212,10 +212,10 @@
                         style="width: 100%"
                       >
                         <el-option
-                          v-for="val in p.enum_values.filter(v => v)"
-                          :key="val"
-                          :label="val"
-                          :value="val"
+                          v-for="item in p.enum_values"
+                          :key="item.value"
+                          :label="item.label"
+                          :value="item.value"
                         />
                       </el-select>
                       <el-input
