@@ -61,7 +61,7 @@ sleep 3
 # 启动前端
 echo "[启动] 前端服务..."
 cd "$FRONTEND_DIR"
-nohup node server.js > "$LOGS_DIR/frontend.log" 2>&1 &
+nohup npm run dev > "$LOGS_DIR/frontend.log" 2>&1 &
 FRONTEND_PID=$!
 echo "$FRONTEND_PID" > "$LOGS_DIR/frontend.pid"
 echo "[成功] 前端服务已启动 (PID: $FRONTEND_PID, http://localhost:3000)"
