@@ -265,6 +265,7 @@
                   <el-input v-model="param.label" placeholder="显示标签" size="small" style="flex: 1" />
                   <el-select v-model="param.type" placeholder="类型" size="small" style="width: 110px" @change="onParamTypeChange(param)">
                     <el-option value="text" label="文本" />
+                    <el-option value="number" label="数字" />
                     <el-option value="date" label="日期" />
                     <el-option value="datetime" label="日期时间" />
                   </el-select>
@@ -276,7 +277,7 @@
                 <div v-if="param.type === 'text'" class="param-row param-row-sub">
                   <el-checkbox v-model="param.multi" size="small" label="IN参数（支持多个值）" />
                 </div>
-                <div v-if="param.type === 'text'" class="param-row param-row-sub">
+                <div v-if="param.type === 'text' || param.type === 'number'" class="param-row param-row-sub">
                   <el-checkbox v-model="param.enum_enabled" size="small" label="枚举参数" />
                   <div v-if="param.enum_enabled" class="enum-config">
                     <div class="param-row param-row-sub" style="margin-top: 0">

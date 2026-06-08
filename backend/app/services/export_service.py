@@ -130,7 +130,8 @@ class ExportService:
 
                     script_params = dict(params_values) if params_values else {}
                     params_config = script.get_params_config()
-                    multi_params = {p['name'] for p in params_config if p.get('multi') and p.get('type') == 'text'}
+                    multi_params = {p['name'] for p in params_config if p.get('multi') and p.get('type') in ('text', 'number')}
+                    number_params = {p['name'] for p in params_config if p.get('type') == 'number'}
                     neq_params = {p['name']: p for p in params_config if p.get('enum_enabled') and p.get('enum_mode') == 'neq' and p.get('neq_value')}
                     allow_all_params = {p['name'] for p in params_config if p.get('enum_enabled') and p.get('allow_all')}
 
@@ -182,9 +183,10 @@ class ExportService:
                                 script_params[pname] = neq_val
                             else:
                                 # 勾选否：将 '= {{param}}' 整体替换为 '!= neq_val'
+                                neq_val_fmt = f"!= {neq_val}" if pname in number_params else f"!= '{neq_val}'"
                                 sql_text = re.sub(
                                     rf'=\s*\{{\{{\s*{re.escape(pname)}\s*\}}\}}\s*',
-                                    f"!= '{neq_val}'",
+                                    neq_val_fmt,
                                     sql_text
                                 )
                                 del script_params[pname]
@@ -198,11 +200,12 @@ class ExportService:
                             if not parts:
                                 continue
                             if len(parts) == 1:
-                                sql_text = sql_text.replace(f'{{{{{param_name}}}}}', f"'{parts[0]}'")
+                                fmt = f"'{parts[0]}'" if param_name not in number_params else parts[0]
+                                sql_text = sql_text.replace(f'{{{{{param_name}}}}}', fmt)
                                 if f':{param_name}' in sql_text:
                                     script_params[param_name] = parts[0]
                             else:
-                                quoted = ','.join(f"'{p}'" for p in parts)
+                                quoted = ','.join(f"'{p}'" for p in parts) if param_name not in number_params else ','.join(parts)
                                 sql_text = sql_text.replace(f'{{{{{param_name}}}}}', quoted)
                                 if f':{param_name}' in sql_text:
                                     bind_keys = [f':{param_name}_{i}' for i in range(len(parts))]
@@ -218,11 +221,14 @@ class ExportService:
                         placeholders = re.findall(r'\{\{(\w+)\}\}', sql_text)
                         for ph in placeholders:
                             if ph in script_params:
-                                val = str(script_params[ph])
-                                if val and not val.startswith("'"):
-                                    sql_text = sql_text.replace(f'{{{{{ph}}}}}', f"'{val}'")
+                                val = script_params[ph]
+                                val_str = str(val)
+                                if ph in number_params:
+                                    sql_text = sql_text.replace(f'{{{{{ph}}}}}', val_str)
+                                elif val_str and not val_str.startswith("'"):
+                                    sql_text = sql_text.replace(f'{{{{{ph}}}}}', f"'{val_str}'")
                                 else:
-                                    sql_text = sql_text.replace(f'{{{{{ph}}}}}', val)
+                                    sql_text = sql_text.replace(f'{{{{{ph}}}}}', val_str)
                         placeholders_remaining = re.findall(r'\{\{(\w+)\}\}', sql_text)
                         for ph in placeholders_remaining:
                             sql_text = sql_text.replace(f'{{{{{ph}}}}}', '')
