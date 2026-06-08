@@ -18,12 +18,6 @@ LOGS_DIR="$SCRIPT_DIR/logs"
 # 创建日志目录
 mkdir -p "$LOGS_DIR"
 
-# 检查Python
-if ! command -v python3 &> /dev/null; then
-    echo "[错误] 未找到Python3，请先安装Python 3.8+"
-    exit 1
-fi
-
 # 检查虚拟环境
 if [ ! -d "$VENV_DIR" ]; then
     echo "[首次启动] 创建Python虚拟环境..."
