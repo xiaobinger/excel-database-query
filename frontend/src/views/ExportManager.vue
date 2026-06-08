@@ -276,6 +276,22 @@
                 <div v-if="param.type === 'text'" class="param-row param-row-sub">
                   <el-checkbox v-model="param.multi" size="small" label="IN参数（支持多个值）" />
                 </div>
+                <div v-if="param.type === 'text'" class="param-row param-row-sub">
+                  <el-checkbox v-model="param.enum_enabled" size="small" label="枚举参数" />
+                  <div v-if="param.enum_enabled" class="enum-config">
+                    <div class="enum-values-list">
+                      <div v-for="(val, idx) in param.enum_values" :key="idx" class="enum-value-row">
+                        <el-input v-model="param.enum_values[idx]" placeholder="枚举值" size="small" style="flex: 1" />
+                        <el-button size="small" type="danger" text @click="param.enum_values.splice(idx, 1)">
+                          <i class="fas fa-times"></i>
+                        </el-button>
+                      </div>
+                    </div>
+                    <el-button size="small" type="primary" text @click="param.enum_values.push('')">
+                      <i class="fas fa-plus"></i> 添加枚举值
+                    </el-button>
+                  </div>
+                </div>
                 <div v-if="param.type === 'date' || param.type === 'datetime'" class="param-row param-row-sub">
                   <el-select v-model="param.date_format" placeholder="日期格式" size="small" style="width: 140px">
                     <el-option value="year" label="年" />
@@ -453,7 +469,9 @@ function addParam() {
     required: false,
     multi: false,
     range: false,
-    default_value: ''
+    default_value: '',
+    enum_enabled: false,
+    enum_values: []
   })
 }
 
@@ -782,6 +800,27 @@ onMounted(() => {
 
 .param-row-sub {
   margin-top: 8px;
+}
+
+.enum-config {
+  margin-top: 8px;
+  padding: 8px;
+  background: #f8fafc;
+  border: 1px solid #e4e7ed;
+  border-radius: 4px;
+}
+
+.enum-values-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.enum-value-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .dialog-footer {

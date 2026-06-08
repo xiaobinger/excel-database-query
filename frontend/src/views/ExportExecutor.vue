@@ -73,8 +73,24 @@
                   <el-tag v-if="p.required" size="small" type="danger" effect="plain">必填</el-tag>
                 </div>
                 <div class="param-item-control">
+                  <el-select
+                    v-if="p.enum_enabled && p.enum_values && p.enum_values.length > 0"
+                    v-model="sharedParamValues[p.name]"
+                    :multiple="p.multi"
+                    :collapse-tags="p.multi"
+                    :collapse-tags-tooltip="p.multi"
+                    placeholder="请选择"
+                    style="width: 100%"
+                  >
+                    <el-option
+                      v-for="val in p.enum_values.filter(v => v)"
+                      :key="val"
+                      :label="val"
+                      :value="val"
+                    />
+                  </el-select>
                   <el-input
-                    v-if="p.type === 'text'"
+                    v-else-if="p.type === 'text'"
                     v-model="sharedParamValues[p.name]"
                     :placeholder="p.multi ? '请输入多个值，以逗号分隔' : '请输入' + (p.label || p.name)"
                   />
@@ -186,8 +202,24 @@
                       <el-tag v-if="p.required" size="small" type="danger" effect="plain">必填</el-tag>
                     </div>
                     <div class="param-item-control">
+                      <el-select
+                        v-if="p.enum_enabled && p.enum_values && p.enum_values.length > 0"
+                        v-model="paramValues[scriptId][p.name]"
+                        :multiple="p.multi"
+                        :collapse-tags="p.multi"
+                        :collapse-tags-tooltip="p.multi"
+                        placeholder="请选择"
+                        style="width: 100%"
+                      >
+                        <el-option
+                          v-for="val in p.enum_values.filter(v => v)"
+                          :key="val"
+                          :label="val"
+                          :value="val"
+                        />
+                      </el-select>
                       <el-input
-                        v-if="p.type === 'text'"
+                        v-else-if="p.type === 'text'"
                         v-model="paramValues[scriptId][p.name]"
                         :placeholder="p.multi ? '请输入多个值，以逗号分隔' : '请输入' + (p.label || p.name)"
                       />
