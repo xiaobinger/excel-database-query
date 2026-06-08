@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import uuid
 import zipfile
 import threading
@@ -140,8 +141,12 @@ class ExportService:
                             if is_checked:
                                 script_params[pname] = neq_val
                             else:
-                                # 否：使用!=，值设为neq_val，SQL中用!=
-                                script_params[f'{pname}_neq'] = neq_val
+                                # 勾选否：将 '= {{param}}' 整体替换为 '!= neq_val'
+                                sql_text = re.sub(
+                                    rf'=\s*\{{\{{\s*{re.escape(pname)}\s*\}}\}}\s*',
+                                    f"!= '{neq_val}'",
+                                    sql_text
+                                )
                                 del script_params[pname]
 
                     if script_params:
@@ -179,10 +184,6 @@ class ExportService:
                                     sql_text = sql_text.replace(f'{{{{{ph}}}}}', f"'{val}'")
                                 else:
                                     sql_text = sql_text.replace(f'{{{{{ph}}}}}', val)
-                            elif f'{ph}_neq' in script_params:
-                                # 非即不等于参数：替换为 != 条件
-                                neq_val = script_params[f'{ph}_neq']
-                                sql_text = sql_text.replace(f'{{{{{ph}}}}}', f" AND `{ph}` != '{neq_val}'")
                         placeholders_remaining = re.findall(r'\{\{(\w+)\}\}', sql_text)
                         for ph in placeholders_remaining:
                             sql_text = sql_text.replace(f'{{{{{ph}}}}}', '')

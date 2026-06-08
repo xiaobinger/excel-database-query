@@ -724,7 +724,7 @@ function goToStep1() {
 
 async function goToStep2() {
   for (const p of sharedParams.value) {
-    if (p.required && !sharedParamValues[p.name] && !isNeqParam(p)) {
+    if (p.required && isMissingValue(p, sharedParamValues[p.name])) {
       ElMessage.warning(`请填写公共参数"${p.label || p.name}"`)
       return
     }
@@ -736,7 +736,7 @@ async function goToStep2() {
       return !merged || merged.scriptIds.length <= 1
     })
     for (const p of params) {
-      if (p.required && !paramValues[s.id]?.[p.name] && !isNeqParam(p)) {
+      if (p.required && isMissingValue(p, paramValues[s.id]?.[p.name])) {
         ElMessage.warning(`请填写导出选项"${s.name}"的参数"${p.label || p.name}"`)
         activeCollapse.value = s.id
         return
@@ -748,6 +748,12 @@ async function goToStep2() {
 
 function isNeqParam(p) {
   return p.enum_enabled && p.enum_mode === 'neq'
+}
+
+function isMissingValue(p, val) {
+  if (isNeqParam(p)) return false
+  if (p.enum_enabled && p.allow_all && val === '') return false
+  return !val
 }
 
 async function executeExport() {
