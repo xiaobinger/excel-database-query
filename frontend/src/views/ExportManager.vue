@@ -280,14 +280,14 @@
                   <el-checkbox v-model="param.enum_enabled" size="small" label="枚举参数" />
                   <div v-if="param.enum_enabled" class="enum-config">
                     <div class="enum-values-list">
-                      <div v-for="(val, idx) in param.enum_values" :key="idx" class="enum-value-row">
+                      <div v-for="(val, idx) in (param.enum_values || [])" :key="idx" class="enum-value-row">
                         <el-input v-model="param.enum_values[idx]" placeholder="枚举值" size="small" style="flex: 1" />
                         <el-button size="small" type="danger" text @click="param.enum_values.splice(idx, 1)">
                           <i class="fas fa-times"></i>
                         </el-button>
                       </div>
                     </div>
-                    <el-button size="small" type="primary" text @click="param.enum_values.push('')">
+                    <el-button size="small" type="primary" text @click="(param.enum_values = param.enum_values || []).push('')">
                       <i class="fas fa-plus"></i> 添加枚举值
                     </el-button>
                   </div>
