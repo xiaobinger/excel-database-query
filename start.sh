@@ -27,8 +27,7 @@ fi
 
 # 激活虚拟环境
 echo "[激活] Python虚拟环境: $VENV_DIR"
-cd "$VENV_DIR/bin"
-source activate
+. "$VENV_DIR/bin/activate"
 
 # 检查依赖
 if [ ! -f "$VENV_DIR/.deps_installed" ]; then
