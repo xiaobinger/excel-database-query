@@ -132,8 +132,48 @@ class ExportService:
                     params_config = script.get_params_config()
                     multi_params = {p['name'] for p in params_config if p.get('multi') and p.get('type') == 'text'}
                     neq_params = {p['name']: p for p in params_config if p.get('enum_enabled') and p.get('enum_mode') == 'neq' and p.get('neq_value')}
+                    allow_all_params = {p['name'] for p in params_config if p.get('enum_enabled') and p.get('allow_all')}
 
-                    # 处理非即不等于参数
+                    # 1. 先处理"全部"选项：智能移除WHERE条件
+                    for pname in allow_all_params:
+                        if pname not in script_params:
+                            # 匹配模式：column = {{param}} 或 column != {{param}}
+                            # 场景1: WHERE column = {{param}} → 整个WHERE去掉
+                            # 场景2: WHERE ... AND column = {{param}} → 去掉 AND ...
+                            # 场景3: WHERE column = {{param}} AND ... → 去掉 column = {{param}} AND
+                            col_pat = rf'`?{re.escape(pname)}`?'
+                            cond_pat = rf'({col_pat}\s*[=!]=\s*\{{\{{\s*{re.escape(pname)}\s*\}}\}}\s*)'
+                            
+                            # 场景A: 只有这一个WHERE条件
+                            sql_text = re.sub(
+                                rf'\bWHERE\s+{cond_pat}(?=\s*(?:;|$|GROUP|ORDER|LIMIT))',
+                                '',
+                                sql_text,
+                                flags=re.IGNORECASE
+                            )
+                            # 场景B: WHERE ... AND cond → 删AND cond
+                            sql_text = re.sub(
+                                rf'(?<=\bWHERE\b.*)\s+AND\s+{cond_pat}',
+                                '',
+                                sql_text,
+                                flags=re.IGNORECASE | re.DOTALL
+                            )
+                            # 场景C: WHERE cond AND ... → 删cond AND
+                            sql_text = re.sub(
+                                rf'(?<=\bWHERE\b)\s+{cond_pat}\s+AND\s+',
+                                ' ',
+                                sql_text,
+                                flags=re.IGNORECASE
+                            )
+                            # 场景D: 任意位置AND cond
+                            sql_text = re.sub(
+                                rf'\s+AND\s+{cond_pat}',
+                                '',
+                                sql_text,
+                                flags=re.IGNORECASE
+                            )
+
+                    # 2. 处理非即不等于参数（选是/否时替换=为!=）
                     for pname, pconf in neq_params.items():
                         if pname in script_params:
                             is_checked = script_params[pname]
@@ -148,16 +188,6 @@ class ExportService:
                                     sql_text
                                 )
                                 del script_params[pname]
-
-                    # 处理"全部"选项：参数值缺失时，移除整个 = {{param}} 筛选条件
-                    allow_all_params = {p['name'] for p in params_config if p.get('enum_enabled') and p.get('allow_all')}
-                    for pname in allow_all_params:
-                        if pname not in script_params:
-                            sql_text = re.sub(
-                                rf'=\s*\{{\{{\s*{re.escape(pname)}\s*\}}\}}\s*',
-                                '',
-                                sql_text
-                            )
 
                     if script_params:
                         for param_name in multi_params:
