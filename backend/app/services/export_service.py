@@ -149,8 +149,17 @@ class ExportService:
                                 )
                                 del script_params[pname]
 
+                    # 处理"全部"选项：参数值缺失时，移除整个 = {{param}} 筛选条件
+                    allow_all_params = {p['name'] for p in params_config if p.get('enum_enabled') and p.get('allow_all')}
+                    for pname in allow_all_params:
+                        if pname not in script_params:
+                            sql_text = re.sub(
+                                rf'=\s*\{{\{{\s*{re.escape(pname)}\s*\}}\}}\s*',
+                                '',
+                                sql_text
+                            )
+
                     if script_params:
-                        import re
                         for param_name in multi_params:
                             if param_name not in script_params:
                                 continue
