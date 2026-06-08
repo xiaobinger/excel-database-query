@@ -130,6 +130,19 @@ class ExportService:
                     script_params = dict(params_values) if params_values else {}
                     params_config = script.get_params_config()
                     multi_params = {p['name'] for p in params_config if p.get('multi') and p.get('type') == 'text'}
+                    neq_params = {p['name']: p for p in params_config if p.get('enum_enabled') and p.get('enum_mode') == 'neq' and p.get('neq_value')}
+
+                    # 处理非即不等于参数
+                    for pname, pconf in neq_params.items():
+                        if pname in script_params:
+                            is_checked = script_params[pname]
+                            neq_val = pconf.get('neq_value', '')
+                            if is_checked:
+                                script_params[pname] = neq_val
+                            else:
+                                # 否：使用!=，值设为neq_val，SQL中用!=
+                                script_params[f'{pname}_neq'] = neq_val
+                                del script_params[pname]
 
                     if script_params:
                         import re
@@ -166,6 +179,10 @@ class ExportService:
                                     sql_text = sql_text.replace(f'{{{{{ph}}}}}', f"'{val}'")
                                 else:
                                     sql_text = sql_text.replace(f'{{{{{ph}}}}}', val)
+                            elif f'{ph}_neq' in script_params:
+                                # 非即不等于参数：替换为 != 条件
+                                neq_val = script_params[f'{ph}_neq']
+                                sql_text = sql_text.replace(f'{{{{{ph}}}}}', f" AND `{ph}` != '{neq_val}'")
                         placeholders_remaining = re.findall(r'\{\{(\w+)\}\}', sql_text)
                         for ph in placeholders_remaining:
                             sql_text = sql_text.replace(f'{{{{{ph}}}}}', '')

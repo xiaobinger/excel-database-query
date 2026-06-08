@@ -279,7 +279,13 @@
                 <div v-if="param.type === 'text'" class="param-row param-row-sub">
                   <el-checkbox v-model="param.enum_enabled" size="small" label="枚举参数" />
                   <div v-if="param.enum_enabled" class="enum-config">
-                    <div class="enum-values-list">
+                    <div class="param-row param-row-sub" style="margin-top: 0">
+                      <el-radio-group v-model="param.enum_mode" size="small">
+                        <el-radio-button label="list">列表选择</el-radio-button>
+                        <el-radio-button label="neq">非即不等于</el-radio-button>
+                      </el-radio-group>
+                    </div>
+                    <div v-if="param.enum_mode === 'list'" class="enum-values-list">
                       <div v-for="(item, idx) in (param.enum_values || [])" :key="idx" class="enum-value-row">
                         <el-input v-model="item.label" placeholder="显示名称" size="small" style="flex: 1" />
                         <el-input v-model="item.value" placeholder="实际值" size="small" style="flex: 1" />
@@ -288,9 +294,17 @@
                         </el-button>
                       </div>
                     </div>
-                    <el-button size="small" type="primary" text @click="(param.enum_values = param.enum_values || []).push({ label: '', value: '' })">
-                      <i class="fas fa-plus"></i> 添加枚举值
-                    </el-button>
+                    <div v-if="param.enum_mode === 'list'" class="enum-config">
+                      <el-button size="small" type="primary" text @click="(param.enum_values = param.enum_values || []).push({ label: '', value: '' })">
+                        <i class="fas fa-plus"></i> 添加枚举值
+                      </el-button>
+                    </div>
+                    <div v-if="param.enum_mode === 'neq'" class="neq-config">
+                      <el-input v-model="param.neq_value" placeholder="等于时的值（如：1）" size="small" style="width: 200px" />
+                      <div style="margin-top: 8px; font-size: 12px; color: #909399">
+                        勾选"是"时值为该值，勾选"否"时值为该值取反（!=）
+                      </div>
+                    </div>
                   </div>
                 </div>
                 <div v-if="param.type === 'date' || param.type === 'datetime'" class="param-row param-row-sub">
@@ -472,7 +486,9 @@ function addParam() {
     range: false,
     default_value: '',
     enum_enabled: false,
-    enum_values: []
+    enum_mode: 'list',
+    enum_values: [],
+    neq_value: ''
   })
 }
 
@@ -822,6 +838,14 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.neq-config {
+  margin-top: 8px;
+  padding: 8px;
+  background: #f8fafc;
+  border: 1px solid #e4e7ed;
+  border-radius: 4px;
 }
 
 .dialog-footer {

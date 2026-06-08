@@ -73,8 +73,21 @@
                   <el-tag v-if="p.required" size="small" type="danger" effect="plain">必填</el-tag>
                 </div>
                 <div class="param-item-control">
+                  <template v-if="p.enum_enabled && p.enum_mode === 'neq' && p.neq_value">
+                    <div class="neq-param-control">
+                      <span class="neq-param-label">{{ p.label || p.name }} = </span>
+                      <span class="neq-param-value">{{ p.neq_value }}</span>
+                      <el-switch
+                        v-model="sharedParamValues[p.name]"
+                        active-text="是"
+                        inactive-text="否"
+                        active-color="#67c23a"
+                        inactive-color="#f56c6c"
+                      />
+                    </div>
+                  </template>
                   <el-select
-                    v-if="p.enum_enabled && p.enum_values && p.enum_values.length > 0"
+                    v-else-if="p.enum_enabled && p.enum_values && p.enum_values.length > 0"
                     v-model="sharedParamValues[p.name]"
                     :multiple="p.multi"
                     :collapse-tags="p.multi"
@@ -202,8 +215,21 @@
                       <el-tag v-if="p.required" size="small" type="danger" effect="plain">必填</el-tag>
                     </div>
                     <div class="param-item-control">
+                      <template v-if="p.enum_enabled && p.enum_mode === 'neq' && p.neq_value">
+                        <div class="neq-param-control">
+                          <span class="neq-param-label">{{ p.label || p.name }} = </span>
+                          <span class="neq-param-value">{{ p.neq_value }}</span>
+                          <el-switch
+                            v-model="paramValues[scriptId][p.name]"
+                            active-text="是"
+                            inactive-text="否"
+                            active-color="#67c23a"
+                            inactive-color="#f56c6c"
+                          />
+                        </div>
+                      </template>
                       <el-select
-                        v-if="p.enum_enabled && p.enum_values && p.enum_values.length > 0"
+                        v-else-if="p.enum_enabled && p.enum_values && p.enum_values.length > 0"
                         v-model="paramValues[scriptId][p.name]"
                         :multiple="p.multi"
                         :collapse-tags="p.multi"
@@ -1070,6 +1096,29 @@ onUnmounted(() => {
   padding: 20px 0;
   color: var(--text-muted, #909399);
   font-size: 14px;
+}
+
+.neq-param-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #f8fafc;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+}
+
+.neq-param-label {
+  font-size: 13px;
+  color: var(--text-regular, #606266);
+  font-weight: 500;
+}
+
+.neq-param-value {
+  font-size: 14px;
+  color: var(--text-primary, #303133);
+  font-weight: 600;
+  font-family: monospace;
 }
 
 .shared-params-section {
