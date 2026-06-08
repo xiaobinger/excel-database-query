@@ -42,29 +42,65 @@ class DatabaseConnector:
             if self.ssh_enabled:
                 self._setup_ssh_tunnel()
             
-            if db_type == 'mysql':
-                connection_string = self._build_mysql_connection_string()
-            elif db_type == 'postgresql':
-                connection_string = self._build_postgresql_connection_string()
-            elif db_type == 'sqlite':
-                connection_string = self._build_sqlite_connection_string()
-            elif db_type == 'sqlserver':
-                connection_string = self._build_sqlserver_connection_string()
-            elif db_type == 'oracle':
-                connection_string = self._build_oracle_connection_string()
-            else:
-                raise ValueError(f"不支持的数据库类型: {db_type}")
-            
             logger.info(f"数据库连接配置: type={db_type}, host={self.config.get('host')}, port={self.config.get('port')}, database={self.config.get('database')}")
             
-            self.engine = create_engine(
-                connection_string,
-                pool_size=self.connection_pool_size,
-                max_overflow=self.max_overflow,
-                pool_pre_ping=True,
-                pool_recycle=3600,
-                echo=False
-            )
+            if db_type == 'mysql':
+                # 使用creator直接创建pymysql连接
+                # 注意：ShardingSphere-Proxy等代理在握手阶段不接受database参数
+                # 策略：先不传database连接，连接成功后USE切换
+                import pymysql as _pymysql
+                _cfg = dict(self.config)
+                _db_name = _cfg.get('database', '')
+                
+                def _mysql_creator():
+                    kwargs = dict(
+                        host=_cfg['host'],
+                        port=int(_cfg.get('port', 3306)),
+                        user=_cfg['username'],
+                        password=_cfg.get('password', ''),
+                        charset='utf8mb4'
+                    )
+                    # 不传database参数，避免ShardingSphere-Proxy握手阶段报错
+                    conn = _pymysql.connect(**kwargs)
+                    # 连接成功后USE切换数据库
+                    if _db_name:
+                        try:
+                            with conn.cursor() as cur:
+                                cur.execute('USE `%s`' % _db_name)
+                        except Exception:
+                            pass  # 切换失败不影响，后续SQL会报错
+                    return conn
+                
+                self.engine = create_engine(
+                    "mysql+pymysql://",
+                    creator=_mysql_creator,
+                    pool_size=self.connection_pool_size,
+                    max_overflow=self.max_overflow,
+                    pool_pre_ping=True,
+                    pool_recycle=3600,
+                    echo=False
+                )
+            else:
+                if db_type == 'postgresql':
+                    connection_string = self._build_postgresql_connection_string()
+                elif db_type == 'sqlite':
+                    connection_string = self._build_sqlite_connection_string()
+                elif db_type == 'sqlserver':
+                    connection_string = self._build_sqlserver_connection_string()
+                elif db_type == 'oracle':
+                    connection_string = self._build_oracle_connection_string()
+                else:
+                    raise ValueError(f"不支持的数据库类型: {db_type}")
+                
+                self.engine = create_engine(
+                    connection_string,
+                    pool_size=self.connection_pool_size,
+                    max_overflow=self.max_overflow,
+                    pool_pre_ping=True,
+                    pool_recycle=3600,
+                    echo=False
+                )
+            
             logger.info(f"成功创建 {db_type} 数据库引擎{' (通过SSH隧道)' if self.ssh_enabled else ''}")
             
         except Exception as e:
