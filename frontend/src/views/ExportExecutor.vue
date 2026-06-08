@@ -724,7 +724,7 @@ function goToStep1() {
 
 async function goToStep2() {
   for (const p of sharedParams.value) {
-    if (p.required && !sharedParamValues[p.name]) {
+    if (p.required && !sharedParamValues[p.name] && !isNeqParam(p)) {
       ElMessage.warning(`请填写公共参数"${p.label || p.name}"`)
       return
     }
@@ -736,7 +736,7 @@ async function goToStep2() {
       return !merged || merged.scriptIds.length <= 1
     })
     for (const p of params) {
-      if (p.required && !paramValues[s.id]?.[p.name]) {
+      if (p.required && !paramValues[s.id]?.[p.name] && !isNeqParam(p)) {
         ElMessage.warning(`请填写导出选项"${s.name}"的参数"${p.label || p.name}"`)
         activeCollapse.value = s.id
         return
@@ -744,6 +744,10 @@ async function goToStep2() {
     }
   }
   currentStep.value = 2
+}
+
+function isNeqParam(p) {
+  return p.enum_enabled && p.enum_mode === 'neq'
 }
 
 async function executeExport() {
