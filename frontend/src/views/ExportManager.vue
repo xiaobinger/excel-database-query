@@ -304,6 +304,12 @@
                       <div style="margin-top: 8px; font-size: 12px; color: #909399">
                         勾选"是"时值为该值，勾选"否"时值为该值取反（!=）
                       </div>
+                      <div style="margin-top: 8px">
+                        <el-checkbox v-model="param.default_checked" size="small" label="默认勾选是" />
+                      </div>
+                    </div>
+                    <div style="margin-top: 8px">
+                      <el-checkbox v-model="param.allow_all" size="small" label="允许选择全部（不筛选）" />
                     </div>
                   </div>
                 </div>
@@ -488,7 +494,9 @@ function addParam() {
     enum_enabled: false,
     enum_mode: 'list',
     enum_values: [],
-    neq_value: ''
+    neq_value: '',
+    default_checked: false,
+    allow_all: false
   })
 }
 

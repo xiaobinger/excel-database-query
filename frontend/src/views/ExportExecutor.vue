@@ -75,15 +75,20 @@
                 <div class="param-item-control">
                   <template v-if="p.enum_enabled && p.enum_mode === 'neq' && p.neq_value">
                     <div class="neq-param-control">
-                      <span class="neq-param-label">{{ p.label || p.name }} = </span>
-                      <span class="neq-param-value">{{ p.neq_value }}</span>
+                      <span class="neq-param-label">{{ p.label || p.name }}</span>
                       <el-switch
                         v-model="sharedParamValues[p.name]"
                         active-text="是"
                         inactive-text="否"
                         active-color="#67c23a"
                         inactive-color="#f56c6c"
+                        :disabled="p.allow_all && neqAllChecked[p.name]"
                       />
+                      <el-checkbox
+                        v-if="p.allow_all"
+                        v-model="neqAllChecked[p.name]"
+                        size="small"
+                      >全部</el-checkbox>
                     </div>
                   </template>
                   <el-select
@@ -95,6 +100,11 @@
                     placeholder="请选择"
                     style="width: 100%"
                   >
+                    <el-option
+                      v-if="p.allow_all"
+                      value=""
+                      label="全部（不筛选）"
+                    />
                     <el-option
                       v-for="item in p.enum_values"
                       :key="item.value"
@@ -217,15 +227,20 @@
                     <div class="param-item-control">
                       <template v-if="p.enum_enabled && p.enum_mode === 'neq' && p.neq_value">
                         <div class="neq-param-control">
-                          <span class="neq-param-label">{{ p.label || p.name }} = </span>
-                          <span class="neq-param-value">{{ p.neq_value }}</span>
+                          <span class="neq-param-label">{{ p.label || p.name }}</span>
                           <el-switch
                             v-model="paramValues[scriptId][p.name]"
                             active-text="是"
                             inactive-text="否"
                             active-color="#67c23a"
                             inactive-color="#f56c6c"
+                            :disabled="p.allow_all && neqAllChecked[scriptId + '_' + p.name]"
                           />
+                          <el-checkbox
+                            v-if="p.allow_all"
+                            v-model="neqAllChecked[scriptId + '_' + p.name]"
+                            size="small"
+                          >全部</el-checkbox>
                         </div>
                       </template>
                       <el-select
@@ -237,6 +252,11 @@
                         placeholder="请选择"
                         style="width: 100%"
                       >
+                        <el-option
+                          v-if="p.allow_all"
+                          value=""
+                          label="全部（不筛选）"
+                        />
                         <el-option
                           v-for="item in p.enum_values"
                           :key="item.value"
@@ -479,6 +499,7 @@ const exportScripts = ref([])
 const activeCollapse = ref('')
 const paramValues = reactive({})
 const sharedParamValues = reactive({})
+const neqAllChecked = reactive({})
 const formRefs = reactive({})
 const outputFormat = ref('sheets')
 const submitting = ref(false)
@@ -654,7 +675,15 @@ function initParamValues() {
     }
     const params = s.params_config || []
     params.forEach((p) => {
-      if (paramValues[s.id][p.name] === undefined) {
+      if (p.enum_enabled && p.enum_mode === 'neq') {
+        if (paramValues[s.id][p.name] === undefined) {
+          paramValues[s.id][p.name] = p.default_checked ? true : false
+        }
+        const allKey = `${s.id}_${p.name}`
+        if (neqAllChecked[allKey] === undefined) {
+          neqAllChecked[allKey] = false
+        }
+      } else if (paramValues[s.id][p.name] === undefined) {
         if (p.range && (p.type === 'date' || p.type === 'datetime')) {
           paramValues[s.id][p.name] = null
         } else {
@@ -664,7 +693,14 @@ function initParamValues() {
     })
   })
   sharedParams.value.forEach((p) => {
-    if (sharedParamValues[p.name] === undefined) {
+    if (p.enum_enabled && p.enum_mode === 'neq') {
+      if (sharedParamValues[p.name] === undefined) {
+        sharedParamValues[p.name] = p.default_checked ? true : false
+      }
+      if (neqAllChecked[p.name] === undefined) {
+        neqAllChecked[p.name] = false
+      }
+    } else if (sharedParamValues[p.name] === undefined) {
       if (p.range && (p.type === 'date' || p.type === 'datetime')) {
         sharedParamValues[p.name] = null
       } else {
@@ -713,10 +749,19 @@ async function goToStep2() {
 async function executeExport() {
   submitting.value = true
   try {
-    const params_values = { ...sharedParamValues }
+    const params_values = {}
+    // 从公共参数构建，跳过选中"全部"的非即不等于参数
+    Object.keys(sharedParamValues).forEach((k) => {
+      if (neqAllChecked[k]) return
+      params_values[k] = sharedParamValues[k]
+    })
     selectedScripts.value.forEach((s) => {
       const scriptParams = s.params_config || []
       scriptParams.forEach((p) => {
+        // 跳过选中"全部"的非即不等于参数
+        if (p.enum_enabled && p.enum_mode === 'neq' && neqAllChecked[`${s.id}_${p.name}`]) {
+          return
+        }
         const val = paramValues[s.id]?.[p.name]
         if (val !== undefined && val !== '') {
           params_values[p.name] = val
@@ -935,6 +980,7 @@ function resetAll() {
   logLines.value = []
   Object.keys(paramValues).forEach((k) => delete paramValues[k])
   Object.keys(sharedParamValues).forEach((k) => delete sharedParamValues[k])
+  Object.keys(neqAllChecked).forEach((k) => delete neqAllChecked[k])
   Object.keys(formRefs).forEach((k) => delete formRefs[k])
   activeCollapse.value = ''
   if (eventSource) {
