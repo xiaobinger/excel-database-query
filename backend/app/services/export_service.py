@@ -143,7 +143,10 @@ class ExportService:
                             # 场景2: WHERE ... AND column = {{param}} → 去掉 AND ...
                             # 场景3: WHERE column = {{param}} AND ... → 去掉 column = {{param}} AND
                             col_pat = rf'`?{re.escape(pname)}`?'
-                            cond_pat = rf'({col_pat}\s*[=!]=\s*\{{\{{\s*{re.escape(pname)}\s*\}}\}}\s*)'
+                            # 匹配 column = {{param}} 或 column = :param
+                            placeholder = rf'\{{\{{\s*{re.escape(pname)}\s*\}}\}}'
+                            bind_param = rf':{re.escape(pname)}\b'
+                            cond_pat = rf'({col_pat}\s*[=!]=\s*(?:{placeholder}|{bind_param})\s*)'
                             
                             # 场景A: 只有这一个WHERE条件 → 整条WHERE去掉
                             sql_text = re.sub(
