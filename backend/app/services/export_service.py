@@ -147,7 +147,7 @@ class ExportService:
                             
                             # 场景A: 只有这一个WHERE条件 → 整条WHERE去掉
                             sql_text = re.sub(
-                                rf'\bWHERE\s+{cond_pat}(?=\s*(?:;|$|GROUP|ORDER|LIMIT))',
+                                rf'\bWHERE\s+{cond_pat}(?=\s*(?:;|$|GROUP|ORDER|LIMIT|UNION))',
                                 '',
                                 sql_text,
                                 flags=re.IGNORECASE
