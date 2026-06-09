@@ -144,43 +144,52 @@ class ExportService:
                         if pname not in script_params or script_params.get(pname) == '':
                             task.add_log(f'导出选项 [{script.name}] 参数 {pname} 满足全部条件，开始移除')
                             
-                            # 匹配任意列名 = :param 或 {{param}}
                             col_ref = r'[a-zA-Z0-9_.`]+'
                             placeholder = rf'\{{\{{\s*{re.escape(pname)}\s*\}}\}}'
                             bind_param = rf':{re.escape(pname)}\b'
+                            REMOVE = '__REMOVE_COND__'
                             
-                            # 两遍扫描，循环直到无变化
-                            for _ in range(10):
-                                old_sql = sql_text
-                                # 第1遍: 移除 "AND col = :param" （中间或末尾条件）
+                            changed = True
+                            while changed:
+                                changed = False
                                 for op in ['!=', '=']:
                                     for ph in [placeholder, bind_param]:
-                                        sql_text = re.sub(
-                                            rf'\s+AND\s+({col_ref})\s*{re.escape(op)}\s*{ph}\s*',
+                                        op_esc = re.escape(op)
+                                        # 匹配: AND col op ph → 替换为 REMOVE
+                                        new_sql = re.sub(
+                                            rf'(\s+)AND\s+({col_ref})\s*{op_esc}\s*{ph}',
+                                            rf'\1{REMOVE}',
+                                            sql_text,
+                                            flags=re.IGNORECASE
+                                        )
+                                        if new_sql != sql_text:
+                                            changed = True
+                                        sql_text = new_sql
+                                        
+                                        # 匹配: WHERE col op ph AND → 替换为 WHERE
+                                        new_sql = re.sub(
+                                            rf'\bWHERE\s+({col_ref})\s*{op_esc}\s*{ph}(\s+)AND\b',
+                                            rf'WHERE\2',
+                                            sql_text,
+                                            flags=re.IGNORECASE
+                                        )
+                                        if new_sql != sql_text:
+                                            changed = True
+                                        sql_text = new_sql
+                                        
+                                        # 匹配: WHERE col op ph (UNION/;/)  → 替换为空
+                                        new_sql = re.sub(
+                                            rf'\bWHERE\s+({col_ref})\s*{op_esc}\s*{ph}\s*(?=\bUNION\b|;|$|\)|GROUP|ORDER|LIMIT)',
                                             '',
                                             sql_text,
                                             flags=re.IGNORECASE
                                         )
-                                # 第2遍: 移除 "WHERE col = :param AND" （第一个条件，后面还有）
-                                for op in ['!=', '=']:
-                                    for ph in [placeholder, bind_param]:
-                                        sql_text = re.sub(
-                                            rf'\bWHERE\s+({col_ref})\s*{re.escape(op)}\s*{ph}\s+AND\s+',
-                                            'WHERE ',
-                                            sql_text,
-                                            flags=re.IGNORECASE
-                                        )
-                                # 第3遍: 移除 "WHERE col = :param" （唯一条件）
-                                for op in ['!=', '=']:
-                                    for ph in [placeholder, bind_param]:
-                                        sql_text = re.sub(
-                                            rf'\bWHERE\s+({col_ref})\s*{re.escape(op)}\s*{ph}\s*(?=\s*(?:\bUNION\b|;|$|\)|GROUP|ORDER|LIMIT))',
-                                            '',
-                                            sql_text,
-                                            flags=re.IGNORECASE
-                                        )
-                                if sql_text == old_sql:
-                                    break
+                                        if new_sql != sql_text:
+                                            changed = True
+                                        sql_text = new_sql
+                            
+                            # 清理残留标记
+                            sql_text = sql_text.replace(REMOVE, '')
                             
                             task.add_log(f'导出选项 [{script.name}] 处理后SQL前200字符: {sql_text[:200]}')
 
