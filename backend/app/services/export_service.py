@@ -149,6 +149,9 @@ class ExportService:
                             bind_param = rf':{re.escape(pname)}\b'
                             cond_pat = rf'({col_pat}\s*[=!]=\s*(?:{placeholder}|{bind_param}))'
                             
+                            task.add_log(f'导出选项 [{script.name}] 完整SQL: {sql_text}')
+                            task.add_log(f'导出选项 [{script.name}] 正则cond_pat: {cond_pat}')
+                            
                             # 场景A: 只有这一个WHERE条件 → 整条WHERE去掉（含UNION子查询、括号包裹）
                             sql_text = re.sub(
                                 rf'\bWHERE\s+{cond_pat}(?=\s*(?:;|$|GROUP|ORDER|LIMIT|UNION|\)))',
@@ -156,7 +159,7 @@ class ExportService:
                                 sql_text,
                                 flags=re.IGNORECASE
                             )
-                            task.add_log(f'导出选项 [{script.name}] 场景A处理后SQL前100字符: {sql_text[:100]}')
+                            task.add_log(f'导出选项 [{script.name}] 场景A处理后完整SQL: {sql_text}')
                             # 场景B: WHERE cond AND ... → 删cond AND，保留WHERE给后续条件
                             sql_text = re.sub(
                                 rf'(?<=\bWHERE\b)\s+{cond_pat}\s+AND\s+',
