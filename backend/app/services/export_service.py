@@ -144,39 +144,43 @@ class ExportService:
                         if pname not in script_params or script_params.get(pname) == '':
                             task.add_log(f'导出选项 [{script.name}] 参数 {pname} 满足全部条件，开始移除')
                             
-                            # 构建两种占位符的条件模式
-                            conditions_to_remove = []
+                            # 匹配任意列名 = :param 或 {{param}}
+                            col_ref = r'[a-zA-Z0-9_.`]+'
+                            placeholder = rf'\{{\{{\s*{re.escape(pname)}\s*\}}\}}'
+                            bind_param = rf':{re.escape(pname)}\b'
                             
-                            # 模式1: 任意列名 = {{param}} 或 != {{param}}
-                            for op in ['=', '!=']:
-                                # 用非贪婪通配符匹配列名
-                                cond1 = re.compile(
-                                    rf'(?:\bWHERE\s+|\bAND\s+)([a-zA-Z0-9_.`]+)\s*{re.escape(op)}\s*\{{\{{\s*{re.escape(pname)}\s*\}}\}}\s*(?=\bAND\b|;|$|\)|GROUP|ORDER|LIMIT)',
-                                    re.IGNORECASE
-                                )
-                                conditions_to_remove.append(cond1)
-                            
-                            # 模式2: 任意列名 = :param 或 != :param
-                            for op in ['=', '!=']:
-                                cond2 = re.compile(
-                                    rf'(?:\bWHERE\s+|\bAND\s+)([a-zA-Z0-9_.`]+)\s*{re.escape(op)}\s*:{re.escape(pname)}\b\s*(?=\bAND\b|;|$|\)|GROUP|ORDER|LIMIT)',
-                                    re.IGNORECASE
-                                )
-                                conditions_to_remove.append(cond2)
-                            
-                            # 逐一移除匹配到的条件
-                            for pattern in conditions_to_remove:
-                                def replace_cond(m):
-                                    matched = m.group(0)
-                                    # 如果是 WHERE 开头，保留 WHERE 关键词
-                                    if re.match(r'\bWHERE\s+', matched, re.IGNORECASE):
-                                        return 'WHERE '
-                                    return ''
-                                
-                                new_sql = pattern.sub(replace_cond, sql_text)
-                                if new_sql != sql_text:
-                                    task.add_log(f'导出选项 [{script.name}] 参数 {pname} 成功移除条件')
-                                sql_text = new_sql
+                            # 两遍扫描，循环直到无变化
+                            for _ in range(10):
+                                old_sql = sql_text
+                                # 第1遍: 移除 "AND col = :param" （中间或末尾条件）
+                                for op in ['!=', '=']:
+                                    for ph in [placeholder, bind_param]:
+                                        sql_text = re.sub(
+                                            rf'\s+AND\s+({col_ref})\s*{re.escape(op)}\s*{ph}\s*',
+                                            '',
+                                            sql_text,
+                                            flags=re.IGNORECASE
+                                        )
+                                # 第2遍: 移除 "WHERE col = :param AND" （第一个条件，后面还有）
+                                for op in ['!=', '=']:
+                                    for ph in [placeholder, bind_param]:
+                                        sql_text = re.sub(
+                                            rf'\bWHERE\s+({col_ref})\s*{re.escape(op)}\s*{ph}\s+AND\s+',
+                                            'WHERE ',
+                                            sql_text,
+                                            flags=re.IGNORECASE
+                                        )
+                                # 第3遍: 移除 "WHERE col = :param" （唯一条件）
+                                for op in ['!=', '=']:
+                                    for ph in [placeholder, bind_param]:
+                                        sql_text = re.sub(
+                                            rf'\bWHERE\s+({col_ref})\s*{re.escape(op)}\s*{ph}\s*(?=\s*(?:\bUNION\b|;|$|\)|GROUP|ORDER|LIMIT))',
+                                            '',
+                                            sql_text,
+                                            flags=re.IGNORECASE
+                                        )
+                                if sql_text == old_sql:
+                                    break
                             
                             task.add_log(f'导出选项 [{script.name}] 处理后SQL前200字符: {sql_text[:200]}')
 
