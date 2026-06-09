@@ -133,7 +133,7 @@ class ExportService:
                     multi_params = {p['name'] for p in params_config if p.get('multi') and p.get('type') in ('text', 'number')}
                     number_params = {p['name'] for p in params_config if p.get('type') == 'number'}
                     neq_params = {p['name']: p for p in params_config if p.get('enum_enabled') and p.get('enum_mode') == 'neq' and p.get('neq_value')}
-                    allow_all_params = {p['name'] for p in params_config if p.get('enum_enabled') and p.get('allow_all')}
+                    allow_all_params = {p['name'] for p in params_config if p.get('allow_all')}
                     
                     task.add_log(f'导出选项 [{script.name}] SQL处理开始, 参数: {script_params}')
 

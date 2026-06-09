@@ -113,10 +113,18 @@
                     />
                   </el-select>
                   <el-input
-                    v-else-if="p.type === 'text'"
+                    v-else-if="p.type === 'text' || p.type === 'number'"
                     v-model="sharedParamValues[p.name]"
+                    :type="p.type === 'number' ? 'number' : 'text'"
+                    :disabled="p.allow_all && allChecked[p.name]"
                     :placeholder="p.multi ? '请输入多个值，以逗号分隔' : '请输入' + (p.label || p.name)"
                   />
+                  <el-checkbox
+                    v-if="p.allow_all && (p.type === 'text' || p.type === 'number')"
+                    v-model="allChecked[p.name]"
+                    size="small"
+                    style="margin-top: 4px"
+                  >全部（不筛选）</el-checkbox>
                   <template v-else-if="p.type === 'date' || p.type === 'datetime'">
                     <el-date-picker
                       v-if="p.range && p.date_format === 'year'"
@@ -195,6 +203,12 @@
                       style="width: 100%"
                     />
                   </template>
+                  <el-checkbox
+                    v-if="p.allow_all && (p.type === 'date' || p.type === 'datetime')"
+                    v-model="allChecked[p.name]"
+                    size="small"
+                    style="margin-top: 4px"
+                  >全部（不筛选）</el-checkbox>
                 </div>
               </div>
             </div>
@@ -265,10 +279,18 @@
                         />
                       </el-select>
                       <el-input
-                        v-else-if="p.type === 'text'"
+                        v-else-if="p.type === 'text' || p.type === 'number'"
                         v-model="paramValues[scriptId][p.name]"
+                        :type="p.type === 'number' ? 'number' : 'text'"
+                        :disabled="p.allow_all && allChecked[scriptId + '_' + p.name]"
                         :placeholder="p.multi ? '请输入多个值，以逗号分隔' : '请输入' + (p.label || p.name)"
                       />
+                      <el-checkbox
+                        v-if="p.allow_all && (p.type === 'text' || p.type === 'number')"
+                        v-model="allChecked[scriptId + '_' + p.name]"
+                        size="small"
+                        style="margin-top: 4px"
+                      >全部（不筛选）</el-checkbox>
                       <template v-else-if="p.type === 'date' || p.type === 'datetime'">
                         <el-date-picker
                           v-if="p.range && p.date_format === 'year'"
@@ -347,6 +369,12 @@
                           style="width: 100%"
                         />
                       </template>
+                      <el-checkbox
+                        v-if="p.allow_all && (p.type === 'date' || p.type === 'datetime')"
+                        v-model="allChecked[scriptId + '_' + p.name]"
+                        size="small"
+                        style="margin-top: 4px"
+                      >全部（不筛选）</el-checkbox>
                     </div>
                   </div>
                 </div>
@@ -500,6 +528,7 @@ const activeCollapse = ref('')
 const paramValues = reactive({})
 const sharedParamValues = reactive({})
 const neqAllChecked = reactive({})
+const allChecked = reactive({})
 const formRefs = reactive({})
 const outputFormat = ref('sheets')
 const submitting = ref(false)
@@ -760,20 +789,24 @@ async function executeExport() {
   submitting.value = true
   try {
     const params_values = {}
-    // 从公共参数构建，跳过选中"全部"的非即不等于参数
+    // 从公共参数构建，跳过选中"全部"的参数
     Object.keys(sharedParamValues).forEach((k) => {
       if (neqAllChecked[k]) return
+      if (allChecked[k]) return
       const sv = sharedParamValues[k]
       if (sv === '' || sv === undefined) {
         const sp = sharedParams.value.find(p => p.name === k)
-        if (sp && sp.enum_enabled && sp.allow_all) return
+        if (sp && sp.allow_all) return
       }
       params_values[k] = sv
     })
     selectedScripts.value.forEach((s) => {
       const scriptParams = s.params_config || []
       scriptParams.forEach((p) => {
-        // 跳过选中"全部"的非即不等于参数
+        // 跳过选中"全部"的参数（所有类型）
+        if (p.allow_all && allChecked[`${s.id}_${p.name}`]) {
+          return
+        }
         if (p.enum_enabled && p.enum_mode === 'neq' && neqAllChecked[`${s.id}_${p.name}`]) {
           return
         }
@@ -996,6 +1029,7 @@ function resetAll() {
   Object.keys(paramValues).forEach((k) => delete paramValues[k])
   Object.keys(sharedParamValues).forEach((k) => delete sharedParamValues[k])
   Object.keys(neqAllChecked).forEach((k) => delete neqAllChecked[k])
+  Object.keys(allChecked).forEach((k) => delete allChecked[k])
   Object.keys(formRefs).forEach((k) => delete formRefs[k])
   activeCollapse.value = ''
   if (eventSource) {

@@ -279,6 +279,7 @@
                 </div>
                 <div v-if="param.type === 'text' || param.type === 'number'" class="param-row param-row-sub">
                   <el-checkbox v-model="param.enum_enabled" size="small" label="枚举参数" />
+                  <el-checkbox v-model="param.allow_all" size="small" label="允许全部（不筛选）" style="margin-left: 8px" />
                   <div v-if="param.enum_enabled" class="enum-config">
                     <div class="param-row param-row-sub" style="margin-top: 0">
                       <el-radio-group v-model="param.enum_mode" size="small">
@@ -309,9 +310,6 @@
                         <el-checkbox v-model="param.default_checked" size="small" label="默认勾选是" />
                       </div>
                     </div>
-                    <div style="margin-top: 8px">
-                      <el-checkbox v-model="param.allow_all" size="small" label="允许选择全部（不筛选）" />
-                    </div>
                   </div>
                 </div>
                 <div v-if="param.type === 'date' || param.type === 'datetime'" class="param-row param-row-sub">
@@ -322,6 +320,7 @@
                     <el-option value="datetime" label="年-月-日 时:分" />
                   </el-select>
                   <el-checkbox v-model="param.range" size="small" label="范围" style="margin-left: 8px" />
+                  <el-checkbox v-model="param.allow_all" size="small" label="允许全部（不筛选）" style="margin-left: 8px" />
                 </div>
                 <div class="param-row param-row-sub">
                   <el-input v-model="param.default_value" :placeholder="param.multi ? '默认值（多个以逗号分隔）' : '默认值（可选）'" size="small" style="flex: 1" />
