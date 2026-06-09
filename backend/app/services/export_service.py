@@ -145,28 +145,21 @@ class ExportService:
                             col_pat = rf'`?{re.escape(pname)}`?'
                             cond_pat = rf'({col_pat}\s*[=!]=\s*\{{\{{\s*{re.escape(pname)}\s*\}}\}}\s*)'
                             
-                            # 场景A: 只有这一个WHERE条件
+                            # 场景A: 只有这一个WHERE条件 → 整条WHERE去掉
                             sql_text = re.sub(
                                 rf'\bWHERE\s+{cond_pat}(?=\s*(?:;|$|GROUP|ORDER|LIMIT))',
                                 '',
                                 sql_text,
                                 flags=re.IGNORECASE
                             )
-                            # 场景B: WHERE ... AND cond → 删AND cond
-                            sql_text = re.sub(
-                                rf'(?<=\bWHERE\b.*)\s+AND\s+{cond_pat}',
-                                '',
-                                sql_text,
-                                flags=re.IGNORECASE | re.DOTALL
-                            )
-                            # 场景C: WHERE cond AND ... → 删cond AND
+                            # 场景B: WHERE cond AND ... → 删cond AND，保留WHERE给后续条件
                             sql_text = re.sub(
                                 rf'(?<=\bWHERE\b)\s+{cond_pat}\s+AND\s+',
                                 ' ',
                                 sql_text,
                                 flags=re.IGNORECASE
                             )
-                            # 场景D: 任意位置AND cond
+                            # 场景C: ... AND cond → 删AND cond（覆盖中间和末尾位置）
                             sql_text = re.sub(
                                 rf'\s+AND\s+{cond_pat}',
                                 '',
