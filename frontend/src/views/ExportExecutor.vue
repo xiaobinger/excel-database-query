@@ -763,7 +763,12 @@ async function executeExport() {
     // 从公共参数构建，跳过选中"全部"的非即不等于参数
     Object.keys(sharedParamValues).forEach((k) => {
       if (neqAllChecked[k]) return
-      params_values[k] = sharedParamValues[k]
+      const sv = sharedParamValues[k]
+      if (sv === '' || sv === undefined) {
+        const sp = sharedParams.value.find(p => p.name === k)
+        if (sp && sp.enum_enabled && sp.allow_all) return
+      }
+      params_values[k] = sv
     })
     selectedScripts.value.forEach((s) => {
       const scriptParams = s.params_config || []

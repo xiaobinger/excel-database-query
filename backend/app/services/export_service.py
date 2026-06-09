@@ -137,20 +137,16 @@ class ExportService:
 
                     # 1. 先处理"全部"选项：智能移除WHERE条件
                     for pname in allow_all_params:
-                        if pname not in script_params:
-                            # 匹配模式：column = {{param}} 或 column != {{param}}
-                            # 场景1: WHERE column = {{param}} → 整个WHERE去掉
-                            # 场景2: WHERE ... AND column = {{param}} → 去掉 AND ...
-                            # 场景3: WHERE column = {{param}} AND ... → 去掉 column = {{param}} AND
-                            col_pat = rf'`?{re.escape(pname)}`?'
+                        if pname not in script_params or script_params.get(pname) == '':
                             # 匹配 column = {{param}} 或 column = :param
+                            col_pat = rf'`?{re.escape(pname)}`?'
                             placeholder = rf'\{{\{{\s*{re.escape(pname)}\s*\}}\}}'
                             bind_param = rf':{re.escape(pname)}\b'
                             cond_pat = rf'({col_pat}\s*[=!]=\s*(?:{placeholder}|{bind_param})\s*)'
                             
-                            # 场景A: 只有这一个WHERE条件 → 整条WHERE去掉
+                            # 场景A: 只有这一个WHERE条件 → 整条WHERE去掉（含UNION子查询、括号包裹）
                             sql_text = re.sub(
-                                rf'\bWHERE\s+{cond_pat}(?=\s*(?:;|$|GROUP|ORDER|LIMIT|UNION))',
+                                rf'\bWHERE\s+{cond_pat}(?=\s*(?:;|$|GROUP|ORDER|LIMIT|UNION|\)))',
                                 '',
                                 sql_text,
                                 flags=re.IGNORECASE
