@@ -278,39 +278,62 @@
                   <el-checkbox v-model="param.multi" size="small" label="IN参数（支持多个值）" />
                 </div>
                 <div v-if="param.type === 'text' || param.type === 'number'" class="param-row param-row-sub">
-                  <el-checkbox v-model="param.enum_enabled" size="small" label="枚举参数" />
-                  <el-checkbox v-model="param.allow_all" size="small" label="允许全部（不筛选）" style="margin-left: 8px" />
-                  <div v-if="param.enum_enabled" class="enum-config">
-                    <div class="param-row param-row-sub" style="margin-top: 0">
-                      <el-radio-group v-model="param.enum_mode" size="small">
-                        <el-radio-button label="list">列表选择</el-radio-button>
-                        <el-radio-button label="neq">非即不等于</el-radio-button>
+                  <el-checkbox v-model="param.allow_all" size="small" class="allow-all-checkbox">
+                    <span class="allow-all-label">允许「全部」选项（不筛选此参数）</span>
+                  </el-checkbox>
+                </div>
+                <div v-if="param.type === 'text' || param.type === 'number'" class="param-row param-row-sub param-enum-section">
+                  <el-checkbox v-model="param.enum_enabled" size="default" label="启用枚举参数" class="enum-enable-checkbox" />
+
+                  <template v-if="param.enum_enabled">
+                    <div class="enum-mode-selector">
+                      <el-radio-group v-model="param.enum_mode" size="default">
+                        <el-radio-button value="list">
+                          <i class="fas fa-list-ul"></i> 列表选择
+                        </el-radio-button>
+                        <el-radio-button value="neq">
+                          <i class="fas fa-not-equal"></i> 非即不等于
+                        </el-radio-button>
                       </el-radio-group>
                     </div>
-                    <div v-if="param.enum_mode === 'list'" class="enum-values-list">
+
+                    <div v-if="param.enum_mode === 'list'" class="enum-list-config">
+                      <div class="enum-list-header">
+                        <span class="enum-list-title">枚举值列表</span>
+                        <el-button size="small" type="primary" @click="(param.enum_values = param.enum_values || []).push({ label: '', value: '' })">
+                          <i class="fas fa-plus"></i> 添加
+                        </el-button>
+                      </div>
+                      <div v-if="!param.enum_values || param.enum_values.length === 0" class="enum-empty-tip">
+                        暂无枚举值，请点击上方"添加"按钮
+                      </div>
                       <div v-for="(item, idx) in (param.enum_values || [])" :key="idx" class="enum-value-row">
-                        <el-input v-model="item.label" placeholder="显示名称" size="small" style="flex: 1" />
-                        <el-input v-model="item.value" placeholder="实际值" size="small" style="flex: 1" />
-                        <el-button size="small" type="danger" text @click="param.enum_values.splice(idx, 1)">
-                          <i class="fas fa-times"></i>
+                        <span class="enum-value-index">{{ idx + 1 }}</span>
+                        <el-input v-model="item.label" placeholder="显示名称" size="small" class="enum-input-label" />
+                        <span class="enum-value-separator">→</span>
+                        <el-input v-model="item.value" placeholder="实际值" size="small" class="enum-input-value" />
+                        <el-button size="small" type="danger" text @click="param.enum_values.splice(idx, 1)" class="enum-value-remove">
+                          <i class="fas fa-trash"></i>
                         </el-button>
                       </div>
                     </div>
-                    <div v-if="param.enum_mode === 'list'" class="enum-config">
-                      <el-button size="small" type="primary" text @click="(param.enum_values = param.enum_values || []).push({ label: '', value: '' })">
-                        <i class="fas fa-plus"></i> 添加枚举值
-                      </el-button>
-                    </div>
-                    <div v-if="param.enum_mode === 'neq'" class="neq-config">
-                      <el-input v-model="param.neq_value" placeholder="等于时的值（如：1）" size="small" style="width: 200px" />
-                      <div style="margin-top: 8px; font-size: 12px; color: #909399">
-                        勾选"是"时值为该值，勾选"否"时值为该值取反（!=）
+
+                    <div v-if="param.enum_mode === 'neq'" class="enum-neq-config">
+                      <div class="neq-config-row">
+                        <span class="neq-config-label">预设值：</span>
+                        <el-input v-model="param.neq_value" placeholder="等于时的值（如：1）" size="small" class="neq-input" />
                       </div>
-                      <div style="margin-top: 8px">
-                        <el-checkbox v-model="param.default_checked" size="small" label="默认勾选是" />
+                      <div class="neq-config-row">
+                        <el-checkbox v-model="param.default_checked" size="small">
+                          默认勾选「是」
+                        </el-checkbox>
+                      </div>
+                      <div class="neq-hint">
+                        <i class="fas fa-info-circle"></i>
+                        勾选「是」时：字段 = 预设值 ｜ 勾选「否」时：字段 != 预设值
                       </div>
                     </div>
-                  </div>
+                  </template>
                 </div>
                 <div v-if="param.type === 'date' || param.type === 'datetime'" class="param-row param-row-sub">
                   <el-select v-model="param.date_format" placeholder="日期格式" size="small" style="width: 140px">
@@ -827,33 +850,173 @@ onMounted(() => {
   margin-top: 8px;
 }
 
-.enum-config {
-  margin-top: 8px;
-  padding: 8px;
-  background: #f8fafc;
-  border: 1px solid #e4e7ed;
-  border-radius: 4px;
+/* ===== Enum Parameter Section ===== */
+.param-enum-section {
+  margin-top: 10px;
+  padding: 12px 14px;
+  background: #f5f8ff;
+  border: 1px solid #d9e8fc;
+  border-radius: 8px;
+  flex-direction: column;
+  align-items: stretch;
 }
 
-.enum-values-list {
+.enum-section-header {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.enum-enable-checkbox {
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.allow-all-checkbox {
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.allow-all-label {
+  color: #606266;
+}
+
+/* Mode Selector */
+.enum-mode-selector {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed #c9d8f0;
+}
+
+.enum-mode-selector :deep(.el-radio-button__inner) {
+  padding: 8px 16px;
+}
+
+.enum-mode-selector :deep(.el-radio-button__inner i) {
+  margin-right: 4px;
+}
+
+/* Enum List Config */
+.enum-list-config {
+  margin-top: 12px;
+}
+
+.enum-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin-bottom: 8px;
+}
+
+.enum-list-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #606266;
+}
+
+.enum-empty-tip {
+  font-size: 12px;
+  color: #c0c4cc;
+  text-align: center;
+  padding: 16px 0;
 }
 
 .enum-value-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  padding: 6px 8px;
+  background: #fff;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  transition: box-shadow 0.2s;
 }
 
-.neq-config {
-  margin-top: 8px;
-  padding: 8px;
-  background: #f8fafc;
+.enum-value-row:hover {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.enum-value-index {
+  width: 20px;
+  height: 20px;
+  line-height: 20px;
+  text-align: center;
+  background: #e8edf5;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 600;
+  color: #909399;
+  flex-shrink: 0;
+}
+
+.enum-input-label,
+.enum-input-value {
+  flex: 1;
+  min-width: 0;
+}
+
+.enum-value-separator {
+  color: #c0c4cc;
+  font-weight: bold;
+  flex-shrink: 0;
+  font-size: 14px;
+}
+
+.enum-value-remove {
+  flex-shrink: 0;
+  padding: 4px;
+}
+
+/* NEQ Config */
+.enum-neq-config {
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: #fff;
   border: 1px solid #e4e7ed;
+  border-radius: 6px;
+}
+
+.neq-config-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.neq-config-row:last-child {
+  margin-bottom: 0;
+}
+
+.neq-config-label {
+  font-size: 12px;
+  color: #606266;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.neq-input {
+  flex: 1;
+}
+
+.neq-hint {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #909399;
+  background: #f5f7fa;
   border-radius: 4px;
+  padding: 6px 10px;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  line-height: 1.5;
+}
+
+.neq-hint i {
+  color: #e6a23c;
+  margin-top: 2px;
+  flex-shrink: 0;
 }
 
 .dialog-footer {

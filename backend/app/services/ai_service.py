@@ -1,9 +1,100 @@
 import json
 import logging
+import re
 import requests
 from typing import Tuple, Optional
 
 logger = logging.getLogger(__name__)
+
+# ============ Tool Definitions ============
+AI_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list_export_options",
+            "description": "列出所有可用的导出选项，包括名称、描述、参数等信息",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {
+                        "type": "string",
+                        "description": "可选，按名称或描述筛选的关键词"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_query_options",
+            "description": "列出所有可用的查询选项，包括名称、描述等信息",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {
+                        "type": "string",
+                        "description": "可选，按名称或描述筛选的关键词"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "request_export",
+            "description": "当用户明确要执行导出任务时调用此工具。需要指定导出选项名称和参数值。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "export_option_name": {
+                        "type": "string",
+                        "description": "要使用的导出选项名称"
+                    },
+                    "params": {
+                        "type": "object",
+                        "description": "参数键值对，键为参数名，值为用户提供的参数值",
+                        "additionalProperties": {"type": "string"}
+                    },
+                    "output_format": {
+                        "type": "string",
+                        "enum": ["sheets", "zip"],
+                        "description": "输出格式：sheets=多工作表，zip=多文件压缩"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "用户原始需求的简要描述"
+                    }
+                },
+                "required": ["export_option_name", "description"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "request_query",
+            "description": "当用户明确要执行查询任务时调用此工具。需要指定查询选项名称。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query_option_name": {
+                        "type": "string",
+                        "description": "要使用的查询选项名称"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "用户原始需求的简要描述"
+                    }
+                },
+                "required": ["query_option_name", "description"]
+            }
+        }
+    }
+]
 
 
 class AiService:
@@ -161,3 +252,149 @@ class AiService:
             db.session.commit()
 
         return new_skills
+
+    @staticmethod
+    def chat_with_tools(config, messages: list) -> dict:
+        """调用AI对话，支持 Function Calling"""
+        api_key = config.get_api_key()
+        if not api_key:
+            raise ValueError('API密钥未配置')
+
+        api_base = config.api_base or 'https://api.openai.com/v1'
+        url = f"{api_base.rstrip('/')}/chat/completions"
+
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json',
+        }
+
+        payload = {
+            'model': config.model_name or 'gpt-3.5-turbo',
+            'messages': messages,
+            'max_tokens': config.max_tokens or 4096,
+            'temperature': config.temperature if config.temperature is not None else 0.7,
+            'tools': AI_TOOLS,
+            'tool_choice': 'auto',
+        }
+
+        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        response.raise_for_status()
+        result = response.json()
+
+        choice = result.get('choices', [{}])[0]
+        message = choice.get('message', {})
+        content = message.get('content', '')
+        tool_calls = message.get('tool_calls', [])
+        tokens = result.get('usage', {}).get('total_tokens', 0)
+
+        return {
+            'content': content,
+            'tool_calls': tool_calls,
+            'tokens': tokens,
+        }
+
+    @staticmethod
+    def execute_tool_call(tool_name: str, arguments_str: str) -> dict:
+        """执行AI请求的工具调用"""
+        try:
+            args = json.loads(arguments_str) if arguments_str else {}
+        except json.JSONDecodeError:
+            return {'error': f'参数解析失败: {arguments_str}'}
+
+        if tool_name == 'list_export_options':
+            return AiService._tool_list_export_options(args)
+        elif tool_name == 'list_query_options':
+            return AiService._tool_list_query_options(args)
+        elif tool_name == 'request_export':
+            return AiService._tool_request_export(args)
+        elif tool_name == 'request_query':
+            return AiService._tool_request_query(args)
+        else:
+            return {'error': f'未知工具: {tool_name}'}
+
+    @staticmethod
+    def _tool_list_export_options(args: dict) -> dict:
+        """列出导出选项"""
+        from app.models.script import Script
+        keyword = args.get('keyword', '').lower()
+        scripts = Script.query.filter_by(type='export').all()
+        result = []
+        for s in scripts:
+            if keyword and keyword not in s.name.lower() and keyword not in (s.description or '').lower():
+                continue
+            params = s.get_params_config()
+            result.append({
+                'id': s.id,
+                'name': s.name,
+                'description': s.description or '',
+                'params': [{'name': p['name'], 'label': p.get('label', p['name']), 'type': p.get('type', 'text')} for p in params],
+            })
+        return {'scripts': result, 'total': len(result)}
+
+    @staticmethod
+    def _tool_list_query_options(args: dict) -> dict:
+        """列出查询选项"""
+        from app.models.script import Script
+        keyword = args.get('keyword', '').lower()
+        scripts = Script.query.filter_by(type='query').all()
+        result = []
+        for s in scripts:
+            if keyword and keyword not in s.name.lower() and keyword not in (s.description or '').lower():
+                continue
+            result.append({
+                'id': s.id,
+                'name': s.name,
+                'description': s.description or '',
+            })
+        return {'scripts': result, 'total': len(result)}
+
+    @staticmethod
+    def _tool_request_export(args: dict) -> dict:
+        """处理导出请求 - 返回结构化信息供前端确认"""
+        from app.models.script import Script
+        export_name = args.get('export_option_name', '')
+        params = args.get('params', {})
+        desc = args.get('description', '')
+
+        # 查找匹配的导出选项
+        script = Script.query.filter_by(name=export_name, type='export').first()
+        if not script:
+            # 尝试模糊匹配
+            script = Script.query.filter(Script.name.like(f'%{export_name}%'), Script.type == 'export').first()
+            if not script:
+                return {'error': f'未找到名为"{export_name}"的导出选项'}
+
+        script_params = script.get_params_config()
+        required_params = [p for p in script_params if p.get('required') and p['name'] not in params]
+
+        return {
+            'action_type': 'export',
+            'script_id': script.id,
+            'script_name': script.name,
+            'params': params,
+            'output_format': args.get('output_format', 'sheets'),
+            'required_missing': [p['name'] for p in required_params],
+            'description': desc,
+            'confirm_message': f'AI 准备执行导出：{script.name}，参数：{json.dumps(params, ensure_ascii=False)}，输出格式：{args.get("output_format", "sheets")}'
+        }
+
+    @staticmethod
+    def _tool_request_query(args: dict) -> dict:
+        """处理查询请求 - 返回结构化信息供前端确认"""
+        from app.models.script import Script
+        query_name = args.get('query_option_name', '')
+        desc = args.get('description', '')
+
+        script = Script.query.filter_by(name=query_name, type='query').first()
+        if not script:
+            script = Script.query.filter(Script.name.like(f'%{query_name}%'), Script.type == 'query').first()
+            if not script:
+                return {'error': f'未找到名为"{query_name}"的查询选项'}
+
+        return {
+            'action_type': 'query',
+            'script_id': script.id,
+            'script_name': script.name,
+            'description': desc,
+            'confirm_message': f'AI 准备执行查询：{script.name}'
+        }

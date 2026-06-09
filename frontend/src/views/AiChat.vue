@@ -27,8 +27,9 @@
       <div v-if="!currentChatId" class="chat-welcome">
         <div class="welcome-icon"><i class="fas fa-robot"></i></div>
         <h2>AI 智能助手</h2>
-        <p>我可以帮你生成SQL查询、创建查询选项、优化语句等</p>
+        <p>我可以帮你生成SQL查询、创建查询选项、优化语句、执行导出任务等</p>
         <div class="quick-actions">
+          <el-button @click="quickAsk('帮我导出商户123456的信息')">执行导出任务</el-button>
           <el-button @click="quickAsk('帮我生成一个查询商户信息的SQL')">生成SQL查询</el-button>
           <el-button @click="quickAsk('帮我优化这个SQL语句')">优化SQL</el-button>
           <el-button @click="quickAsk('如何配置自动导出任务？')">使用帮助</el-button>
@@ -41,8 +42,48 @@
             <div class="message-avatar">
               <i :class="msg.role === 'user' ? 'fas fa-user' : 'fas fa-robot'"></i>
             </div>
-            <div class="message-content">
-              <div class="message-text" v-html="renderMarkdown(msg.content)"></div>
+            <div class="message-content" :class="{ 'full-width': msg._type === 'tool' }">
+              <!-- 普通文本消息 -->
+              <template v-if="msg._type !== 'tool'">
+                <div class="message-text" v-html="renderMarkdown(msg.content)"></div>
+              </template>
+              <!-- 工具调用确认卡片 -->
+              <template v-else-if="!msg._dismissed">
+                <div class="tool-card">
+                  <div class="tool-card-header">
+                    <i class="fas fa-magic tool-icon"></i>
+                    <span class="tool-title">{{ msg.tool_data.action_type === 'export' ? '导出任务确认' : '查询任务确认' }}</span>
+                  </div>
+                  <div class="tool-card-body">
+                    <p class="tool-confirm-msg">{{ msg.tool_data.confirm_message }}</p>
+                    <p v-if="msg.tool_data.required_missing && msg.tool_data.required_missing.length" class="tool-warning">
+                      <i class="fas fa-exclamation-triangle"></i> 缺少必填参数：{{ msg.tool_data.required_missing.join(', ') }}
+                    </p>
+                  </div>
+                  <div class="tool-card-actions">
+                    <el-button
+                      v-if="msg.tool_data.action_type === 'export'"
+                      type="primary"
+                      size="small"
+                      @click="confirmExport(msg)"
+                      :disabled="msg.tool_data.required_missing && msg.tool_data.required_missing.length > 0"
+                    >
+                      <i class="fas fa-play"></i> 确认执行导出
+                    </el-button>
+                    <el-button
+                      v-else-if="msg.tool_data.action_type === 'query'"
+                      type="primary"
+                      size="small"
+                      @click="confirmQuery(msg)"
+                    >
+                      <i class="fas fa-play"></i> 确认执行查询
+                    </el-button>
+                    <el-button size="small" text @click="dismissTool(msg)">
+                      忽略
+                    </el-button>
+                  </div>
+                </div>
+              </template>
             </div>
           </div>
           <div v-if="loading" class="message assistant">
@@ -122,7 +163,9 @@ async function selectChat(chatId) {
   currentChatId.value = chatId
   try {
     const res = await api.ai.getMessages(chatId)
-    messages.value = res.data || []
+    const msgs = res.data || []
+    // 清理历史消息中的 _type 标记（后端不存这个字段，前端恢复时需要清空 dismissed）
+    messages.value = msgs.map(m => ({ ...m, _dismissed: false }))
     await nextTick()
     scrollToBottom()
   } catch {}
@@ -158,9 +201,36 @@ async function sendMessage() {
 
   try {
     const res = await api.ai.sendMessage(currentChatId.value, { content: text })
+
+    // 添加 AI 回复文本
     if (res.data?.assistant_message) {
       messages.value.push(res.data.assistant_message)
     }
+
+    // 处理工具调用结果
+    if (res.data?.tool_results && res.data.tool_results.length > 0) {
+      for (const tr of res.data.tool_results) {
+        const result = tr.result
+        if (result && !result.error && (result.action_type === 'export' || result.action_type === 'query')) {
+          messages.value.push({
+            id: Date.now() + Math.random(),
+            role: 'assistant',
+            content: '',
+            _type: 'tool',
+            _dismissed: false,
+            tool_data: result,
+          })
+        } else if (result && result.error) {
+          // AI 工具调用出错，作为普通文本消息显示
+          messages.value.push({
+            id: Date.now() + Math.random(),
+            role: 'assistant',
+            content: `⚠️ ${result.error}`,
+          })
+        }
+      }
+    }
+
     await nextTick()
     scrollToBottom()
 
@@ -199,6 +269,51 @@ function renderMarkdown(text) {
     return marked.parse(text)
   } catch {
     return text.replace(/\n/g, '<br>')
+  }
+}
+
+function dismissTool(msg) {
+  msg._dismissed = true
+}
+
+async function confirmExport(msg) {
+  const td = msg.tool_data
+  const params = { ...td.params }
+
+  try {
+    ElMessage.info('正在执行导出...')
+    const res = await api.export.execute({
+      script_ids: [td.script_id],
+      params_values: params,
+      output_format: td.output_format || 'sheets',
+    })
+    if (res.data) {
+      const taskId = res.data.task_id
+      ElMessage.success('导出任务已提交')
+      // 添加执行结果消息
+      messages.value.push({
+        id: Date.now(),
+        role: 'assistant',
+        content: `✅ 导出任务已提交！任务ID: ${taskId}\n\n你可以在导出任务列表中查看进度和下载文件。`,
+      })
+      dismissTool(msg)
+      await nextTick()
+      scrollToBottom()
+    }
+  } catch (e) {
+    ElMessage.error('导出执行失败: ' + (e.message || '未知错误'))
+  }
+}
+
+async function confirmQuery(msg) {
+  const td = msg.tool_data
+  try {
+    ElMessage.info('正在执行查询...')
+    // 跳转到查询执行页面
+    window.dispatchEvent(new CustomEvent('navigate-to-query', { detail: { script_id: td.script_id } }))
+    dismissTool(msg)
+  } catch (e) {
+    ElMessage.error('查询执行失败: ' + (e.message || '未知错误'))
   }
 }
 
@@ -311,6 +426,7 @@ onMounted(() => {
 .quick-actions {
   display: flex;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .messages-area {
@@ -354,6 +470,10 @@ onMounted(() => {
   max-width: 70%;
 }
 
+.message-content.full-width {
+  max-width: 100%;
+}
+
 .message-text {
   padding: 10px 16px;
   border-radius: 12px;
@@ -372,6 +492,67 @@ onMounted(() => {
   background: #f4f6f8;
   color: #303133;
   border-top-left-radius: 4px;
+}
+
+/* ===== Tool Card Styles ===== */
+.tool-card {
+  background: #fff;
+  border: 2px solid #409eff;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(64, 158, 255, 0.15);
+  max-width: 500px;
+}
+
+.tool-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #ecf5ff, #f0f7ff);
+  border-bottom: 1px solid #d9ecff;
+}
+
+.tool-icon {
+  font-size: 16px;
+  color: #409eff;
+}
+
+.tool-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #303133;
+}
+
+.tool-card-body {
+  padding: 14px 16px;
+}
+
+.tool-confirm-msg {
+  font-size: 13px;
+  color: #606266;
+  margin: 0 0 8px;
+  line-height: 1.6;
+}
+
+.tool-warning {
+  font-size: 12px;
+  color: #e6a23c;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #fdf6ec;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+
+.tool-card-actions {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px;
+  background: #fafbfc;
+  border-top: 1px solid #eef2f7;
 }
 
 /* Markdown 渲染样式 */

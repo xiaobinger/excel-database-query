@@ -57,37 +57,43 @@
             <span class="selected-count">已选择 {{ selectedScriptIds.length }} 个查询选项</span>
           </div>
           <div class="script-card-grid">
-            <div
+            <el-tooltip
               v-for="s in visibleScripts"
               :key="s.id"
-              class="script-card"
-              :class="{ selected: selectedScriptIds.includes(s.id) }"
-              @click="toggleScript(s.id)"
+              :content="s.description || '暂无描述'"
+              placement="top"
+              :show-after="300"
             >
-              <div class="script-card-header">
-                <span class="check-box"><i class="fas fa-check"></i></span>
-                <span class="script-card-name">{{ s.name }}</span>
+              <div
+                class="script-card"
+                :class="{ selected: selectedScriptIds.includes(s.id) }"
+                @click="toggleScript(s.id)"
+              >
+                <div class="script-card-header">
+                  <span class="check-box"><i class="fas fa-check"></i></span>
+                  <span class="script-card-name">{{ s.name }}</span>
+                </div>
+                <div class="script-card-body">
+                  <el-tag v-if="s.tag" size="small" type="info" style="margin-right: 6px">{{ s.tag }}</el-tag>
+                  <el-tag :type="s.query_mode === 'in' ? 'primary' : 'success'" size="small">
+                    {{ s.query_mode === 'in' ? '批量' : '逐行' }}
+                  </el-tag>
+                </div>
+                <div class="script-card-dbs">
+                  <el-tag
+                    v-for="dbId in (s.database_ids || [])"
+                    :key="dbId"
+                    size="small"
+                    type="success"
+                    effect="plain"
+                    style="margin: 2px 4px 2px 0"
+                  >
+                    <i class="fas fa-database" style="margin-right: 2px"></i> {{ getDbName(dbId) }}
+                  </el-tag>
+                </div>
+                <div v-if="s.description" class="script-card-desc">{{ s.description }}</div>
               </div>
-              <div class="script-card-body">
-                <el-tag v-if="s.tag" size="small" type="info" style="margin-right: 6px">{{ s.tag }}</el-tag>
-                <el-tag :type="s.query_mode === 'in' ? 'primary' : 'success'" size="small">
-                  {{ s.query_mode === 'in' ? '批量' : '逐行' }}
-                </el-tag>
-              </div>
-              <div class="script-card-dbs">
-                <el-tag
-                  v-for="dbId in (s.database_ids || [])"
-                  :key="dbId"
-                  size="small"
-                  type="success"
-                  effect="plain"
-                  style="margin: 2px 4px 2px 0"
-                >
-                  <i class="fas fa-database" style="margin-right: 2px"></i> {{ getDbName(dbId) }}
-                </el-tag>
-              </div>
-              <div v-if="s.description" class="script-card-desc">{{ s.description }}</div>
-            </div>
+            </el-tooltip>
           </div>
           <el-empty v-if="visibleScripts.length === 0" description="暂无查询选项，请先在查询选项管理中创建" />
           <div class="step-actions">

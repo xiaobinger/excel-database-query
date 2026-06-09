@@ -185,6 +185,69 @@ class ExportService:
                                         if new_sql != sql_text:
                                             changed = True
                                         sql_text = new_sql
+                                
+                                # 处理 IN 条件：AND col IN (ph) → 替换为 REMOVE
+                                new_sql = re.sub(
+                                    rf'(\s+)AND\s+({col_ref})\s+IN\s*\(\s*{placeholder}\s*\)',
+                                    rf'\1{REMOVE}',
+                                    sql_text,
+                                    flags=re.IGNORECASE
+                                )
+                                if new_sql != sql_text:
+                                    changed = True
+                                sql_text = new_sql
+                                
+                                new_sql = re.sub(
+                                    rf'(\s+)AND\s+({col_ref})\s+IN\s*\(\s*{bind_param}\s*\)',
+                                    rf'\1{REMOVE}',
+                                    sql_text,
+                                    flags=re.IGNORECASE
+                                )
+                                if new_sql != sql_text:
+                                    changed = True
+                                sql_text = new_sql
+                                
+                                # 处理 WHERE col IN (ph) AND → 替换为 WHERE
+                                new_sql = re.sub(
+                                    rf'\bWHERE\s+({col_ref})\s+IN\s*\(\s*{placeholder}\s*\)(\s+)AND\b',
+                                    rf'WHERE\2',
+                                    sql_text,
+                                    flags=re.IGNORECASE
+                                )
+                                if new_sql != sql_text:
+                                    changed = True
+                                sql_text = new_sql
+                                
+                                new_sql = re.sub(
+                                    rf'\bWHERE\s+({col_ref})\s+IN\s*\(\s*{bind_param}\s*\)(\s+)AND\b',
+                                    rf'WHERE\2',
+                                    sql_text,
+                                    flags=re.IGNORECASE
+                                )
+                                if new_sql != sql_text:
+                                    changed = True
+                                sql_text = new_sql
+                                
+                                # 处理 WHERE col IN (ph) (UNION/;/) → 替换为空
+                                new_sql = re.sub(
+                                    rf'\bWHERE\s+({col_ref})\s+IN\s*\(\s*{placeholder}\s*\)\s*(?=\bUNION\b|;|$|\)|GROUP|ORDER|LIMIT)',
+                                    '',
+                                    sql_text,
+                                    flags=re.IGNORECASE
+                                )
+                                if new_sql != sql_text:
+                                    changed = True
+                                sql_text = new_sql
+                                
+                                new_sql = re.sub(
+                                    rf'\bWHERE\s+({col_ref})\s+IN\s*\(\s*{bind_param}\s*\)\s*(?=\bUNION\b|;|$|\)|GROUP|ORDER|LIMIT)',
+                                    '',
+                                    sql_text,
+                                    flags=re.IGNORECASE
+                                )
+                                if new_sql != sql_text:
+                                    changed = True
+                                sql_text = new_sql
                             
                             # 清理残留标记
                             sql_text = sql_text.replace(REMOVE, '')
@@ -210,8 +273,12 @@ class ExportService:
                         for param_name in multi_params:
                             if param_name not in script_params:
                                 continue
-                            val = str(script_params[param_name])
-                            parts = [v.strip() for v in val.split(',') if v.strip()]
+                            val = script_params[param_name]
+                            # 处理数组类型值（前端多选枚举传递）
+                            if isinstance(val, list):
+                                parts = [str(v).strip() for v in val if str(v).strip()]
+                            else:
+                                parts = [v.strip() for v in str(val).split(',') if v.strip()]
                             if not parts:
                                 continue
                             if len(parts) == 1:

@@ -509,6 +509,7 @@ function onScriptChange() {
 
 function buildAutoParamsPayload() {
   const result = {}
+  const allCheckedState = {}
   for (const sid of form.script_ids) {
     const script = exportScripts.value.find(s => s.id === sid)
     if (!script) continue
@@ -525,6 +526,10 @@ function buildAutoParamsPayload() {
     }
     for (const p of paramsConfig) {
       const key = getParamKey(sid, p.name)
+      // 保存 allChecked 状态
+      if (allChecked[key]) {
+        allCheckedState[key] = true
+      }
       // 跳过勾选"全部"的参数
       if (allChecked[key]) continue
       const val = form.auto_params[key]
@@ -538,6 +543,10 @@ function buildAutoParamsPayload() {
         }
       }
     }
+  }
+  // 将 allChecked 状态存入特殊 key
+  if (Object.keys(allCheckedState).length > 0) {
+    result.__allChecked__ = allCheckedState
   }
   return result
 }
@@ -582,6 +591,11 @@ function openDialog(row) {
     isEdit.value = true
     editId.value = row.id
     const autoParams = row.auto_params || {}
+    // 提取并移除 __allChecked__ 状态
+    const savedAllChecked = autoParams.__allChecked__ || {}
+    const cleanedAutoParams = { ...autoParams }
+    delete cleanedAutoParams.__allChecked__
+
     const restoredParams = {}
     const restoredModes = {}
     if (row.script_ids && row.script_ids.length > 0) {
@@ -601,20 +615,22 @@ function openDialog(row) {
         }
         for (const p of paramsConfig) {
           const key = getParamKey(sid, p.name)
-          if (autoParams[p.name] !== undefined) {
-            restoredParams[key] = autoParams[p.name]
+          if (cleanedAutoParams[p.name] !== undefined) {
+            restoredParams[key] = cleanedAutoParams[p.name]
             const allDynamicValues = [
               ...paramOptionsData.value.time.map(o => o.value),
               ...paramOptionsData.value.range.map(o => o.value),
               ...paramOptionsData.value.fixed.map(o => o.value)
             ]
-            restoredModes[key] = allDynamicValues.includes(autoParams[p.name]) ? 'dynamic' : 'custom'
+            restoredModes[key] = allDynamicValues.includes(cleanedAutoParams[p.name]) ? 'dynamic' : 'custom'
           }
         }
       }
     }
     Object.keys(paramModes).forEach(k => delete paramModes[k])
     Object.keys(allChecked).forEach(k => delete allChecked[k])
+    // 恢复 allChecked 状态
+    Object.assign(allChecked, savedAllChecked)
     Object.assign(paramModes, restoredModes)
     Object.assign(form, {
       name: row.name || '',

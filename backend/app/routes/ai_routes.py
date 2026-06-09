@@ -348,15 +348,83 @@ def send_message(chat_id):
         messages = []
         if ai_config.system_prompt:
             messages.append({'role': 'system', 'content': ai_config.system_prompt})
-        elif context:
-            messages.append({'role': 'system', 'content': context})
+        else:
+            sys_prompt = context + '\n\n## 重要规则\n' \
+                '- 当用户表达需要导出数据的意图时，调用 request_export 工具\n' \
+                '- 当用户表达需要查询数据的意图时，调用 request_query 工具\n' \
+                '- 如果用户没有指定具体的导出选项名称，先调用 list_export_options 列出相关选项让用户选择\n' \
+                '- 如果用户提供了参数值，务必在调用工具时传入正确的参数\n' \
+                '- 如果缺少必填参数，在回复中向用户询问\n'
+            messages.append({'role': 'system', 'content': sys_prompt})
 
         for msg in history:
             messages.append({'role': msg.role, 'content': msg.content})
 
-        # Call AI
-        response_text, tokens = AiService.chat(ai_config, messages)
+        # Call AI with function calling
+        ai_response = AiService.chat_with_tools(ai_config, messages)
+        response_text = ai_response['content']
+        tool_calls = ai_response['tool_calls']
+        tokens = ai_response['tokens']
 
+        # If AI wants to call tools, execute them
+        tool_results = []
+        if tool_calls:
+            for tc in tool_calls:
+                func_name = tc.get('function', {}).get('name', '')
+                func_args = tc.get('function', {}).get('arguments', '')
+                logger.info(f'AI调用工具: {func_name}({func_args})')
+                result = AiService.execute_tool_call(func_name, func_args)
+                tool_results.append({
+                    'tool_call_id': tc['id'],
+                    'name': func_name,
+                    'result': result,
+                })
+
+            # Build tool result messages for AI to generate final response
+            tool_messages = []
+            for tr in tool_results:
+                tool_messages.append({
+                    'role': 'tool',
+                    'tool_call_id': tr['tool_call_id'],
+                    'content': json.dumps(tr['result'], ensure_ascii=False),
+                })
+
+            # Ask AI to generate final response with tool results
+            messages.append({
+                'role': 'assistant',
+                'content': response_text,
+                'tool_calls': tool_calls,
+            })
+            messages.extend(tool_messages)
+
+            # Get final AI response (no more tool calls for simplicity)
+            final_payload = {
+                'model': ai_config.model_name or 'gpt-3.5-turbo',
+                'messages': messages,
+                'max_tokens': ai_config.max_tokens or 4096,
+                'temperature': ai_config.temperature if ai_config.temperature is not None else 0.7,
+            }
+            api_key = ai_config.get_api_key()
+            api_base = ai_config.api_base or 'https://api.openai.com/v1'
+            url = f"{api_base.rstrip('/')}/chat/completions"
+            headers = {
+                'Authorization': f'Bearer {api_key}',
+                'Content-Type': 'application/json',
+            }
+            import requests
+            response = requests.post(url, headers=headers, json=final_payload, timeout=120)
+            response.raise_for_status()
+            result2 = response.json()
+            response_text = result2['choices'][0].get('message', {}).get('content', '') if result2.get('choices') else ''
+            tokens = result2.get('usage', {}).get('total_tokens', tokens)
+
+        # Build response payload
+        response_payload = {
+            'assistant_message': None,
+            'tool_results': None,
+        }
+
+        # Save assistant message
         assistant_message = AiChatMessage(
             chat_id=chat_id,
             role='assistant',
@@ -364,16 +432,19 @@ def send_message(chat_id):
             tokens_used=tokens,
         )
         db.session.add(assistant_message)
+        db.session.commit()
+
+        response_payload['assistant_message'] = assistant_message.to_dict()
+
+        # If there are tool results, send them to frontend
+        if tool_results:
+            response_payload['tool_results'] = tool_results
 
         # Track behavior
         from app.utils.behavior_tracker import track_behavior as _track
-        db.session.commit()  # 先提交消息
         _track(current_user.id, 'chat', 'ai_chat', chat_id, {'tokens': tokens})
 
-        return jsonify({'success': True, 'data': {
-            'user_message': user_message.to_dict(),
-            'assistant_message': assistant_message.to_dict(),
-        }})
+        return jsonify({'success': True, 'data': response_payload})
     except Exception as e:
         logger.error(f'AI对话失败: {e}', exc_info=True)
         assistant_message = AiChatMessage(
