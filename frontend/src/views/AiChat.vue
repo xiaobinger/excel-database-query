@@ -72,20 +72,40 @@
               </template>
               <!-- 工具调用确认卡片 -->
               <template v-else-if="!msg._dismissed">
-                <div class="tool-card">
+                <div class="tool-card" :class="msg._executing ? 'executing' : (msg._done ? 'done' : (msg._failed ? 'failed' : ''))">
                   <div class="tool-card-header">
-                    <i class="fas fa-magic tool-icon"></i>
-                    <span class="tool-title">{{ msg.tool_data.action_type === 'export' ? '导出任务确认' : '查询任务确认' }}</span>
+                    <i v-if="msg._executing" class="fas fa-spinner fa-spin tool-icon"></i>
+                    <i v-else-if="msg._done" class="fas fa-check-circle tool-icon tool-icon-success"></i>
+                    <i v-else-if="msg._failed" class="fas fa-times-circle tool-icon tool-icon-error"></i>
+                    <i v-else class="fas fa-magic tool-icon"></i>
+                    <span class="tool-title">
+                      <template v-if="msg._executing">任务执行中...</template>
+                      <template v-else-if="msg._done">执行成功</template>
+                      <template v-else-if="msg._failed">执行失败</template>
+                      <template v-else>{{ msg.tool_data.action_type === 'export' ? '导出任务确认' : '查询任务确认' }}</template>
+                    </span>
                   </div>
                   <div class="tool-card-body">
                     <p class="tool-confirm-msg">{{ msg.tool_data.confirm_message }}</p>
-                    <p v-if="msg.tool_data.required_missing && msg.tool_data.required_missing.length" class="tool-warning">
+                    <p v-if="msg._executing" class="tool-progress-info">
+                      <el-progress :percentage="msg._progress || 0" :stroke-width="6" />
+                      <span class="tool-progress-text">{{ msg._status_text || '正在初始化...' }}</span>
+                    </p>
+                    <p v-if="msg._done && msg._download_url" class="tool-download-link">
+                      <a :href="msg._download_url" target="_blank" download>
+                        <i class="fas fa-download"></i> 点击下载文件
+                      </a>
+                    </p>
+                    <p v-if="msg._failed && msg._error_msg" class="tool-error-msg">
+                      <i class="fas fa-exclamation-circle"></i> {{ msg._error_msg }}
+                    </p>
+                    <p v-if="msg.tool_data.required_missing && msg.tool_data.required_missing.length && !msg._executing && !msg._done" class="tool-warning">
                       <i class="fas fa-exclamation-triangle"></i> 缺少必填参数：{{ msg.tool_data.required_missing.join(', ') }}
                     </p>
                   </div>
                   <div class="tool-card-actions">
                     <el-button
-                      v-if="msg.tool_data.action_type === 'export'"
+                      v-if="msg.tool_data.action_type === 'export' && !msg._executing && !msg._done && !msg._failed"
                       type="primary"
                       size="small"
                       @click="confirmExport(msg)"
@@ -94,7 +114,15 @@
                       <i class="fas fa-play"></i> 确认执行导出
                     </el-button>
                     <el-button
-                      v-else-if="msg.tool_data.action_type === 'query'"
+                      v-if="msg._done && msg._download_url"
+                      type="success"
+                      size="small"
+                      @click="downloadFile(msg._download_url)"
+                    >
+                      <i class="fas fa-download"></i> 下载文件
+                    </el-button>
+                    <el-button
+                      v-if="msg.tool_data.action_type === 'query' && !msg._executing && !msg._done && !msg._failed"
                       type="primary"
                       size="small"
                       @click="confirmQuery(msg)"
@@ -102,7 +130,7 @@
                       <i class="fas fa-play"></i> 确认执行查询
                     </el-button>
                     <el-button size="small" text @click="dismissTool(msg)">
-                      忽略
+                      {{ msg._done || msg._failed ? '关闭' : '忽略' }}
                     </el-button>
                   </div>
                 </div>
@@ -161,7 +189,7 @@
 <script setup>
 import { ref, onMounted, nextTick, computed } from 'vue'
 import api from '../api'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 
@@ -367,32 +395,114 @@ function dismissTool(msg) {
 async function confirmExport(msg) {
   const td = msg.tool_data
   const params = { ...td.params }
-  // 添加 all_checked 状态（未提供的 allow_all 参数自动勾选全部）
   const allChecked = td.all_checked || {}
 
+  // Set executing state
+  msg._executing = true
+  msg._progress = 5
+  msg._status_text = '正在初始化任务...'
+  msg._done = false
+  msg._failed = false
+
   try {
-    ElMessage.info('正在执行导出...')
     const res = await api.export.execute({
       script_ids: [td.script_id],
       params_values: params,
       all_checked: allChecked,
       output_format: td.output_format || 'sheets',
     })
-    if (res.data) {
-      const taskId = res.data.task_id
-      ElMessage.success('导出任务已提交')
-      messages.value.push({
-        id: Date.now(),
-        role: 'assistant',
-        content: `✅ 导出任务已提交！任务ID: ${taskId}\n\n你可以在导出任务列表中查看进度和下载文件。`,
-      })
-      dismissTool(msg)
-      await nextTick()
-      scrollToBottom()
+    if (!res.data?.task_id) {
+      throw new Error('未获取到任务ID')
     }
+
+    const taskId = res.data.task_id
+    msg._status_text = '任务已提交，正在执行...'
+
+    // Poll task status
+    await pollTaskStatus(taskId, msg)
   } catch (e) {
-    ElMessage.error('导出执行失败: ' + (e.message || '未知错误'))
+    msg._executing = false
+    msg._failed = true
+    msg._error_msg = e.message || '未知错误'
+    ElMessage.error('导出执行失败: ' + msg._error_msg)
   }
+}
+
+function pollTaskStatus(taskId, msg) {
+  const statusTextMap = {
+    pending: '任务等待中...',
+    running: '正在执行导出...',
+    completed: '执行完成',
+    failed: '执行失败',
+    cancelled: '已取消',
+  }
+
+  return new Promise((resolve) => {
+    const poll = async () => {
+      try {
+        const res = await api.export.status(taskId)
+        const task = res.data
+        if (!task) return
+
+        msg._progress = task.progress || 0
+        msg._status_text = statusTextMap[task.status] || '执行中...'
+
+        if (task.status === 'completed') {
+          msg._executing = false
+          msg._done = true
+          msg._download_url = `/api/download/${taskId}`
+          msg._progress = 100
+          msg._status_text = '执行完成'
+
+          // 弹出下载确认
+          ElMessageBox.confirm(
+            '导出任务已完成，是否立即下载文件？',
+            '下载确认',
+            { confirmButtonText: '立即下载', cancelButtonText: '稍后下载', type: 'success' }
+          ).then(() => {
+            downloadFile(msg._download_url)
+          }).catch(() => {})
+
+          // 添加聊天反馈
+          messages.value.push({
+            id: Date.now(),
+            role: 'assistant',
+            content: `✅ 导出任务 **${msg.tool_data.script_name}** 已完成！\n\n- 任务ID：\`${taskId}\`\n- 输出格式：${msg.tool_data.output_format || 'sheets'}\n\n你可以点击上方卡片中的按钮下载文件，或前往导出任务列表查看历史记录。`,
+          })
+          resolve()
+          return
+        }
+
+        if (task.status === 'failed') {
+          msg._executing = false
+          msg._failed = true
+          msg._error_msg = task.error_message || '执行失败'
+          msg._status_text = '执行失败'
+
+          messages.value.push({
+            id: Date.now(),
+            role: 'assistant',
+            content: `❌ 导出任务执行失败：**${msg.tool_data.script_name}**\n\n错误信息：${msg._error_msg}`,
+          })
+          resolve()
+          return
+        }
+
+        // Still running, poll again
+        setTimeout(poll, 1500)
+      } catch (e) {
+        msg._executing = false
+        msg._failed = true
+        msg._error_msg = '轮询任务状态失败: ' + (e.message || '未知错误')
+        resolve()
+      }
+    }
+    poll()
+  })
+}
+
+function downloadFile(url) {
+  window.open(url, '_blank')
 }
 
 async function confirmQuery(msg) {
@@ -694,6 +804,97 @@ onMounted(() => {
   padding: 10px 16px;
   background: #fafbfc;
   border-top: 1px solid #eef2f7;
+}
+
+/* Tool Card States */
+.tool-card.executing {
+  border-color: #e6a23c;
+  box-shadow: 0 2px 12px rgba(230, 162, 60, 0.2);
+}
+
+.tool-card.executing .tool-card-header {
+  background: linear-gradient(135deg, #fdf6ec, #fcf5e0);
+  border-bottom-color: #f0d9a6;
+}
+
+.tool-card.executing .tool-icon {
+  color: #e6a23c;
+}
+
+.tool-card.done {
+  border-color: #67c23a;
+  box-shadow: 0 2px 12px rgba(103, 194, 58, 0.2);
+}
+
+.tool-card.done .tool-card-header {
+  background: linear-gradient(135deg, #f0f9eb, #e5f7d5);
+  border-bottom-color: #c2e09a;
+}
+
+.tool-card.done .tool-icon {
+  color: #67c23a;
+}
+
+.tool-icon-success {
+  color: #67c23a !important;
+}
+
+.tool-icon-error {
+  color: #f56c6c !important;
+}
+
+.tool-card.failed {
+  border-color: #f56c6c;
+  box-shadow: 0 2px 12px rgba(245, 108, 108, 0.2);
+}
+
+.tool-card.failed .tool-card-header {
+  background: linear-gradient(135deg, #fef0f0, #fde8e8);
+  border-bottom-color: #f5c6c6;
+}
+
+.tool-card.failed .tool-icon {
+  color: #f56c6c;
+}
+
+.tool-progress-info {
+  margin: 0;
+}
+
+.tool-progress-text {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
+  display: block;
+}
+
+.tool-download-link {
+  margin: 8px 0 0;
+}
+
+.tool-download-link a {
+  color: #409eff;
+  text-decoration: none;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-download-link a:hover {
+  text-decoration: underline;
+}
+
+.tool-error-msg {
+  font-size: 12px;
+  color: #f56c6c;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #fef0f0;
+  padding: 6px 10px;
+  border-radius: 6px;
 }
 
 /* ===== Input Area ===== */
