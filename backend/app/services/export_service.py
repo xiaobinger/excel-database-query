@@ -142,7 +142,7 @@ class ExportService:
                             col_pat = rf'`?{re.escape(pname)}`?'
                             placeholder = rf'\{{\{{\s*{re.escape(pname)}\s*\}}\}}'
                             bind_param = rf':{re.escape(pname)}\b'
-                            cond_pat = rf'({col_pat}\s*[=!]=\s*(?:{placeholder}|{bind_param})\s*)'
+                            cond_pat = rf'({col_pat}\s*[=!]=\s*(?:{placeholder}|{bind_param}))'
                             
                             # 场景A: 只有这一个WHERE条件 → 整条WHERE去掉（含UNION子查询、括号包裹）
                             sql_text = re.sub(
