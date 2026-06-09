@@ -422,13 +422,21 @@ class AiService:
                     return {'error': f'你没有权限使用导出选项"{script.name}"'}
 
         script_params = script.get_params_config()
-        required_params = [p for p in script_params if p.get('required') and p['name'] not in params]
+        # 自动将未提供且支持 allow_all 的参数标记为"全部"
+        all_checked = {}
+        for p in script_params:
+            if p.get('allow_all') and p['name'] not in params:
+                # 构建前端 allChecked 的 key（导出执行时是参数名本身，非独立参数用脚本ID_参数名）
+                all_checked[p['name']] = True
+
+        required_params = [p for p in script_params if p.get('required') and p['name'] not in params and p['name'] not in all_checked]
 
         return {
             'action_type': 'export',
             'script_id': script.id,
             'script_name': script.name,
             'params': params,
+            'all_checked': all_checked,
             'output_format': args.get('output_format', 'sheets'),
             'required_missing': [p['name'] for p in required_params],
             'description': desc,

@@ -74,10 +74,11 @@ class ExportService:
     @staticmethod
     def execute_export_async(task_id: str, script_ids: List[int],
                              params_values: Dict[str, Any], output_dir: str,
-                             output_format: str = 'sheets', on_complete=None):
+                             output_format: str = 'sheets', all_checked: Dict[str, Any] = None,
+                             on_complete=None):
         thread = threading.Thread(
             target=ExportService._execute_export_background,
-            args=(task_id, script_ids, params_values, output_dir, output_format, on_complete),
+            args=(task_id, script_ids, params_values, output_dir, output_format, all_checked, on_complete),
             daemon=True
         )
         thread.start()
@@ -85,7 +86,8 @@ class ExportService:
     @staticmethod
     def _execute_export_background(task_id: str, script_ids: List[int],
                                    params_values: Dict[str, Any], output_dir: str,
-                                   output_format: str = 'sheets', on_complete=None):
+                                   output_format: str = 'sheets', all_checked: Dict[str, Any] = None,
+                                   on_complete=None):
         try:
             from app import create_app
             app = create_app()
@@ -134,6 +136,13 @@ class ExportService:
                     number_params = {p['name'] for p in params_config if p.get('type') == 'number'}
                     neq_params = {p['name']: p for p in params_config if p.get('enum_enabled') and p.get('enum_mode') == 'neq' and p.get('neq_value')}
                     allow_all_params = {p['name'] for p in params_config if p.get('allow_all')}
+                    
+                    # 如果 all_checked 中有参数，将其从 script_params 中移除（视为未提供，触发 allow_all 逻辑）
+                    if all_checked:
+                        for pname in list(script_params.keys()):
+                            if pname in all_checked:
+                                del script_params[pname]
+                                task.add_log(f'导出选项 [{script.name}] 参数 {pname} 被标记为"全部"，不筛选')
                     
                     task.add_log(f'导出选项 [{script.name}] SQL处理开始, 参数: {script_params}')
 

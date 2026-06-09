@@ -24,6 +24,7 @@ def execute_export():
 
     script_ids = data.get('script_ids', [])
     params_values = data.get('params_values', {})
+    all_checked = data.get('all_checked', {})
     output_format = data.get('output_format', 'sheets')
 
     if not script_ids:
@@ -58,6 +59,7 @@ def execute_export():
             params_values=params_values,
             output_dir=output_dir,
             output_format=output_format,
+            all_checked=all_checked,
         )
 
         # 记录用户行为

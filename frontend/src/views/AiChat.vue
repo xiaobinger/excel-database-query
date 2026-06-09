@@ -367,12 +367,15 @@ function dismissTool(msg) {
 async function confirmExport(msg) {
   const td = msg.tool_data
   const params = { ...td.params }
+  // 添加 all_checked 状态（未提供的 allow_all 参数自动勾选全部）
+  const allChecked = td.all_checked || {}
 
   try {
     ElMessage.info('正在执行导出...')
     const res = await api.export.execute({
       script_ids: [td.script_id],
       params_values: params,
+      all_checked: allChecked,
       output_format: td.output_format || 'sheets',
     })
     if (res.data) {
