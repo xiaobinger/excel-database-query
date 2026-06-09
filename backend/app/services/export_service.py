@@ -143,37 +143,42 @@ class ExportService:
                     for pname in allow_all_params:
                         if pname not in script_params or script_params.get(pname) == '':
                             task.add_log(f'导出选项 [{script.name}] 参数 {pname} 满足全部条件，开始移除')
-                            # 匹配任意列名（含表前缀如 d.device_status）+ = :param 或 = {{param}}
-                            col_ref = rf'(?:`?\w+`?\.)?`?\w+`?'
-                            placeholder = rf'\{{\{{\s*{re.escape(pname)}\s*\}}\}}'
-                            bind_param = rf':{re.escape(pname)}\b'
-                            cond_pat = rf'({col_ref}\s*[=!]=\s*(?:{placeholder}|{bind_param}))'
                             
-                            task.add_log(f'导出选项 [{script.name}] 完整SQL: {sql_text}')
-                            task.add_log(f'导出选项 [{script.name}] 正则cond_pat: {cond_pat}')
+                            # 构建两种占位符的条件模式
+                            conditions_to_remove = []
                             
-                            # 场景A: 只有这一个WHERE条件 → 整条WHERE去掉（含UNION子查询、括号包裹）
-                            sql_text = re.sub(
-                                rf'\bWHERE\s+{cond_pat}(?=\s*(?:;|$|GROUP|ORDER|LIMIT|UNION|\)))',
-                                '',
-                                sql_text,
-                                flags=re.IGNORECASE
-                            )
-                            task.add_log(f'导出选项 [{script.name}] 场景A处理后完整SQL: {sql_text}')
-                            # 场景B: WHERE cond AND ... → 删cond AND，保留WHERE给后续条件
-                            sql_text = re.sub(
-                                rf'(?<=\bWHERE\b)\s+{cond_pat}\s+AND\s+',
-                                ' ',
-                                sql_text,
-                                flags=re.IGNORECASE
-                            )
-                            # 场景C: ... AND cond → 删AND cond（覆盖中间和末尾位置）
-                            sql_text = re.sub(
-                                rf'\s+AND\s+{cond_pat}',
-                                '',
-                                sql_text,
-                                flags=re.IGNORECASE
-                            )
+                            # 模式1: 任意列名 = {{param}} 或 != {{param}}
+                            for op in ['=', '!=']:
+                                # 用非贪婪通配符匹配列名
+                                cond1 = re.compile(
+                                    rf'(?:\bWHERE\s+|\bAND\s+)([a-zA-Z0-9_.`]+)\s*{re.escape(op)}\s*\{{\{{\s*{re.escape(pname)}\s*\}}\}}\s*(?=\bAND\b|;|$|\)|GROUP|ORDER|LIMIT)',
+                                    re.IGNORECASE
+                                )
+                                conditions_to_remove.append(cond1)
+                            
+                            # 模式2: 任意列名 = :param 或 != :param
+                            for op in ['=', '!=']:
+                                cond2 = re.compile(
+                                    rf'(?:\bWHERE\s+|\bAND\s+)([a-zA-Z0-9_.`]+)\s*{re.escape(op)}\s*:{re.escape(pname)}\b\s*(?=\bAND\b|;|$|\)|GROUP|ORDER|LIMIT)',
+                                    re.IGNORECASE
+                                )
+                                conditions_to_remove.append(cond2)
+                            
+                            # 逐一移除匹配到的条件
+                            for pattern in conditions_to_remove:
+                                def replace_cond(m):
+                                    matched = m.group(0)
+                                    # 如果是 WHERE 开头，保留 WHERE 关键词
+                                    if re.match(r'\bWHERE\s+', matched, re.IGNORECASE):
+                                        return 'WHERE '
+                                    return ''
+                                
+                                new_sql = pattern.sub(replace_cond, sql_text)
+                                if new_sql != sql_text:
+                                    task.add_log(f'导出选项 [{script.name}] 参数 {pname} 成功移除条件')
+                                sql_text = new_sql
+                            
+                            task.add_log(f'导出选项 [{script.name}] 处理后SQL前200字符: {sql_text[:200]}')
 
                     # 2. 处理非即不等于参数（选是/否时替换=为!=）
                     for pname, pconf in neq_params.items():
