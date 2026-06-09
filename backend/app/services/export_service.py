@@ -143,11 +143,11 @@ class ExportService:
                     for pname in allow_all_params:
                         if pname not in script_params or script_params.get(pname) == '':
                             task.add_log(f'导出选项 [{script.name}] 参数 {pname} 满足全部条件，开始移除')
-                            # 匹配 column = {{param}} 或 column = :param
-                            col_pat = rf'`?{re.escape(pname)}`?'
+                            # 匹配任意列名（含表前缀如 d.device_status）+ = :param 或 = {{param}}
+                            col_ref = rf'(?:`?\w+`?\.)?`?\w+`?'
                             placeholder = rf'\{{\{{\s*{re.escape(pname)}\s*\}}\}}'
                             bind_param = rf':{re.escape(pname)}\b'
-                            cond_pat = rf'({col_pat}\s*[=!]=\s*(?:{placeholder}|{bind_param}))'
+                            cond_pat = rf'({col_ref}\s*[=!]=\s*(?:{placeholder}|{bind_param}))'
                             
                             task.add_log(f'导出选项 [{script.name}] 完整SQL: {sql_text}')
                             task.add_log(f'导出选项 [{script.name}] 正则cond_pat: {cond_pat}')
