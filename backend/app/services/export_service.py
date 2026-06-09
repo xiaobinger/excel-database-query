@@ -134,10 +134,15 @@ class ExportService:
                     number_params = {p['name'] for p in params_config if p.get('type') == 'number'}
                     neq_params = {p['name']: p for p in params_config if p.get('enum_enabled') and p.get('enum_mode') == 'neq' and p.get('neq_value')}
                     allow_all_params = {p['name'] for p in params_config if p.get('enum_enabled') and p.get('allow_all')}
+                    
+                    task.add_log(f'导出选项 [{script.name}] 收到的参数: {script_params}')
+                    task.add_log(f'导出选项 [{script.name}] 全部参数: {allow_all_params}')
+                    task.add_log(f'导出选项 [{script.name}] 原始SQL前100字符: {sql_text[:100]}')
 
                     # 1. 先处理"全部"选项：智能移除WHERE条件
                     for pname in allow_all_params:
                         if pname not in script_params or script_params.get(pname) == '':
+                            task.add_log(f'导出选项 [{script.name}] 参数 {pname} 满足全部条件，开始移除')
                             # 匹配 column = {{param}} 或 column = :param
                             col_pat = rf'`?{re.escape(pname)}`?'
                             placeholder = rf'\{{\{{\s*{re.escape(pname)}\s*\}}\}}'
@@ -151,6 +156,7 @@ class ExportService:
                                 sql_text,
                                 flags=re.IGNORECASE
                             )
+                            task.add_log(f'导出选项 [{script.name}] 场景A处理后SQL前100字符: {sql_text[:100]}')
                             # 场景B: WHERE cond AND ... → 删cond AND，保留WHERE给后续条件
                             sql_text = re.sub(
                                 rf'(?<=\bWHERE\b)\s+{cond_pat}\s+AND\s+',
