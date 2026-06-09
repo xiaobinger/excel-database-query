@@ -135,9 +135,7 @@ class ExportService:
                     neq_params = {p['name']: p for p in params_config if p.get('enum_enabled') and p.get('enum_mode') == 'neq' and p.get('neq_value')}
                     allow_all_params = {p['name'] for p in params_config if p.get('enum_enabled') and p.get('allow_all')}
                     
-                    task.add_log(f'导出选项 [{script.name}] 收到的参数: {script_params}')
-                    task.add_log(f'导出选项 [{script.name}] 全部参数: {allow_all_params}')
-                    task.add_log(f'导出选项 [{script.name}] 原始SQL前100字符: {sql_text[:100]}')
+                    task.add_log(f'导出选项 [{script.name}] SQL处理开始, 参数: {script_params}')
 
                     # 1. 先处理"全部"选项：智能移除WHERE条件
                     for pname in allow_all_params:
@@ -190,8 +188,6 @@ class ExportService:
                             
                             # 清理残留标记
                             sql_text = sql_text.replace(REMOVE, '')
-                            
-                            task.add_log(f'导出选项 [{script.name}] 处理后SQL前200字符: {sql_text[:200]}')
 
                     # 2. 处理非即不等于参数（选是/否时替换=为!=）
                     for pname, pconf in neq_params.items():
