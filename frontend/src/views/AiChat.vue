@@ -411,11 +411,11 @@ async function confirmExport(msg) {
       all_checked: allChecked,
       output_format: td.output_format || 'sheets',
     })
-    if (!res.data?.task_id) {
+    if (!res.task_id) {
       throw new Error('未获取到任务ID')
     }
 
-    const taskId = res.data.task_id
+    const taskId = res.task_id
     msg._status_text = '任务已提交，正在执行...'
 
     // Poll task status
@@ -438,11 +438,27 @@ function pollTaskStatus(taskId, msg) {
   }
 
   return new Promise((resolve) => {
+    let pollCount = 0
+    const maxPolls = 300 // max 5 minutes at 1s interval
     const poll = async () => {
       try {
+        pollCount++
+        if (pollCount > maxPolls) {
+          msg._executing = false
+          msg._failed = true
+          msg._error_msg = '任务执行超时'
+          msg._status_text = '执行超时'
+          resolve()
+          return
+        }
+
         const res = await api.export.status(taskId)
         const task = res.data
-        if (!task) return
+        if (!task) {
+          // Task not found yet (still initializing), wait and retry
+          setTimeout(poll, 2000)
+          return
+        }
 
         msg._progress = task.progress || 0
         msg._status_text = statusTextMap[task.status] || '执行中...'
@@ -469,6 +485,8 @@ function pollTaskStatus(taskId, msg) {
             role: 'assistant',
             content: `✅ 导出任务 **${msg.tool_data.script_name}** 已完成！\n\n- 任务ID：\`${taskId}\`\n- 输出格式：${msg.tool_data.output_format || 'sheets'}\n\n你可以点击上方卡片中的按钮下载文件，或前往导出任务列表查看历史记录。`,
           })
+          await nextTick()
+          scrollToBottom()
           resolve()
           return
         }
@@ -484,6 +502,8 @@ function pollTaskStatus(taskId, msg) {
             role: 'assistant',
             content: `❌ 导出任务执行失败：**${msg.tool_data.script_name}**\n\n错误信息：${msg._error_msg}`,
           })
+          await nextTick()
+          scrollToBottom()
           resolve()
           return
         }
@@ -494,6 +514,9 @@ function pollTaskStatus(taskId, msg) {
         msg._executing = false
         msg._failed = true
         msg._error_msg = '轮询任务状态失败: ' + (e.message || '未知错误')
+        msg._status_text = '轮询失败'
+        await nextTick()
+        scrollToBottom()
         resolve()
       }
     }
