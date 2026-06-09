@@ -187,70 +187,126 @@
                     <el-tag v-if="param.range" size="small" type="warning" effect="plain" style="margin-left:4px;font-size:11px">范围</el-tag>
                   </div>
                   <div class="param-config-control">
-                    <el-select
-                      :model-value="getParamMode(sp.scriptId, param.name)"
-                      placeholder="选择方式"
-                      size="small"
-                      style="width: 140px"
-                      @update:model-value="(val) => onParamModeChange(sp.scriptId, param.name, val)"
-                    >
-                      <el-option value="dynamic" label="动态表达式" />
-                      <el-option value="custom" label="自定义固定值" />
-                    </el-select>
-                    <el-select
-                      v-if="getParamMode(sp.scriptId, param.name) === 'dynamic'"
-                      :model-value="getParamValue(sp.scriptId, param.name)"
-                      placeholder="选择动态值"
-                      size="small"
-                      style="flex: 1"
-                      @change="(val) => setParamValue(sp.scriptId, param.name, val)"
-                    >
-                      <el-option-group v-if="param.range" label="时间范围（自动拆分开始/结束）">
-                        <el-option
-                          v-for="opt in rangeDynamicOptions"
-                          :key="opt.value"
-                          :label="opt.label"
-                          :value="opt.value"
-                        />
-                      </el-option-group>
-                      <el-option-group v-if="!param.range" label="时间动态值">
-                        <el-option
-                          v-for="opt in timeDynamicOptions"
-                          :key="opt.value"
-                          :label="opt.label"
-                          :value="opt.value"
-                        />
-                      </el-option-group>
-                      <el-option-group label="固定值">
-                        <el-option
-                          v-for="opt in fixedParamOptions"
-                          :key="opt.value"
-                          :label="opt.label"
-                          :value="opt.value"
-                        />
-                      </el-option-group>
-                    </el-select>
-                    <template v-else-if="getParamMode(sp.scriptId, param.name) === 'custom' && param.range">
-                      <el-date-picker
+                    <!-- 枚举list模式：下拉选择 -->
+                    <template v-if="param.enum_enabled && param.enum_mode === 'list' && param.enum_values && param.enum_values.length > 0">
+                      <el-select
                         :model-value="getParamValue(sp.scriptId, param.name)"
-                        type="daterange"
-                        range-separator="至"
-                        start-placeholder="开始日期"
-                        end-placeholder="结束日期"
+                        :multiple="param.multi"
+                        :collapse-tags="param.multi"
+                        :collapse-tags-tooltip="param.multi"
+                        placeholder="请选择枚举值"
                         size="small"
                         style="flex: 1"
-                        value-format="YYYY-MM-DD"
-                        @change="(val) => setParamValue(sp.scriptId, param.name, val || '')"
-                      />
+                        @change="(val) => setParamValue(sp.scriptId, param.name, val ?? '')"
+                      >
+                        <el-option
+                          v-if="param.allow_all"
+                          value=""
+                          label="全部（不筛选）"
+                        />
+                        <el-option
+                          v-for="item in param.enum_values"
+                          :key="item.value"
+                          :label="item.label"
+                          :value="item.value"
+                        />
+                      </el-select>
                     </template>
-                    <el-input
-                      v-else-if="getParamMode(sp.scriptId, param.name) === 'custom'"
-                      :model-value="getParamValue(sp.scriptId, param.name)"
-                      :placeholder="param.multi ? '输入多个值，以逗号分隔' : '输入固定值'"
-                      size="small"
-                      style="flex: 1"
-                      @input="(val) => setParamValue(sp.scriptId, param.name, val)"
-                    />
+                    <!-- 枚举neq模式：是/否开关 -->
+                    <template v-else-if="param.enum_enabled && param.enum_mode === 'neq' && param.neq_value">
+                      <el-switch
+                        :model-value="getParamValue(sp.scriptId, param.name)"
+                        active-text="是"
+                        inactive-text="否"
+                        active-color="#67c23a"
+                        inactive-color="#f56c6c"
+                        :disabled="param.allow_all && allChecked[getParamKey(sp.scriptId, param.name)]"
+                        @change="(val) => setParamValue(sp.scriptId, param.name, val)"
+                      />
+                      <el-checkbox
+                        v-if="param.allow_all"
+                        :model-value="allChecked[getParamKey(sp.scriptId, param.name)]"
+                        size="small"
+                        style="margin-left: 8px"
+                        @change="(val) => setAllChecked(sp.scriptId, param.name, val)"
+                      >全部</el-checkbox>
+                    </template>
+                    <!-- 非枚举参数：mode选择器 + 动态/自定义 -->
+                    <template v-else>
+                      <el-select
+                        :model-value="getParamMode(sp.scriptId, param.name)"
+                        placeholder="选择方式"
+                        size="small"
+                        style="width: 140px"
+                        @update:model-value="(val) => onParamModeChange(sp.scriptId, param.name, val)"
+                      >
+                        <el-option value="dynamic" label="动态表达式" />
+                        <el-option value="custom" label="自定义固定值" />
+                      </el-select>
+                      <el-select
+                        v-if="getParamMode(sp.scriptId, param.name) === 'dynamic'"
+                        :model-value="getParamValue(sp.scriptId, param.name)"
+                        placeholder="选择动态值"
+                        size="small"
+                        style="flex: 1"
+                        @change="(val) => setParamValue(sp.scriptId, param.name, val)"
+                      >
+                        <el-option-group v-if="param.range" label="时间范围（自动拆分开始/结束）">
+                          <el-option
+                            v-for="opt in rangeDynamicOptions"
+                            :key="opt.value"
+                            :label="opt.label"
+                            :value="opt.value"
+                          />
+                        </el-option-group>
+                        <el-option-group v-if="!param.range" label="时间动态值">
+                          <el-option
+                            v-for="opt in timeDynamicOptions"
+                            :key="opt.value"
+                            :label="opt.label"
+                            :value="opt.value"
+                          />
+                        </el-option-group>
+                        <el-option-group label="固定值">
+                          <el-option
+                            v-for="opt in fixedParamOptions"
+                            :key="opt.value"
+                            :label="opt.label"
+                            :value="opt.value"
+                          />
+                        </el-option-group>
+                      </el-select>
+                      <template v-else-if="getParamMode(sp.scriptId, param.name) === 'custom' && param.range">
+                        <el-date-picker
+                          :model-value="getParamValue(sp.scriptId, param.name)"
+                          type="daterange"
+                          range-separator="至"
+                          start-placeholder="开始日期"
+                          end-placeholder="结束日期"
+                          size="small"
+                          style="flex: 1"
+                          value-format="YYYY-MM-DD"
+                          @change="(val) => setParamValue(sp.scriptId, param.name, val || '')"
+                        />
+                      </template>
+                      <el-input
+                        v-else-if="getParamMode(sp.scriptId, param.name) === 'custom'"
+                        :model-value="getParamValue(sp.scriptId, param.name)"
+                        :type="param.type === 'number' ? 'number' : 'text'"
+                        :disabled="param.allow_all && allChecked[getParamKey(sp.scriptId, param.name)]"
+                        :placeholder="param.multi ? '输入多个值，以逗号分隔' : '输入固定值'"
+                        size="small"
+                        style="flex: 1"
+                        @input="(val) => setParamValue(sp.scriptId, param.name, val)"
+                      />
+                      <el-checkbox
+                        v-if="param.allow_all && (param.type === 'text' || param.type === 'number' || param.type === 'date' || param.type === 'datetime')"
+                        :model-value="allChecked[getParamKey(sp.scriptId, param.name)]"
+                        size="small"
+                        style="margin-left: 8px"
+                        @change="(val) => setAllChecked(sp.scriptId, param.name, val)"
+                      >全部</el-checkbox>
+                    </template>
                   </div>
                   <div v-if="param.range && getParamMode(sp.scriptId, param.name) === 'dynamic' && getParamValue(sp.scriptId, param.name)" class="param-range-preview">
                     <i class="fas fa-info-circle"></i>
@@ -307,6 +363,7 @@ const defaultForm = {
 
 const form = reactive({ ...defaultForm, script_ids: [], auto_params: {} })
 const paramModes = reactive({})
+const allChecked = reactive({})
 
 const rules = {
   name: [{ required: true, message: '请输入任务名称', trigger: 'blur' }],
@@ -348,6 +405,11 @@ function lastStatusLabel(status) {
 
 function getParamKey(scriptId, paramName) {
   return `${scriptId}__${paramName}`
+}
+
+function setAllChecked(scriptId, paramName, val) {
+  const key = getParamKey(scriptId, paramName)
+  allChecked[key] = !!val
 }
 
 function getParamMode(scriptId, paramName) {
@@ -438,6 +500,11 @@ function onScriptChange() {
       delete paramModes[key]
     }
   }
+  for (const key of Object.keys(allChecked)) {
+    if (!activeKeys.has(key)) {
+      delete allChecked[key]
+    }
+  }
 }
 
 function buildAutoParamsPayload() {
@@ -458,6 +525,8 @@ function buildAutoParamsPayload() {
     }
     for (const p of paramsConfig) {
       const key = getParamKey(sid, p.name)
+      // 跳过勾选"全部"的参数
+      if (allChecked[key]) continue
       const val = form.auto_params[key]
       if (val !== undefined && val !== null && val !== '') {
         // range类型参数自定义固定值：数组拆分为 _start 和 _end
@@ -545,6 +614,7 @@ function openDialog(row) {
       }
     }
     Object.keys(paramModes).forEach(k => delete paramModes[k])
+    Object.keys(allChecked).forEach(k => delete allChecked[k])
     Object.assign(paramModes, restoredModes)
     Object.assign(form, {
       name: row.name || '',
@@ -562,6 +632,7 @@ function openDialog(row) {
     isEdit.value = false
     editId.value = null
     Object.keys(paramModes).forEach(k => delete paramModes[k])
+    Object.keys(allChecked).forEach(k => delete allChecked[k])
     Object.assign(form, {
       ...defaultForm,
       script_ids: [],
