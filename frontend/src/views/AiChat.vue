@@ -27,7 +27,7 @@
       <div v-if="!currentChatId" class="chat-welcome">
         <div class="welcome-icon"><i class="fas fa-robot"></i></div>
         <h2>AI 智能助手</h2>
-        <p>我可以帮你生成SQL查询、创建查询选项、优化语句、执行导出任务等</p>
+        <p>我可以帮你生成SQL查询、创建查询选项、优化语句、执行导出任务、解析Excel文件等</p>
         <div class="quick-actions">
           <el-button @click="quickAsk('帮我导出商户123456的信息')">执行导出任务</el-button>
           <el-button @click="quickAsk('帮我生成一个查询商户信息的SQL')">生成SQL查询</el-button>
@@ -42,9 +42,32 @@
             <div class="message-avatar">
               <i :class="msg.role === 'user' ? 'fas fa-user' : 'fas fa-robot'"></i>
             </div>
-            <div class="message-content" :class="{ 'full-width': msg._type === 'tool' }">
+            <div class="message-content" :class="{ 'full-width': msg._type === 'tool' || msg._type === 'file' }">
+              <!-- 文件附件显示 -->
+              <template v-if="msg._type === 'file'">
+                <div class="file-card">
+                  <div class="file-card-header">
+                    <i class="fas fa-file-excel file-icon"></i>
+                    <span class="file-title">{{ msg._file_data.filename }}</span>
+                  </div>
+                  <div class="file-card-body">
+                    <div class="file-info-row">
+                      <span><i class="fas fa-table"></i> {{ msg._file_data.row_count }} 行</span>
+                      <span><i class="fas fa-columns"></i> {{ msg._file_data.columns.length }} 列</span>
+                    </div>
+                    <div class="file-columns">
+                      <el-tag v-for="col in msg._file_data.columns.slice(0, 10)" :key="col" size="small" effect="plain" style="margin: 2px 4px 2px 0">
+                        {{ col }}
+                      </el-tag>
+                      <el-tag v-if="msg._file_data.columns.length > 10" size="small" type="info" effect="plain">
+                        +{{ msg._file_data.columns.length - 10 }}
+                      </el-tag>
+                    </div>
+                  </div>
+                </div>
+              </template>
               <!-- 普通文本消息 -->
-              <template v-if="msg._type !== 'tool'">
+              <template v-else-if="msg._type !== 'tool'">
                 <div class="message-text" v-html="renderMarkdown(msg.content)"></div>
               </template>
               <!-- 工具调用确认卡片 -->
@@ -97,17 +120,38 @@
         </div>
 
         <div class="input-area">
-          <el-input
-            v-model="inputText"
-            type="textarea"
-            :rows="2"
-            placeholder="输入消息，按 Enter 发送，Shift+Enter 换行..."
-            resize="none"
-            @keydown="handleKeydown"
-          />
-          <el-button type="primary" :loading="loading" :disabled="!inputText.trim()" @click="sendMessage">
-            <i class="fas fa-paper-plane"></i>
-          </el-button>
+          <div class="input-wrapper">
+            <div v-if="uploadedFile" class="file-attachment">
+              <i class="fas fa-file-excel"></i>
+              <span class="file-name">{{ uploadedFile.filename }}</span>
+              <span class="file-info">{{ uploadedFile.row_count }} 行 · {{ uploadedFile.columns.length }} 列</span>
+              <i class="fas fa-times file-remove" @click="uploadedFile = null"></i>
+            </div>
+            <div class="input-row">
+              <el-input
+                v-model="inputText"
+                type="textarea"
+                :rows="2"
+                placeholder="输入消息，按 Enter 发送，Shift+Enter 换行..."
+                resize="none"
+                @keydown="handleKeydown"
+              />
+              <div class="input-buttons">
+                <el-upload
+                  :show-file-list="false"
+                  :before-upload="handleFileUpload"
+                  accept=".xlsx,.xls,.csv"
+                >
+                  <el-button type="info" size="small" :disabled="loading" title="上传Excel文件">
+                    <i class="fas fa-file-upload"></i>
+                  </el-button>
+                </el-upload>
+                <el-button type="primary" :loading="loading" :disabled="!canSend" @click="sendMessage">
+                  <i class="fas fa-paper-plane"></i>
+                </el-button>
+              </div>
+            </div>
+          </div>
         </div>
       </template>
     </div>
@@ -115,7 +159,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick, watch } from 'vue'
+import { ref, onMounted, nextTick, computed } from 'vue'
 import api from '../api'
 import { ElMessage } from 'element-plus'
 import { marked } from 'marked'
@@ -141,6 +185,11 @@ const messages = ref([])
 const inputText = ref('')
 const loading = ref(false)
 const messagesRef = ref(null)
+const uploadedFile = ref(null)
+
+const canSend = computed(() => {
+  return (inputText.value.trim() || uploadedFile.value) && !loading.value
+})
 
 async function fetchChats() {
   try {
@@ -164,7 +213,6 @@ async function selectChat(chatId) {
   try {
     const res = await api.ai.getMessages(chatId)
     const msgs = res.data || []
-    // 清理历史消息中的 _type 标记（后端不存这个字段，前端恢复时需要清空 dismissed）
     messages.value = msgs.map(m => ({ ...m, _dismissed: false }))
     await nextTick()
     scrollToBottom()
@@ -182,32 +230,73 @@ async function deleteChat(chatId) {
   } catch {}
 }
 
+async function handleFileUpload(file) {
+  if (!currentChatId.value) {
+    await createNewChat()
+    if (!currentChatId.value) return false
+  }
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+    const res = await api.ai.uploadFile(formData)
+    if (res.data) {
+      uploadedFile.value = res.data
+      ElMessage.success(`文件解析成功：${res.data.row_count} 行，${res.data.columns.length} 列`)
+    }
+  } catch (e) {
+    ElMessage.error('文件上传失败: ' + (e.message || '未知错误'))
+  }
+  return false // prevent default upload
+}
+
 async function sendMessage() {
   const text = inputText.value.trim()
-  if (!text || loading.value) return
+  if ((!text && !uploadedFile.value) || loading.value) return
 
   if (!currentChatId.value) {
     await createNewChat()
     if (!currentChatId.value) return
   }
 
+  // Build message content with file info if uploaded
+  let content = text
+  if (uploadedFile.value) {
+    const fileInfo = uploadedFile.value
+    const fileDesc = `用户上传了文件 "${fileInfo.filename}"（${fileInfo.row_count} 行，${fileInfo.columns.length} 列），列名：${fileInfo.columns.join(', ')}`
+    content = text ? `${content}\n\n[${fileDesc}]` : fileDesc
+  }
+
   inputText.value = ''
   loading.value = true
 
   // Optimistic add user message
-  messages.value.push({ id: Date.now(), role: 'user', content: text })
+  const userMsg = { id: Date.now(), role: 'user', content: content }
+  messages.value.push(userMsg)
+
+  // Show file as separate bubble
+  if (uploadedFile.value) {
+    messages.value.push({
+      id: Date.now() + 1,
+      role: 'user',
+      content: '',
+      _type: 'file',
+      _dismissed: false,
+      _file_data: { ...uploadedFile.value },
+    })
+  }
+
   await nextTick()
   scrollToBottom()
 
   try {
-    const res = await api.ai.sendMessage(currentChatId.value, { content: text })
+    const res = await api.ai.sendMessage(currentChatId.value, { content: content })
 
-    // 添加 AI 回复文本
+    // Add AI text reply
     if (res.data?.assistant_message) {
       messages.value.push(res.data.assistant_message)
     }
 
-    // 处理工具调用结果
+    // Handle tool call results
     if (res.data?.tool_results && res.data.tool_results.length > 0) {
       for (const tr of res.data.tool_results) {
         const result = tr.result
@@ -221,7 +310,6 @@ async function sendMessage() {
             tool_data: result,
           })
         } else if (result && result.error) {
-          // AI 工具调用出错，作为普通文本消息显示
           messages.value.push({
             id: Date.now() + Math.random(),
             role: 'assistant',
@@ -234,12 +322,12 @@ async function sendMessage() {
     await nextTick()
     scrollToBottom()
 
-    // Track behavior
     api.ai.trackBehavior({ action: 'chat', target_type: 'ai_chat', target_id: currentChatId.value }).catch(() => {})
   } catch (e) {
     ElMessage.error('发送失败')
   } finally {
     loading.value = false
+    uploadedFile.value = null
   }
 }
 
@@ -290,7 +378,6 @@ async function confirmExport(msg) {
     if (res.data) {
       const taskId = res.data.task_id
       ElMessage.success('导出任务已提交')
-      // 添加执行结果消息
       messages.value.push({
         id: Date.now(),
         role: 'assistant',
@@ -309,7 +396,6 @@ async function confirmQuery(msg) {
   const td = msg.tool_data
   try {
     ElMessage.info('正在执行查询...')
-    // 跳转到查询执行页面
     window.dispatchEvent(new CustomEvent('navigate-to-query', { detail: { script_id: td.script_id } }))
     dismissTool(msg)
   } catch (e) {
@@ -494,6 +580,58 @@ onMounted(() => {
   border-top-left-radius: 4px;
 }
 
+/* ===== File Card Styles ===== */
+.file-card {
+  background: #fff;
+  border: 2px solid #67c23a;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(103, 194, 58, 0.15);
+  max-width: 480px;
+}
+
+.file-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: linear-gradient(135deg, #f0f9eb, #f5fcf0);
+  border-bottom: 1px solid #d9f0be;
+}
+
+.file-icon {
+  font-size: 16px;
+  color: #67c23a;
+}
+
+.file-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: #303133;
+}
+
+.file-card-body {
+  padding: 10px 14px;
+}
+
+.file-info-row {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: #606266;
+  margin-bottom: 8px;
+}
+
+.file-info-row i {
+  margin-right: 4px;
+  color: #909399;
+}
+
+.file-columns {
+  display: flex;
+  flex-wrap: wrap;
+}
+
 /* ===== Tool Card Styles ===== */
 .tool-card {
   background: #fff;
@@ -553,6 +691,75 @@ onMounted(() => {
   padding: 10px 16px;
   background: #fafbfc;
   border-top: 1px solid #eef2f7;
+}
+
+/* ===== Input Area ===== */
+.input-area {
+  padding: 12px 24px 16px;
+  border-top: 1px solid #eef2f7;
+}
+
+.input-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.file-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #f0f9eb;
+  border: 1px solid #d9f0be;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #606266;
+  align-self: flex-start;
+}
+
+.file-attachment > i:first-child {
+  color: #67c23a;
+  font-size: 14px;
+}
+
+.file-name {
+  font-weight: 500;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-info {
+  color: #909399;
+}
+
+.file-remove {
+  cursor: pointer;
+  color: #c0c4cc;
+  transition: color 0.2s;
+}
+
+.file-remove:hover {
+  color: #f56c6c;
+}
+
+.input-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.input-row :deep(.el-textarea__inner) {
+  border-radius: 8px;
+  flex: 1;
+}
+
+.input-buttons {
+  display: flex;
+  gap: 6px;
+  align-items: center;
 }
 
 /* Markdown 渲染样式 */
@@ -686,17 +893,5 @@ onMounted(() => {
 @keyframes typing {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
   30% { transform: translateY(-6px); opacity: 1; }
-}
-
-.input-area {
-  display: flex;
-  gap: 12px;
-  padding: 16px 24px;
-  border-top: 1px solid #eef2f7;
-  align-items: flex-end;
-}
-
-.input-area :deep(.el-textarea__inner) {
-  border-radius: 8px;
 }
 </style>

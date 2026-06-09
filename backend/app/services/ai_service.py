@@ -28,6 +28,23 @@ AI_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "parse_uploaded_file",
+            "description": "解析用户上传的Excel/CSV文件，获取列名、行数、数据预览等信息。当用户提到上传了文件或附件时调用此工具。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {
+                        "type": "string",
+                        "description": "上传的文件名"
+                    }
+                },
+                "required": ["filename"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_query_options",
             "description": "列出所有可用的查询选项，包括名称、描述等信息",
             "parameters": {
@@ -294,7 +311,7 @@ class AiService:
         }
 
     @staticmethod
-    def execute_tool_call(tool_name: str, arguments_str: str) -> dict:
+    def execute_tool_call(tool_name: str, arguments_str: str, user_id: int = None) -> dict:
         """执行AI请求的工具调用"""
         try:
             args = json.loads(arguments_str) if arguments_str else {}
@@ -302,22 +319,51 @@ class AiService:
             return {'error': f'参数解析失败: {arguments_str}'}
 
         if tool_name == 'list_export_options':
-            return AiService._tool_list_export_options(args)
+            return AiService._tool_list_export_options(args, user_id)
         elif tool_name == 'list_query_options':
-            return AiService._tool_list_query_options(args)
+            return AiService._tool_list_query_options(args, user_id)
+        elif tool_name == 'parse_uploaded_file':
+            return AiService._tool_parse_file(args, user_id)
         elif tool_name == 'request_export':
-            return AiService._tool_request_export(args)
+            return AiService._tool_request_export(args, user_id)
         elif tool_name == 'request_query':
-            return AiService._tool_request_query(args)
+            return AiService._tool_request_query(args, user_id)
         else:
             return {'error': f'未知工具: {tool_name}'}
 
     @staticmethod
-    def _tool_list_export_options(args: dict) -> dict:
-        """列出导出选项"""
+    def _filter_script_by_user(scripts, user_id: int = None):
+        """根据用户权限过滤脚本"""
+        if not user_id:
+            return scripts
+        from app.models.user import User
+        user = User.query.get(user_id)
+        if not user or user.is_admin():
+            return scripts
+        allowed_ids = set(user.get_script_ids())
+        return [s for s in scripts if s.id in allowed_ids]
+
+    @staticmethod
+    def _tool_parse_file(args: dict, user_id: int = None) -> dict:
+        """解析上传的文件信息"""
+        filename = args.get('filename', '')
+        if not filename:
+            return {'error': '未提供文件名'}
+        # 文件实际由前端上传后通过upload-file接口解析
+        # 这里只返回提示信息，让AI知道文件已上传
+        return {
+            'filename': filename,
+            'status': 'uploaded',
+            'message': f'文件"{filename}"已上传，请根据文件列名分析并执行相应操作'
+        }
+
+    @staticmethod
+    def _tool_list_export_options(args: dict, user_id: int = None) -> dict:
+        """列出导出选项（按用户权限过滤）"""
         from app.models.script import Script
         keyword = args.get('keyword', '').lower()
         scripts = Script.query.filter_by(type='export').all()
+        scripts = AiService._filter_script_by_user(scripts, user_id)
         result = []
         for s in scripts:
             if keyword and keyword not in s.name.lower() and keyword not in (s.description or '').lower():
@@ -332,11 +378,12 @@ class AiService:
         return {'scripts': result, 'total': len(result)}
 
     @staticmethod
-    def _tool_list_query_options(args: dict) -> dict:
-        """列出查询选项"""
+    def _tool_list_query_options(args: dict, user_id: int = None) -> dict:
+        """列出查询选项（按用户权限过滤）"""
         from app.models.script import Script
         keyword = args.get('keyword', '').lower()
         scripts = Script.query.filter_by(type='query').all()
+        scripts = AiService._filter_script_by_user(scripts, user_id)
         result = []
         for s in scripts:
             if keyword and keyword not in s.name.lower() and keyword not in (s.description or '').lower():
@@ -349,9 +396,10 @@ class AiService:
         return {'scripts': result, 'total': len(result)}
 
     @staticmethod
-    def _tool_request_export(args: dict) -> dict:
-        """处理导出请求 - 返回结构化信息供前端确认"""
+    def _tool_request_export(args: dict, user_id: int = None) -> dict:
+        """处理导出请求 - 返回结构化信息供前端确认（含权限校验）"""
         from app.models.script import Script
+        from app.models.user import User
         export_name = args.get('export_option_name', '')
         params = args.get('params', {})
         desc = args.get('description', '')
@@ -361,8 +409,17 @@ class AiService:
         if not script:
             # 尝试模糊匹配
             script = Script.query.filter(Script.name.like(f'%{export_name}%'), Script.type == 'export').first()
-            if not script:
-                return {'error': f'未找到名为"{export_name}"的导出选项'}
+
+        if not script:
+            return {'error': f'未找到名为"{export_name}"的导出选项'}
+
+        # 权限校验
+        if user_id:
+            user = User.query.get(user_id)
+            if user and not user.is_admin():
+                allowed_ids = user.get_script_ids()
+                if allowed_ids and script.id not in allowed_ids:
+                    return {'error': f'你没有权限使用导出选项"{script.name}"'}
 
         script_params = script.get_params_config()
         required_params = [p for p in script_params if p.get('required') and p['name'] not in params]
@@ -379,17 +436,27 @@ class AiService:
         }
 
     @staticmethod
-    def _tool_request_query(args: dict) -> dict:
-        """处理查询请求 - 返回结构化信息供前端确认"""
+    def _tool_request_query(args: dict, user_id: int = None) -> dict:
+        """处理查询请求 - 返回结构化信息供前端确认（含权限校验）"""
         from app.models.script import Script
+        from app.models.user import User
         query_name = args.get('query_option_name', '')
         desc = args.get('description', '')
 
         script = Script.query.filter_by(name=query_name, type='query').first()
         if not script:
             script = Script.query.filter(Script.name.like(f'%{query_name}%'), Script.type == 'query').first()
-            if not script:
-                return {'error': f'未找到名为"{query_name}"的查询选项'}
+
+        if not script:
+            return {'error': f'未找到名为"{query_name}"的查询选项'}
+
+        # 权限校验
+        if user_id:
+            user = User.query.get(user_id)
+            if user and not user.is_admin():
+                allowed_ids = user.get_script_ids()
+                if allowed_ids and script.id not in allowed_ids:
+                    return {'error': f'你没有权限使用查询选项"{script.name}"'}
 
         return {
             'action_type': 'query',

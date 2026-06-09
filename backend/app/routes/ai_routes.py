@@ -281,6 +281,89 @@ def delete_chat(chat_id):
     return jsonify({'success': True, 'message': '删除成功'})
 
 
+@ai_bp.route('/upload-file', methods=['POST'])
+@login_required
+def upload_file():
+    current_user = get_current_user()
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'message': '未上传文件'}), 400
+
+    file = request.files['file']
+    if not file.filename:
+        return jsonify({'success': False, 'message': '文件名为空'}), 400
+
+    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+    allowed_ext = {'xlsx', 'xls', 'csv'}
+    if ext not in allowed_ext:
+        return jsonify({'success': False, 'message': f'仅支持 {", ".join(allowed_ext)} 格式的文件'}), 400
+
+    try:
+        from app.services.excel_service import ExcelService
+        upload_dir = current_app.config['UPLOAD_FOLDER']
+        os.makedirs(upload_dir, exist_ok=True)
+
+        filename = f"ai_{uuid.uuid4().hex[:8]}_{file.filename}"
+        input_path = os.path.join(upload_dir, filename)
+        file.save(input_path)
+
+        info = ExcelService.get_file_info(input_path)
+        columns = info.get('column_names', [])
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'file_path': input_path,
+                'filename': file.filename,
+                'row_count': info.get('row_count', 0),
+                'columns': columns,
+                'preview': info.get('preview_rows', []),
+            }
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
+@ai_bp.route('/match-query', methods=['POST'])
+@login_required
+def match_query():
+    """根据上传的文件信息，自动匹配最合适的查询选项"""
+    current_user = get_current_user()
+    data = request.get_json()
+    if not data or 'columns' not in data:
+        return jsonify({'success': False, 'message': '缺少列信息'}), 400
+
+    columns = data.get('columns', [])
+    user_script_ids = set(current_user.get_script_ids()) if not current_user.is_admin() else None
+
+    from app.models.script import Script
+    scripts = Script.query.filter_by(type='query').all()
+    if user_script_ids:
+        scripts = [s for s in scripts if s.id in user_script_ids]
+
+    # 简单匹配：根据名称匹配
+    matches = []
+    for s in scripts:
+        score = 0
+        name_lower = s.name.lower()
+        desc_lower = (s.description or '').lower()
+        for col in columns:
+            col_lower = col.lower()
+            if col_lower in name_lower or name_lower in col_lower:
+                score += 3
+            if col_lower in desc_lower:
+                score += 1
+        if score > 0:
+            matches.append({
+                'id': s.id,
+                'name': s.name,
+                'description': s.description or '',
+                'score': score,
+            })
+
+    matches.sort(key=lambda x: x['score'], reverse=True)
+    return jsonify({'success': True, 'data': {'matches': matches[:5]}})
+
+
 @ai_bp.route('/chats/<int:chat_id>/messages', methods=['GET'])
 @login_required
 def get_messages(chat_id):
@@ -354,7 +437,8 @@ def send_message(chat_id):
                 '- 当用户表达需要查询数据的意图时，调用 request_query 工具\n' \
                 '- 如果用户没有指定具体的导出选项名称，先调用 list_export_options 列出相关选项让用户选择\n' \
                 '- 如果用户提供了参数值，务必在调用工具时传入正确的参数\n' \
-                '- 如果缺少必填参数，在回复中向用户询问\n'
+                '- 如果缺少必填参数，在回复中向用户询问\n' \
+                '- 当用户上传文件时，消息中会包含文件信息（行数和列名），根据列名自动匹配最合适的查询或导出选项\n'
             messages.append({'role': 'system', 'content': sys_prompt})
 
         for msg in history:
@@ -373,7 +457,7 @@ def send_message(chat_id):
                 func_name = tc.get('function', {}).get('name', '')
                 func_args = tc.get('function', {}).get('arguments', '')
                 logger.info(f'AI调用工具: {func_name}({func_args})')
-                result = AiService.execute_tool_call(func_name, func_args)
+                result = AiService.execute_tool_call(func_name, func_args, current_user.id)
                 tool_results.append({
                     'tool_call_id': tc['id'],
                     'name': func_name,

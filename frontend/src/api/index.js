@@ -156,6 +156,8 @@ const ai = {
   deleteChat: (id) => http.delete(`/ai/chats/${id}`),
   getMessages: (chatId) => http.get(`/ai/chats/${chatId}/messages`),
   sendMessage: (chatId, data) => http.post(`/ai/chats/${chatId}/send`, data, { timeout: 180000 }),
+  uploadFile: (formData) => http.post('/ai/upload-file', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  matchQuery: (data) => http.post('/ai/match-query', data),
 }
 
 const business = {
