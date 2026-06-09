@@ -178,7 +178,7 @@ class ExportService:
                                 # 勾选否：将 '= {{param}}' 整体替换为 '!= neq_val'
                                 neq_val_fmt = f"!= {neq_val}" if pname in number_params else f"!= '{neq_val}'"
                                 sql_text = re.sub(
-                                    rf'=\s*\{{\{{\s*{re.escape(pname)}\s*\}}\}}\s*',
+                                    rf'=\s*\{{\{{\s*{re.escape(pname)}\s*\}}\}}',
                                     neq_val_fmt,
                                     sql_text
                                 )
