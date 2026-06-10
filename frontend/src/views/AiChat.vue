@@ -79,25 +79,27 @@
               </template>
               <!-- 选项选择卡片 -->
               <template v-else-if="msg._type === 'select_options'">
-                <div class="tool-card select-card">
+                <div class="tool-card select-card" :class="{ ignored: msg._ignored }">
                   <div class="tool-card-header">
-                    <i class="fas fa-list-check tool-icon"></i>
+                    <i v-if="msg._ignored" class="fas fa-ban tool-icon tool-icon-error"></i>
+                    <i v-else class="fas fa-list-check tool-icon"></i>
                     <span class="tool-title">
-                      <template v-if="msg._action_type === 'export'">可选导出任务</template>
+                      <template v-if="msg._ignored">已忽略</template>
+                      <template v-else-if="msg._action_type === 'export'">可选导出任务</template>
                       <template v-else>可选查询任务</template>
                     </span>
                   </div>
                   <div class="tool-card-body">
                     <p class="tool-confirm-msg">{{ msg.content }}</p>
                     <!-- 未解析到参数时的二次提醒 -->
-                    <div v-if="!msg._params_checked && msg._scripts.length > 0" class="param-reminder">
+                    <div v-if="!msg._ignored && !msg._params_checked && msg._scripts.length > 0" class="param-reminder">
                       <i class="fas fa-exclamation-triangle"></i>
                       <span>当前所有参数将使用默认值（全部），是否继续？</span>
-                      <el-checkbox v-model="msg._params_checked" size="small">确认无参数或全部不筛选</el-checkbox>
+                      <el-checkbox v-model="msg._params_checked" size="small" :disabled="msg._ignored || msg._executing">确认无参数或全部不筛选</el-checkbox>
                     </div>
                     <div class="select-options-list">
                       <label v-for="s in msg._scripts" :key="s.id" class="select-option-item">
-                        <input type="checkbox" :value="s.id" v-model="msg._selected" :disabled="msg._executing" />
+                        <input type="checkbox" :value="s.id" v-model="msg._selected" :disabled="msg._ignored || msg._executing" />
                         <div class="select-option-detail">
                           <span class="select-option-name">{{ s.name }}</span>
                           <span v-if="s.description" class="select-option-desc">{{ s.description }}</span>
@@ -115,13 +117,14 @@
                     <el-button
                       type="primary" size="small"
                       @click="executeSelectedOptions(msg)"
-                      :disabled="msg._selected.length === 0 || msg._executing || (msg._scripts.length > 0 && !msg._params_checked)"
+                      :disabled="msg._ignored || msg._selected.length === 0 || msg._executing || (msg._scripts.length > 0 && !msg._params_checked)"
                       :loading="msg._executing"
                     >
-                      <template v-if="msg._executing">正在执行...</template>
+                      <template v-if="msg._ignored">已忽略</template>
+                      <template v-else-if="msg._executing">正在执行...</template>
                       <template v-else>确认执行所选 ({{ msg._selected.length }})</template>
                     </el-button>
-                    <el-button size="small" text @click="dismissTool(msg)" :disabled="msg._executing">{{ msg._ignored ? '已忽略' : '忽略' }}</el-button>
+                    <el-button size="small" text @click="dismissTool(msg)" :disabled="msg._ignored || msg._executing">{{ msg._ignored ? '已忽略' : '忽略' }}</el-button>
                   </div>
                 </div>
               </template>
@@ -1141,6 +1144,32 @@ onMounted(() => {
 
 .tool-card.select-card .tool-icon {
   color: #e6a23c;
+}
+
+/* 已忽略状态 */
+.tool-card.select-card.ignored {
+  border-color: #c0c4cc;
+  box-shadow: none;
+  opacity: 0.65;
+}
+
+.tool-card.select-card.ignored .tool-card-header {
+  background: linear-gradient(135deg, #f5f7fa, #edf0f5);
+  border-bottom-color: #dcdfe6;
+}
+
+.tool-card.select-card.ignored .tool-icon {
+  color: #c0c4cc !important;
+}
+
+.tool-card.select-card.ignored .select-option-item {
+  cursor: not-allowed;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.tool-card.select-card.ignored .param-reminder {
+  display: none;
 }
 
 .select-options-list {
