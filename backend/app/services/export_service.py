@@ -151,7 +151,7 @@ class ExportService:
                         if pname not in script_params or script_params.get(pname) == '':
                             task.add_log(f'导出选项 [{script.name}] 参数 {pname} 满足全部条件，开始移除')
                             
-                            col_ref = r'[a-zA-Z0-9_.`]+'
+                            col_ref = r'[a-zA-Z0-9_.`\u4e00-\u9fff]+'
                             placeholder = rf'\{{\{{\s*{re.escape(pname)}\s*\}}\}}'
                             bind_param = rf':{re.escape(pname)}\b'
                             REMOVE = '__REMOVE_COND__'

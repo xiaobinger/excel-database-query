@@ -457,6 +457,7 @@ def send_message(chat_id):
             sys_prompt = context + '\n\n## 重要规则\n' \
                 '- 当用户表达需要导出数据的意图时，调用 request_export 工具\n' \
                 '- 当用户表达需要查询数据的意图时，调用 request_query 工具\n' \
+                '- 调用 request_export 时，务必从用户描述中提取所有参数值（如商户号、日期、渠道等）填入 params 对象\n' \
                 '- 如果用户没有指定具体的导出选项名称，先调用 list_export_options 列出相关选项让用户选择\n' \
                 '- 如果用户提供了参数值，务必在调用工具时传入正确的参数\n' \
                 '- 如果缺少必填参数，在回复中向用户询问\n' \
@@ -501,6 +502,14 @@ def send_message(chat_id):
                         'name': 'request_export',
                         'result': auto_result,
                     })
+                # 多匹配或无匹配 → 创建选择卡片
+                elif func_name == 'list_export_options' and not result.get('error'):
+                    if result.get('total', 0) > 1:
+                        result['_select_mode'] = 'multi'
+                        result['message'] = f'找到 {result["total"]} 个匹配的导出选项，请勾选需要的选项后点击确认执行'
+                    elif result.get('total', 0) == 0:
+                        result['_select_mode'] = 'all'
+                        result['message'] = '未找到精确匹配的选项，以下是你有权限的所有导出选项，请勾选后执行'
 
                 # 智能处理：如果list_query_options返回唯一匹配，自动调用request_query
                 if func_name == 'list_query_options' and result.get('total') == 1 and not result.get('error'):
@@ -515,6 +524,14 @@ def send_message(chat_id):
                         'name': 'request_query',
                         'result': auto_result,
                     })
+                # 多匹配或无匹配 → 创建选择卡片
+                elif func_name == 'list_query_options' and not result.get('error'):
+                    if result.get('total', 0) > 1:
+                        result['_select_mode'] = 'multi'
+                        result['message'] = f'找到 {result["total"]} 个匹配的查询选项，请勾选后执行'
+                    elif result.get('total', 0) == 0:
+                        result['_select_mode'] = 'all'
+                        result['message'] = '未找到精确匹配的选项，以下是你有权限的所有查询选项'
 
             # Build tool result messages for AI to generate final response
             tool_messages = []
@@ -533,11 +550,13 @@ def send_message(chat_id):
             })
             messages.extend(tool_messages)
 
-            # 检查工具类型：如果是操作型工具（导出/查询），跳过AI二次确认，直接返回结果给前端显示卡片
+            # 检查工具类型：如果是操作型工具（导出/查询/选项选择），跳过AI二次确认
             action_tools = {'request_export', 'request_query'}
             has_action = any(tc.get('function', {}).get('name', '') in action_tools for tc in tool_calls)
+            # 选择卡片也视为 action
+            has_select = any(tr.get('result', {}).get('_select_mode') for tr in tool_results)
 
-            if has_action:
+            if has_action or has_select:
                 # 直接返回，不请求AI二次回复
                 response_text = ''
                 tokens = tokens  # 保持原有 token 计数
@@ -586,6 +605,7 @@ def send_message(chat_id):
             saved_tool_messages = []
             for tr in tool_results:
                 result = tr['result']
+                # 导出/查询确认卡片
                 if result and not result.get('error') and result.get('action_type') in ('export', 'query'):
                     tool_msg = AiChatMessage(
                         chat_id=chat_id,
@@ -594,6 +614,27 @@ def send_message(chat_id):
                         msg_metadata=json.dumps({
                             '_type': 'tool',
                             'tool_data': result,
+                        }, ensure_ascii=False),
+                    )
+                    db.session.add(tool_msg)
+                    db.session.flush()
+                    saved_tool_messages.append({
+                        'tool_call_id': tr['tool_call_id'],
+                        'name': tr['name'],
+                        'result': result,
+                        'message_id': tool_msg.id,
+                    })
+                # 选项选择卡片（_select_mode）
+                elif result and result.get('_select_mode'):
+                    tool_msg = AiChatMessage(
+                        chat_id=chat_id,
+                        role='assistant',
+                        content=result.get('message', ''),
+                        msg_metadata=json.dumps({
+                            '_type': 'select_options',
+                            '_select_mode': result['_select_mode'],
+                            'scripts': result.get('scripts', []),
+                            'action_type': 'export' if tr['name'] == 'list_export_options' else 'query',
                         }, ensure_ascii=False),
                     )
                     db.session.add(tool_msg)

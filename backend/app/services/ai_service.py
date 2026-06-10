@@ -63,7 +63,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "request_export",
-            "description": "当用户明确要执行导出任务时调用此工具。需要指定导出选项名称和参数值。",
+            "description": "当用户明确要执行导出任务时调用此工具。需要指定导出选项名称和参数值。注意：必须从用户的自然语言描述中提取所有可能的参数值填入params对象，未能提取的参数不要填入（系统会自动将其标记为'全部'不筛选）。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -73,7 +73,7 @@ AI_TOOLS = [
                     },
                     "params": {
                         "type": "object",
-                        "description": "参数键值对，键为参数名，值为用户提供的参数值",
+                        "description": "参数键值对，键为参数名，值为用户提供的参数值。务必从用户描述中提取所有参数值。例如用户说'导出商户123456的信息'，如果参数有merchant_no，则params为{\"merchant_no\": \"123456\"}",
                         "additionalProperties": {"type": "string"}
                     },
                     "output_format": {
