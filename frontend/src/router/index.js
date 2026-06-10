@@ -23,6 +23,7 @@ const routes = [
       { path: 'users', name: 'Users', component: () => import('../views/UserManager.vue'), meta: { menu: 'users' } },
       { path: 'roles', name: 'Roles', component: () => import('../views/RoleManager.vue'), meta: { menu: 'roles' } },
       { path: 'ai-chat', name: 'AiChat', component: () => import('../views/AiChat.vue'), meta: { menu: 'ai_chat' } },
+      { path: 'ai-sessions', name: 'AiSessionManager', component: () => import('../views/AiSessionManager.vue'), meta: { menu: 'ai_sessions' } },
       { path: 'skills', name: 'Skills', component: () => import('../views/SkillManager.vue'), meta: { menu: 'skills' } },
       { path: 'business', name: 'BusinessSystems', component: () => import('../views/BusinessSystems.vue'), meta: { menu: 'business_systems' } }
     ]
@@ -47,6 +48,7 @@ const menuRouteMap = {
   '/users': 'users',
   '/roles': 'roles',
   '/ai-chat': 'ai_chat',
+  '/ai-sessions': 'ai_sessions',
   '/skills': 'skills',
   '/business': 'business_systems'
 }
@@ -64,6 +66,7 @@ const menuRoutes = [
   { path: '/users', menu: 'users' },
   { path: '/roles', menu: 'roles' },
   { path: '/ai-chat', menu: 'ai_chat' },
+  { path: '/ai-sessions', menu: 'ai_sessions' },
   { path: '/skills', menu: 'skills' },
   { path: '/business', menu: 'business_systems' }
 ]

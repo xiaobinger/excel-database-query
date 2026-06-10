@@ -15,7 +15,18 @@
           @click="selectChat(chat.id)"
         >
           <div class="chat-item-title">{{ chat.title || '新对话' }}</div>
-          <el-button type="danger" text size="small" class="chat-item-del" @click.stop="deleteChat(chat.id)">
+          <el-dropdown v-if="isAdmin" trigger="click" class="chat-item-del" @command="(cmd) => handleDeleteCommand(cmd, chat.id)">
+            <el-button type="danger" text size="small" @click.stop>
+              <i class="fas fa-trash"></i>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="soft">删除对话</el-dropdown-item>
+                <el-dropdown-item command="hard">永久删除</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <el-button v-else type="danger" text size="small" class="chat-item-del" @click.stop="deleteChat(chat.id)">
             <i class="fas fa-trash"></i>
           </el-button>
         </div>
@@ -187,9 +198,10 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick, computed } from 'vue'
-import api from '../api'
+import { ref, onMounted, nextTick, onUnmounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import api from '../api'
+import { useAppStore } from '../stores'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 
@@ -214,6 +226,8 @@ const inputText = ref('')
 const loading = ref(false)
 const messagesRef = ref(null)
 const uploadedFile = ref(null)
+const store = useAppStore()
+const isAdmin = computed(() => store.isAdmin)
 
 const canSend = computed(() => {
   return (inputText.value.trim() || uploadedFile.value) && !loading.value
@@ -269,7 +283,36 @@ async function selectChat(chatId) {
 
 async function deleteChat(chatId) {
   try {
+    await ElMessageBox.confirm(
+      '删除对话后，消息记录将不再显示，但管理员可在后台恢复。确定要删除吗？',
+      '删除确认',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
+    )
     await api.ai.deleteChat(chatId)
+    chats.value = chats.value.filter(c => c.id !== chatId)
+    if (currentChatId.value === chatId) {
+      currentChatId.value = null
+      messages.value = []
+    }
+  } catch {}
+}
+
+function handleDeleteCommand(cmd, chatId) {
+  if (cmd === 'soft') {
+    deleteChat(chatId)
+  } else if (cmd === 'hard') {
+    hardDeleteChat(chatId)
+  }
+}
+
+async function hardDeleteChat(chatId) {
+  try {
+    await ElMessageBox.confirm(
+      '此操作将永久删除该对话及其所有消息记录，不可恢复！确定要永久删除吗？',
+      '永久删除确认',
+      { confirmButtonText: '永久删除', cancelButtonText: '取消', type: 'error' }
+    )
+    await api.ai.hardDeleteChat(chatId)
     chats.value = chats.value.filter(c => c.id !== chatId)
     if (currentChatId.value === chatId) {
       currentChatId.value = null

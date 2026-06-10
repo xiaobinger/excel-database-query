@@ -154,12 +154,15 @@ const ai = {
   getChats: () => http.get('/ai/chats'),
   createChat: (data) => http.post('/ai/chats', data),
   deleteChat: (id) => http.delete(`/ai/chats/${id}`),
+  hardDeleteChat: (id) => http.delete(`/ai/chats/${id}/hard`),
   getMessages: (chatId) => http.get(`/ai/chats/${chatId}/messages`),
   sendMessage: (chatId, data) => http.post(`/ai/chats/${chatId}/send`, data, { timeout: 180000 }),
   uploadFile: (formData) => http.post('/ai/upload-file', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   matchQuery: (data) => http.post('/ai/match-query', data),
   updateMessage: (chatId, msgId, data) => http.put(`/ai/chats/${chatId}/messages/${msgId}`, data),
   createMessage: (chatId, data) => http.post(`/ai/chats/${chatId}/messages`, data),
+  adminListChats: (params) => http.get('/ai/admin/chats', { params }),
+  adminRestoreChat: (chatId) => http.put(`/ai/admin/chats/${chatId}/restore`),
 }
 
 const business = {

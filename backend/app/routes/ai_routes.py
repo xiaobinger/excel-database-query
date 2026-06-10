@@ -246,7 +246,7 @@ def get_behaviors():
 @login_required
 def get_chats():
     current_user = get_current_user()
-    chats = AiChat.query.filter_by(user_id=current_user.id, is_archived=False)\
+    chats = AiChat.query.filter_by(user_id=current_user.id, is_archived=False, is_deleted=False)\
         .order_by(AiChat.updated_at.desc()).all()
     return jsonify({'success': True, 'data': [c.to_dict() for c in chats]})
 
@@ -269,6 +269,7 @@ def create_chat():
         return jsonify({'success': False, 'message': str(e)}), 400
 
 
+# ============ Delete Chat (Soft Delete) ============
 @ai_bp.route('/chats/<int:chat_id>', methods=['DELETE'])
 @login_required
 def delete_chat(chat_id):
@@ -277,10 +278,29 @@ def delete_chat(chat_id):
     if not chat:
         return jsonify({'success': False, 'message': '对话不存在'}), 404
 
+    # Soft delete
+    chat.is_deleted = True
+    db.session.commit()
+    return jsonify({'success': True, 'message': '删除成功'})
+
+
+# ============ Hard Delete Chat (Admin Only) ============
+@ai_bp.route('/chats/<int:chat_id>/hard', methods=['DELETE'])
+@login_required
+def hard_delete_chat(chat_id):
+    current_user = get_current_user()
+    if not current_user.is_admin():
+        return jsonify({'success': False, 'message': '无权限'}), 403
+
+    chat = AiChat.query.filter_by(id=chat_id).first()
+    if not chat:
+        return jsonify({'success': False, 'message': '对话不存在'}), 404
+
+    # Physically delete messages and chat
     AiChatMessage.query.filter_by(chat_id=chat_id).delete()
     db.session.delete(chat)
     db.session.commit()
-    return jsonify({'success': True, 'message': '删除成功'})
+    return jsonify({'success': True, 'message': '永久删除成功'})
 
 
 @ai_bp.route('/upload-file', methods=['POST'])
@@ -466,6 +486,36 @@ def send_message(chat_id):
                     'result': result,
                 })
 
+                # 智能处理：如果list_export_options返回唯一匹配，自动调用request_export
+                if func_name == 'list_export_options' and result.get('total') == 1 and not result.get('error'):
+                    script = result['scripts'][0]
+                    logger.info(f'自动匹配到唯一导出选项: {script["name"]}，自动调用request_export')
+                    auto_args = json.dumps({
+                        'export_option_name': script['name'],
+                        'params': {},
+                        'output_format': 'sheets',
+                    })
+                    auto_result = AiService.execute_tool_call('request_export', auto_args, current_user.id)
+                    tool_results.append({
+                        'tool_call_id': f'auto_{tc["id"]}',
+                        'name': 'request_export',
+                        'result': auto_result,
+                    })
+
+                # 智能处理：如果list_query_options返回唯一匹配，自动调用request_query
+                if func_name == 'list_query_options' and result.get('total') == 1 and not result.get('error'):
+                    script = result['scripts'][0]
+                    logger.info(f'自动匹配到唯一查询选项: {script["name"]}，自动调用request_query')
+                    auto_args = json.dumps({
+                        'query_option_name': script['name'],
+                    })
+                    auto_result = AiService.execute_tool_call('request_query', auto_args, current_user.id)
+                    tool_results.append({
+                        'tool_call_id': f'auto_{tc["id"]}',
+                        'name': 'request_query',
+                        'result': auto_result,
+                    })
+
             # Build tool result messages for AI to generate final response
             tool_messages = []
             for tr in tool_results:
@@ -634,3 +684,33 @@ def create_message(chat_id):
     db.session.add(msg)
     db.session.commit()
     return jsonify({'success': True, 'data': msg.to_dict()})
+
+
+# ============ Admin: List All Users' Sessions ============
+@ai_bp.route('/admin/chats', methods=['GET'])
+@admin_required
+def admin_list_chats():
+    user_id = request.args.get('user_id', type=int)
+    include_deleted = request.args.get('include_deleted', 'false') == 'true'
+
+    query = AiChat.query
+    if user_id:
+        query = query.filter_by(user_id=user_id)
+    if not include_deleted:
+        query = query.filter_by(is_deleted=False)
+
+    chats = query.order_by(AiChat.updated_at.desc()).all()
+    return jsonify({'success': True, 'data': [c.to_dict() for c in chats]})
+
+
+# ============ Admin: Restore Deleted Chat ============
+@ai_bp.route('/admin/chats/<int:chat_id>/restore', methods=['PUT'])
+@admin_required
+def admin_restore_chat(chat_id):
+    chat = AiChat.query.filter_by(id=chat_id, is_deleted=True).first()
+    if not chat:
+        return jsonify({'success': False, 'message': '对话不存在或未被删除'}), 404
+
+    chat.is_deleted = False
+    db.session.commit()
+    return jsonify({'success': True, 'message': '恢复成功'})

@@ -63,6 +63,10 @@
           <i class="fas fa-robot"></i>
           <template #title>AI 助手</template>
         </el-menu-item>
+        <el-menu-item v-if="store.isAdmin" index="/ai-sessions">
+          <i class="fas fa-comments"></i>
+          <template #title>AI会话管理</template>
+        </el-menu-item>
         <el-menu-item v-if="store.hasMenuPermission('skills')" index="/skills">
           <i class="fas fa-brain"></i>
           <template #title>Skills</template>
@@ -184,6 +188,7 @@ const titleMap = {
   '/users': '用户管理',
   '/roles': '角色管理',
   '/ai-chat': 'AI 助手',
+  '/ai-sessions': 'AI会话管理',
   '/skills': 'Skills',
   '/business': '业务系统'
 }
