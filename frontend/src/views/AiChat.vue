@@ -141,33 +141,6 @@
                       </span>
                     </div>
 
-                    <!-- 必填参数缺失警告（执行按钮上方，阻止执行） -->
-                    <div v-if="!msg._executing && !msg._done && !msg._ignored && msg._selectedScripts && msg._selectedScripts.length > 0 && hasMissingRequiredNoAllParams(msg)" class="param-required-block">
-                      <div class="param-required-header">
-                        <i class="fas fa-exclamation-circle"></i>
-                        <span>需要补充参数</span>
-                      </div>
-                      <div v-for="item in getMissingRequiredNoAllParams(msg)" :key="item.key" class="param-required-item">
-                        <label>{{ item.label }} <span class="required-mark">*</span></label>
-                        <el-input
-                          v-model="msg._param_values[item.key]"
-                          size="small"
-                          :placeholder="'请输入' + item.label"
-                          @input="onParamInputChange(msg)"
-                        />
-                      </div>
-                      <div class="param-required-tip">
-                        <i class="fas fa-info-circle"></i> 以上参数为必填项，请填写后才能执行任务
-                      </div>
-                    </div>
-
-                    <!-- 无必填参数但需要确认全部不筛选 -->
-                    <div v-if="!msg._ignored && !msg._executing && !msg._done && !msg._params_checked && !hasAnyRequiredParams(msg) && msg._scripts.length > 0" class="param-reminder">
-                      <i class="fas fa-exclamation-triangle"></i>
-                      <span>当前所有参数将使用默认值（全部不筛选），是否继续？</span>
-                      <el-checkbox v-model="msg._params_checked" size="small" :disabled="msg._ignored || msg._executing">确认全部参数不筛选</el-checkbox>
-                    </div>
-
                     <div v-if="!msg._executing && !msg._done" class="select-options-list">
                       <label v-for="s in msg._scripts" :key="s.id" class="select-option-item">
                         <input type="checkbox" :value="s.id" v-model="msg._selected" :disabled="msg._ignored || msg._executing" @change="onSelectionChange(msg)" />
@@ -204,6 +177,22 @@
                       <i class="fas fa-download"></i> 下载文件
                     </el-button>
                     <el-button size="small" text @click="dismissTool(msg)" :disabled="msg._ignored || msg._executing" v-if="!msg._executing">{{ msg._ignored ? '已忽略' : '忽略' }}</el-button>
+                  </div>
+                </div>
+              </template>
+              <!-- 参数确认消息（带操作按钮） -->
+              <template v-else-if="msg._type === 'param_confirm'">
+                <div class="param-confirm-card">
+                  <div class="param-confirm-body">
+                    <div class="message-text" v-html="renderMarkdown(msg.content)"></div>
+                  </div>
+                  <div class="param-confirm-actions">
+                    <el-button type="primary" size="small" @click="confirmParamAll(msg)">
+                      <i class="fas fa-check"></i> 确认全部不筛选
+                    </el-button>
+                    <el-button size="small" @click="cancelParamConfirm(msg)">
+                      取消
+                    </el-button>
                   </div>
                 </div>
               </template>
@@ -533,6 +522,79 @@ async function sendMessage() {
     if (!currentChatId.value) return
   }
 
+  // 检查是否有等待参数的select_options卡片，尝试将用户输入解析为参数值
+  const pendingCard = messages.value.find(m =>
+    m._type === 'select_options' && !m._executing && !m._done && !m._ignored
+    && m._selectedScripts && m._selectedScripts.length > 0
+    && hasMissingRequiredNoAllParams(m)
+  )
+  if (pendingCard && !uploadedFile.value) {
+    const parsed = tryParseParamValues(text, pendingCard)
+    if (parsed) {
+      // 成功解析参数，填充到卡片中并执行
+      Object.assign(pendingCard._param_values, parsed)
+      // 检查是否还有缺失的必填参数
+      const stillMissing = getMissingRequiredNoAllParams(pendingCard)
+      if (stillMissing.length === 0) {
+        // 所有必填参数已填写，添加用户消息后自动执行
+        const userMsg = { id: Date.now(), role: 'user', content: text }
+        messages.value.push(userMsg)
+        inputText.value = ''
+        await nextTick()
+        scrollToBottom()
+
+        // 检查是否还有allow_all参数需要确认
+        const hasAllowAllParams = getAllowAllParamsNeedConfirm(pendingCard)
+        if (hasAllowAllParams.length > 0 && !pendingCard._params_checked) {
+          const paramList = hasAllowAllParams.map(p => p.label).join('、')
+          const confirmContent = `📋 已收到必填参数。当前以下参数将使用 **全部不筛选**：\n\n${hasAllowAllParams.map(p => `- ${p.label}`).join('\n')}\n\n请确认是否继续？`
+          let msgId = Date.now() + 1
+          try {
+            const res = await api.ai.createMessage(currentChatId.value, { content: confirmContent })
+            msgId = res.data?.id || msgId
+          } catch {}
+          messages.value.push({
+            id: msgId,
+            role: 'assistant',
+            content: confirmContent,
+            _type: 'param_confirm',
+            _pending_card_id: pendingCard.id,
+            _confirm_action: 'all_checked',
+          })
+          await nextTick()
+          scrollToBottom()
+          return
+        }
+
+        // 直接执行
+        doExecuteExport(pendingCard)
+        return
+      } else {
+        // 还有缺失参数，提示用户继续补充
+        const userMsg = { id: Date.now(), role: 'user', content: text }
+        messages.value.push(userMsg)
+        inputText.value = ''
+
+        const stillMissingList = stillMissing.map(p => `**${p.label}**`).join('、')
+        const replyContent = `已收到部分参数，还需要以下必填参数：\n\n${stillMissing.map(p => `- ${p.label}（必填）`).join('\n')}\n\n请继续提供。`
+        let replyId = Date.now() + 1
+        try {
+          const res = await api.ai.createMessage(currentChatId.value, { content: replyContent })
+          replyId = res.data?.id || replyId
+        } catch {}
+        messages.value.push({
+          id: replyId,
+          role: 'assistant',
+          content: replyContent,
+        })
+        await nextTick()
+        scrollToBottom()
+        return
+      }
+    }
+    // 解析失败，走正常的AI对话流程
+  }
+
   // Build message content with file info if uploaded
   let content = text
   if (uploadedFile.value) {
@@ -684,14 +746,87 @@ async function executeSelectedOptions(msg) {
     return
   }
 
-  // 检查必填参数
-  const missingRequired = checkMissingRequiredParams(msg)
-  if (missingRequired.length > 0) {
-    msg._missing_required_params = missingRequired
-    ElMessage.warning('请填写所有必填参数')
+  // 更新选中脚本
+  msg._selectedScripts = msg._scripts.filter(s => selectedIds.includes(s.id)) || []
+
+  // 检查是否有未允许全部且必填的参数未填写 → 不能执行，发送消息提示
+  const missingRequiredNoAll = getMissingRequiredNoAllParams(msg)
+  if (missingRequiredNoAll.length > 0) {
+    // 发送AI消息提示用户补充必填参数
+    const paramList = missingRequiredNoAll.map(p => `**${p.label}**`).join('、')
+    const content = `⚠️ 执行导出任务需要以下必填参数，请在对话中提供参数值：\n\n${missingRequiredNoAll.map(p => `- ${p.label}（必填）`).join('\n')}\n\n例如回复："${missingRequiredNoAll.map(p => p.label + ': xxx').join('，')}"`
+
+    let msgId = Date.now()
+    try {
+      const res = await api.ai.createMessage(currentChatId.value, { content })
+      msgId = res.data?.id || msgId
+    } catch {}
+    messages.value.push({
+      id: msgId,
+      role: 'assistant',
+      content,
+    })
+    await nextTick()
+    scrollToBottom()
     return
   }
 
+  // 检查是否有允许全部的参数未确认 → 发送确认消息
+  const hasAllowAllParams = getAllowAllParamsNeedConfirm(msg)
+  if (hasAllowAllParams.length > 0 && !msg._params_checked) {
+    const paramList = hasAllowAllParams.map(p => p.label).join('、')
+    const content = `📋 当前以下参数将使用 **全部不筛选**：\n\n${hasAllowAllParams.map(p => `- ${p.label}`).join('\n')}\n\n请确认是否继续？`
+
+    let msgId = Date.now()
+    try {
+      const res = await api.ai.createMessage(currentChatId.value, { content })
+      msgId = res.data?.id || msgId
+    } catch {}
+    messages.value.push({
+      id: msgId,
+      role: 'assistant',
+      content,
+      _type: 'param_confirm',
+      _pending_card_id: msg.id,
+      _confirm_action: 'all_checked',
+    })
+    await nextTick()
+    scrollToBottom()
+    return
+  }
+
+  // 所有参数已确认，执行任务
+  doExecuteExport(msg)
+}
+
+// 获取需要确认的"允许全部"参数列表
+function getAllowAllParamsNeedConfirm(msg) {
+  const params = []
+  const selectedScripts = msg._selectedScripts || []
+  const paramValues = msg._param_values || {}
+  const allChecked = msg._all_checked || {}
+
+  for (const script of selectedScripts) {
+    if (!script.params) continue
+    for (const p of script.params) {
+      if (!p.allow_all) continue
+      const key = script.id + '_' + p.name
+      const val = paramValues[key]
+      // 已有值或已勾选全部的不需要确认
+      if ((val && val.trim() !== '') || allChecked[key]) continue
+      params.push({
+        key,
+        label: (script.name ? script.name + ' - ' : '') + (p.label || p.name),
+        scriptId: script.id,
+        paramName: p.name
+      })
+    }
+  }
+  return params
+}
+
+// 实际执行导出任务
+async function doExecuteExport(msg) {
   msg._executing = true
   msg._progress = 5
   msg._status_text = '正在初始化任务...'
@@ -707,7 +842,7 @@ async function executeSelectedOptions(msg) {
     const allChecked = msg._all_checked || {}
 
     const res = await api.export.execute({
-      script_ids: selectedIds,
+      script_ids: msg._selected,
       params_values: paramsValues,
       all_checked: allChecked,
       output_format: 'sheets',
@@ -806,27 +941,97 @@ function hasAnyRequiredParams(msg) {
   return false
 }
 
-// 判断是否可以执行
+// 判断是否可以执行（点击执行按钮后由消息互动引导参数，按钮本身只需检查是否有选中）
 function canExecute(msg) {
   if (msg._executing || msg._done || msg._ignored) return false
   if (msg._selected.length === 0) return false
-  // 先检查未允许全部的必填参数：有缺失则不能执行
-  if (hasMissingRequiredNoAllParams(msg)) return false
-  // 再检查所有必填参数（包括允许全部的）
-  const missing = checkMissingRequiredParams(msg)
-  if (missing.length > 0) return false
-  // 如果有必填参数且已填写完，可以执行
-  if (hasAnyRequiredParams(msg)) return true
-  // 没有必填参数，需要用户勾选确认
-  if (msg._params_checked) return true
-  return false
+  return true
 }
 
-// 参数输入框值变化时的处理
+// 参数输入框值变化时的处理（已废弃，保留兼容）
 function onParamInputChange(msg) {
-  // 清除之前的必填参数缺失提示
   msg._missing_required_params = []
-  // 如果填写了所有未允许全部的必填参数，可以执行
+}
+
+// 确认参数全部不筛选
+async function confirmParamAll(msg) {
+  const cardId = msg._pending_card_id
+  if (!cardId) return
+
+  // 找到对应的卡片消息
+  const card = messages.value.find(m => m.id === cardId)
+  if (!card) {
+    ElMessage.warning('关联的任务卡片已不存在')
+    return
+  }
+
+  // 将所有允许全部的参数标记为全部不筛选
+  const selectedScripts = card._selectedScripts || []
+  for (const script of selectedScripts) {
+    if (!script.params) continue
+    for (const p of script.params) {
+      if (p.allow_all) {
+        card._all_checked[script.id + '_' + p.name] = true
+      }
+    }
+  }
+  card._params_checked = true
+
+  // 移除确认消息
+  messages.value = messages.value.filter(m => m.id !== msg.id)
+
+  // 执行任务
+  await nextTick()
+  doExecuteExport(card)
+}
+
+// 取消参数确认
+function cancelParamConfirm(msg) {
+  // 移除确认消息
+  messages.value = messages.value.filter(m => m.id !== msg.id)
+  ElMessage.info('已取消执行')
+}
+
+// 尝试将用户输入的文本解析为参数值
+function tryParseParamValues(text, msg) {
+  const selectedScripts = msg._selectedScripts || []
+  const paramValues = msg._param_values || {}
+  const allChecked = msg._all_checked || {}
+  const parsed = {}
+  let matched = false
+
+  for (const script of selectedScripts) {
+    if (!script.params) continue
+    for (const p of script.params) {
+      const key = script.id + '_' + p.name
+      // 跳过已有值的参数
+      if (paramValues[key] && paramValues[key].trim() !== '') continue
+      if (allChecked[key]) continue
+
+      const label = p.label || p.name
+      const paramName = p.name
+
+      // 尝试多种格式匹配：
+      // 1. "参数名: 值" 或 "参数名：值"
+      // 2. "标签: 值" 或 "标签：值"
+      // 3. "参数名=值"
+      const patterns = [
+        new RegExp(`${paramName}\\s*[:：=]\\s*(.+?)(?:[,，;；\\n]|$)`, 'i'),
+        new RegExp(`${label}\\s*[:：=]\\s*(.+?)(?:[,，;；\\n]|$)`, 'i'),
+      ]
+
+      for (const pattern of patterns) {
+        const match = text.match(pattern)
+        if (match && match[1] && match[1].trim()) {
+          parsed[key] = match[1].trim()
+          matched = true
+          break
+        }
+      }
+    }
+  }
+
+  return matched ? parsed : null
 }
 
 // 选择变化时更新选中的脚本详情
@@ -1523,10 +1728,6 @@ onMounted(() => {
   pointer-events: none;
 }
 
-.tool-card.select-card.ignored .param-reminder {
-  display: none;
-}
-
 .select-options-list {
   display: flex;
   flex-direction: column;
@@ -1593,29 +1794,6 @@ onMounted(() => {
   margin-top: 4px;
 }
 
-/* 参数二次提醒样式 */
-.param-reminder {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 10px 12px;
-  background: #fdf6ec;
-  border: 1px solid #faecd8;
-  border-radius: 8px;
-  margin-bottom: 12px;
-  font-size: 12px;
-  color: #e6a23c;
-}
-
-.param-reminder i {
-  font-size: 14px;
-}
-
-.param-reminder > span {
-  flex: 1;
-}
-
 /* 执行中状态 */
 .tool-card.select-card.executing {
   border-color: #409eff;
@@ -1627,10 +1805,7 @@ onMounted(() => {
   border-bottom-color: #b3d8ff;
 }
 
-.tool-card.select-card.executing .select-options-list,
-.tool-card.select-card.executing .param-reminder,
-.tool-card.select-card.executing .param-input-section,
-.tool-card.select-card.executing .param-required-block {
+.tool-card.select-card.executing .select-options-list {
   pointer-events: none;
   opacity: 0.5;
 }
@@ -1650,10 +1825,7 @@ onMounted(() => {
   color: #67c23a !important;
 }
 
-.tool-card.select-card.done .select-options-list,
-.tool-card.select-card.done .param-reminder,
-.tool-card.select-card.done .param-input-section,
-.tool-card.select-card.done .param-required-block {
+.tool-card.select-card.done .select-options-list {
   pointer-events: none;
   opacity: 0.4;
 }
@@ -1673,161 +1845,49 @@ onMounted(() => {
   color: #f56c6c !important;
 }
 
-.tool-card.select-card.failed .select-options-list,
-.tool-card.select-card.failed .param-reminder,
-.tool-card.select-card.failed .param-input-section,
-.tool-card.select-card.failed .param-required-block {
+.tool-card.select-card.failed .select-options-list {
   pointer-events: none;
   opacity: 0.4;
 }
 
-/* 参数输入区域（已废弃，保留兼容） */
-.param-input-section {
+/* 必填参数输入区域（已移除，保留样式兼容） */
+.param-input-section,
+.param-required-block,
+.param-reminder,
+.param-input-group,
+.param-input-script-name,
+.param-input-item,
+.param-input-controls,
+.param-missing-warning {
   display: none;
 }
 
-/* 必填参数输入区域（阻止执行时显示） */
-.param-required-block {
-  margin: 12px 0;
-  padding: 12px;
-  background: #fffbe6;
-  border: 1px solid #ffe58f;
-  border-radius: 8px;
+/* 参数确认卡片样式 */
+.param-confirm-card {
+  background: #fff;
+  border: 2px solid #409eff;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(64, 158, 255, 0.15);
+  max-width: 480px;
 }
 
-.param-required-header {
+.param-confirm-body {
+  padding: 14px 16px;
+}
+
+.param-confirm-body .message-text {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+
+.param-confirm-actions {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #d48806;
-  margin-bottom: 10px;
-}
-
-.param-required-header i {
-  font-size: 14px;
-}
-
-.param-required-item {
-  margin-bottom: 8px;
-}
-
-.param-required-item:last-of-type {
-  margin-bottom: 8px;
-}
-
-.param-required-item label {
-  display: block;
-  font-size: 12px;
-  color: #606266;
-  margin-bottom: 4px;
-}
-
-.param-required-item .el-input {
-  max-width: 320px;
-}
-
-.param-required-tip {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: #b8860b;
-  margin-top: 8px;
-}
-
-.param-required-tip i {
-  font-size: 12px;
-}
-
-/* 旧参数输入区域样式（保留兼容） */
-.param-input-section {
-  margin: 12px 0;
-  padding: 12px;
-  background: #f5f7fa;
-  border-radius: 8px;
-}
-
-.param-input-group {
-  margin-bottom: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px dashed #dcdfe6;
-}
-
-.param-input-group:last-child {
-  margin-bottom: 0;
-  padding-bottom: 0;
-  border-bottom: none;
-}
-
-.param-input-script-name {
-  font-weight: 500;
-  font-size: 13px;
-  color: #303133;
-  margin-bottom: 8px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.param-input-script-name i {
-  color: #e6a23c;
-  font-size: 12px;
-}
-
-.param-input-item {
-  margin-bottom: 8px;
-}
-
-.param-input-item label {
-  display: block;
-  font-size: 12px;
-  color: #606266;
-  margin-bottom: 4px;
-}
-
-.required-mark {
-  color: #f56c6c;
-  margin-left: 2px;
-}
-
-.param-input-controls {
-  display: flex;
-  align-items: center;
   gap: 8px;
-}
-
-.param-input-controls .el-input {
-  flex: 1;
-  max-width: 260px;
-}
-
-.param-missing-warning {
-  margin-top: 8px;
-  padding: 8px 10px;
-  background: #fef0f0;
-  border: 1px solid #fbc4c4;
-  border-radius: 6px;
-  font-size: 12px;
-  color: #f56c6c;
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-}
-
-.param-missing-warning i {
-  margin-top: 1px;
-  flex-shrink: 0;
-}
-
-.param-missing-warning ul {
-  margin: 4px 0 0 0;
-  padding-left: 20px;
-}
-
-.param-missing-warning > span {
-  flex: 1;
+  padding: 10px 16px;
+  background: #fafbfc;
+  border-top: 1px solid #eef2f7;
 }
 
 /* ===== Input Area ===== */
