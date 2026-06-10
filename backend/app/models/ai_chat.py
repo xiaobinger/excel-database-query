@@ -34,6 +34,7 @@ class AiChatMessage(db.Model):
     role = db.Column(db.String(20), nullable=False, comment='角色: user/assistant/system')
     content = db.Column(db.Text, comment='消息内容')
     tokens_used = db.Column(db.Integer, default=0, comment='消耗token数')
+    is_deleted = db.Column(db.Boolean, default=False, comment='是否软删除')
     msg_metadata = db.Column('metadata', db.Text, comment='消息元数据(JSON)，用于存储工具调用状态等')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 

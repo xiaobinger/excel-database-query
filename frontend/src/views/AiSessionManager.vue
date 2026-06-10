@@ -50,11 +50,34 @@
     <!-- 对话详情 -->
     <el-dialog v-model="detailVisible" :title="`对话详情 (ID: ${detailChatId})`" width="750px" destroy-on-close>
       <div class="dialog-messages" v-loading="detailLoading" style="max-height: 60vh; overflow-y: auto; padding: 16px">
-        <div v-for="msg in detailMessages" :key="msg.id" class="dialog-msg" :class="msg.role">
+        <div
+          v-for="msg in detailMessages"
+          :key="msg.id"
+          class="dialog-msg"
+          :class="msg.role"
+          @mouseenter="msg._showDelete = true"
+          @mouseleave="msg._showDelete = false"
+        >
           <div class="dialog-msg-avatar">
             <i :class="msg.role === 'user' ? 'fas fa-user' : 'fas fa-robot'"></i>
           </div>
           <div class="dialog-msg-content">
+            <!-- 删除按钮（悬浮显示） -->
+            <div class="dialog-msg-actions" v-show="msg._showDelete">
+              <el-dropdown trigger="click" @command="(cmd) => handleDetailMsgDelete(cmd, msg)">
+                <el-button text size="small" class="detail-msg-delete-btn" @click.stop>
+                  <i class="fas fa-trash"></i>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="soft">删除消息</el-dropdown-item>
+                    <el-dropdown-item command="hard" divided>
+                      <span style="color: #f56c6c">永久删除</span>
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
             <template v-if="msg._type === 'tool' && msg._metadata?.tool_data">
               <div class="tool-badge">
                 <i class="fas fa-magic"></i>
@@ -161,6 +184,32 @@ async function hardDeleteChat(chatId) {
   } catch {}
 }
 
+async function softDeleteDetailMessage(msg) {
+  try {
+    await ElMessageBox.confirm('确定要删除此消息吗？', '删除确认', { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' })
+    await api.ai.deleteMessage(detailChatId.value, msg.id)
+    detailMessages.value = detailMessages.value.filter(m => m.id !== msg.id)
+    ElMessage.success('已删除')
+  } catch {}
+}
+
+async function hardDeleteDetailMessage(msg) {
+  try {
+    await ElMessageBox.confirm('永久删除后将无法恢复，确定要永久删除此消息吗？', '永久删除确认', { confirmButtonText: '永久删除', cancelButtonText: '取消', type: 'error' })
+    await api.ai.hardDeleteMessage(detailChatId.value, msg.id)
+    detailMessages.value = detailMessages.value.filter(m => m.id !== msg.id)
+    ElMessage.success('已永久删除')
+  } catch {}
+}
+
+function handleDetailMsgDelete(cmd, msg) {
+  if (cmd === 'soft') {
+    softDeleteDetailMessage(msg)
+  } else if (cmd === 'hard') {
+    hardDeleteDetailMessage(msg)
+  }
+}
+
 onMounted(() => {
   fetchUsers()
   fetchSessions()
@@ -215,6 +264,7 @@ onMounted(() => {
   border-radius: 12px;
   font-size: 13px;
   line-height: 1.6;
+  position: relative;
 }
 .dialog-msg.assistant .dialog-msg-content {
   background: #f4f6f8;
@@ -223,6 +273,31 @@ onMounted(() => {
 .dialog-msg.user .dialog-msg-content {
   background: #409eff;
   color: #fff;
+}
+
+/* 详情对话框消息删除按钮 */
+.dialog-msg-actions {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 10;
+  opacity: 0.8;
+  transition: opacity 0.2s;
+}
+
+.dialog-msg-actions:hover {
+  opacity: 1;
+}
+
+.detail-msg-delete-btn {
+  color: #909399;
+  padding: 2px 4px;
+  font-size: 11px;
+  min-height: auto;
+}
+
+.detail-msg-delete-btn:hover {
+  color: #f56c6c;
 }
 .tool-badge {
   display: inline-flex;

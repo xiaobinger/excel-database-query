@@ -303,6 +303,37 @@ def hard_delete_chat(chat_id):
     return jsonify({'success': True, 'message': '永久删除成功'})
 
 
+@ai_bp.route('/chats/<int:chat_id>/messages/<int:message_id>', methods=['DELETE'])
+@login_required
+def delete_message(chat_id, message_id):
+    """软删除单条消息：普通用户只能软删除自己的消息"""
+    current_user = get_current_user()
+    chat = AiChat.query.filter_by(id=chat_id, user_id=current_user.id).first()
+    if not chat:
+        return jsonify({'success': False, 'message': '对话不存在'}), 404
+
+    msg = AiChatMessage.query.filter_by(id=message_id, chat_id=chat_id).first()
+    if not msg:
+        return jsonify({'success': False, 'message': '消息不存在'}), 404
+
+    msg.is_deleted = True
+    db.session.commit()
+    return jsonify({'success': True, 'message': '已删除'})
+
+
+@ai_bp.route('/chats/<int:chat_id>/messages/<int:message_id>/hard', methods=['DELETE'])
+@admin_required
+def hard_delete_message(chat_id, message_id):
+    """永久删除单条消息：仅管理员可操作"""
+    msg = AiChatMessage.query.filter_by(id=message_id, chat_id=chat_id).first()
+    if not msg:
+        return jsonify({'success': False, 'message': '消息不存在'}), 404
+
+    db.session.delete(msg)
+    db.session.commit()
+    return jsonify({'success': True, 'message': '已永久删除'})
+
+
 @ai_bp.route('/upload-file', methods=['POST'])
 @login_required
 def upload_file():
@@ -398,7 +429,7 @@ def get_messages(chat_id):
     if not chat:
         return jsonify({'success': False, 'message': '对话不存在'}), 404
 
-    messages = AiChatMessage.query.filter_by(chat_id=chat_id)\
+    messages = AiChatMessage.query.filter_by(chat_id=chat_id, is_deleted=False)\
         .order_by(AiChatMessage.created_at.asc()).all()
     return jsonify({'success': True, 'data': [m.to_dict() for m in messages]})
 

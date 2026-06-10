@@ -49,11 +49,30 @@
 
       <template v-else>
         <div class="messages-area" ref="messagesRef">
-          <div v-for="msg in messages" :key="msg.id" class="message" :class="msg.role">
+          <div v-for="msg in messages" :key="msg.id" class="message" :class="msg.role" @mouseenter="msg._showActions = true" @mouseleave="msg._showActions = false">
             <div class="message-avatar">
               <i :class="msg.role === 'user' ? 'fas fa-user' : 'fas fa-robot'"></i>
             </div>
             <div class="message-content" :class="{ 'full-width': msg._type === 'tool' || msg._type === 'file' }">
+              <!-- 删除按钮（悬浮显示） -->
+              <div class="message-actions" v-show="msg._showActions">
+                <el-dropdown v-if="isAdmin" trigger="click" @command="(cmd) => handleMsgDelete(cmd, msg)">
+                  <el-button text size="small" class="msg-action-btn" @click.stop>
+                    <i class="fas fa-trash"></i>
+                  </el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="soft">删除消息</el-dropdown-item>
+                      <el-dropdown-item command="hard" divided>
+                        <span style="color: #f56c6c">永久删除</span>
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+                <el-button v-else text size="small" class="msg-action-btn" @click="softDeleteMessage(msg)">
+                  <i class="fas fa-trash"></i>
+                </el-button>
+              </div>
               <!-- 文件附件显示 -->
               <template v-if="msg._type === 'file'">
                 <div class="file-card">
@@ -439,6 +458,40 @@ async function deleteChat(chatId) {
       messages.value = []
     }
   } catch {}
+}
+
+async function softDeleteMessage(msg) {
+  try {
+    await ElMessageBox.confirm(
+      '确定要删除此消息吗？',
+      '删除确认',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
+    )
+    await api.ai.deleteMessage(currentChatId.value, msg.id)
+    messages.value = messages.value.filter(m => m.id !== msg.id)
+    ElMessage.success('已删除')
+  } catch {}
+}
+
+async function hardDeleteMessage(msg) {
+  try {
+    await ElMessageBox.confirm(
+      '永久删除后将无法恢复，确定要永久删除此消息吗？',
+      '永久删除确认',
+      { confirmButtonText: '永久删除', cancelButtonText: '取消', type: 'error' }
+    )
+    await api.ai.hardDeleteMessage(currentChatId.value, msg.id)
+    messages.value = messages.value.filter(m => m.id !== msg.id)
+    ElMessage.success('已永久删除')
+  } catch {}
+}
+
+function handleMsgDelete(cmd, msg) {
+  if (cmd === 'soft') {
+    softDeleteMessage(msg)
+  } else if (cmd === 'hard') {
+    hardDeleteMessage(msg)
+  }
 }
 
 function handleDeleteCommand(cmd, chatId) {
@@ -1078,10 +1131,41 @@ onMounted(() => {
 
 .message-content {
   max-width: 70%;
+  position: relative;
 }
 
 .message-content.full-width {
   max-width: 100%;
+}
+
+/* 消息操作按钮（悬浮显示） */
+.message-actions {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 10;
+  opacity: 0.8;
+  transition: opacity 0.2s;
+}
+
+.message-actions:hover {
+  opacity: 1;
+}
+
+.msg-action-btn {
+  color: #909399;
+  padding: 2px 4px;
+  font-size: 12px;
+  min-height: auto;
+}
+
+.msg-action-btn:hover {
+  color: #f56c6c;
+}
+
+.message.user .message-actions {
+  right: 8px;
+  top: 8px;
 }
 
 .message-text {

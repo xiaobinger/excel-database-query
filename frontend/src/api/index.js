@@ -161,6 +161,8 @@ const ai = {
   matchQuery: (data) => http.post('/ai/match-query', data),
   updateMessage: (chatId, msgId, data) => http.put(`/ai/chats/${chatId}/messages/${msgId}`, data),
   createMessage: (chatId, data) => http.post(`/ai/chats/${chatId}/messages`, data),
+  deleteMessage: (chatId, msgId) => http.delete(`/ai/chats/${chatId}/messages/${msgId}`),
+  hardDeleteMessage: (chatId, msgId) => http.delete(`/ai/chats/${chatId}/messages/${msgId}/hard`),
   adminListChats: (params) => http.get('/ai/admin/chats', { params }),
   adminRestoreChat: (chatId) => http.put(`/ai/admin/chats/${chatId}/restore`),
 }

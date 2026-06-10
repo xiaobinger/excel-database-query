@@ -247,6 +247,7 @@ CREATE TABLE IF NOT EXISTS ai_chat_messages (
     role VARCHAR(20) NOT NULL COMMENT '角色: user/assistant/system',
     content TEXT COMMENT '消息内容',
     tokens_used INT DEFAULT 0 COMMENT '消耗token数',
+    is_deleted BOOLEAN DEFAULT FALSE COMMENT '是否软删除',
     metadata TEXT COMMENT '消息元数据(JSON)，用于存储工具调用状态等',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_chat_id (chat_id),
