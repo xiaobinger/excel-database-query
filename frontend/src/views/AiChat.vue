@@ -77,6 +77,34 @@
                   </div>
                 </div>
               </template>
+              <!-- 选项选择卡片 -->
+              <template v-else-if="msg._type === 'select_options'">
+                <div class="tool-card select-card">
+                  <div class="tool-card-header">
+                    <i class="fas fa-list-check tool-icon"></i>
+                    <span class="tool-title">
+                      <template v-if="msg._action_type === 'export'">可选导出任务</template>
+                      <template v-else>可选查询任务</template>
+                    </span>
+                  </div>
+                  <div class="tool-card-body">
+                    <p class="tool-confirm-msg">{{ msg.content }}</p>
+                    <div class="select-options-list">
+                      <label v-for="s in msg._scripts" :key="s.id" class="select-option-item">
+                        <input type="checkbox" :value="s.id" v-model="msg._selected" />
+                        <span class="select-option-name">{{ s.name }}</span>
+                        <span v-if="s.description" class="select-option-desc">{{ s.description }}</span>
+                      </label>
+                    </div>
+                  </div>
+                  <div class="tool-card-actions">
+                    <el-button type="primary" size="small" @click="executeSelectedOptions(msg)" :disabled="msg._selected.length === 0">
+                      <i class="fas fa-play"></i> 确认执行所选 ({{ msg._selected.length }})
+                    </el-button>
+                    <el-button size="small" text @click="dismissTool(msg)">忽略</el-button>
+                  </div>
+                </div>
+              </template>
               <!-- 普通文本消息 -->
               <template v-else-if="msg._type !== 'tool'">
                 <div class="message-text" v-html="renderMarkdown(msg.content)"></div>
@@ -265,6 +293,12 @@ async function selectChat(chatId) {
         if (meta._type === 'tool') {
           base._type = 'tool'
           base.tool_data = meta.tool_data
+        } else if (meta._type === 'select_options') {
+          base._type = 'select_options'
+          base._select_mode = meta._select_mode
+          base._scripts = meta.scripts || []
+          base._selected = []
+          base._action_type = meta.action_type || ''
         }
         // 恢复执行状态
         if (meta._executing) base._executing = true
@@ -402,6 +436,18 @@ async function sendMessage() {
             _dismissed: false,
             tool_data: result,
           })
+        } else if (result && result._select_mode) {
+          // 选项选择卡片：列出多个/全部选项供用户勾选
+          messages.value.push({
+            id: tr.message_id || Date.now() + Math.random(),
+            role: 'assistant',
+            content: result.message || '',
+            _type: 'select_options',
+            _select_mode: result._select_mode,
+            _scripts: result.scripts || [],
+            _action_type: result.scripts && result.scripts.length > 0 ? (tr.name === 'list_export_options' ? 'export' : 'query') : '',
+            _selected: [],
+          })
         } else if (result && result.error) {
           messages.value.push({
             id: Date.now() + Math.random(),
@@ -474,6 +520,40 @@ async function saveMessageState(msg) {
     try {
       await api.ai.updateMessage(currentChatId.value, msg.id, { metadata })
     } catch {}
+  }
+}
+
+async function executeSelectedOptions(msg) {
+  const selectedIds = msg._selected
+  if (!selectedIds || selectedIds.length === 0) {
+    ElMessage.warning('请至少选择一个选项')
+    return
+  }
+
+  msg._executing = true
+  msg._progress = 5
+  msg._status_text = '正在初始化任务...'
+
+  try {
+    // 构建导出任务，所选多个选项都执行
+    const res = await api.export.execute({
+      script_ids: selectedIds,
+      params_values: {},
+      all_checked: {},
+      output_format: 'sheets',
+    })
+    if (!res.task_id) {
+      throw new Error('未获取到任务ID')
+    }
+    const taskId = res.task_id
+    await pollTaskStatus(taskId, msg)
+  } catch (e) {
+    msg._executing = false
+    msg._failed = true
+    msg._error_msg = e.message || '未知错误'
+    saveMessageState(msg)
+    await nextTick()
+    scrollToBottom()
   }
 }
 
@@ -1023,6 +1103,73 @@ onMounted(() => {
   background: #fef0f0;
   padding: 6px 10px;
   border-radius: 6px;
+}
+
+/* ===== Select Card Styles ===== */
+.tool-card.select-card {
+  border-color: #e6a23c;
+  box-shadow: 0 2px 12px rgba(230, 162, 60, 0.15);
+  max-width: 600px;
+}
+
+.tool-card.select-card .tool-card-header {
+  background: linear-gradient(135deg, #fdf6ec, #fcf5e0);
+  border-bottom-color: #f0d9a6;
+}
+
+.tool-card.select-card .tool-icon {
+  color: #e6a23c;
+}
+
+.select-options-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.select-option-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: #f5f7fa;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+}
+
+.select-option-item:hover {
+  background: #ecf5ff;
+  border-color: #b3d8ff;
+}
+
+.select-option-item input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--primary-color, #409eff);
+  flex-shrink: 0;
+}
+
+.select-option-name {
+  font-weight: 500;
+  font-size: 13px;
+  color: #303133;
+  flex: 1;
+}
+
+.select-option-desc {
+  font-size: 12px;
+  color: #909399;
+  margin-left: auto;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ===== Input Area ===== */
