@@ -247,6 +247,24 @@ class QueryService:
                     first_script.query_mode if first_script else 'batch'
                 )
 
+                total_success = sum(r.get('success_count', 0) for r in all_results.values())
+                total_failure = sum(r.get('failure_count', 0) for r in all_results.values())
+
+                # 查询成功但未查询到数据，不生成结果文件
+                if len(processed_results) == 0:
+                    task.status = 'completed'
+                    task.completed_at = datetime.utcnow()
+                    task.total_rows = 0
+                    task.output_file = None
+                    task.success_count = total_success
+                    task.failure_count = total_failure
+                    task.progress = 100
+                    task.error_message = None
+                    task.add_log('查询执行完成，但未查询到任何数据，未生成结果文件', 'warning')
+                    db.session.commit()
+                    update_task_progress(task_id, 100, '查询执行完成（无数据）')
+                    return
+
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 output_filename = f"result_{timestamp}.xlsx"
                 output_path = os.path.join(output_dir, output_filename)
@@ -263,9 +281,6 @@ class QueryService:
                         output_path, input_file, processed_results,
                         param_name, column_mapping or {}, primary_key
                     )
-
-                total_success = sum(r.get('success_count', 0) for r in all_results.values())
-                total_failure = sum(r.get('failure_count', 0) for r in all_results.values())
 
                 task.status = 'completed'
                 task.completed_at = datetime.utcnow()

@@ -473,6 +473,26 @@ class ExportService:
                             pass
                     return
 
+                # 查询成功但未查询到数据，不生成结果文件
+                if total_rows == 0:
+                    task.status = 'completed'
+                    task.completed_at = datetime.utcnow()
+                    task.total_rows = 0
+                    task.success_count = total_success
+                    task.failure_count = total_failure
+                    task.output_file = None
+                    task.progress = 100
+                    task.error_message = None
+                    task.add_log('导出完成，但未查询到任何数据，未生成结果文件', 'warning')
+                    db.session.commit()
+                    update_export_progress(task_id, 100, '导出完成（无数据）')
+                    if on_complete:
+                        try:
+                            on_complete(task_id, 'completed')
+                        except Exception:
+                            pass
+                    return
+
                 task.add_log('开始生成导出文件')
                 db.session.commit()
                 update_export_progress(task_id, 85, '生成导出文件')

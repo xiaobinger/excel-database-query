@@ -396,6 +396,44 @@ class AiService:
         return {'scripts': result, 'total': len(result)}
 
     @staticmethod
+    def _normalize_neq_value(value: str) -> bool:
+        """将非即不等于参数值标准化为布尔值
+        
+        注意：非即不等于参数中，is_checked=True 表示使用 = neq_value（包含该值），
+        is_checked=False 表示使用 != neq_value（排除该值）。
+        
+        因此：
+        - 用户说"排除/不要/不"等 → 想表达用 != 排除该值 → is_checked = False
+        - 用户说"是/要/包含"等 → 想表达用 = 包含该值 → is_checked = True
+        """
+        if isinstance(value, bool):
+            return value
+        if not isinstance(value, str):
+            value = str(value)
+        v = value.strip().lower()
+        if not v:
+            return True  # 默认使用 = 运算符
+
+        # 先检查明确的否定/排除短语（这些意味着用 != 排除该值 → is_checked=False）
+        negative_phrases = ['不要排除', '不需排除', '不用排除', '不启用', '不应用',
+                           '不使用不等于', '不', '否', '不是', '不要', '不需要',
+                           '不用', '没有', 'no', 'false', '排除', '不包含','未',
+                           '0']
+        for phrase in negative_phrases:
+            if phrase in v:
+                return False
+
+        # 肯定词列表（这些意味着用 = 包含该值 → is_checked=True）
+        positive_phrases = ['是', '要', '需要', '启用', '开启', '包含', '使用',
+                           'yes', 'true','1']
+        for phrase in positive_phrases:
+            if phrase in v:
+                return True
+
+        # 默认值
+        return True
+
+    @staticmethod
     def _tool_request_export(args: dict, user_id: int = None) -> dict:
         """处理导出请求 - 返回结构化信息供前端确认（含权限校验）"""
         from app.models.script import Script
@@ -422,6 +460,11 @@ class AiService:
                     return {'error': f'你没有权限使用导出选项"{script.name}"'}
 
         script_params = script.get_params_config()
+        # 标准化非即不等于参数值：将自然语言中的否定/肯定词转为布尔值
+        for p in script_params:
+            if p.get('enum_enabled') and p.get('enum_mode') == 'neq' and p['name'] in params:
+                params[p['name']] = AiService._normalize_neq_value(params[p['name']])
+
         # 自动将未提供且支持 allow_all 的参数标记为"全部"
         all_checked = {}
         for p in script_params:

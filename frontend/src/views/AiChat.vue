@@ -54,8 +54,8 @@
               <i :class="msg.role === 'user' ? 'fas fa-user' : 'fas fa-robot'"></i>
             </div>
             <div class="message-content" :class="{ 'full-width': msg._type === 'tool' || msg._type === 'file' }">
-              <!-- 删除按钮（悬浮显示） -->
-              <div class="message-actions" v-show="msg._showActions">
+              <!-- 删除按钮（悬浮显示，执行中的任务不显示删除按钮） -->
+              <div class="message-actions" v-show="msg._showActions && !msg._executing">
                 <el-dropdown v-if="isAdmin" trigger="click" @command="(cmd) => handleMsgDelete(cmd, msg)">
                   <el-button text size="small" class="msg-action-btn" @click.stop>
                     <i class="fas fa-trash"></i>
@@ -132,60 +132,40 @@
 
                     <!-- 执行失败错误 -->
                     <div v-if="msg._failed && msg._error_msg" class="tool-error-msg">
-                      <i class="fas fa-exclamation-circle"></i> {{ msg._error_msg }}
+                      <i class="fas fa-exclamation-circle"></i>
+                      <span class="error-msg-content">
+                        <span class="error-msg-text">{{ msg._error_msg }}</span>
+                        <span v-if="msg._ai_suggestion" class="error-ai-suggestion">
+                          <i class="fas fa-lightbulb"></i> {{ msg._ai_suggestion }}
+                        </span>
+                      </span>
                     </div>
 
-                    <!-- 参数输入区域（执行前） -->
-                    <div v-if="!msg._executing && !msg._done && !msg._ignored && msg._selectedScripts && msg._selectedScripts.length > 0 && showParamInput(msg)" class="param-input-section">
-                      <div v-for="script in msg._selectedScripts" :key="script.id" class="param-input-group">
-                        <div class="param-input-script-name">
-                          <i class="fas fa-file-export"></i> {{ script.name }}
-                        </div>
-                        <div v-for="p in script.params" :key="p.name" class="param-input-item">
-                          <label>
-                            {{ p.label || p.name }}
-                            <span v-if="p.required" class="required-mark">*</span>
-                          </label>
-                          <div class="param-input-controls">
-                            <el-input
-                              v-if="!p.allow_all"
-                              v-model="msg._param_values[script.id + '_' + p.name]"
-                              size="small"
-                              :placeholder="'请输入' + (p.label || p.name)"
-                              :disabled="msg._executing"
-                            />
-                            <template v-else>
-                              <el-input
-                                v-if="!msg._all_checked[script.id + '_' + p.name]"
-                                v-model="msg._param_values[script.id + '_' + p.name]"
-                                size="small"
-                                :placeholder="'请输入' + (p.label || p.name) + '，或勾选全部'"
-                                :disabled="msg._executing"
-                              />
-                              <el-checkbox
-                                v-model="msg._all_checked[script.id + '_' + p.name]"
-                                size="small"
-                                :disabled="msg._executing"
-                              >全部（不筛选）</el-checkbox>
-                            </template>
-                          </div>
-                        </div>
+                    <!-- 必填参数缺失警告（执行按钮上方，阻止执行） -->
+                    <div v-if="!msg._executing && !msg._done && !msg._ignored && msg._selectedScripts && msg._selectedScripts.length > 0 && hasMissingRequiredNoAllParams(msg)" class="param-required-block">
+                      <div class="param-required-header">
+                        <i class="fas fa-exclamation-circle"></i>
+                        <span>需要补充参数</span>
                       </div>
-                      <!-- 必填参数缺失警告 -->
-                      <div v-if="msg._missing_required_params && msg._missing_required_params.length > 0" class="param-missing-warning">
-                        <i class="fas fa-exclamation-triangle"></i>
-                        <span>以下参数为必填项，请填写后才能执行：</span>
-                        <ul>
-                          <li v-for="p in msg._missing_required_params" :key="p">{{ p }}</li>
-                        </ul>
+                      <div v-for="item in getMissingRequiredNoAllParams(msg)" :key="item.key" class="param-required-item">
+                        <label>{{ item.label }} <span class="required-mark">*</span></label>
+                        <el-input
+                          v-model="msg._param_values[item.key]"
+                          size="small"
+                          :placeholder="'请输入' + item.label"
+                          @input="onParamInputChange(msg)"
+                        />
+                      </div>
+                      <div class="param-required-tip">
+                        <i class="fas fa-info-circle"></i> 以上参数为必填项，请填写后才能执行任务
                       </div>
                     </div>
 
-                    <!-- 未解析到参数时的二次提醒 -->
+                    <!-- 无必填参数但需要确认全部不筛选 -->
                     <div v-if="!msg._ignored && !msg._executing && !msg._done && !msg._params_checked && !hasAnyRequiredParams(msg) && msg._scripts.length > 0" class="param-reminder">
                       <i class="fas fa-exclamation-triangle"></i>
-                      <span>当前所有参数将使用默认值（全部），是否继续？</span>
-                      <el-checkbox v-model="msg._params_checked" size="small" :disabled="msg._ignored || msg._executing">确认无参数或全部不筛选</el-checkbox>
+                      <span>当前所有参数将使用默认值（全部不筛选），是否继续？</span>
+                      <el-checkbox v-model="msg._params_checked" size="small" :disabled="msg._ignored || msg._executing">确认全部参数不筛选</el-checkbox>
                     </div>
 
                     <div v-if="!msg._executing && !msg._done" class="select-options-list">
@@ -223,7 +203,7 @@
                     >
                       <i class="fas fa-download"></i> 下载文件
                     </el-button>
-                    <el-button size="small" text @click="dismissTool(msg)" :disabled="msg._ignored || msg._executing">{{ msg._ignored ? '已忽略' : '忽略' }}</el-button>
+                    <el-button size="small" text @click="dismissTool(msg)" :disabled="msg._ignored || msg._executing" v-if="!msg._executing">{{ msg._ignored ? '已忽略' : '忽略' }}</el-button>
                   </div>
                 </div>
               </template>
@@ -258,7 +238,13 @@
                       </a>
                     </p>
                     <p v-if="msg._failed && msg._error_msg" class="tool-error-msg">
-                      <i class="fas fa-exclamation-circle"></i> {{ msg._error_msg }}
+                      <i class="fas fa-exclamation-circle"></i>
+                      <span class="error-msg-content">
+                        <span class="error-msg-text">{{ msg._error_msg }}</span>
+                        <span v-if="msg._ai_suggestion" class="error-ai-suggestion">
+                          <i class="fas fa-lightbulb"></i> {{ msg._ai_suggestion }}
+                        </span>
+                      </span>
                     </p>
                     <p v-if="msg.tool_data.required_missing && msg.tool_data.required_missing.length && !msg._executing && !msg._done" class="tool-warning">
                       <i class="fas fa-exclamation-triangle"></i> 缺少必填参数：{{ msg.tool_data.required_missing.join(', ') }}
@@ -291,7 +277,7 @@
                       <i class="fas fa-play"></i> 确认执行查询
                     </el-button>
                     <el-button
-                      v-if="!msg._ignored"
+                      v-if="!msg._ignored && !msg._executing"
                       size="small" text @click="dismissTool(msg)">
                       {{ msg._done || msg._failed ? '关闭' : '忽略' }}
                     </el-button>
@@ -436,6 +422,7 @@ async function selectChat(chatId) {
         if (meta._status_text) base._status_text = meta._status_text
         if (meta._download_url) base._download_url = meta._download_url
         if (meta._error_msg) base._error_msg = meta._error_msg
+        if (meta._ai_suggestion) base._ai_suggestion = meta._ai_suggestion
       }
       return base
     })
@@ -682,6 +669,7 @@ async function saveMessageState(msg) {
   if (msg._status_text) metadata._status_text = msg._status_text
   if (msg._download_url) metadata._download_url = msg._download_url
   if (msg._error_msg) metadata._error_msg = msg._error_msg
+  if (msg._ai_suggestion) metadata._ai_suggestion = msg._ai_suggestion
   if (Object.keys(metadata).length > 0) {
     try {
       await api.ai.updateMessage(currentChatId.value, msg.id, { metadata })
@@ -761,6 +749,50 @@ function checkMissingRequiredParams(msg) {
   return missing
 }
 
+// 检查是否有未允许全部且必填的参数未填写（阻止执行的核心检查）
+function hasMissingRequiredNoAllParams(msg) {
+  const selectedScripts = msg._selectedScripts || []
+  const paramValues = msg._param_values || {}
+  const allChecked = msg._all_checked || {}
+
+  for (const script of selectedScripts) {
+    if (!script.params) continue
+    for (const p of script.params) {
+      if (!p.required) continue
+      if (p.allow_all) continue // 允许全部的跳过（可以勾选全部不筛选）
+      const val = paramValues[script.id + '_' + p.name]
+      if (!val || val.trim() === '') {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+// 获取未允许全部且必填的参数列表（用于显示输入框）
+function getMissingRequiredNoAllParams(msg) {
+  const missing = []
+  const selectedScripts = msg._selectedScripts || []
+  const paramValues = msg._param_values || {}
+
+  for (const script of selectedScripts) {
+    if (!script.params) continue
+    for (const p of script.params) {
+      if (!p.required) continue
+      if (p.allow_all) continue // 允许全部的跳过
+      const key = script.id + '_' + p.name
+      const val = paramValues[key]
+      if (!val || val.trim() === '') {
+        missing.push({
+          key,
+          label: (script.name ? script.name + ' - ' : '') + (p.label || p.name)
+        })
+      }
+    }
+  }
+  return missing
+}
+
 // 判断是否有任何必填参数（只检查已勾选的脚本）
 function hasAnyRequiredParams(msg) {
   const selectedIds = msg._selected || []
@@ -778,7 +810,9 @@ function hasAnyRequiredParams(msg) {
 function canExecute(msg) {
   if (msg._executing || msg._done || msg._ignored) return false
   if (msg._selected.length === 0) return false
-  // 先检查必填参数：有缺失则不能执行
+  // 先检查未允许全部的必填参数：有缺失则不能执行
+  if (hasMissingRequiredNoAllParams(msg)) return false
+  // 再检查所有必填参数（包括允许全部的）
   const missing = checkMissingRequiredParams(msg)
   if (missing.length > 0) return false
   // 如果有必填参数且已填写完，可以执行
@@ -788,13 +822,11 @@ function canExecute(msg) {
   return false
 }
 
-// 判断是否显示参数输入区域
-function showParamInput(msg) {
-  if (!msg._selectedScripts || msg._selectedScripts.length === 0) return false
-  for (const script of msg._selectedScripts) {
-    if (script.params && script.params.length > 0) return true
-  }
-  return false
+// 参数输入框值变化时的处理
+function onParamInputChange(msg) {
+  // 清除之前的必填参数缺失提示
+  msg._missing_required_params = []
+  // 如果填写了所有未允许全部的必填参数，可以执行
 }
 
 // 选择变化时更新选中的脚本详情
@@ -881,37 +913,62 @@ function pollTaskStatus(taskId, msg) {
         if (task.status === 'completed') {
           msg._executing = false
           msg._done = true
-          msg._download_url = `/api/download/${taskId}`
           msg._progress = 100
-          msg._status_text = '执行完成'
 
-          // 持久化状态
-          saveMessageState(msg)
+          // 检查是否有输出文件（未查询到数据时 output_file 为 null）
+          if (task.output_file) {
+            msg._download_url = `/api/download/${taskId}`
+            msg._status_text = '执行完成'
 
-          // 弹出下载确认
-          ElMessageBox.confirm(
-            '导出任务已完成，是否立即下载文件？',
-            '下载确认',
-            { confirmButtonText: '立即下载', cancelButtonText: '稍后下载', type: 'success' }
-          ).then(() => {
-            downloadFile(msg._download_url)
-          }).catch(() => {})
+            // 持久化状态
+            saveMessageState(msg)
 
-          // 保存反馈消息到数据库
-          const scriptNames = msg._selectedScripts
-            ? msg._selectedScripts.map(s => s.name).join('、')
-            : (msg.tool_data?.script_name || '未知任务')
-          const feedbackContent = `✅ 导出任务 **${scriptNames}** 已完成！\n\n- 任务ID：\`${taskId}\`\n- 输出格式：${msg.tool_data?.output_format || 'sheets'}\n\n你可以点击上方卡片中的按钮下载文件，或前往导出任务列表查看历史记录。`
-          let feedbackId = Date.now()
-          try {
-            const fbRes = await api.ai.createMessage(currentChatId.value, { content: feedbackContent })
-            feedbackId = fbRes.data?.id || feedbackId
-          } catch {}
-          messages.value.push({
-            id: feedbackId,
-            role: 'assistant',
-            content: feedbackContent,
-          })
+            // 弹出下载确认
+            ElMessageBox.confirm(
+              '导出任务已完成，是否立即下载文件？',
+              '下载确认',
+              { confirmButtonText: '立即下载', cancelButtonText: '稍后下载', type: 'success' }
+            ).then(() => {
+              downloadFile(msg._download_url)
+            }).catch(() => {})
+
+            // 保存反馈消息到数据库
+            const scriptNames = msg._selectedScripts
+              ? msg._selectedScripts.map(s => s.name).join('、')
+              : (msg.tool_data?.script_name || '未知任务')
+            const feedbackContent = `✅ 导出任务 **${scriptNames}** 已完成！\n\n- 任务ID：\`${taskId}\`\n- 输出格式：${msg.tool_data?.output_format || 'sheets'}\n\n你可以点击上方卡片中的按钮下载文件，或前往导出任务列表查看历史记录。`
+            let feedbackId = Date.now()
+            try {
+              const fbRes = await api.ai.createMessage(currentChatId.value, { content: feedbackContent })
+              feedbackId = fbRes.data?.id || feedbackId
+            } catch {}
+            messages.value.push({
+              id: feedbackId,
+              role: 'assistant',
+              content: feedbackContent,
+            })
+          } else {
+            // 未查询到数据，任务完成但无输出文件
+            msg._status_text = '执行完成（无数据）'
+            saveMessageState(msg)
+
+            const scriptNames = msg._selectedScripts
+              ? msg._selectedScripts.map(s => s.name).join('、')
+              : (msg.tool_data?.script_name || '未知任务')
+            const noDataContent = `⚠️ 导出任务 **${scriptNames}** 已执行完成，但 **未查询到任何数据**，未生成结果文件。
+
+请检查筛选参数是否正确，或前往执行历史查看详细日志。`
+            let noDataId = Date.now()
+            try {
+              const fbRes = await api.ai.createMessage(currentChatId.value, { content: noDataContent })
+              noDataId = fbRes.data?.id || noDataId
+            } catch {}
+            messages.value.push({
+              id: noDataId,
+              role: 'assistant',
+              content: noDataContent,
+            })
+          }
           await nextTick()
           scrollToBottom()
           resolve()
@@ -922,6 +979,7 @@ function pollTaskStatus(taskId, msg) {
           msg._executing = false
           msg._failed = true
           msg._error_msg = task.error_message || '执行失败'
+          msg._ai_suggestion = task.ai_suggestion || null
           msg._status_text = '执行失败'
 
           // 持久化状态
@@ -931,7 +989,11 @@ function pollTaskStatus(taskId, msg) {
           const scriptNames = msg._selectedScripts
             ? msg._selectedScripts.map(s => s.name).join('、')
             : (msg.tool_data?.script_name || '未知任务')
-          const failContent = `❌ 导出任务执行失败：**${scriptNames}**\n\n错误信息：${msg._error_msg}`
+          let failContent = `❌ 导出任务执行失败：**${scriptNames}**`
+          failContent += `\n\n**错误信息：** ${msg._error_msg}`
+          if (msg._ai_suggestion) {
+            failContent += `\n\n**AI修正建议：**\n${msg._ai_suggestion}`
+          }
           let failId = Date.now()
           try {
             const fbRes = await api.ai.createMessage(currentChatId.value, { content: failContent })
@@ -1387,11 +1449,40 @@ onMounted(() => {
   color: #f56c6c;
   margin: 0;
   display: flex;
-  align-items: center;
-  gap: 4px;
+  align-items: flex-start;
+  gap: 6px;
   background: #fef0f0;
-  padding: 6px 10px;
+  padding: 8px 12px;
   border-radius: 6px;
+  flex-direction: column;
+}
+
+.error-msg-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.error-msg-text {
+  line-height: 1.5;
+}
+
+.error-ai-suggestion {
+  color: #409eff;
+  background: #ecf5ff;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.error-ai-suggestion i {
+  margin-top: 2px;
+  flex-shrink: 0;
 }
 
 /* ===== Select Card Styles ===== */
@@ -1538,7 +1629,8 @@ onMounted(() => {
 
 .tool-card.select-card.executing .select-options-list,
 .tool-card.select-card.executing .param-reminder,
-.tool-card.select-card.executing .param-input-section {
+.tool-card.select-card.executing .param-input-section,
+.tool-card.select-card.executing .param-required-block {
   pointer-events: none;
   opacity: 0.5;
 }
@@ -1560,7 +1652,8 @@ onMounted(() => {
 
 .tool-card.select-card.done .select-options-list,
 .tool-card.select-card.done .param-reminder,
-.tool-card.select-card.done .param-input-section {
+.tool-card.select-card.done .param-input-section,
+.tool-card.select-card.done .param-required-block {
   pointer-events: none;
   opacity: 0.4;
 }
@@ -1582,12 +1675,73 @@ onMounted(() => {
 
 .tool-card.select-card.failed .select-options-list,
 .tool-card.select-card.failed .param-reminder,
-.tool-card.select-card.failed .param-input-section {
+.tool-card.select-card.failed .param-input-section,
+.tool-card.select-card.failed .param-required-block {
   pointer-events: none;
   opacity: 0.4;
 }
 
-/* 参数输入区域 */
+/* 参数输入区域（已废弃，保留兼容） */
+.param-input-section {
+  display: none;
+}
+
+/* 必填参数输入区域（阻止执行时显示） */
+.param-required-block {
+  margin: 12px 0;
+  padding: 12px;
+  background: #fffbe6;
+  border: 1px solid #ffe58f;
+  border-radius: 8px;
+}
+
+.param-required-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #d48806;
+  margin-bottom: 10px;
+}
+
+.param-required-header i {
+  font-size: 14px;
+}
+
+.param-required-item {
+  margin-bottom: 8px;
+}
+
+.param-required-item:last-of-type {
+  margin-bottom: 8px;
+}
+
+.param-required-item label {
+  display: block;
+  font-size: 12px;
+  color: #606266;
+  margin-bottom: 4px;
+}
+
+.param-required-item .el-input {
+  max-width: 320px;
+}
+
+.param-required-tip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #b8860b;
+  margin-top: 8px;
+}
+
+.param-required-tip i {
+  font-size: 12px;
+}
+
+/* 旧参数输入区域样式（保留兼容） */
 .param-input-section {
   margin: 12px 0;
   padding: 12px;

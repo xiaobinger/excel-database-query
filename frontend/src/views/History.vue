@@ -186,7 +186,13 @@
             <span v-else>-</span>
           </el-descriptions-item>
           <el-descriptions-item label="输入文件">{{ detailData.input_file ? detailData.input_file.split(/[\\/]/).pop() : '-' }}</el-descriptions-item>
-          <el-descriptions-item label="输出文件">{{ detailData.output_file ? detailData.output_file.split(/[\\/]/).pop() : '-' }}</el-descriptions-item>
+          <el-descriptions-item label="输出文件">
+            <template v-if="detailData.output_file">{{ detailData.output_file.split(/[\\/]/).pop() }}</template>
+            <span v-else-if="detailData.status === 'completed'" style="color: #e6a23c">
+              <i class="fas fa-exclamation-triangle"></i> 未查询到数据，未生成文件
+            </span>
+            <span v-else>-</span>
+          </el-descriptions-item>
           <el-descriptions-item label="开始时间">{{ detailData.started_at || '-' }}</el-descriptions-item>
           <el-descriptions-item label="完成时间">{{ detailData.completed_at || '-' }}</el-descriptions-item>
         </el-descriptions>
@@ -194,6 +200,16 @@
         <div v-if="detailData.error_message" class="error-section">
           <el-divider content-position="left">错误信息</el-divider>
           <el-alert :title="detailData.error_message" type="error" show-icon :closable="false" />
+          <div v-if="detailData.ai_suggestion" class="ai-suggestion">
+            <div class="suggestion-header">
+              <i class="fas fa-lightbulb"></i> AI 分析与修正建议
+            </div>
+            <div class="suggestion-content">{{ detailData.ai_suggestion }}</div>
+          </div>
+          <div v-if="detailData.is_admin" class="admin-error-detail">
+            <el-divider content-position="left">详细错误日志（仅管理员可见）</el-divider>
+            <pre class="error-stack">{{ detailData.raw_error_message || detailData.error_message }}</pre>
+          </div>
         </div>
 
         <div class="log-section">
@@ -515,6 +531,54 @@ watch(() => store.taskVersion, () => {
 
 .error-section {
   margin-top: 16px;
+}
+
+.ai-suggestion {
+  margin-top: 12px;
+  padding: 12px 16px;
+  background: #ecf5ff;
+  border: 1px solid #b3d8ff;
+  border-radius: 6px;
+}
+
+.suggestion-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #409eff;
+  margin-bottom: 8px;
+}
+
+.suggestion-header i {
+  font-size: 16px;
+}
+
+.suggestion-content {
+  font-size: 13px;
+  color: #303133;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.admin-error-detail {
+  margin-top: 12px;
+}
+
+.error-stack {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: 12px;
+  border-radius: 4px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 400px;
+  overflow-y: auto;
 }
 
 .log-section {

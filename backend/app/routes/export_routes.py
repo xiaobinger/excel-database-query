@@ -10,6 +10,7 @@ from app.models.script import Script
 from app.models.database import DatabaseConnection
 from app.utils.auth import login_required, get_current_user
 from app.utils.behavior_tracker import track_behavior
+from app.utils.error_sanitizer import sanitize_error_for_user
 import time
 
 export_bp = Blueprint('export', __name__, url_prefix='/api/export')
@@ -77,10 +78,21 @@ def execute_export():
 
 
 @export_bp.route('/status/<task_id>', methods=['GET'])
+@login_required
 def get_export_status(task_id):
     status = ExportService.get_task_status(task_id)
     if not status:
         return jsonify({'success': False, 'message': '任务不存在'}), 404
+
+    # 对普通用户脱敏错误信息
+    current_user = get_current_user()
+    is_admin = current_user.is_admin() if current_user else False
+    sanitized = sanitize_error_for_user(status.get('error_message'), is_admin)
+    status['error_message'] = sanitized['error_message']
+    status['raw_error_message'] = sanitized['raw_error_message']
+    status['ai_suggestion'] = sanitized['ai_suggestion']
+    status['is_admin'] = is_admin
+
     return jsonify({'success': True, 'data': status})
 
 
