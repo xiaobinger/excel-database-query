@@ -89,19 +89,39 @@
                   </div>
                   <div class="tool-card-body">
                     <p class="tool-confirm-msg">{{ msg.content }}</p>
+                    <!-- 未解析到参数时的二次提醒 -->
+                    <div v-if="!msg._params_checked && msg._scripts.length > 0" class="param-reminder">
+                      <i class="fas fa-exclamation-triangle"></i>
+                      <span>当前所有参数将使用默认值（全部），是否继续？</span>
+                      <el-checkbox v-model="msg._params_checked" size="small">确认无参数或全部不筛选</el-checkbox>
+                    </div>
                     <div class="select-options-list">
                       <label v-for="s in msg._scripts" :key="s.id" class="select-option-item">
-                        <input type="checkbox" :value="s.id" v-model="msg._selected" />
-                        <span class="select-option-name">{{ s.name }}</span>
-                        <span v-if="s.description" class="select-option-desc">{{ s.description }}</span>
+                        <input type="checkbox" :value="s.id" v-model="msg._selected" :disabled="msg._executing" />
+                        <div class="select-option-detail">
+                          <span class="select-option-name">{{ s.name }}</span>
+                          <span v-if="s.description" class="select-option-desc">{{ s.description }}</span>
+                          <!-- 显示参数信息 -->
+                          <div v-if="s.params && s.params.length > 0" class="select-option-params">
+                            <el-tag v-for="p in s.params" :key="p.name" size="small" type="info" effect="plain" style="margin: 2px 4px 2px 0">
+                              {{ p.label || p.name }}{{ p.required ? '*' : '' }}
+                            </el-tag>
+                          </div>
+                        </div>
                       </label>
                     </div>
                   </div>
                   <div class="tool-card-actions">
-                    <el-button type="primary" size="small" @click="executeSelectedOptions(msg)" :disabled="msg._selected.length === 0">
-                      <i class="fas fa-play"></i> 确认执行所选 ({{ msg._selected.length }})
+                    <el-button
+                      type="primary" size="small"
+                      @click="executeSelectedOptions(msg)"
+                      :disabled="msg._selected.length === 0 || msg._executing || (msg._scripts.length > 0 && !msg._params_checked)"
+                      :loading="msg._executing"
+                    >
+                      <template v-if="msg._executing">正在执行...</template>
+                      <template v-else>确认执行所选 ({{ msg._selected.length }})</template>
                     </el-button>
-                    <el-button size="small" text @click="dismissTool(msg)">忽略</el-button>
+                    <el-button size="small" text @click="dismissTool(msg)" :disabled="msg._executing">{{ msg._ignored ? '已忽略' : '忽略' }}</el-button>
                   </div>
                 </div>
               </template>
@@ -299,6 +319,7 @@ async function selectChat(chatId) {
           base._scripts = meta.scripts || []
           base._selected = []
           base._action_type = meta.action_type || ''
+          base._params_checked = false
         }
         // 恢复执行状态
         if (meta._executing) base._executing = true
@@ -447,6 +468,7 @@ async function sendMessage() {
             _scripts: result.scripts || [],
             _action_type: result.scripts && result.scripts.length > 0 ? (tr.name === 'list_export_options' ? 'export' : 'query') : '',
             _selected: [],
+            _params_checked: false,
           })
         } else if (result && result.error) {
           messages.value.push({
@@ -1132,7 +1154,7 @@ onMounted(() => {
 
 .select-option-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   padding: 10px 14px;
   background: #f5f7fa;
@@ -1153,6 +1175,7 @@ onMounted(() => {
   cursor: pointer;
   accent-color: var(--primary-color, #409eff);
   flex-shrink: 0;
+  margin-top: 2px;
 }
 
 .select-option-name {
@@ -1170,6 +1193,43 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.select-option-detail {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  gap: 4px;
+}
+
+.select-option-params {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+/* 参数二次提醒样式 */
+.param-reminder {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #fdf6ec;
+  border: 1px solid #faecd8;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: #e6a23c;
+}
+
+.param-reminder i {
+  font-size: 14px;
+}
+
+.param-reminder > span {
+  flex: 1;
 }
 
 /* ===== Input Area ===== */
