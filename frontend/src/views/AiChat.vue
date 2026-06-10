@@ -187,7 +187,6 @@
                   </div>
                   <div class="tool-card-actions">
                     <el-button
-                      v-if="!msg._done && !msg._failed"
                       type="primary" size="small"
                       @click="executeSelectedOptions(msg)"
                       :disabled="msg._ignored || msg._selected.length === 0 || msg._executing || !canExecute(msg)"
@@ -195,6 +194,7 @@
                     >
                       <template v-if="msg._ignored">已忽略</template>
                       <template v-else-if="msg._executing">正在执行...</template>
+                      <template v-else-if="msg._failed">重新执行 ({{ msg._selected.length }})</template>
                       <template v-else>确认执行所选 ({{ msg._selected.length }})</template>
                     </el-button>
                     <el-button
@@ -656,6 +656,9 @@ async function executeSelectedOptions(msg) {
   msg._status_text = '正在初始化任务...'
   msg._done = false
   msg._failed = false
+  msg._error_msg = ''
+  msg._download_url = ''
+  msg._missing_required_params = []
 
   try {
     // 构建参数
@@ -718,14 +721,15 @@ function hasAnyRequiredParams(msg) {
 
 // 判断是否可以执行
 function canExecute(msg) {
-  if (msg._executing || msg._done || msg._failed || msg._ignored) return false
+  if (msg._executing || msg._done || msg._ignored) return false
   if (msg._selected.length === 0) return false
-  // 如果勾选了"确认无参数"，可以执行
-  if (msg._params_checked) return true
-  // 如果有必填参数且未填写完，不能执行
+  // 先检查必填参数：有缺失则不能执行
   const missing = checkMissingRequiredParams(msg)
   if (missing.length > 0) return false
-  // 如果没有必填参数，需要用户确认
+  // 如果有必填参数且已填写完，可以执行
+  if (hasAnyRequiredParams(msg)) return true
+  // 没有必填参数，需要用户勾选确认
+  if (msg._params_checked) return true
   return false
 }
 
@@ -841,7 +845,10 @@ function pollTaskStatus(taskId, msg) {
           }).catch(() => {})
 
           // 保存反馈消息到数据库
-          const feedbackContent = `✅ 导出任务 **${msg.tool_data.script_name}** 已完成！\n\n- 任务ID：\`${taskId}\`\n- 输出格式：${msg.tool_data.output_format || 'sheets'}\n\n你可以点击上方卡片中的按钮下载文件，或前往导出任务列表查看历史记录。`
+          const scriptNames = msg._selectedScripts
+            ? msg._selectedScripts.map(s => s.name).join('、')
+            : (msg.tool_data?.script_name || '未知任务')
+          const feedbackContent = `✅ 导出任务 **${scriptNames}** 已完成！\n\n- 任务ID：\`${taskId}\`\n- 输出格式：${msg.tool_data?.output_format || 'sheets'}\n\n你可以点击上方卡片中的按钮下载文件，或前往导出任务列表查看历史记录。`
           let feedbackId = Date.now()
           try {
             const fbRes = await api.ai.createMessage(currentChatId.value, { content: feedbackContent })
@@ -868,7 +875,10 @@ function pollTaskStatus(taskId, msg) {
           saveMessageState(msg)
 
           // 保存反馈消息到数据库
-          const failContent = `❌ 导出任务执行失败：**${msg.tool_data.script_name}**\n\n错误信息：${msg._error_msg}`
+          const scriptNames = msg._selectedScripts
+            ? msg._selectedScripts.map(s => s.name).join('、')
+            : (msg.tool_data?.script_name || '未知任务')
+          const failContent = `❌ 导出任务执行失败：**${scriptNames}**\n\n错误信息：${msg._error_msg}`
           let failId = Date.now()
           try {
             const fbRes = await api.ai.createMessage(currentChatId.value, { content: failContent })
