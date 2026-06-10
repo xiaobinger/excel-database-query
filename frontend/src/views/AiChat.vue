@@ -636,11 +636,37 @@
       destroy-on-close
     >
       <div class="query-dialog-body">
+        <!-- 查询脚本信息提示 -->
+        <div class="query-script-info" v-if="queryDialogMsg?._selectedScripts?.length">
+          <div v-for="script in queryDialogMsg._selectedScripts" :key="script.id" class="query-script-info-item">
+            <div class="query-script-info-title">
+              <i class="fas fa-search"></i> {{ script.name }}
+            </div>
+            <div class="query-script-info-details">
+              <div v-if="script.primary_key" class="query-info-row">
+                <span class="query-info-label">主键字段：</span>
+                <el-tag size="small" type="danger" effect="plain">{{ script.primary_key }}</el-tag>
+                <span class="query-info-desc">Excel文件中必须包含此列</span>
+              </div>
+              <div v-if="script.param_column" class="query-info-row">
+                <span class="query-info-label">参数列：</span>
+                <el-tag size="small" type="primary" effect="plain">{{ script.param_column }}</el-tag>
+              </div>
+              <div v-if="!script.primary_key && !script.param_column" class="query-info-row">
+                <span class="query-info-desc">未配置主键字段，请确保Excel文件包含查询所需的列</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- 步骤1：上传Excel文件 -->
         <div v-if="queryDialogStep === 1" class="query-dialog-step">
           <div class="query-dialog-hint">
             <i class="fas fa-info-circle"></i>
-            查询任务需要上传包含主键信息的Excel文件，系统将根据主键列的值进行查询匹配。
+            请上传包含上述主键字段的Excel文件，系统将根据主键列的值进行查询匹配。
+            <span v-if="queryDialogMsg?._selectedScripts?.some(s => s.primary_key)">
+              文件表头中需包含：<strong>{{ queryDialogMsg._selectedScripts.filter(s => s.primary_key).map(s => s.primary_key).join('、') }}</strong>
+            </span>
           </div>
           <el-upload
             :show-file-list="false"
@@ -1338,7 +1364,9 @@ async function doExecuteQuery(msg) {
     formData.append('script_ids', JSON.stringify(msg._selected))
     formData.append('file', queryDialogFile.value)
     formData.append('param_column', queryDialogParamColumn.value)
-    formData.append('new_sheet', 'true')
+    // 根据脚本配置决定是否新建工作表
+    const newSheet = msg._selectedScripts?.some(s => s.new_sheet === false) ? 'false' : 'true'
+    formData.append('new_sheet', newSheet)
 
     const res = await api.query.execute(formData)
     if (!res.task_id && !res.data?.task_id) {
@@ -1887,6 +1915,9 @@ async function confirmQuery(msg) {
     id: td.script_id,
     name: td.script_name || '查询任务',
     params: [],
+    primary_key: td.primary_key || '',
+    param_column: td.param_column || '',
+    new_sheet: td.new_sheet !== undefined ? td.new_sheet : true,
   }]
   msg._action_type = 'query'
   openQueryDialog(msg)
@@ -2609,6 +2640,61 @@ onMounted(() => {
 /* 查询任务执行对话框样式 */
 .query-dialog-body {
   min-height: 200px;
+}
+
+.query-script-info {
+  margin-bottom: 16px;
+}
+
+.query-script-info-item {
+  background: #fafafa;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+}
+
+.query-script-info-item:last-child {
+  margin-bottom: 0;
+}
+
+.query-script-info-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #303133;
+  margin-bottom: 8px;
+}
+
+.query-script-info-title i {
+  color: #409eff;
+  margin-right: 6px;
+}
+
+.query-script-info-details {
+  padding-left: 22px;
+}
+
+.query-info-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+
+.query-info-row:last-child {
+  margin-bottom: 0;
+}
+
+.query-info-label {
+  color: #606266;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.query-info-desc {
+  color: #909399;
+  font-size: 12px;
 }
 
 .query-dialog-step {

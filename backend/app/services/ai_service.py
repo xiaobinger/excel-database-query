@@ -373,7 +373,7 @@ class AiService:
                 'id': s.id,
                 'name': s.name,
                 'description': s.description or '',
-                'params': [{'name': p['name'], 'label': p.get('label', p['name']), 'type': p.get('type', 'text'), 'required': p.get('required', False), 'allow_all': p.get('allow_all', False)} for p in params],
+                'params': params,  # 返回完整参数配置，前端参数设置对话框需要
             })
         return {'scripts': result, 'total': len(result)}
 
@@ -389,12 +389,16 @@ class AiService:
             if keyword and keyword not in s.name.lower() and keyword not in (s.description or '').lower():
                 continue
             params = s.get_params_config()
-            result.append({
+            item = {
                 'id': s.id,
                 'name': s.name,
                 'description': s.description or '',
-                'params': [{'name': p['name'], 'label': p.get('label', p['name']), 'type': p.get('type', 'text'), 'required': p.get('required', False), 'allow_all': p.get('allow_all', False)} for p in params],
-            })
+                'params': params,
+                'primary_key': s.primary_key or '',
+                'param_column': s.param_column or '',
+                'new_sheet': s.new_sheet if s.new_sheet is not None else True,
+            }
+            result.append(item)
         return {'scripts': result, 'total': len(result)}
 
     @staticmethod
@@ -516,5 +520,8 @@ class AiService:
             'script_id': script.id,
             'script_name': script.name,
             'description': desc,
+            'primary_key': script.primary_key or '',
+            'param_column': script.param_column or '',
+            'new_sheet': script.new_sheet if script.new_sheet is not None else True,
             'confirm_message': f'AI 准备执行查询：{script.name}'
         }
