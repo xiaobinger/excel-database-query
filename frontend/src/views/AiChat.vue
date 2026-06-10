@@ -708,9 +708,11 @@ function checkMissingRequiredParams(msg) {
   return missing
 }
 
-// 判断是否有任何必填参数
+// 判断是否有任何必填参数（只检查已勾选的脚本）
 function hasAnyRequiredParams(msg) {
+  const selectedIds = msg._selected || []
   for (const s of msg._scripts) {
+    if (!selectedIds.includes(s.id)) continue
     if (!s.params) continue
     for (const p of s.params) {
       if (p.required) return true
@@ -748,10 +750,8 @@ function onSelectionChange(msg) {
   msg._selectedScripts = msg._scripts.filter(s => selectedIds.includes(s.id)) || []
   // 清除之前的必填参数缺失提示
   msg._missing_required_params = []
-  // 如果有必填参数，自动勾选确认（用户需要先填写参数）
-  if (hasAnyRequiredParams(msg)) {
-    msg._params_checked = true
-  }
+  // 重置参数确认状态：有必填参数时不显示"全部不筛选"确认提醒
+  msg._params_checked = false
 }
 
 async function confirmExport(msg) {
