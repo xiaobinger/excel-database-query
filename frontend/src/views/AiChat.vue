@@ -1145,6 +1145,7 @@ async function confirmParamDialog() {
   // 将对话框中的参数值写入卡片消息
   msg._param_values = { ...paramDialogValues.value }
   msg._all_checked = { ...paramDialogAllChecked.value }
+  msg._shared_param_names = (paramDialogSharedParams.value || []).map(p => p.name)
   msg._params_checked = true
 
   paramDialogVisible.value = false
@@ -1166,14 +1167,88 @@ async function doExecuteExport(msg) {
   msg._missing_required_params = []
 
   try {
-    // 构建参数
-    const paramsValues = msg._param_values || {}
-    const allChecked = msg._all_checked || {}
+    // 构建参数（与ExportExecutor保持一致的处理逻辑）
+    const rawValues = msg._param_values || {}
+    const rawAllChecked = msg._all_checked || {}
+    const selectedScripts = msg._selectedScripts || []
+
+    // 收集所有参数配置（用于判断range等属性）
+    const allParamsConfig = []
+    for (const s of selectedScripts) {
+      if (!s.params) continue
+      for (const p of s.params) {
+        if (!allParamsConfig.find(ap => ap.name === p.name)) {
+          allParamsConfig.push(p)
+        }
+      }
+    }
+
+    const params_values = {}
+
+    // 公共参数名集合
+    const sharedParamNames = new Set(msg._shared_param_names || [])
+
+    // 处理公共参数（key为纯paramName）
+    for (const name of sharedParamNames) {
+      // 跳过勾选"全部"的参数
+      if (rawAllChecked[name]) continue
+      const sv = rawValues[name]
+      if (sv === '' || sv === undefined || sv === null) continue
+      params_values[name] = sv
+    }
+
+    // 处理独立参数（key为scriptId_paramName，需转换为纯paramName）
+    for (const script of selectedScripts) {
+      if (!script.params) continue
+      for (const p of script.params) {
+        const dialogKey = script.id + '_' + p.name
+        // 跳过公共参数（已处理）
+        if (sharedParamNames.has(p.name)) continue
+        // 跳过勾选"全部"的参数
+        if (p.allow_all && rawAllChecked[dialogKey]) continue
+        const val = rawValues[dialogKey]
+        if (val !== undefined && val !== '' && val !== null) {
+          params_values[p.name] = val
+        }
+      }
+    }
+
+    // 处理范围参数：将数组[start, end]拆分为param_start和param_end
+    Object.keys(params_values).forEach((k) => {
+      const val = params_values[k]
+      if (val === undefined || val === '' || val === null) {
+        delete params_values[k]
+        return
+      }
+      const paramConfig = allParamsConfig.find(p => p.name === k)
+      if (paramConfig && paramConfig.range && Array.isArray(val) && val.length === 2) {
+        params_values[`${k}_start`] = val[0]
+        params_values[`${k}_end`] = val[1]
+        delete params_values[k]
+      }
+    })
+
+    // 构建 all_checked（使用纯paramName作为key）
+    const all_checked = {}
+    for (const [key, checked] of Object.entries(rawAllChecked)) {
+      if (!checked) continue
+      // 公共参数key本身就是paramName
+      if (sharedParamNames.has(key)) {
+        all_checked[key] = true
+        continue
+      }
+      // 独立参数key格式为scriptId_paramName，提取paramName
+      const found = selectedScripts.find(s => key.startsWith(s.id + '_'))
+      if (found) {
+        const paramName = key.substring(found.id.toString().length + 1)
+        all_checked[paramName] = true
+      }
+    }
 
     const res = await api.export.execute({
       script_ids: msg._selected,
-      params_values: paramsValues,
-      all_checked: allChecked,
+      params_values,
+      all_checked,
       output_format: 'sheets',
     })
     if (!res.task_id) {
@@ -1212,6 +1287,7 @@ async function confirmParamAll(msg) {
 
   // 将所有允许全部的参数标记为全部不筛选
   const selectedScripts = card._selectedScripts || []
+  const sharedParamNames = new Set()
   for (const script of selectedScripts) {
     if (!script.params) continue
     for (const p of script.params) {
@@ -1220,6 +1296,19 @@ async function confirmParamAll(msg) {
       }
     }
   }
+  // 识别公共参数名
+  const paramNameCount = {}
+  for (const script of selectedScripts) {
+    if (!script.params) continue
+    for (const p of script.params) {
+      if (!paramNameCount[p.name]) paramNameCount[p.name] = 0
+      paramNameCount[p.name]++
+    }
+  }
+  for (const [name, count] of Object.entries(paramNameCount)) {
+    if (count > 1) sharedParamNames.add(name)
+  }
+  card._shared_param_names = [...sharedParamNames]
   card._params_checked = true
 
   // 移除确认消息
