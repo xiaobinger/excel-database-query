@@ -390,7 +390,11 @@ def match_query():
 @login_required
 def get_messages(chat_id):
     current_user = get_current_user()
-    chat = AiChat.query.filter_by(id=chat_id, user_id=current_user.id).first()
+    # 管理员可以查看任何用户的会话，普通用户只能查看自己的
+    if current_user.is_admin():
+        chat = AiChat.query.filter_by(id=chat_id).first()
+    else:
+        chat = AiChat.query.filter_by(id=chat_id, user_id=current_user.id).first()
     if not chat:
         return jsonify({'success': False, 'message': '对话不存在'}), 404
 
@@ -488,20 +492,11 @@ def send_message(chat_id):
                 })
 
                 # 智能处理：如果list_export_options返回唯一匹配，自动调用request_export
+                # 注意：不再自动调用，让AI在二次回复时提取参数并调用
                 if func_name == 'list_export_options' and result.get('total') == 1 and not result.get('error'):
                     script = result['scripts'][0]
-                    logger.info(f'自动匹配到唯一导出选项: {script["name"]}，自动调用request_export')
-                    auto_args = json.dumps({
-                        'export_option_name': script['name'],
-                        'params': {},
-                        'output_format': 'sheets',
-                    })
-                    auto_result = AiService.execute_tool_call('request_export', auto_args, current_user.id)
-                    tool_results.append({
-                        'tool_call_id': f'auto_{tc["id"]}',
-                        'name': 'request_export',
-                        'result': auto_result,
-                    })
+                    logger.info(f'匹配到唯一导出选项: {script["name"]}，等待AI二次回复提取参数')
+                    # 不再自动调用 request_export，让AI从用户消息中提取参数后调用
                 # 多匹配或无匹配 → 创建选择卡片
                 elif func_name == 'list_export_options' and not result.get('error'):
                     if result.get('total', 0) > 1:
@@ -512,18 +507,11 @@ def send_message(chat_id):
                         result['message'] = '未找到精确匹配的选项，以下是你有权限的所有导出选项，请勾选后执行'
 
                 # 智能处理：如果list_query_options返回唯一匹配，自动调用request_query
+                # 注意：不再自动调用，让AI在二次回复时提取参数并调用
                 if func_name == 'list_query_options' and result.get('total') == 1 and not result.get('error'):
                     script = result['scripts'][0]
-                    logger.info(f'自动匹配到唯一查询选项: {script["name"]}，自动调用request_query')
-                    auto_args = json.dumps({
-                        'query_option_name': script['name'],
-                    })
-                    auto_result = AiService.execute_tool_call('request_query', auto_args, current_user.id)
-                    tool_results.append({
-                        'tool_call_id': f'auto_{tc["id"]}',
-                        'name': 'request_query',
-                        'result': auto_result,
-                    })
+                    logger.info(f'匹配到唯一查询选项: {script["name"]}，等待AI二次回复')
+                    # 不再自动调用 request_query，让AI处理
                 # 多匹配或无匹配 → 创建选择卡片
                 elif func_name == 'list_query_options' and not result.get('error'):
                     if result.get('total', 0) > 1:
@@ -550,7 +538,7 @@ def send_message(chat_id):
             })
             messages.extend(tool_messages)
 
-            # 检查工具类型：如果是操作型工具（导出/查询/选项选择），跳过AI二次确认
+            # 检查工具类型：如果是操作型工具（导出/查询），跳过AI二次确认
             action_tools = {'request_export', 'request_query'}
             has_action = any(tc.get('function', {}).get('name', '') in action_tools for tc in tool_calls)
             # 选择卡片也视为 action
@@ -561,26 +549,74 @@ def send_message(chat_id):
                 response_text = ''
                 tokens = tokens  # 保持原有 token 计数
             else:
-                # 非操作型工具（如列出选项），请求AI生成回复
-                final_payload = {
-                    'model': ai_config.model_name or 'gpt-3.5-turbo',
-                    'messages': messages,
-                    'max_tokens': ai_config.max_tokens or 4096,
-                    'temperature': ai_config.temperature if ai_config.temperature is not None else 0.7,
-                }
-                api_key = ai_config.get_api_key()
-                api_base = ai_config.api_base or 'https://api.openai.com/v1'
-                url = f"{api_base.rstrip('/')}/chat/completions"
-                headers = {
-                    'Authorization': f'Bearer {api_key}',
-                    'Content-Type': 'application/json',
-                }
-                import requests
-                response = requests.post(url, headers=headers, json=final_payload, timeout=120)
-                response.raise_for_status()
-                result2 = response.json()
-                response_text = result2['choices'][0].get('message', {}).get('content', '') if result2.get('choices') else ''
-                tokens = result2.get('usage', {}).get('total_tokens', tokens)
+                # 非操作型工具（如列出选项），请求AI二次回复（支持工具调用）
+                # 使用 AiService.chat_with_tools 让AI有机会调用 request_export/request_query
+                try:
+                    ai_response2 = AiService.chat_with_tools(ai_config, messages)
+                    response_text = ai_response2['content']
+                    second_tool_calls = ai_response2['tool_calls']
+                    tokens = ai_response2['tokens']
+
+                    # 如果AI在二次回复中调用了工具，执行它们
+                    if second_tool_calls:
+                        second_tool_results = []
+                        for tc2 in second_tool_calls:
+                            func_name2 = tc2.get('function', {}).get('name', '')
+                            func_args2 = tc2.get('function', {}).get('arguments', '')
+                            logger.info(f'AI二次回复调用工具: {func_name2}({func_args2})')
+                            result2 = AiService.execute_tool_call(func_name2, func_args2, current_user.id)
+                            second_tool_results.append({
+                                'tool_call_id': tc2['id'],
+                                'name': func_name2,
+                                'result': result2,
+                            })
+
+                        # 检查二次回复是否有操作型工具
+                        second_has_action = any(tc2.get('function', {}).get('name', '') in action_tools for tc2 in second_tool_calls)
+                        second_has_select = any(tr.get('result', {}).get('_select_mode') for tr in second_tool_results)
+
+                        if second_has_action or second_has_select:
+                            # 将二次回复的工具结果添加到总结果中
+                            tool_results.extend(second_tool_results)
+                            response_text = ''  # 有操作型工具结果，清空文本回复
+                        else:
+                            # 非操作型工具，构建完整消息链，再次请求AI生成最终回复
+                            tool_messages2 = []
+                            for tr2 in second_tool_results:
+                                tool_messages2.append({
+                                    'role': 'tool',
+                                    'tool_call_id': tr2['tool_call_id'],
+                                    'content': json.dumps(tr2['result'], ensure_ascii=False),
+                                })
+
+                            messages.append({
+                                'role': 'assistant',
+                                'content': response_text,
+                                'tool_calls': second_tool_calls,
+                            })
+                            messages.extend(tool_messages2)
+
+                            final_payload2 = {
+                                'model': ai_config.model_name or 'gpt-3.5-turbo',
+                                'messages': messages,
+                                'max_tokens': ai_config.max_tokens or 4096,
+                                'temperature': ai_config.temperature if ai_config.temperature is not None else 0.7,
+                            }
+                            api_key2 = ai_config.get_api_key()
+                            api_base2 = ai_config.api_base or 'https://api.openai.com/v1'
+                            url2 = f"{api_base2.rstrip('/')}/chat/completions"
+                            headers2 = {
+                                'Authorization': f'Bearer {api_key2}',
+                                'Content-Type': 'application/json',
+                            }
+                            response2 = requests.post(url2, headers=headers2, json=final_payload2, timeout=120)
+                            response2.raise_for_status()
+                            result3 = response2.json()
+                            response_text = result3['choices'][0].get('message', {}).get('content', '') if result3.get('choices') else ''
+                            tokens = result3.get('usage', {}).get('total_tokens', tokens)
+                except Exception as e:
+                    logger.error(f'AI二次回复失败: {e}', exc_info=True)
+                    response_text = '处理失败，请稍后重试'
 
         # Build response payload
         response_payload = {
