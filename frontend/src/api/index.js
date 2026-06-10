@@ -159,6 +159,7 @@ const ai = {
   uploadFile: (formData) => http.post('/ai/upload-file', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   matchQuery: (data) => http.post('/ai/match-query', data),
   updateMessage: (chatId, msgId, data) => http.put(`/ai/chats/${chatId}/messages/${msgId}`, data),
+  createMessage: (chatId, data) => http.post(`/ai/chats/${chatId}/messages`, data),
 }
 
 const business = {

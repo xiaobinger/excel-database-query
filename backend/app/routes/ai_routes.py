@@ -519,21 +519,46 @@ def send_message(chat_id):
             'tool_results': None,
         }
 
-        # Save assistant message
-        assistant_message = AiChatMessage(
-            chat_id=chat_id,
-            role='assistant',
-            content=response_text,
-            tokens_used=tokens,
-        )
-        db.session.add(assistant_message)
-        db.session.commit()
+        # Save assistant message (skip if empty content AND there are tool results)
+        if response_text.strip() or not tool_results:
+            assistant_message = AiChatMessage(
+                chat_id=chat_id,
+                role='assistant',
+                content=response_text,
+                tokens_used=tokens,
+            )
+            db.session.add(assistant_message)
+            db.session.flush()
+            response_payload['assistant_message'] = assistant_message.to_dict()
 
-        response_payload['assistant_message'] = assistant_message.to_dict()
-
-        # If there are tool results, send them to frontend
+        # If there are tool results, save each as a message and return IDs
         if tool_results:
-            response_payload['tool_results'] = tool_results
+            saved_tool_messages = []
+            for tr in tool_results:
+                result = tr['result']
+                if result and not result.get('error') and result.get('action_type') in ('export', 'query'):
+                    tool_msg = AiChatMessage(
+                        chat_id=chat_id,
+                        role='assistant',
+                        content='',
+                        msg_metadata=json.dumps({
+                            '_type': 'tool',
+                            'tool_data': result,
+                        }, ensure_ascii=False),
+                    )
+                    db.session.add(tool_msg)
+                    db.session.flush()
+                    saved_tool_messages.append({
+                        'tool_call_id': tr['tool_call_id'],
+                        'name': tr['name'],
+                        'result': result,
+                        'message_id': tool_msg.id,
+                    })
+                else:
+                    saved_tool_messages.append(tr)
+            response_payload['tool_results'] = saved_tool_messages
+
+        db.session.commit()
 
         # Track behavior
         from app.utils.behavior_tracker import track_behavior as _track
@@ -573,7 +598,39 @@ def update_message(chat_id, msg_id):
         return jsonify({'success': False, 'message': '请求数据为空'}), 400
 
     if 'metadata' in data:
-        msg.msg_metadata = json.dumps(data['metadata'], ensure_ascii=False)
+        new_meta = data['metadata']
+        existing = {}
+        if msg.msg_metadata:
+            try:
+                existing = json.loads(msg.msg_metadata)
+            except:
+                pass
+        # 合并元数据，保留原有字段
+        existing.update(new_meta)
+        msg.msg_metadata = json.dumps(existing, ensure_ascii=False)
         db.session.commit()
 
+    return jsonify({'success': True, 'data': msg.to_dict()})
+
+
+# ============ Create Message (for saving result feedback) ============
+@ai_bp.route('/chats/<int:chat_id>/messages', methods=['POST'])
+@login_required
+def create_message(chat_id):
+    current_user = get_current_user()
+    chat = AiChat.query.filter_by(id=chat_id, user_id=current_user.id).first()
+    if not chat:
+        return jsonify({'success': False, 'message': '对话不存在'}), 404
+
+    data = request.get_json()
+    if not data or not data.get('content'):
+        return jsonify({'success': False, 'message': '消息内容不能为空'}), 400
+
+    msg = AiChatMessage(
+        chat_id=chat_id,
+        role='assistant',
+        content=data['content'],
+    )
+    db.session.add(msg)
+    db.session.commit()
     return jsonify({'success': True, 'data': msg.to_dict()})

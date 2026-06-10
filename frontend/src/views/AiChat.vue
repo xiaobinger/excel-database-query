@@ -109,7 +109,7 @@
                       type="primary"
                       size="small"
                       @click="confirmExport(msg)"
-                      :disabled="msg.tool_data.required_missing && msg.tool_data.required_missing.length > 0"
+                      :disabled="msg._ignored || (msg.tool_data.required_missing && msg.tool_data.required_missing.length > 0)"
                     >
                       <i class="fas fa-play"></i> 确认执行导出
                     </el-button>
@@ -244,11 +244,17 @@ async function selectChat(chatId) {
     messages.value = msgs.map(m => {
       const base = { ...m, _dismissed: false }
       // 恢复工具卡片状态
-      if (m._type === 'tool' && m._metadata) {
+      if (m._metadata) {
         const meta = m._metadata
+        if (meta._type === 'tool') {
+          base._type = 'tool'
+          base.tool_data = meta.tool_data
+        }
+        // 恢复执行状态
         if (meta._executing) base._executing = true
         if (meta._done) base._done = true
         if (meta._failed) base._failed = true
+        if (meta._ignored) base._ignored = true
         if (meta._progress != null) base._progress = meta._progress
         if (meta._status_text) base._status_text = meta._status_text
         if (meta._download_url) base._download_url = meta._download_url
@@ -344,7 +350,7 @@ async function sendMessage() {
         const result = tr.result
         if (result && !result.error && (result.action_type === 'export' || result.action_type === 'query')) {
           messages.value.push({
-            id: Date.now() + Math.random(),
+            id: tr.message_id || Date.now() + Math.random(),
             role: 'assistant',
             content: '',
             _type: 'tool',
@@ -404,6 +410,8 @@ function renderMarkdown(text) {
 
 function dismissTool(msg) {
   msg._dismissed = true
+  msg._ignored = true
+  saveMessageState(msg)
 }
 
 // 保存工具卡片状态到数据库
@@ -413,6 +421,7 @@ async function saveMessageState(msg) {
   if (msg._executing) metadata._executing = true
   if (msg._done) metadata._done = true
   if (msg._failed) metadata._failed = true
+  if (msg._ignored) metadata._ignored = true
   if (msg._progress != null) metadata._progress = msg._progress
   if (msg._status_text) metadata._status_text = msg._status_text
   if (msg._download_url) metadata._download_url = msg._download_url
@@ -514,11 +523,17 @@ function pollTaskStatus(taskId, msg) {
             downloadFile(msg._download_url)
           }).catch(() => {})
 
-          // 添加聊天反馈
+          // 保存反馈消息到数据库
+          const feedbackContent = `✅ 导出任务 **${msg.tool_data.script_name}** 已完成！\n\n- 任务ID：\`${taskId}\`\n- 输出格式：${msg.tool_data.output_format || 'sheets'}\n\n你可以点击上方卡片中的按钮下载文件，或前往导出任务列表查看历史记录。`
+          let feedbackId = Date.now()
+          try {
+            const fbRes = await api.ai.createMessage(currentChatId.value, { content: feedbackContent })
+            feedbackId = fbRes.data?.id || feedbackId
+          } catch {}
           messages.value.push({
-            id: Date.now(),
+            id: feedbackId,
             role: 'assistant',
-            content: `✅ 导出任务 **${msg.tool_data.script_name}** 已完成！\n\n- 任务ID：\`${taskId}\`\n- 输出格式：${msg.tool_data.output_format || 'sheets'}\n\n你可以点击上方卡片中的按钮下载文件，或前往导出任务列表查看历史记录。`,
+            content: feedbackContent,
           })
           await nextTick()
           scrollToBottom()
@@ -535,10 +550,17 @@ function pollTaskStatus(taskId, msg) {
           // 持久化状态
           saveMessageState(msg)
 
+          // 保存反馈消息到数据库
+          const failContent = `❌ 导出任务执行失败：**${msg.tool_data.script_name}**\n\n错误信息：${msg._error_msg}`
+          let failId = Date.now()
+          try {
+            const fbRes = await api.ai.createMessage(currentChatId.value, { content: failContent })
+            failId = fbRes.data?.id || failId
+          } catch {}
           messages.value.push({
-            id: Date.now(),
+            id: failId,
             role: 'assistant',
-            content: `❌ 导出任务执行失败：**${msg.tool_data.script_name}**\n\n错误信息：${msg._error_msg}`,
+            content: failContent,
           })
           await nextTick()
           scrollToBottom()
