@@ -63,7 +63,7 @@
           <i class="fas fa-robot"></i>
           <template #title>AI 助手</template>
         </el-menu-item>
-        <el-menu-item v-if="store.isAdmin" index="/ai-sessions">
+        <el-menu-item v-if="store.hasMenuPermission('ai_sessions')" index="/ai-sessions">
           <i class="fas fa-comments"></i>
           <template #title>AI会话管理</template>
         </el-menu-item>

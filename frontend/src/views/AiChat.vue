@@ -122,7 +122,7 @@
                       @click="confirmExport(msg)"
                       :disabled="msg._ignored || (msg.tool_data.required_missing && msg.tool_data.required_missing.length > 0)"
                     >
-                      <i class="fas fa-play"></i> 确认执行导出
+                      <i class="fas fa-play"></i> <template v-if="msg._ignored">已忽略</template><template v-else>确认执行导出</template>
                     </el-button>
                     <el-button
                       v-if="msg._done && msg._download_url"
@@ -133,14 +133,16 @@
                       <i class="fas fa-download"></i> 下载文件
                     </el-button>
                     <el-button
-                      v-if="msg.tool_data.action_type === 'query' && !msg._executing && !msg._done && !msg._failed"
+                      v-if="msg.tool_data.action_type === 'query' && !msg._executing && !msg._done && !msg._failed && !msg._ignored"
                       type="primary"
                       size="small"
                       @click="confirmQuery(msg)"
                     >
                       <i class="fas fa-play"></i> 确认执行查询
                     </el-button>
-                    <el-button size="small" text @click="dismissTool(msg)">
+                    <el-button
+                      v-if="!msg._ignored"
+                      size="small" text @click="dismissTool(msg)">
                       {{ msg._done || msg._failed ? '关闭' : '忽略' }}
                     </el-button>
                   </div>
@@ -452,7 +454,6 @@ function renderMarkdown(text) {
 }
 
 function dismissTool(msg) {
-  msg._dismissed = true
   msg._ignored = true
   saveMessageState(msg)
 }

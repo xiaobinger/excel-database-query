@@ -167,6 +167,7 @@ const menuPermLabels = {
   users: '用户管理',
   roles: '角色管理',
   ai_chat: 'AI助手',
+  ai_sessions: 'AI会话管理',
   skills: 'Skills',
   business_systems: '业务系统'
 }
@@ -219,6 +220,7 @@ const menuOptions = [
   { value: 'users', label: '用户管理' },
   { value: 'roles', label: '角色管理' },
   { value: 'ai_chat', label: 'AI助手' },
+  { value: 'ai_sessions', label: 'AI会话管理' },
   { value: 'skills', label: 'Skills' },
   { value: 'business_systems', label: '业务系统' }
 ]
