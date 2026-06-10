@@ -79,33 +79,105 @@
               </template>
               <!-- 选项选择卡片 -->
               <template v-else-if="msg._type === 'select_options'">
-                <div class="tool-card select-card" :class="{ ignored: msg._ignored }">
+                <div class="tool-card select-card" :class="{ ignored: msg._ignored, done: msg._done, executing: msg._executing }">
                   <div class="tool-card-header">
                     <i v-if="msg._ignored" class="fas fa-ban tool-icon tool-icon-error"></i>
+                    <i v-else-if="msg._executing" class="fas fa-spinner fa-spin tool-icon"></i>
+                    <i v-else-if="msg._done" class="fas fa-check-circle tool-icon tool-icon-success"></i>
+                    <i v-else-if="msg._failed" class="fas fa-times-circle tool-icon tool-icon-error"></i>
                     <i v-else class="fas fa-list-check tool-icon"></i>
                     <span class="tool-title">
                       <template v-if="msg._ignored">已忽略</template>
+                      <template v-else-if="msg._executing">正在执行...</template>
+                      <template v-else-if="msg._done">执行成功</template>
+                      <template v-else-if="msg._failed">执行失败</template>
                       <template v-else-if="msg._action_type === 'export'">可选导出任务</template>
                       <template v-else>可选查询任务</template>
                     </span>
                   </div>
                   <div class="tool-card-body">
                     <p class="tool-confirm-msg">{{ msg.content }}</p>
+
+                    <!-- 执行进度条 -->
+                    <div v-if="msg._executing" class="tool-progress-info">
+                      <el-progress :percentage="msg._progress || 0" :stroke-width="6" />
+                      <span class="tool-progress-text">{{ msg._status_text || '正在初始化...' }}</span>
+                    </div>
+
+                    <!-- 执行完成下载链接 -->
+                    <div v-if="msg._done && msg._download_url" class="tool-download-link">
+                      <el-button type="success" size="small" @click="downloadFile(msg._download_url)">
+                        <i class="fas fa-download"></i> 下载文件
+                      </el-button>
+                    </div>
+
+                    <!-- 执行失败错误 -->
+                    <div v-if="msg._failed && msg._error_msg" class="tool-error-msg">
+                      <i class="fas fa-exclamation-circle"></i> {{ msg._error_msg }}
+                    </div>
+
+                    <!-- 参数输入区域（执行前） -->
+                    <div v-if="!msg._executing && !msg._done && !msg._ignored && msg._selectedScripts && msg._selectedScripts.length > 0 && showParamInput(msg)" class="param-input-section">
+                      <div v-for="script in msg._selectedScripts" :key="script.id" class="param-input-group">
+                        <div class="param-input-script-name">
+                          <i class="fas fa-file-export"></i> {{ script.name }}
+                        </div>
+                        <div v-for="p in script.params" :key="p.name" class="param-input-item">
+                          <label>
+                            {{ p.label || p.name }}
+                            <span v-if="p.required" class="required-mark">*</span>
+                          </label>
+                          <div class="param-input-controls">
+                            <el-input
+                              v-if="!p.allow_all"
+                              v-model="msg._param_values[script.id + '_' + p.name]"
+                              size="small"
+                              :placeholder="'请输入' + (p.label || p.name)"
+                              :disabled="msg._executing"
+                            />
+                            <template v-else>
+                              <el-input
+                                v-if="!msg._all_checked[script.id + '_' + p.name]"
+                                v-model="msg._param_values[script.id + '_' + p.name]"
+                                size="small"
+                                :placeholder="'请输入' + (p.label || p.name) + '，或勾选全部'"
+                                :disabled="msg._executing"
+                              />
+                              <el-checkbox
+                                v-model="msg._all_checked[script.id + '_' + p.name]"
+                                size="small"
+                                :disabled="msg._executing"
+                              >全部（不筛选）</el-checkbox>
+                            </template>
+                          </div>
+                        </div>
+                      </div>
+                      <!-- 必填参数缺失警告 -->
+                      <div v-if="msg._missing_required_params && msg._missing_required_params.length > 0" class="param-missing-warning">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        <span>以下参数为必填项，请填写后才能执行：</span>
+                        <ul>
+                          <li v-for="p in msg._missing_required_params" :key="p">{{ p }}</li>
+                        </ul>
+                      </div>
+                    </div>
+
                     <!-- 未解析到参数时的二次提醒 -->
-                    <div v-if="!msg._ignored && !msg._params_checked && msg._scripts.length > 0" class="param-reminder">
+                    <div v-if="!msg._ignored && !msg._executing && !msg._done && !msg._params_checked && !hasAnyRequiredParams(msg) && msg._scripts.length > 0" class="param-reminder">
                       <i class="fas fa-exclamation-triangle"></i>
                       <span>当前所有参数将使用默认值（全部），是否继续？</span>
                       <el-checkbox v-model="msg._params_checked" size="small" :disabled="msg._ignored || msg._executing">确认无参数或全部不筛选</el-checkbox>
                     </div>
-                    <div class="select-options-list">
+
+                    <div v-if="!msg._executing && !msg._done" class="select-options-list">
                       <label v-for="s in msg._scripts" :key="s.id" class="select-option-item">
-                        <input type="checkbox" :value="s.id" v-model="msg._selected" :disabled="msg._ignored || msg._executing" />
+                        <input type="checkbox" :value="s.id" v-model="msg._selected" :disabled="msg._ignored || msg._executing" @change="onSelectionChange(msg)" />
                         <div class="select-option-detail">
                           <span class="select-option-name">{{ s.name }}</span>
                           <span v-if="s.description" class="select-option-desc">{{ s.description }}</span>
                           <!-- 显示参数信息 -->
                           <div v-if="s.params && s.params.length > 0" class="select-option-params">
-                            <el-tag v-for="p in s.params" :key="p.name" size="small" type="info" effect="plain" style="margin: 2px 4px 2px 0">
+                            <el-tag v-for="p in s.params" :key="p.name" size="small" :type="p.required ? 'danger' : 'info'" effect="plain" style="margin: 2px 4px 2px 0">
                               {{ p.label || p.name }}{{ p.required ? '*' : '' }}
                             </el-tag>
                           </div>
@@ -115,14 +187,22 @@
                   </div>
                   <div class="tool-card-actions">
                     <el-button
+                      v-if="!msg._done && !msg._failed"
                       type="primary" size="small"
                       @click="executeSelectedOptions(msg)"
-                      :disabled="msg._ignored || msg._selected.length === 0 || msg._executing || (msg._scripts.length > 0 && !msg._params_checked)"
+                      :disabled="msg._ignored || msg._selected.length === 0 || msg._executing || !canExecute(msg)"
                       :loading="msg._executing"
                     >
                       <template v-if="msg._ignored">已忽略</template>
                       <template v-else-if="msg._executing">正在执行...</template>
                       <template v-else>确认执行所选 ({{ msg._selected.length }})</template>
+                    </el-button>
+                    <el-button
+                      v-if="msg._done && msg._download_url"
+                      type="success" size="small"
+                      @click="downloadFile(msg._download_url)"
+                    >
+                      <i class="fas fa-download"></i> 下载文件
                     </el-button>
                     <el-button size="small" text @click="dismissTool(msg)" :disabled="msg._ignored || msg._executing">{{ msg._ignored ? '已忽略' : '忽略' }}</el-button>
                   </div>
@@ -317,13 +397,17 @@ async function selectChat(chatId) {
           base._type = 'tool'
           base.tool_data = meta.tool_data
         } else if (meta._type === 'select_options') {
-          base._type = 'select_options'
-          base._select_mode = meta._select_mode
-          base._scripts = meta.scripts || []
-          base._selected = []
-          base._action_type = meta.action_type || ''
-          base._params_checked = false
-        }
+        base._type = 'select_options'
+        base._select_mode = meta._select_mode
+        base._scripts = meta.scripts || []
+        base._selected = []
+        base._action_type = meta.action_type || ''
+        base._params_checked = false
+        base._param_values = {}
+        base._all_checked = {}
+        base._selectedScripts = []
+        base._missing_required_params = []
+      }
         // 恢复执行状态
         if (meta._executing) base._executing = true
         if (meta._done) base._done = true
@@ -472,6 +556,10 @@ async function sendMessage() {
             _action_type: result.scripts && result.scripts.length > 0 ? (tr.name === 'list_export_options' ? 'export' : 'query') : '',
             _selected: [],
             _params_checked: false,
+            _param_values: {},
+            _all_checked: {},
+            _selectedScripts: [],
+            _missing_required_params: [],
           })
         } else if (result && result.error) {
           messages.value.push({
@@ -555,16 +643,29 @@ async function executeSelectedOptions(msg) {
     return
   }
 
+  // 检查必填参数
+  const missingRequired = checkMissingRequiredParams(msg)
+  if (missingRequired.length > 0) {
+    msg._missing_required_params = missingRequired
+    ElMessage.warning('请填写所有必填参数')
+    return
+  }
+
   msg._executing = true
   msg._progress = 5
   msg._status_text = '正在初始化任务...'
+  msg._done = false
+  msg._failed = false
 
   try {
-    // 构建导出任务，所选多个选项都执行
+    // 构建参数
+    const paramsValues = msg._param_values || {}
+    const allChecked = msg._all_checked || {}
+
     const res = await api.export.execute({
       script_ids: selectedIds,
-      params_values: {},
-      all_checked: {},
+      params_values: paramsValues,
+      all_checked: allChecked,
       output_format: 'sheets',
     })
     if (!res.task_id) {
@@ -579,6 +680,73 @@ async function executeSelectedOptions(msg) {
     saveMessageState(msg)
     await nextTick()
     scrollToBottom()
+  }
+}
+
+// 检查选中的脚本是否有必填参数未填写
+function checkMissingRequiredParams(msg) {
+  const missing = []
+  const selectedScripts = msg._selectedScripts || []
+  const paramValues = msg._param_values || {}
+  const allChecked = msg._all_checked || {}
+
+  for (const script of selectedScripts) {
+    if (!script.params) continue
+    for (const p of script.params) {
+      if (!p.required) continue
+      if (p.allow_all && allChecked[script.id + '_' + p.name]) continue
+      const val = paramValues[script.id + '_' + p.name]
+      if (!val || val.trim() === '') {
+        const label = (script.name ? script.name + ' - ' : '') + (p.label || p.name)
+        missing.push(label)
+      }
+    }
+  }
+  return missing
+}
+
+// 判断是否有任何必填参数
+function hasAnyRequiredParams(msg) {
+  for (const s of msg._scripts) {
+    if (!s.params) continue
+    for (const p of s.params) {
+      if (p.required) return true
+    }
+  }
+  return false
+}
+
+// 判断是否可以执行
+function canExecute(msg) {
+  if (msg._executing || msg._done || msg._failed || msg._ignored) return false
+  if (msg._selected.length === 0) return false
+  // 如果勾选了"确认无参数"，可以执行
+  if (msg._params_checked) return true
+  // 如果有必填参数且未填写完，不能执行
+  const missing = checkMissingRequiredParams(msg)
+  if (missing.length > 0) return false
+  // 如果没有必填参数，需要用户确认
+  return false
+}
+
+// 判断是否显示参数输入区域
+function showParamInput(msg) {
+  if (!msg._selectedScripts || msg._selectedScripts.length === 0) return false
+  for (const script of msg._selectedScripts) {
+    if (script.params && script.params.length > 0) return true
+  }
+  return false
+}
+
+// 选择变化时更新选中的脚本详情
+function onSelectionChange(msg) {
+  const selectedIds = msg._selected || []
+  msg._selectedScripts = msg._scripts.filter(s => selectedIds.includes(s.id)) || []
+  // 清除之前的必填参数缺失提示
+  msg._missing_required_params = []
+  // 如果有必填参数，自动勾选确认（用户需要先填写参数）
+  if (hasAnyRequiredParams(msg)) {
+    msg._params_checked = true
   }
 }
 
@@ -1103,6 +1271,8 @@ onMounted(() => {
 
 .tool-download-link {
   margin: 8px 0 0;
+  display: flex;
+  align-items: center;
 }
 
 .tool-download-link a {
@@ -1258,6 +1428,157 @@ onMounted(() => {
 }
 
 .param-reminder > span {
+  flex: 1;
+}
+
+/* 执行中状态 */
+.tool-card.select-card.executing {
+  border-color: #409eff;
+  box-shadow: 0 2px 12px rgba(64, 158, 255, 0.15);
+}
+
+.tool-card.select-card.executing .tool-card-header {
+  background: linear-gradient(135deg, #ecf5ff, #e1eeff);
+  border-bottom-color: #b3d8ff;
+}
+
+.tool-card.select-card.executing .select-options-list,
+.tool-card.select-card.executing .param-reminder,
+.tool-card.select-card.executing .param-input-section {
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+/* 执行完成状态 */
+.tool-card.select-card.done {
+  border-color: #67c23a;
+  box-shadow: 0 2px 12px rgba(103, 194, 58, 0.15);
+}
+
+.tool-card.select-card.done .tool-card-header {
+  background: linear-gradient(135deg, #f0f9eb, #e7f8dc);
+  border-bottom-color: #c2e7b0;
+}
+
+.tool-card.select-card.done .tool-icon {
+  color: #67c23a !important;
+}
+
+.tool-card.select-card.done .select-options-list,
+.tool-card.select-card.done .param-reminder,
+.tool-card.select-card.done .param-input-section {
+  pointer-events: none;
+  opacity: 0.4;
+}
+
+/* 执行失败状态 */
+.tool-card.select-card.failed {
+  border-color: #f56c6c;
+  box-shadow: 0 2px 12px rgba(245, 108, 108, 0.15);
+}
+
+.tool-card.select-card.failed .tool-card-header {
+  background: linear-gradient(135deg, #fef0f0, #fde2e2);
+  border-bottom-color: #fbc4c4;
+}
+
+.tool-card.select-card.failed .tool-icon {
+  color: #f56c6c !important;
+}
+
+.tool-card.select-card.failed .select-options-list,
+.tool-card.select-card.failed .param-reminder,
+.tool-card.select-card.failed .param-input-section {
+  pointer-events: none;
+  opacity: 0.4;
+}
+
+/* 参数输入区域 */
+.param-input-section {
+  margin: 12px 0;
+  padding: 12px;
+  background: #f5f7fa;
+  border-radius: 8px;
+}
+
+.param-input-group {
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed #dcdfe6;
+}
+
+.param-input-group:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.param-input-script-name {
+  font-weight: 500;
+  font-size: 13px;
+  color: #303133;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.param-input-script-name i {
+  color: #e6a23c;
+  font-size: 12px;
+}
+
+.param-input-item {
+  margin-bottom: 8px;
+}
+
+.param-input-item label {
+  display: block;
+  font-size: 12px;
+  color: #606266;
+  margin-bottom: 4px;
+}
+
+.required-mark {
+  color: #f56c6c;
+  margin-left: 2px;
+}
+
+.param-input-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.param-input-controls .el-input {
+  flex: 1;
+  max-width: 260px;
+}
+
+.param-missing-warning {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: #fef0f0;
+  border: 1px solid #fbc4c4;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #f56c6c;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.param-missing-warning i {
+  margin-top: 1px;
+  flex-shrink: 0;
+}
+
+.param-missing-warning ul {
+  margin: 4px 0 0 0;
+  padding-left: 20px;
+}
+
+.param-missing-warning > span {
   flex: 1;
 }
 
