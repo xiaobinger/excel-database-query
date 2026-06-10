@@ -551,3 +551,27 @@ def send_message(chat_id):
             'user_message': user_message.to_dict(),
             'assistant_message': assistant_message.to_dict(),
         }})
+
+
+# ============ Update Message Metadata ============
+@ai_bp.route('/chats/<int:chat_id>/messages/<int:msg_id>', methods=['PUT'])
+@login_required
+def update_message(chat_id, msg_id):
+    current_user = get_current_user()
+    chat = AiChat.query.filter_by(id=chat_id, user_id=current_user.id).first()
+    if not chat:
+        return jsonify({'success': False, 'message': '对话不存在'}), 404
+
+    msg = AiChatMessage.query.filter_by(id=msg_id, chat_id=chat_id).first()
+    if not msg:
+        return jsonify({'success': False, 'message': '消息不存在'}), 404
+
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': '请求数据为空'}), 400
+
+    if 'metadata' in data:
+        msg.msg_metadata = json.dumps(data['metadata'], ensure_ascii=False)
+        db.session.commit()
+
+    return jsonify({'success': True, 'data': msg.to_dict()})

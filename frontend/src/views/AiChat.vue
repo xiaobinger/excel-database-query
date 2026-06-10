@@ -241,7 +241,21 @@ async function selectChat(chatId) {
   try {
     const res = await api.ai.getMessages(chatId)
     const msgs = res.data || []
-    messages.value = msgs.map(m => ({ ...m, _dismissed: false }))
+    messages.value = msgs.map(m => {
+      const base = { ...m, _dismissed: false }
+      // 恢复工具卡片状态
+      if (m._type === 'tool' && m._metadata) {
+        const meta = m._metadata
+        if (meta._executing) base._executing = true
+        if (meta._done) base._done = true
+        if (meta._failed) base._failed = true
+        if (meta._progress != null) base._progress = meta._progress
+        if (meta._status_text) base._status_text = meta._status_text
+        if (meta._download_url) base._download_url = meta._download_url
+        if (meta._error_msg) base._error_msg = meta._error_msg
+      }
+      return base
+    })
     await nextTick()
     scrollToBottom()
   } catch {}
@@ -392,6 +406,24 @@ function dismissTool(msg) {
   msg._dismissed = true
 }
 
+// 保存工具卡片状态到数据库
+async function saveMessageState(msg) {
+  if (!msg.id || !currentChatId.value) return
+  const metadata = {}
+  if (msg._executing) metadata._executing = true
+  if (msg._done) metadata._done = true
+  if (msg._failed) metadata._failed = true
+  if (msg._progress != null) metadata._progress = msg._progress
+  if (msg._status_text) metadata._status_text = msg._status_text
+  if (msg._download_url) metadata._download_url = msg._download_url
+  if (msg._error_msg) metadata._error_msg = msg._error_msg
+  if (Object.keys(metadata).length > 0) {
+    try {
+      await api.ai.updateMessage(currentChatId.value, msg.id, { metadata })
+    } catch {}
+  }
+}
+
 async function confirmExport(msg) {
   const td = msg.tool_data
   const params = { ...td.params }
@@ -470,6 +502,9 @@ function pollTaskStatus(taskId, msg) {
           msg._progress = 100
           msg._status_text = '执行完成'
 
+          // 持久化状态
+          saveMessageState(msg)
+
           // 弹出下载确认
           ElMessageBox.confirm(
             '导出任务已完成，是否立即下载文件？',
@@ -497,6 +532,9 @@ function pollTaskStatus(taskId, msg) {
           msg._error_msg = task.error_message || '执行失败'
           msg._status_text = '执行失败'
 
+          // 持久化状态
+          saveMessageState(msg)
+
           messages.value.push({
             id: Date.now(),
             role: 'assistant',
@@ -515,6 +553,7 @@ function pollTaskStatus(taskId, msg) {
         msg._failed = true
         msg._error_msg = '轮询任务状态失败: ' + (e.message || '未知错误')
         msg._status_text = '轮询失败'
+        saveMessageState(msg)
         await nextTick()
         scrollToBottom()
         resolve()

@@ -32,10 +32,11 @@ class AiChatMessage(db.Model):
     role = db.Column(db.String(20), nullable=False, comment='角色: user/assistant/system')
     content = db.Column(db.Text, comment='消息内容')
     tokens_used = db.Column(db.Integer, default=0, comment='消耗token数')
+    msg_metadata = db.Column('metadata', db.Text, comment='消息元数据(JSON)，用于存储工具调用状态等')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self) -> dict:
-        return {
+        result = {
             'id': self.id,
             'chat_id': self.chat_id,
             'role': self.role,
@@ -43,3 +44,10 @@ class AiChatMessage(db.Model):
             'tokens_used': self.tokens_used,
             'created_at': beijing_isoformat(self.created_at),
         }
+        if self.msg_metadata:
+            try:
+                import json
+                result['_metadata'] = json.loads(self.msg_metadata)
+            except:
+                pass
+        return result
