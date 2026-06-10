@@ -626,6 +626,77 @@
         <el-button type="primary" :disabled="!paramDialogCanConfirm" @click="confirmParamDialog">确认执行</el-button>
       </template>
     </el-dialog>
+
+    <!-- 查询任务执行对话框 -->
+    <el-dialog
+      v-model="queryDialogVisible"
+      title="执行查询任务"
+      width="600px"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <div class="query-dialog-body">
+        <!-- 步骤1：上传Excel文件 -->
+        <div v-if="queryDialogStep === 1" class="query-dialog-step">
+          <div class="query-dialog-hint">
+            <i class="fas fa-info-circle"></i>
+            查询任务需要上传包含主键信息的Excel文件，系统将根据主键列的值进行查询匹配。
+          </div>
+          <el-upload
+            :show-file-list="false"
+            :before-upload="handleQueryFileUpload"
+            accept=".xlsx,.xls"
+            drag
+          >
+            <div class="query-upload-area">
+              <i class="fas fa-cloud-upload-alt query-upload-icon"></i>
+              <p>将Excel文件拖拽到此处，或<em>点击上传</em></p>
+              <p class="query-upload-tip">仅支持 .xlsx / .xls 格式</p>
+            </div>
+          </el-upload>
+        </div>
+
+        <!-- 步骤2：解析结果确认 -->
+        <div v-if="queryDialogStep === 2" class="query-dialog-step">
+          <div class="query-file-info">
+            <i class="fas fa-file-excel"></i>
+            <span>{{ queryDialogFileName }}</span>
+            <el-button text size="small" @click="queryDialogStep = 1">
+              <i class="fas fa-redo"></i> 重新上传
+            </el-button>
+          </div>
+          <div class="query-parse-result">
+            <el-descriptions :column="2" border size="small">
+              <el-descriptions-item label="数据行数">{{ queryDialogRowCount }}</el-descriptions-item>
+              <el-descriptions-item label="列数">{{ queryDialogColumns.length }}</el-descriptions-item>
+            </el-descriptions>
+            <div class="query-columns-preview">
+              <span class="query-columns-label">解析到的列：</span>
+              <el-tag v-for="col in queryDialogColumns.slice(0, 15)" :key="col" size="small" effect="plain" style="margin: 2px 4px 2px 0">
+                {{ col }}
+              </el-tag>
+              <el-tag v-if="queryDialogColumns.length > 15" size="small" type="info" effect="plain">
+                +{{ queryDialogColumns.length - 15 }}
+              </el-tag>
+            </div>
+          </div>
+          <el-form label-width="100px" style="margin-top: 16px">
+            <el-form-item label="参数列" required>
+              <el-select v-model="queryDialogParamColumn" placeholder="请选择参数列" style="width: 100%">
+                <el-option v-for="col in queryDialogColumns" :key="col" :label="col" :value="col" />
+              </el-select>
+            </el-form-item>
+          </el-form>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="queryDialogVisible = false">取消</el-button>
+        <el-button v-if="queryDialogStep === 2" type="primary" :disabled="!queryDialogParamColumn" @click="confirmQueryDialog">
+          <i class="fas fa-play"></i> 确认执行查询
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -668,6 +739,17 @@ const paramDialogScripts = ref([])  // 需要独立参数的脚本列表
 const paramDialogSharedParams = ref([])  // 公共参数列表
 const paramDialogValues = ref({})  // 参数值 { key: value }
 const paramDialogAllChecked = ref({})  // allow_all勾选状态 { key: boolean }
+
+// 查询任务执行对话框状态
+const queryDialogVisible = ref(false)
+const queryDialogMsg = ref(null)  // 关联的select_options卡片消息
+const queryDialogStep = ref(1)  // 1=上传文件, 2=确认执行
+const queryDialogFile = ref(null)  // 上传的文件对象
+const queryDialogFilePath = ref('')  // 后端返回的文件路径
+const queryDialogFileName = ref('')  // 文件名
+const queryDialogRowCount = ref(0)  // 数据行数
+const queryDialogColumns = ref([])  // 解析到的列
+const queryDialogParamColumn = ref('')  // 选择的参数列
 
 // 参数对话框：是否可以确认执行
 const paramDialogCanConfirm = computed(() => {
@@ -1007,7 +1089,14 @@ async function executeSelectedOptions(msg) {
   // 更新选中脚本
   msg._selectedScripts = msg._scripts.filter(s => selectedIds.includes(s.id)) || []
 
-  // 检查是否有任何参数需要设置
+  // 区分导出和查询任务
+  if (msg._action_type === 'query') {
+    // 查询任务：需要上传Excel文件
+    openQueryDialog(msg)
+    return
+  }
+
+  // 导出任务：检查参数
   const hasAnyParams = msg._selectedScripts.some(s => s.params && s.params.length > 0)
 
   if (!hasAnyParams) {
@@ -1153,6 +1242,258 @@ async function confirmParamDialog() {
   // 执行任务
   await nextTick()
   doExecuteExport(msg)
+}
+
+// 打开查询任务执行对话框
+function openQueryDialog(msg) {
+  queryDialogMsg.value = msg
+  queryDialogStep.value = 1
+  queryDialogFile.value = null
+  queryDialogFilePath.value = ''
+  queryDialogFileName.value = ''
+  queryDialogRowCount.value = 0
+  queryDialogColumns.value = []
+  queryDialogParamColumn.value = ''
+  queryDialogVisible.value = true
+}
+
+// 处理查询任务文件上传
+async function handleQueryFileUpload(file) {
+  const ext = file.name.split('.').pop().toLowerCase()
+  if (!['xlsx', 'xls'].includes(ext)) {
+    ElMessage.error('仅支持 xlsx/xls 格式')
+    return false
+  }
+  queryDialogFile.value = file
+  queryDialogFileName.value = file.name
+
+  // 上传文件到后端解析
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+    const res = await api.query.uploadInfo(formData)
+    if (res.success && res.data) {
+      queryDialogRowCount.value = res.data.row_count || 0
+      queryDialogColumns.value = res.columns || res.data.column_names || []
+      queryDialogFilePath.value = res.file_path || ''
+
+      // 智能匹配参数列：从脚本配置中获取primary_key或默认参数列
+      const selectedScripts = queryDialogMsg.value?._selectedScripts || []
+      const defaultParamColumns = []
+      for (const s of selectedScripts) {
+        if (s.default_param_column) {
+          const cols = Array.isArray(s.default_param_column) ? s.default_param_column : [s.default_param_column]
+          defaultParamColumns.push(...cols)
+        }
+      }
+      // 尝试自动匹配参数列
+      if (defaultParamColumns.length > 0) {
+        for (const kw of defaultParamColumns) {
+          const found = queryDialogColumns.value.find(c => c.includes(kw))
+          if (found) {
+            queryDialogParamColumn.value = found
+            break
+          }
+        }
+      }
+      // 如果没有匹配到，默认选第一列
+      if (!queryDialogParamColumn.value && queryDialogColumns.value.length > 0) {
+        queryDialogParamColumn.value = queryDialogColumns.value[0]
+      }
+
+      queryDialogStep.value = 2
+    } else {
+      ElMessage.error(res.message || '文件解析失败')
+    }
+  } catch (e) {
+    ElMessage.error('文件解析失败: ' + (e.message || '未知错误'))
+  }
+  return false // 阻止默认上传
+}
+
+// 确认执行查询任务
+async function confirmQueryDialog() {
+  const msg = queryDialogMsg.value
+  if (!msg) return
+
+  queryDialogVisible.value = false
+
+  // 执行查询任务
+  await nextTick()
+  doExecuteQuery(msg)
+}
+
+// 实际执行查询任务
+async function doExecuteQuery(msg) {
+  msg._executing = true
+  msg._progress = 5
+  msg._status_text = '正在初始化查询任务...'
+  msg._done = false
+  msg._failed = false
+  msg._error_msg = ''
+  msg._download_url = ''
+
+  try {
+    const formData = new FormData()
+    formData.append('script_ids', JSON.stringify(msg._selected))
+    formData.append('file', queryDialogFile.value)
+    formData.append('param_column', queryDialogParamColumn.value)
+    formData.append('new_sheet', 'true')
+
+    const res = await api.query.execute(formData)
+    if (!res.task_id && !res.data?.task_id) {
+      throw new Error('未获取到任务ID')
+    }
+    const taskId = res.task_id || res.data?.task_id
+    await pollQueryTaskStatus(taskId, msg)
+  } catch (e) {
+    msg._executing = false
+    msg._failed = true
+    msg._error_msg = e.message || '未知错误'
+    saveMessageState(msg)
+    await nextTick()
+    scrollToBottom()
+  }
+}
+
+// 轮询查询任务状态
+function pollQueryTaskStatus(taskId, msg) {
+  const statusTextMap = {
+    pending: '任务等待中...',
+    running: '正在执行查询...',
+    completed: '执行完成',
+    failed: '执行失败',
+    cancelled: '已取消',
+  }
+
+  return new Promise((resolve) => {
+    let pollCount = 0
+    const maxPolls = 300
+    const poll = async () => {
+      try {
+        pollCount++
+        if (pollCount > maxPolls) {
+          msg._executing = false
+          msg._failed = true
+          msg._error_msg = '任务执行超时'
+          msg._status_text = '执行超时'
+          resolve()
+          return
+        }
+
+        const res = await api.query.status(taskId)
+        const task = res.data
+        if (!task) {
+          setTimeout(poll, 2000)
+          return
+        }
+
+        msg._progress = task.progress || 0
+        msg._status_text = statusTextMap[task.status] || '执行中...'
+
+        if (task.status === 'completed') {
+          msg._executing = false
+          msg._done = true
+          msg._progress = 100
+
+          if (task.output_file) {
+            msg._download_url = `/api/download/${taskId}`
+            msg._status_text = '执行完成'
+            saveMessageState(msg)
+
+            ElMessageBox.confirm(
+              '查询任务已完成，是否立即下载文件？',
+              '下载确认',
+              { confirmButtonText: '立即下载', cancelButtonText: '稍后下载', type: 'success' }
+            ).then(() => {
+              downloadFile(msg._download_url)
+            }).catch(() => {})
+
+            const scriptNames = msg._selectedScripts
+              ? msg._selectedScripts.map(s => s.name).join('、')
+              : '查询任务'
+            const feedbackContent = `✅ 查询任务 **${scriptNames}** 已完成！\n\n- 任务ID：\`${taskId}\`\n\n你可以点击上方卡片中的按钮下载文件，或前往查询任务列表查看历史记录。`
+            let feedbackId = Date.now()
+            try {
+              const fbRes = await api.ai.createMessage(currentChatId.value, { content: feedbackContent })
+              feedbackId = fbRes.data?.id || feedbackId
+            } catch {}
+            messages.value.push({
+              id: feedbackId,
+              role: 'assistant',
+              content: feedbackContent,
+            })
+          } else {
+            msg._status_text = '执行完成（无数据）'
+            saveMessageState(msg)
+
+            const scriptNames = msg._selectedScripts
+              ? msg._selectedScripts.map(s => s.name).join('、')
+              : '查询任务'
+            const noDataContent = `⚠️ 查询任务 **${scriptNames}** 已执行完成，但 **未查询到任何数据**，未生成结果文件。\n\n请检查筛选参数是否正确，或前往执行历史查看详细日志。`
+            let noDataId = Date.now()
+            try {
+              const fbRes = await api.ai.createMessage(currentChatId.value, { content: noDataContent })
+              noDataId = fbRes.data?.id || noDataId
+            } catch {}
+            messages.value.push({
+              id: noDataId,
+              role: 'assistant',
+              content: noDataContent,
+            })
+          }
+          await nextTick()
+          scrollToBottom()
+          resolve()
+          return
+        }
+
+        if (task.status === 'failed') {
+          msg._executing = false
+          msg._failed = true
+          msg._error_msg = task.error_message || '执行失败'
+          msg._ai_suggestion = task.ai_suggestion || null
+          msg._status_text = '执行失败'
+          saveMessageState(msg)
+
+          const scriptNames = msg._selectedScripts
+            ? msg._selectedScripts.map(s => s.name).join('、')
+            : '查询任务'
+          let failContent = `❌ 查询任务执行失败：**${scriptNames}**`
+          failContent += `\n\n**错误信息：** ${msg._error_msg}`
+          if (msg._ai_suggestion) {
+            failContent += `\n\n**AI修正建议：**\n${msg._ai_suggestion}`
+          }
+          let failId = Date.now()
+          try {
+            const fbRes = await api.ai.createMessage(currentChatId.value, { content: failContent })
+            failId = fbRes.data?.id || failId
+          } catch {}
+          messages.value.push({
+            id: failId,
+            role: 'assistant',
+            content: failContent,
+          })
+          await nextTick()
+          scrollToBottom()
+          resolve()
+          return
+        }
+
+        setTimeout(poll, 1500)
+      } catch (e) {
+        msg._executing = false
+        msg._failed = true
+        msg._error_msg = '轮询任务状态失败: ' + (e.message || '未知错误')
+        msg._status_text = '轮询失败'
+        saveMessageState(msg)
+        await nextTick()
+        scrollToBottom()
+        resolve()
+      }
+    }
+    poll()
+  })
 }
 
 // 实际执行导出任务
@@ -1539,13 +1880,16 @@ function downloadFile(url) {
 
 async function confirmQuery(msg) {
   const td = msg.tool_data
-  try {
-    ElMessage.info('正在执行查询...')
-    window.dispatchEvent(new CustomEvent('navigate-to-query', { detail: { script_id: td.script_id } }))
-    dismissTool(msg)
-  } catch (e) {
-    ElMessage.error('查询执行失败: ' + (e.message || '未知错误'))
-  }
+  // 在AI对话中直接执行查询任务，需要上传Excel文件
+  // 设置卡片消息的查询相关属性
+  msg._selected = [td.script_id]
+  msg._selectedScripts = [{
+    id: td.script_id,
+    name: td.script_name || '查询任务',
+    params: [],
+  }]
+  msg._action_type = 'query'
+  openQueryDialog(msg)
 }
 
 onMounted(() => {
@@ -2260,6 +2604,97 @@ onMounted(() => {
   font-size: 13px;
   color: #606266;
   min-width: 60px;
+}
+
+/* 查询任务执行对话框样式 */
+.query-dialog-body {
+  min-height: 200px;
+}
+
+.query-dialog-step {
+  padding: 8px 0;
+}
+
+.query-dialog-hint {
+  background: #ecf5ff;
+  border: 1px solid #d9ecff;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: #409eff;
+  line-height: 1.6;
+}
+
+.query-dialog-hint i {
+  margin-right: 6px;
+}
+
+.query-upload-area {
+  padding: 40px 20px;
+  text-align: center;
+  color: #909399;
+}
+
+.query-upload-icon {
+  font-size: 48px;
+  color: #c0c4cc;
+  margin-bottom: 12px;
+  display: block;
+}
+
+.query-upload-area p {
+  margin: 4px 0;
+  font-size: 14px;
+}
+
+.query-upload-area em {
+  color: #409eff;
+  font-style: normal;
+}
+
+.query-upload-tip {
+  font-size: 12px !important;
+  color: #c0c4cc;
+}
+
+.query-file-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #f0f9eb;
+  border: 1px solid #d9f0be;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+
+.query-file-info i {
+  color: #67c23a;
+  font-size: 16px;
+}
+
+.query-file-info span {
+  flex: 1;
+  font-weight: 500;
+  font-size: 13px;
+  color: #303133;
+}
+
+.query-parse-result {
+  margin-bottom: 8px;
+}
+
+.query-columns-preview {
+  margin-top: 12px;
+}
+
+.query-columns-label {
+  font-size: 13px;
+  color: #606266;
+  font-weight: 500;
+  display: block;
+  margin-bottom: 8px;
 }
 
 /* ===== Input Area ===== */
