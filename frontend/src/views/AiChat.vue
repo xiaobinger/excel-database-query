@@ -98,7 +98,7 @@
               </template>
               <!-- 选项选择卡片 -->
               <template v-else-if="msg._type === 'select_options'">
-                <div class="tool-card select-card" :class="{ ignored: msg._ignored, done: msg._done, executing: msg._executing }">
+                <div class="tool-card select-card" :class="{ ignored: msg._ignored, done: msg._done, executing: msg._executing, executed: msg._executing || msg._done }">
                   <div class="tool-card-header">
                     <i v-if="msg._ignored" class="fas fa-ban tool-icon tool-icon-error"></i>
                     <i v-else-if="msg._executing" class="fas fa-spinner fa-spin tool-icon"></i>
@@ -143,7 +143,7 @@
 
                     <div v-if="!msg._executing && !msg._done" class="select-options-list">
                       <label v-for="s in msg._scripts" :key="s.id" class="select-option-item">
-                        <input type="checkbox" :value="s.id" v-model="msg._selected" :disabled="msg._ignored || msg._executing" @change="onSelectionChange(msg)" />
+                        <input type="checkbox" :value="s.id" v-model="msg._selected" :disabled="msg._ignored || msg._executing || msg._done" @change="onSelectionChange(msg)" />
                         <div class="select-option-detail">
                           <span class="select-option-name">{{ s.name }}</span>
                           <span v-if="s.description" class="select-option-desc">{{ s.description }}</span>
@@ -166,6 +166,7 @@
                     >
                       <template v-if="msg._ignored">已忽略</template>
                       <template v-else-if="msg._executing">正在执行...</template>
+                      <template v-else-if="msg._done">已执行</template>
                       <template v-else-if="msg._failed">重新执行 ({{ msg._selected.length }})</template>
                       <template v-else>确认执行所选 ({{ msg._selected.length }})</template>
                     </el-button>
@@ -191,7 +192,7 @@
                       <i class="fas fa-check"></i> 确认全部不筛选
                     </el-button>
                     <el-button size="small" @click="cancelParamConfirm(msg)">
-                      取消
+                      自定义参数
                     </el-button>
                   </div>
                 </div>
@@ -321,6 +322,310 @@
         </div>
       </template>
     </div>
+
+    <!-- 参数设置对话框 -->
+    <el-dialog
+      v-model="paramDialogVisible"
+      title="参数设置"
+      width="600px"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <div v-if="paramDialogScripts.length > 0" class="param-dialog-body">
+        <!-- 公共参数 -->
+        <div v-if="paramDialogSharedParams.length > 0" class="param-section">
+          <div class="param-section-title">
+            <i class="fas fa-layer-group"></i> 公共参数
+            <el-tag size="small" type="info" effect="plain" style="margin-left: 8px">多个选项共用</el-tag>
+          </div>
+          <div class="params-card">
+            <div class="param-item" v-for="p in paramDialogSharedParams" :key="'shared_'+p.name">
+              <div class="param-item-label">
+                <span class="param-name-tag">{{ p.label || p.name }}</span>
+                <el-tag v-if="p.multi" size="small" type="warning" effect="plain">IN</el-tag>
+                <el-tag v-if="p.range" size="small" type="warning" effect="plain">范围</el-tag>
+                <el-tag v-if="p.required" size="small" type="danger" effect="plain">必填</el-tag>
+              </div>
+              <div class="param-item-control">
+                <template v-if="p.enum_enabled && p.enum_mode === 'neq' && p.neq_value">
+                  <div class="neq-param-control">
+                    <span class="neq-param-label">{{ p.label || p.name }}</span>
+                    <el-switch
+                      v-model="paramDialogValues[p.name]"
+                      active-text="是"
+                      inactive-text="否"
+                      active-color="#67c23a"
+                      inactive-color="#f56c6c"
+                      :disabled="p.allow_all && paramDialogAllChecked[p.name]"
+                    />
+                    <el-checkbox v-if="p.allow_all" v-model="paramDialogAllChecked[p.name]" size="small">全部</el-checkbox>
+                  </div>
+                </template>
+                <el-select
+                  v-else-if="p.enum_enabled && p.enum_values && p.enum_values.length > 0"
+                  v-model="paramDialogValues[p.name]"
+                  :multiple="p.multi"
+                  :collapse-tags="p.multi"
+                  :collapse-tags-tooltip="p.multi"
+                  placeholder="请选择"
+                  style="width: 100%"
+                >
+                  <el-option v-if="p.allow_all" value="" label="全部（不筛选）" />
+                  <el-option v-for="item in p.enum_values" :key="item.value" :label="item.label" :value="item.value" />
+                </el-select>
+                <template v-else-if="p.type === 'date' || p.type === 'datetime'">
+                  <el-date-picker
+                    v-if="p.range && p.date_format === 'year'"
+                    v-model="paramDialogValues[p.name]"
+                    type="yearrange"
+                    :start-placeholder="'开始' + (p.label || p.name)"
+                    :end-placeholder="'结束' + (p.label || p.name)"
+                    value-format="YYYY"
+                    style="width: 100%"
+                    :disabled="p.allow_all && paramDialogAllChecked[p.name]"
+                  />
+                  <el-date-picker
+                    v-else-if="p.range && p.date_format === 'month'"
+                    v-model="paramDialogValues[p.name]"
+                    type="monthrange"
+                    :start-placeholder="'开始' + (p.label || p.name)"
+                    :end-placeholder="'结束' + (p.label || p.name)"
+                    value-format="YYYY-MM"
+                    style="width: 100%"
+                    :disabled="p.allow_all && paramDialogAllChecked[p.name]"
+                  />
+                  <el-date-picker
+                    v-else-if="p.range && (p.date_format === 'day' || !p.date_format)"
+                    v-model="paramDialogValues[p.name]"
+                    type="daterange"
+                    :start-placeholder="'开始' + (p.label || p.name)"
+                    :end-placeholder="'结束' + (p.label || p.name)"
+                    value-format="YYYY-MM-DD"
+                    style="width: 100%"
+                    :disabled="p.allow_all && paramDialogAllChecked[p.name]"
+                  />
+                  <el-date-picker
+                    v-else-if="p.range && p.date_format === 'datetime'"
+                    v-model="paramDialogValues[p.name]"
+                    type="datetimerange"
+                    :start-placeholder="'开始' + (p.label || p.name)"
+                    :end-placeholder="'结束' + (p.label || p.name)"
+                    value-format="YYYY-MM-DD HH:mm:ss"
+                    style="width: 100%"
+                    :disabled="p.allow_all && paramDialogAllChecked[p.name]"
+                  />
+                  <el-date-picker
+                    v-else-if="!p.range && p.date_format === 'year'"
+                    v-model="paramDialogValues[p.name]"
+                    type="year"
+                    :placeholder="'请选择' + (p.label || p.name)"
+                    value-format="YYYY"
+                    style="width: 100%"
+                    :disabled="p.allow_all && paramDialogAllChecked[p.name]"
+                  />
+                  <el-date-picker
+                    v-else-if="!p.range && p.date_format === 'month'"
+                    v-model="paramDialogValues[p.name]"
+                    type="month"
+                    :placeholder="'请选择' + (p.label || p.name)"
+                    value-format="YYYY-MM"
+                    style="width: 100%"
+                    :disabled="p.allow_all && paramDialogAllChecked[p.name]"
+                  />
+                  <el-date-picker
+                    v-else-if="!p.range && (p.date_format === 'day' || !p.date_format)"
+                    v-model="paramDialogValues[p.name]"
+                    type="date"
+                    :placeholder="'请选择' + (p.label || p.name)"
+                    value-format="YYYY-MM-DD"
+                    style="width: 100%"
+                    :disabled="p.allow_all && paramDialogAllChecked[p.name]"
+                  />
+                  <el-date-picker
+                    v-else
+                    v-model="paramDialogValues[p.name]"
+                    type="datetime"
+                    :placeholder="'请选择' + (p.label || p.name)"
+                    value-format="YYYY-MM-DD HH:mm:ss"
+                    style="width: 100%"
+                    :disabled="p.allow_all && paramDialogAllChecked[p.name]"
+                  />
+                  <el-checkbox
+                    v-if="p.allow_all"
+                    v-model="paramDialogAllChecked[p.name]"
+                    size="small"
+                    style="margin-top: 4px"
+                  >全部（不筛选）</el-checkbox>
+                </template>
+                <template v-else>
+                  <el-input
+                    v-model="paramDialogValues[p.name]"
+                    :type="p.type === 'number' ? 'number' : 'text'"
+                    :disabled="p.allow_all && paramDialogAllChecked[p.name]"
+                    :placeholder="p.multi ? '请输入多个值，以逗号分隔' : '请输入' + (p.label || p.name)"
+                  />
+                  <el-checkbox
+                    v-if="p.allow_all"
+                    v-model="paramDialogAllChecked[p.name]"
+                    size="small"
+                    style="margin-top: 4px"
+                  >全部（不筛选）</el-checkbox>
+                </template>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 独立参数 -->
+        <div v-for="script in paramDialogScripts" :key="script.id" class="param-section">
+          <div class="param-section-title">
+            <i class="fas fa-cube"></i> {{ script.name }}
+            <el-tag size="small" type="primary" style="margin-left: 8px">{{ script.params.length }} 个参数</el-tag>
+          </div>
+          <div class="params-card">
+            <div class="param-item" v-for="p in script.params" :key="script.id+'_'+p.name">
+              <div class="param-item-label">
+                <span class="param-name-tag">{{ p.label || p.name }}</span>
+                <el-tag v-if="p.multi" size="small" type="warning" effect="plain">IN</el-tag>
+                <el-tag v-if="p.range" size="small" type="warning" effect="plain">范围</el-tag>
+                <el-tag v-if="p.required" size="small" type="danger" effect="plain">必填</el-tag>
+              </div>
+              <div class="param-item-control">
+                <template v-if="p.enum_enabled && p.enum_mode === 'neq' && p.neq_value">
+                  <div class="neq-param-control">
+                    <span class="neq-param-label">{{ p.label || p.name }}</span>
+                    <el-switch
+                      v-model="paramDialogValues[script.id + '_' + p.name]"
+                      active-text="是"
+                      inactive-text="否"
+                      active-color="#67c23a"
+                      inactive-color="#f56c6c"
+                      :disabled="p.allow_all && paramDialogAllChecked[script.id + '_' + p.name]"
+                    />
+                    <el-checkbox v-if="p.allow_all" v-model="paramDialogAllChecked[script.id + '_' + p.name]" size="small">全部</el-checkbox>
+                  </div>
+                </template>
+                <el-select
+                  v-else-if="p.enum_enabled && p.enum_values && p.enum_values.length > 0"
+                  v-model="paramDialogValues[script.id + '_' + p.name]"
+                  :multiple="p.multi"
+                  :collapse-tags="p.multi"
+                  :collapse-tags-tooltip="p.multi"
+                  placeholder="请选择"
+                  style="width: 100%"
+                >
+                  <el-option v-if="p.allow_all" value="" label="全部（不筛选）" />
+                  <el-option v-for="item in p.enum_values" :key="item.value" :label="item.label" :value="item.value" />
+                </el-select>
+                <template v-else-if="p.type === 'date' || p.type === 'datetime'">
+                  <el-date-picker
+                    v-if="p.range && p.date_format === 'year'"
+                    v-model="paramDialogValues[script.id + '_' + p.name]"
+                    type="yearrange"
+                    :start-placeholder="'开始' + (p.label || p.name)"
+                    :end-placeholder="'结束' + (p.label || p.name)"
+                    value-format="YYYY"
+                    style="width: 100%"
+                    :disabled="p.allow_all && paramDialogAllChecked[script.id + '_' + p.name]"
+                  />
+                  <el-date-picker
+                    v-else-if="p.range && p.date_format === 'month'"
+                    v-model="paramDialogValues[script.id + '_' + p.name]"
+                    type="monthrange"
+                    :start-placeholder="'开始' + (p.label || p.name)"
+                    :end-placeholder="'结束' + (p.label || p.name)"
+                    value-format="YYYY-MM"
+                    style="width: 100%"
+                    :disabled="p.allow_all && paramDialogAllChecked[script.id + '_' + p.name]"
+                  />
+                  <el-date-picker
+                    v-else-if="p.range && (p.date_format === 'day' || !p.date_format)"
+                    v-model="paramDialogValues[script.id + '_' + p.name]"
+                    type="daterange"
+                    :start-placeholder="'开始' + (p.label || p.name)"
+                    :end-placeholder="'结束' + (p.label || p.name)"
+                    value-format="YYYY-MM-DD"
+                    style="width: 100%"
+                    :disabled="p.allow_all && paramDialogAllChecked[script.id + '_' + p.name]"
+                  />
+                  <el-date-picker
+                    v-else-if="p.range && p.date_format === 'datetime'"
+                    v-model="paramDialogValues[script.id + '_' + p.name]"
+                    type="datetimerange"
+                    :start-placeholder="'开始' + (p.label || p.name)"
+                    :end-placeholder="'结束' + (p.label || p.name)"
+                    value-format="YYYY-MM-DD HH:mm:ss"
+                    style="width: 100%"
+                    :disabled="p.allow_all && paramDialogAllChecked[script.id + '_' + p.name]"
+                  />
+                  <el-date-picker
+                    v-else-if="!p.range && p.date_format === 'year'"
+                    v-model="paramDialogValues[script.id + '_' + p.name]"
+                    type="year"
+                    :placeholder="'请选择' + (p.label || p.name)"
+                    value-format="YYYY"
+                    style="width: 100%"
+                    :disabled="p.allow_all && paramDialogAllChecked[script.id + '_' + p.name]"
+                  />
+                  <el-date-picker
+                    v-else-if="!p.range && p.date_format === 'month'"
+                    v-model="paramDialogValues[script.id + '_' + p.name]"
+                    type="month"
+                    :placeholder="'请选择' + (p.label || p.name)"
+                    value-format="YYYY-MM"
+                    style="width: 100%"
+                    :disabled="p.allow_all && paramDialogAllChecked[script.id + '_' + p.name]"
+                  />
+                  <el-date-picker
+                    v-else-if="!p.range && (p.date_format === 'day' || !p.date_format)"
+                    v-model="paramDialogValues[script.id + '_' + p.name]"
+                    type="date"
+                    :placeholder="'请选择' + (p.label || p.name)"
+                    value-format="YYYY-MM-DD"
+                    style="width: 100%"
+                    :disabled="p.allow_all && paramDialogAllChecked[script.id + '_' + p.name]"
+                  />
+                  <el-date-picker
+                    v-else
+                    v-model="paramDialogValues[script.id + '_' + p.name]"
+                    type="datetime"
+                    :placeholder="'请选择' + (p.label || p.name)"
+                    value-format="YYYY-MM-DD HH:mm:ss"
+                    style="width: 100%"
+                    :disabled="p.allow_all && paramDialogAllChecked[script.id + '_' + p.name]"
+                  />
+                  <el-checkbox
+                    v-if="p.allow_all"
+                    v-model="paramDialogAllChecked[script.id + '_' + p.name]"
+                    size="small"
+                    style="margin-top: 4px"
+                  >全部（不筛选）</el-checkbox>
+                </template>
+                <template v-else>
+                  <el-input
+                    v-model="paramDialogValues[script.id + '_' + p.name]"
+                    :type="p.type === 'number' ? 'number' : 'text'"
+                    :disabled="p.allow_all && paramDialogAllChecked[script.id + '_' + p.name]"
+                    :placeholder="p.multi ? '请输入多个值，以逗号分隔' : '请输入' + (p.label || p.name)"
+                  />
+                  <el-checkbox
+                    v-if="p.allow_all"
+                    v-model="paramDialogAllChecked[script.id + '_' + p.name]"
+                    size="small"
+                    style="margin-top: 4px"
+                  >全部（不筛选）</el-checkbox>
+                </template>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="paramDialogVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!paramDialogCanConfirm" @click="confirmParamDialog">确认执行</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -355,6 +660,32 @@ const messagesRef = ref(null)
 const uploadedFile = ref(null)
 const store = useAppStore()
 const isAdmin = computed(() => store.isAdmin)
+
+// 参数设置对话框状态
+const paramDialogVisible = ref(false)
+const paramDialogMsg = ref(null)  // 关联的select_options卡片消息
+const paramDialogScripts = ref([])  // 需要独立参数的脚本列表
+const paramDialogSharedParams = ref([])  // 公共参数列表
+const paramDialogValues = ref({})  // 参数值 { key: value }
+const paramDialogAllChecked = ref({})  // allow_all勾选状态 { key: boolean }
+
+// 参数对话框：是否可以确认执行
+const paramDialogCanConfirm = computed(() => {
+  // 检查所有必填参数是否已填写
+  const allParams = [...paramDialogSharedParams.value]
+  for (const script of paramDialogScripts.value) {
+    if (script.params) allParams.push(...script.params.map(p => ({ ...p, _scriptId: script.id })))
+  }
+  for (const p of allParams) {
+    if (!p.required) continue
+    const key = p._scriptId ? (p._scriptId + '_' + p.name) : p.name
+    if (p.allow_all && paramDialogAllChecked.value[key]) continue
+    const val = paramDialogValues.value[key]
+    if (val === undefined || val === null || val === '') return false
+    if (Array.isArray(val) && val.length === 0) return false
+  }
+  return true
+})
 
 const canSend = computed(() => {
   return (inputText.value.trim() || uploadedFile.value) && !loading.value
@@ -522,79 +853,6 @@ async function sendMessage() {
     if (!currentChatId.value) return
   }
 
-  // 检查是否有等待参数的select_options卡片，尝试将用户输入解析为参数值
-  const pendingCard = messages.value.find(m =>
-    m._type === 'select_options' && !m._executing && !m._done && !m._ignored
-    && m._selectedScripts && m._selectedScripts.length > 0
-    && hasMissingRequiredNoAllParams(m)
-  )
-  if (pendingCard && !uploadedFile.value) {
-    const parsed = tryParseParamValues(text, pendingCard)
-    if (parsed) {
-      // 成功解析参数，填充到卡片中并执行
-      Object.assign(pendingCard._param_values, parsed)
-      // 检查是否还有缺失的必填参数
-      const stillMissing = getMissingRequiredNoAllParams(pendingCard)
-      if (stillMissing.length === 0) {
-        // 所有必填参数已填写，添加用户消息后自动执行
-        const userMsg = { id: Date.now(), role: 'user', content: text }
-        messages.value.push(userMsg)
-        inputText.value = ''
-        await nextTick()
-        scrollToBottom()
-
-        // 检查是否还有allow_all参数需要确认
-        const hasAllowAllParams = getAllowAllParamsNeedConfirm(pendingCard)
-        if (hasAllowAllParams.length > 0 && !pendingCard._params_checked) {
-          const paramList = hasAllowAllParams.map(p => p.label).join('、')
-          const confirmContent = `📋 已收到必填参数。当前以下参数将使用 **全部不筛选**：\n\n${hasAllowAllParams.map(p => `- ${p.label}`).join('\n')}\n\n请确认是否继续？`
-          let msgId = Date.now() + 1
-          try {
-            const res = await api.ai.createMessage(currentChatId.value, { content: confirmContent })
-            msgId = res.data?.id || msgId
-          } catch {}
-          messages.value.push({
-            id: msgId,
-            role: 'assistant',
-            content: confirmContent,
-            _type: 'param_confirm',
-            _pending_card_id: pendingCard.id,
-            _confirm_action: 'all_checked',
-          })
-          await nextTick()
-          scrollToBottom()
-          return
-        }
-
-        // 直接执行
-        doExecuteExport(pendingCard)
-        return
-      } else {
-        // 还有缺失参数，提示用户继续补充
-        const userMsg = { id: Date.now(), role: 'user', content: text }
-        messages.value.push(userMsg)
-        inputText.value = ''
-
-        const stillMissingList = stillMissing.map(p => `**${p.label}**`).join('、')
-        const replyContent = `已收到部分参数，还需要以下必填参数：\n\n${stillMissing.map(p => `- ${p.label}（必填）`).join('\n')}\n\n请继续提供。`
-        let replyId = Date.now() + 1
-        try {
-          const res = await api.ai.createMessage(currentChatId.value, { content: replyContent })
-          replyId = res.data?.id || replyId
-        } catch {}
-        messages.value.push({
-          id: replyId,
-          role: 'assistant',
-          content: replyContent,
-        })
-        await nextTick()
-        scrollToBottom()
-        return
-      }
-    }
-    // 解析失败，走正常的AI对话流程
-  }
-
   // Build message content with file info if uploaded
   let content = text
   if (uploadedFile.value) {
@@ -749,33 +1007,30 @@ async function executeSelectedOptions(msg) {
   // 更新选中脚本
   msg._selectedScripts = msg._scripts.filter(s => selectedIds.includes(s.id)) || []
 
-  // 检查是否有未允许全部且必填的参数未填写 → 不能执行，发送消息提示
-  const missingRequiredNoAll = getMissingRequiredNoAllParams(msg)
-  if (missingRequiredNoAll.length > 0) {
-    // 发送AI消息提示用户补充必填参数
-    const paramList = missingRequiredNoAll.map(p => `**${p.label}**`).join('、')
-    const content = `⚠️ 执行导出任务需要以下必填参数，请在对话中提供参数值：\n\n${missingRequiredNoAll.map(p => `- ${p.label}（必填）`).join('\n')}\n\n例如回复："${missingRequiredNoAll.map(p => p.label + ': xxx').join('，')}"`
+  // 检查是否有任何参数需要设置
+  const hasAnyParams = msg._selectedScripts.some(s => s.params && s.params.length > 0)
 
-    let msgId = Date.now()
-    try {
-      const res = await api.ai.createMessage(currentChatId.value, { content })
-      msgId = res.data?.id || msgId
-    } catch {}
-    messages.value.push({
-      id: msgId,
-      role: 'assistant',
-      content,
-    })
-    await nextTick()
-    scrollToBottom()
+  if (!hasAnyParams) {
+    // 无参数，直接执行
+    doExecuteExport(msg)
     return
   }
 
-  // 检查是否有允许全部的参数未确认 → 发送确认消息
-  const hasAllowAllParams = getAllowAllParamsNeedConfirm(msg)
-  if (hasAllowAllParams.length > 0 && !msg._params_checked) {
-    const paramList = hasAllowAllParams.map(p => p.label).join('、')
-    const content = `📋 当前以下参数将使用 **全部不筛选**：\n\n${hasAllowAllParams.map(p => `- ${p.label}`).join('\n')}\n\n请确认是否继续？`
+  // 检查是否所有参数都是 allow_all 且没有必填参数
+  const allParamsAllowAll = msg._selectedScripts.every(s =>
+    !s.params || s.params.length === 0 || s.params.every(p => p.allow_all && !p.required)
+  )
+
+  if (allParamsAllowAll) {
+    // 全部是allow_all且非必填参数 → 发送确认卡片
+    const paramList = []
+    for (const script of msg._selectedScripts) {
+      if (!script.params) continue
+      for (const p of script.params) {
+        paramList.push((script.name ? script.name + ' - ' : '') + (p.label || p.name))
+      }
+    }
+    const content = `📋 当前以下参数将使用 **全部不筛选**：\n\n${paramList.map(p => `- ${p}`).join('\n')}\n\n请确认是否继续？`
 
     let msgId = Date.now()
     try {
@@ -795,34 +1050,108 @@ async function executeSelectedOptions(msg) {
     return
   }
 
-  // 所有参数已确认，执行任务
-  doExecuteExport(msg)
+  // 有参数需要设置 → 弹出参数设置对话框
+  openParamDialog(msg)
 }
 
-// 获取需要确认的"允许全部"参数列表
-function getAllowAllParamsNeedConfirm(msg) {
-  const params = []
+// 打开参数设置对话框
+function openParamDialog(msg) {
   const selectedScripts = msg._selectedScripts || []
-  const paramValues = msg._param_values || {}
-  const allChecked = msg._all_checked || {}
+
+  // 分离公共参数和独立参数
+  const paramCountMap = {}
+  const scriptParamMap = {}
 
   for (const script of selectedScripts) {
-    if (!script.params) continue
+    if (!script.params || script.params.length === 0) continue
+    scriptParamMap[script.id] = []
     for (const p of script.params) {
-      if (!p.allow_all) continue
-      const key = script.id + '_' + p.name
-      const val = paramValues[key]
-      // 已有值或已勾选全部的不需要确认
-      if ((val && val.trim() !== '') || allChecked[key]) continue
-      params.push({
-        key,
-        label: (script.name ? script.name + ' - ' : '') + (p.label || p.name),
-        scriptId: script.id,
-        paramName: p.name
-      })
+      const key = p.name
+      if (!paramCountMap[key]) {
+        paramCountMap[key] = { param: p, scriptIds: [] }
+      }
+      paramCountMap[key].scriptIds.push(script.id)
+      scriptParamMap[script.id].push(p)
     }
   }
-  return params
+
+  // 公共参数：出现在多个脚本中的同名参数
+  const sharedParams = []
+  const sharedNames = new Set()
+  for (const [name, info] of Object.entries(paramCountMap)) {
+    if (info.scriptIds.length > 1) {
+      sharedParams.push(info.param)
+      sharedNames.add(name)
+    }
+  }
+
+  // 独立参数脚本：过滤掉公共参数
+  const uniqueScripts = []
+  for (const script of selectedScripts) {
+    const params = (scriptParamMap[script.id] || []).filter(p => !sharedNames.has(p.name))
+    if (params.length > 0) {
+      uniqueScripts.push({ ...script, params })
+    }
+  }
+
+  // 初始化参数值
+  const values = {}
+  const allChecked = {}
+
+  // 初始化公共参数默认值
+  for (const p of sharedParams) {
+    if (p.enum_enabled && p.enum_mode === 'neq' && p.neq_value) {
+      values[p.name] = true  // neq switch 默认true
+    } else if (p.enum_enabled && p.enum_values && p.enum_values.length > 0) {
+      values[p.name] = p.multi ? [] : ''
+    } else {
+      values[p.name] = ''
+    }
+    if (p.allow_all) {
+      allChecked[p.name] = false
+    }
+  }
+
+  // 初始化独立参数默认值
+  for (const script of uniqueScripts) {
+    for (const p of script.params) {
+      const key = script.id + '_' + p.name
+      if (p.enum_enabled && p.enum_mode === 'neq' && p.neq_value) {
+        values[key] = true
+      } else if (p.enum_enabled && p.enum_values && p.enum_values.length > 0) {
+        values[key] = p.multi ? [] : ''
+      } else {
+        values[key] = ''
+      }
+      if (p.allow_all) {
+        allChecked[key] = false
+      }
+    }
+  }
+
+  paramDialogMsg.value = msg
+  paramDialogScripts.value = uniqueScripts
+  paramDialogSharedParams.value = sharedParams
+  paramDialogValues.value = values
+  paramDialogAllChecked.value = allChecked
+  paramDialogVisible.value = true
+}
+
+// 确认参数设置并执行
+async function confirmParamDialog() {
+  const msg = paramDialogMsg.value
+  if (!msg) return
+
+  // 将对话框中的参数值写入卡片消息
+  msg._param_values = { ...paramDialogValues.value }
+  msg._all_checked = { ...paramDialogAllChecked.value }
+  msg._params_checked = true
+
+  paramDialogVisible.value = false
+
+  // 执行任务
+  await nextTick()
+  doExecuteExport(msg)
 }
 
 // 实际执行导出任务
@@ -862,95 +1191,11 @@ async function doExecuteExport(msg) {
   }
 }
 
-// 检查选中的脚本是否有必填参数未填写
-function checkMissingRequiredParams(msg) {
-  const missing = []
-  const selectedScripts = msg._selectedScripts || []
-  const paramValues = msg._param_values || {}
-  const allChecked = msg._all_checked || {}
-
-  for (const script of selectedScripts) {
-    if (!script.params) continue
-    for (const p of script.params) {
-      if (!p.required) continue
-      if (p.allow_all && allChecked[script.id + '_' + p.name]) continue
-      const val = paramValues[script.id + '_' + p.name]
-      if (!val || val.trim() === '') {
-        const label = (script.name ? script.name + ' - ' : '') + (p.label || p.name)
-        missing.push(label)
-      }
-    }
-  }
-  return missing
-}
-
-// 检查是否有未允许全部且必填的参数未填写（阻止执行的核心检查）
-function hasMissingRequiredNoAllParams(msg) {
-  const selectedScripts = msg._selectedScripts || []
-  const paramValues = msg._param_values || {}
-  const allChecked = msg._all_checked || {}
-
-  for (const script of selectedScripts) {
-    if (!script.params) continue
-    for (const p of script.params) {
-      if (!p.required) continue
-      if (p.allow_all) continue // 允许全部的跳过（可以勾选全部不筛选）
-      const val = paramValues[script.id + '_' + p.name]
-      if (!val || val.trim() === '') {
-        return true
-      }
-    }
-  }
-  return false
-}
-
-// 获取未允许全部且必填的参数列表（用于显示输入框）
-function getMissingRequiredNoAllParams(msg) {
-  const missing = []
-  const selectedScripts = msg._selectedScripts || []
-  const paramValues = msg._param_values || {}
-
-  for (const script of selectedScripts) {
-    if (!script.params) continue
-    for (const p of script.params) {
-      if (!p.required) continue
-      if (p.allow_all) continue // 允许全部的跳过
-      const key = script.id + '_' + p.name
-      const val = paramValues[key]
-      if (!val || val.trim() === '') {
-        missing.push({
-          key,
-          label: (script.name ? script.name + ' - ' : '') + (p.label || p.name)
-        })
-      }
-    }
-  }
-  return missing
-}
-
-// 判断是否有任何必填参数（只检查已勾选的脚本）
-function hasAnyRequiredParams(msg) {
-  const selectedIds = msg._selected || []
-  for (const s of msg._scripts) {
-    if (!selectedIds.includes(s.id)) continue
-    if (!s.params) continue
-    for (const p of s.params) {
-      if (p.required) return true
-    }
-  }
-  return false
-}
-
-// 判断是否可以执行（点击执行按钮后由消息互动引导参数，按钮本身只需检查是否有选中）
+// 判断是否可以执行
 function canExecute(msg) {
   if (msg._executing || msg._done || msg._ignored) return false
   if (msg._selected.length === 0) return false
   return true
-}
-
-// 参数输入框值变化时的处理（已废弃，保留兼容）
-function onParamInputChange(msg) {
-  msg._missing_required_params = []
 }
 
 // 确认参数全部不筛选
@@ -985,53 +1230,20 @@ async function confirmParamAll(msg) {
   doExecuteExport(card)
 }
 
-// 取消参数确认
+// 取消参数确认 → 弹出参数设置对话框
 function cancelParamConfirm(msg) {
   // 移除确认消息
   messages.value = messages.value.filter(m => m.id !== msg.id)
-  ElMessage.info('已取消执行')
-}
-
-// 尝试将用户输入的文本解析为参数值
-function tryParseParamValues(text, msg) {
-  const selectedScripts = msg._selectedScripts || []
-  const paramValues = msg._param_values || {}
-  const allChecked = msg._all_checked || {}
-  const parsed = {}
-  let matched = false
-
-  for (const script of selectedScripts) {
-    if (!script.params) continue
-    for (const p of script.params) {
-      const key = script.id + '_' + p.name
-      // 跳过已有值的参数
-      if (paramValues[key] && paramValues[key].trim() !== '') continue
-      if (allChecked[key]) continue
-
-      const label = p.label || p.name
-      const paramName = p.name
-
-      // 尝试多种格式匹配：
-      // 1. "参数名: 值" 或 "参数名：值"
-      // 2. "标签: 值" 或 "标签：值"
-      // 3. "参数名=值"
-      const patterns = [
-        new RegExp(`${paramName}\\s*[:：=]\\s*(.+?)(?:[,，;；\\n]|$)`, 'i'),
-        new RegExp(`${label}\\s*[:：=]\\s*(.+?)(?:[,，;；\\n]|$)`, 'i'),
-      ]
-
-      for (const pattern of patterns) {
-        const match = text.match(pattern)
-        if (match && match[1] && match[1].trim()) {
-          parsed[key] = match[1].trim()
-          matched = true
-          break
-        }
-      }
+  // 找到关联的卡片消息，弹出参数设置对话框
+  const cardId = msg._pending_card_id
+  if (cardId) {
+    const card = messages.value.find(m => m.id === cardId)
+    if (card) {
+      openParamDialog(card)
+      return
     }
   }
-
-  return matched ? parsed : null
+  ElMessage.info('已取消执行')
 }
 
 // 选择变化时更新选中的脚本详情
@@ -1794,35 +2006,40 @@ onMounted(() => {
   margin-top: 4px;
 }
 
-/* 执行中状态 */
+/* 执行中状态（置灰） */
 .tool-card.select-card.executing {
-  border-color: #409eff;
-  box-shadow: 0 2px 12px rgba(64, 158, 255, 0.15);
+  border-color: #b0b5bd;
+  box-shadow: 0 2px 8px rgba(176, 181, 189, 0.15);
 }
 
 .tool-card.select-card.executing .tool-card-header {
-  background: linear-gradient(135deg, #ecf5ff, #e1eeff);
-  border-bottom-color: #b3d8ff;
+  background: linear-gradient(135deg, #f0f2f5, #e8eaef);
+  border-bottom-color: #d0d3d9;
+}
+
+.tool-card.select-card.executing .tool-icon {
+  color: #909399 !important;
 }
 
 .tool-card.select-card.executing .select-options-list {
   pointer-events: none;
-  opacity: 0.5;
+  opacity: 0.4;
 }
 
-/* 执行完成状态 */
+/* 执行完成状态（置灰） */
 .tool-card.select-card.done {
-  border-color: #67c23a;
-  box-shadow: 0 2px 12px rgba(103, 194, 58, 0.15);
+  border-color: #c0c4cc;
+  box-shadow: none;
+  opacity: 0.75;
 }
 
 .tool-card.select-card.done .tool-card-header {
-  background: linear-gradient(135deg, #f0f9eb, #e7f8dc);
-  border-bottom-color: #c2e7b0;
+  background: linear-gradient(135deg, #f5f7fa, #edf0f5);
+  border-bottom-color: #dcdfe6;
 }
 
 .tool-card.select-card.done .tool-icon {
-  color: #67c23a !important;
+  color: #909399 !important;
 }
 
 .tool-card.select-card.done .select-options-list {
@@ -1848,18 +2065,6 @@ onMounted(() => {
 .tool-card.select-card.failed .select-options-list {
   pointer-events: none;
   opacity: 0.4;
-}
-
-/* 必填参数输入区域（已移除，保留样式兼容） */
-.param-input-section,
-.param-required-block,
-.param-reminder,
-.param-input-group,
-.param-input-script-name,
-.param-input-item,
-.param-input-controls,
-.param-missing-warning {
-  display: none;
 }
 
 /* 参数确认卡片样式 */
@@ -1888,6 +2093,84 @@ onMounted(() => {
   padding: 10px 16px;
   background: #fafbfc;
   border-top: 1px solid #eef2f7;
+}
+
+/* 参数设置对话框样式 */
+.param-dialog-body {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.param-section {
+  margin-bottom: 16px;
+}
+
+.param-section:last-child {
+  margin-bottom: 0;
+}
+
+.param-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.param-section-title i {
+  color: #409eff;
+}
+
+.params-card {
+  background: #f5f7fa;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.param-item {
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px dashed #e4e7ed;
+}
+
+.param-item:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.param-item-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.param-name-tag {
+  font-size: 13px;
+  font-weight: 500;
+  color: #303133;
+}
+
+.param-item-control {
+  padding-left: 4px;
+}
+
+.neq-param-control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.neq-param-label {
+  font-size: 13px;
+  color: #606266;
+  min-width: 60px;
 }
 
 /* ===== Input Area ===== */
