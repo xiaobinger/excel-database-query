@@ -373,7 +373,7 @@ class AiService:
                 'id': s.id,
                 'name': s.name,
                 'description': s.description or '',
-                'params': [{'name': p['name'], 'label': p.get('label', p['name']), 'type': p.get('type', 'text')} for p in params],
+                'params': [{'name': p['name'], 'label': p.get('label', p['name']), 'type': p.get('type', 'text'), 'required': p.get('required', False), 'allow_all': p.get('allow_all', False)} for p in params],
             })
         return {'scripts': result, 'total': len(result)}
 
@@ -388,10 +388,12 @@ class AiService:
         for s in scripts:
             if keyword and keyword not in s.name.lower() and keyword not in (s.description or '').lower():
                 continue
+            params = s.get_params_config()
             result.append({
                 'id': s.id,
                 'name': s.name,
                 'description': s.description or '',
+                'params': [{'name': p['name'], 'label': p.get('label', p['name']), 'type': p.get('type', 'text'), 'required': p.get('required', False), 'allow_all': p.get('allow_all', False)} for p in params],
             })
         return {'scripts': result, 'total': len(result)}
 
