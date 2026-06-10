@@ -492,8 +492,12 @@ def send_message(chat_id):
             sys_prompt = context + '\n\n## 重要规则\n' \
                 '- 当用户表达需要导出数据的意图时，调用 request_export 工具\n' \
                 '- 当用户表达需要查询数据的意图时，调用 request_query 工具\n' \
+                '- 当用户表达需要执行系统任务的意图时，调用 request_system_task 工具\n' \
                 '- 调用 request_export 时，务必从用户描述中提取所有参数值（如商户号、日期、渠道等）填入 params 对象\n' \
+                '- 调用 request_system_task 时，务必从用户描述中提取所有参数值填入 params 对象\n' \
                 '- 如果用户没有指定具体的导出选项名称，先调用 list_export_options 列出相关选项让用户选择\n' \
+                '- 如果用户没有指定具体的查询选项名称，先调用 list_query_options 列出相关选项让用户选择\n' \
+                '- 如果用户没有指定具体的系统任务名称，先调用 list_system_tasks 列出相关任务让用户选择\n' \
                 '- 如果用户提供了参数值，务必在调用工具时传入正确的参数\n' \
                 '- 如果缺少必填参数，在回复中向用户询问\n' \
                 '- 当用户上传文件时，消息中会包含文件信息（行数和列名），根据列名自动匹配最合适的查询或导出选项\n'
@@ -552,6 +556,18 @@ def send_message(chat_id):
                         result['_select_mode'] = 'all'
                         result['message'] = '未找到精确匹配的选项，以下是你有权限的所有查询选项'
 
+                # 系统任务列表处理
+                if func_name == 'list_system_tasks' and result.get('total') == 1 and not result.get('error'):
+                    task = result['tasks'][0]
+                    logger.info(f'匹配到唯一系统任务: {task["name"]}，等待AI二次回复')
+                elif func_name == 'list_system_tasks' and not result.get('error'):
+                    if result.get('total', 0) > 1:
+                        result['_select_mode'] = 'multi'
+                        result['message'] = f'找到 {result["total"]} 个匹配的系统任务，请勾选后执行'
+                    elif result.get('total', 0) == 0:
+                        result['_select_mode'] = 'all'
+                        result['message'] = '未找到精确匹配的系统任务，以下是所有可用的系统任务'
+
             # Build tool result messages for AI to generate final response
             tool_messages = []
             for tr in tool_results:
@@ -570,7 +586,7 @@ def send_message(chat_id):
             messages.extend(tool_messages)
 
             # 检查工具类型：如果是操作型工具（导出/查询），跳过AI二次确认
-            action_tools = {'request_export', 'request_query'}
+            action_tools = {'request_export', 'request_query', 'request_system_task'}
             has_action = any(tc.get('function', {}).get('name', '') in action_tools for tc in tool_calls)
             # 选择卡片也视为 action
             has_select = any(tr.get('result', {}).get('_select_mode') for tr in tool_results)
@@ -672,8 +688,8 @@ def send_message(chat_id):
             saved_tool_messages = []
             for tr in tool_results:
                 result = tr['result']
-                # 导出/查询确认卡片
-                if result and not result.get('error') and result.get('action_type') in ('export', 'query'):
+                # 导出/查询/系统任务确认卡片
+                if result and not result.get('error') and result.get('action_type') in ('export', 'query', 'system_task'):
                     tool_msg = AiChatMessage(
                         chat_id=chat_id,
                         role='assistant',
@@ -693,6 +709,15 @@ def send_message(chat_id):
                     })
                 # 选项选择卡片（_select_mode）
                 elif result and result.get('_select_mode'):
+                    # 确定 action_type
+                    if tr['name'] == 'list_export_options':
+                        action_type = 'export'
+                    elif tr['name'] == 'list_query_options':
+                        action_type = 'query'
+                    elif tr['name'] == 'list_system_tasks':
+                        action_type = 'system_task'
+                    else:
+                        action_type = 'export'
                     tool_msg = AiChatMessage(
                         chat_id=chat_id,
                         role='assistant',
@@ -700,8 +725,8 @@ def send_message(chat_id):
                         msg_metadata=json.dumps({
                             '_type': 'select_options',
                             '_select_mode': result['_select_mode'],
-                            'scripts': result.get('scripts', []),
-                            'action_type': 'export' if tr['name'] == 'list_export_options' else 'query',
+                            'scripts': result.get('scripts', result.get('tasks', [])),
+                            'action_type': action_type,
                         }, ensure_ascii=False),
                     )
                     db.session.add(tool_msg)

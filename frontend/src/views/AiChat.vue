@@ -111,6 +111,7 @@
                       <template v-else-if="msg._done">执行成功</template>
                       <template v-else-if="msg._failed">执行失败</template>
                       <template v-else-if="msg._action_type === 'export'">可选导出任务</template>
+                      <template v-else-if="msg._action_type === 'system_task'">可选系统任务</template>
                       <template v-else>可选查询任务</template>
                     </span>
                   </div>
@@ -151,6 +152,18 @@
                           <div v-if="s.params && s.params.length > 0" class="select-option-params">
                             <el-tag v-for="p in s.params" :key="p.name" size="small" :type="p.required ? 'danger' : 'info'" effect="plain" style="margin: 2px 4px 2px 0">
                               {{ p.label || p.name }}{{ p.required ? '*' : '' }}
+                            </el-tag>
+                          </div>
+                          <!-- 查询任务显示主键和查询字段 -->
+                          <div v-if="msg._action_type === 'query' && (s.primary_key || (s.query_fields && s.query_fields.length > 0))" class="select-option-query-info">
+                            <el-tag v-if="s.primary_key" size="small" type="danger" effect="plain" style="margin: 2px 4px 2px 0" title="主键字段">
+                              <i class="fas fa-key"></i> {{ s.primary_key }}
+                            </el-tag>
+                            <el-tag v-for="field in (s.query_fields || []).slice(0, 5)" :key="field" size="small" effect="plain" style="margin: 2px 4px 2px 0">
+                              {{ field }}
+                            </el-tag>
+                            <el-tag v-if="s.query_fields && s.query_fields.length > 5" size="small" type="info" effect="plain">
+                              +{{ s.query_fields.length - 5 }}
                             </el-tag>
                           </div>
                         </div>
@@ -213,11 +226,25 @@
                       <template v-if="msg._executing">任务执行中...</template>
                       <template v-else-if="msg._done">执行成功</template>
                       <template v-else-if="msg._failed">执行失败</template>
-                      <template v-else>{{ msg.tool_data.action_type === 'export' ? '导出任务确认' : '查询任务确认' }}</template>
+                      <template v-else>{{ msg.tool_data.action_type === 'export' ? '导出任务确认' : msg.tool_data.action_type === 'system_task' ? '系统任务确认' : '查询任务确认' }}</template>
                     </span>
                   </div>
                   <div class="tool-card-body">
                     <p class="tool-confirm-msg">{{ msg.tool_data.confirm_message }}</p>
+                    <!-- 系统任务参数展示 -->
+                    <div v-if="msg.tool_data.action_type === 'system_task' && msg.tool_data.params && msg.tool_data.params.length > 0 && !msg._executing && !msg._done" class="tool-params-preview">
+                      <div v-for="p in msg.tool_data.params" :key="p.name" class="tool-param-row">
+                        <span class="tool-param-label">{{ p.label || p.name }}：</span>
+                        <span class="tool-param-value">
+                          <template v-if="msg.tool_data.params_values && msg.tool_data.params_values[p.name] !== undefined">
+                            {{ msg.tool_data.params_values[p.name] }}
+                          </template>
+                          <template v-else>
+                            <span style="color: #909399">未设置</span>
+                          </template>
+                        </span>
+                      </div>
+                    </div>
                     <p v-if="msg._executing" class="tool-progress-info">
                       <el-progress :percentage="msg._progress || 0" :stroke-width="6" />
                       <span class="tool-progress-text">{{ msg._status_text || '正在初始化...' }}</span>
@@ -265,6 +292,14 @@
                       @click="confirmQuery(msg)"
                     >
                       <i class="fas fa-play"></i> 确认执行查询
+                    </el-button>
+                    <el-button
+                      v-if="msg.tool_data.action_type === 'system_task' && !msg._executing && !msg._done && !msg._failed && !msg._ignored"
+                      type="primary"
+                      size="small"
+                      @click="confirmSystemTask(msg)"
+                    >
+                      <i class="fas fa-play"></i> 确认执行系统任务
                     </el-button>
                     <el-button
                       v-if="!msg._ignored && !msg._executing"
@@ -652,7 +687,15 @@
                 <span class="query-info-label">参数列：</span>
                 <el-tag size="small" type="primary" effect="plain">{{ script.param_column }}</el-tag>
               </div>
-              <div v-if="!script.primary_key && !script.param_column" class="query-info-row">
+              <div v-if="script.query_fields && script.query_fields.length > 0" class="query-info-row query-fields-row">
+                <span class="query-info-label">查询字段：</span>
+                <div class="query-fields-tags">
+                  <el-tag v-for="field in script.query_fields" :key="field" size="small" effect="plain" style="margin: 2px 4px 2px 0">
+                    {{ field }}
+                  </el-tag>
+                </div>
+              </div>
+              <div v-if="!script.primary_key && !script.param_column && (!script.query_fields || script.query_fields.length === 0)" class="query-info-row">
                 <span class="query-info-desc">未配置主键字段，请确保Excel文件包含查询所需的列</span>
               </div>
             </div>
@@ -723,6 +766,82 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 系统任务参数设置对话框 -->
+    <el-dialog
+      v-model="sysTaskParamDialogVisible"
+      title="系统任务参数设置"
+      width="500px"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <div v-if="sysTaskParamDialogTask" class="param-dialog-body">
+        <div class="param-section">
+          <div class="param-section-title">
+            <i class="fas fa-cog"></i> {{ sysTaskParamDialogTask.name }}
+            <el-tag size="small" type="warning" style="margin-left: 8px">{{ sysTaskParamDialogTask.task_type || 'sql' }}</el-tag>
+          </div>
+          <div class="params-card">
+            <div class="param-item" v-for="p in (sysTaskParamDialogTask.params || [])" :key="p.name">
+              <div class="param-item-label">
+                <span class="param-name-tag">{{ p.label || p.name }}</span>
+                <el-tag v-if="p.required" size="small" type="danger" effect="plain">必填</el-tag>
+              </div>
+              <div class="param-item-control">
+                <template v-if="p.enum_enabled && p.enum_mode === 'neq' && p.neq_value">
+                  <div class="neq-param-control">
+                    <span class="neq-param-label">{{ p.label || p.name }}</span>
+                    <el-switch
+                      v-model="sysTaskParamDialogValues[p.name]"
+                      active-text="是"
+                      inactive-text="否"
+                      active-color="#67c23a"
+                      inactive-color="#f56c6c"
+                    />
+                  </div>
+                </template>
+                <el-select
+                  v-else-if="p.enum_enabled && p.enum_values && p.enum_values.length > 0"
+                  v-model="sysTaskParamDialogValues[p.name]"
+                  :multiple="p.multi"
+                  :collapse-tags="p.multi"
+                  :collapse-tags-tooltip="p.multi"
+                  placeholder="请选择"
+                  style="width: 100%"
+                >
+                  <el-option v-for="item in p.enum_values" :key="item.value" :label="item.label" :value="item.value" />
+                </el-select>
+                <template v-else-if="p.type === 'date' || p.type === 'datetime'">
+                  <el-date-picker
+                    v-model="sysTaskParamDialogValues[p.name]"
+                    :type="p.range ? 'daterange' : 'date'"
+                    :start-placeholder="'开始' + (p.label || p.name)"
+                    :end-placeholder="'结束' + (p.label || p.name)"
+                    :placeholder="'请选择' + (p.label || p.name)"
+                    value-format="YYYY-MM-DD"
+                    style="width: 100%"
+                  />
+                </template>
+                <template v-else>
+                  <el-input
+                    v-model="sysTaskParamDialogValues[p.name]"
+                    :type="p.type === 'number' ? 'number' : 'text'"
+                    :placeholder="p.multi ? '请输入多个值，以逗号分隔' : '请输入' + (p.label || p.name)"
+                  />
+                </template>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="sysTaskParamDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="confirmSystemTaskParamDialog">
+          <i class="fas fa-play"></i> 确认执行
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -776,6 +895,12 @@ const queryDialogFileName = ref('')  // 文件名
 const queryDialogRowCount = ref(0)  // 数据行数
 const queryDialogColumns = ref([])  // 解析到的列
 const queryDialogParamColumn = ref('')  // 选择的参数列
+
+// 系统任务参数对话框状态
+const sysTaskParamDialogVisible = ref(false)
+const sysTaskParamDialogMsg = ref(null)  // 关联的select_options卡片消息
+const sysTaskParamDialogTask = ref(null)  // 当前编辑的系统任务
+const sysTaskParamDialogValues = ref({})  // 参数值
 
 // 参数对话框：是否可以确认执行
 const paramDialogCanConfirm = computed(() => {
@@ -1003,7 +1128,7 @@ async function sendMessage() {
     if (res.data?.tool_results && res.data.tool_results.length > 0) {
       for (const tr of res.data.tool_results) {
         const result = tr.result
-        if (result && !result.error && (result.action_type === 'export' || result.action_type === 'query')) {
+        if (result && !result.error && (result.action_type === 'export' || result.action_type === 'query' || result.action_type === 'system_task')) {
           messages.value.push({
             id: tr.message_id || Date.now() + Math.random(),
             role: 'assistant',
@@ -1020,8 +1145,8 @@ async function sendMessage() {
             content: result.message || '',
             _type: 'select_options',
             _select_mode: result._select_mode,
-            _scripts: result.scripts || [],
-            _action_type: result.scripts && result.scripts.length > 0 ? (tr.name === 'list_export_options' ? 'export' : 'query') : '',
+            _scripts: result.scripts || result.tasks || [],
+            _action_type: (result.scripts || result.tasks || []).length > 0 ? (tr.name === 'list_export_options' ? 'export' : tr.name === 'list_system_tasks' ? 'system_task' : 'query') : '',
             _selected: [],
             _params_checked: false,
             _param_values: {},
@@ -1115,10 +1240,23 @@ async function executeSelectedOptions(msg) {
   // 更新选中脚本
   msg._selectedScripts = msg._scripts.filter(s => selectedIds.includes(s.id)) || []
 
-  // 区分导出和查询任务
+  // 区分导出、查询和系统任务
   if (msg._action_type === 'query') {
     // 查询任务：需要上传Excel文件
     openQueryDialog(msg)
+    return
+  }
+
+  if (msg._action_type === 'system_task') {
+    // 系统任务：检查参数
+    const hasAnyParams = msg._selectedScripts.some(s => s.params && s.params.length > 0)
+    if (!hasAnyParams) {
+      // 无参数，直接执行
+      doExecuteSystemTask(msg)
+      return
+    }
+    // 有参数，弹出参数设置对话框
+    openSystemTaskParamDialog(msg)
     return
   }
 
@@ -1303,13 +1441,16 @@ async function handleQueryFileUpload(file) {
       queryDialogColumns.value = res.columns || res.data.column_names || []
       queryDialogFilePath.value = res.file_path || ''
 
-      // 智能匹配参数列：从脚本配置中获取primary_key或默认参数列
+      // 智能匹配参数列：从脚本配置中获取primary_key或param_column
       const selectedScripts = queryDialogMsg.value?._selectedScripts || []
       const defaultParamColumns = []
       for (const s of selectedScripts) {
-        if (s.default_param_column) {
-          const cols = Array.isArray(s.default_param_column) ? s.default_param_column : [s.default_param_column]
-          defaultParamColumns.push(...cols)
+        // 优先使用primary_key，其次使用param_column
+        if (s.primary_key) {
+          defaultParamColumns.push(s.primary_key)
+        }
+        if (s.param_column) {
+          defaultParamColumns.push(s.param_column)
         }
       }
       // 尝试自动匹配参数列
@@ -1918,9 +2059,211 @@ async function confirmQuery(msg) {
     primary_key: td.primary_key || '',
     param_column: td.param_column || '',
     new_sheet: td.new_sheet !== undefined ? td.new_sheet : true,
+    query_fields: td.query_fields || [],
   }]
   msg._action_type = 'query'
   openQueryDialog(msg)
+}
+
+// ============ 系统任务相关函数 ============
+
+// 打开系统任务参数设置对话框
+function openSystemTaskParamDialog(msg) {
+  // 系统任务一次只选一个（如果有多个选中的，逐个处理）
+  const task = msg._selectedScripts[0]
+  if (!task) return
+
+  const values = {}
+  if (task.params) {
+    for (const p of task.params) {
+      if (p.enum_enabled && p.enum_mode === 'neq' && p.neq_value) {
+        values[p.name] = true
+      } else if (p.enum_enabled && p.enum_values && p.enum_values.length > 0) {
+        values[p.name] = p.multi ? [] : ''
+      } else {
+        values[p.name] = ''
+      }
+    }
+  }
+
+  sysTaskParamDialogMsg.value = msg
+  sysTaskParamDialogTask.value = task
+  sysTaskParamDialogValues.value = values
+  sysTaskParamDialogVisible.value = true
+}
+
+// 确认系统任务参数并执行
+async function confirmSystemTaskParamDialog() {
+  const msg = sysTaskParamDialogMsg.value
+  const task = sysTaskParamDialogTask.value
+  if (!msg || !task) return
+
+  // 将参数值写入卡片消息
+  msg._param_values = { ...sysTaskParamDialogValues.value }
+  msg._params_checked = true
+
+  sysTaskParamDialogVisible.value = false
+  await nextTick()
+  doExecuteSystemTask(msg)
+}
+
+// 确认系统任务（从tool卡片确认按钮触发）
+async function confirmSystemTask(msg) {
+  const td = msg.tool_data
+  msg._selected = [td.task_id]
+  msg._selectedScripts = [{
+    id: td.task_id,
+    name: td.task_name || '系统任务',
+    task_type: td.task_type || 'sql',
+    params: td.params || [],
+  }]
+  msg._action_type = 'system_task'
+
+  // 如果有参数值，直接执行；否则弹出参数设置
+  const hasParams = td.params && td.params.length > 0
+  if (hasParams) {
+    msg._param_values = td.params_values || {}
+    msg._params_checked = true
+  }
+
+  doExecuteSystemTask(msg)
+}
+
+// 实际执行系统任务
+async function doExecuteSystemTask(msg) {
+  msg._executing = true
+  msg._progress = 5
+  msg._status_text = '正在初始化系统任务...'
+  msg._done = false
+  msg._failed = false
+  msg._error_msg = ''
+
+  try {
+    const task = msg._selectedScripts[0]
+    if (!task) throw new Error('未选择系统任务')
+
+    const params_values = {}
+    if (msg._param_values && task.params) {
+      for (const p of task.params) {
+        const val = msg._param_values[p.name]
+        if (val !== undefined && val !== '' && val !== null) {
+          params_values[p.name] = val
+        }
+      }
+    }
+
+    const res = await api.systemTask.execute(task.id, { params_values })
+    if (!res.execution_id && !res.data?.execution_id) {
+      throw new Error('未获取到执行ID')
+    }
+    const executionId = res.execution_id || res.data?.execution_id
+    await pollSystemTaskStatus(executionId, msg)
+  } catch (e) {
+    msg._executing = false
+    msg._failed = true
+    msg._error_msg = e.message || '未知错误'
+    saveMessageState(msg)
+    await nextTick()
+    scrollToBottom()
+  }
+}
+
+// 轮询系统任务状态
+function pollSystemTaskStatus(executionId, msg) {
+  const statusTextMap = {
+    pending: '任务等待中...',
+    running: '正在执行系统任务...',
+    completed: '执行完成',
+    failed: '执行失败',
+    cancelled: '已取消',
+  }
+
+  return new Promise((resolve) => {
+    let pollCount = 0
+    const maxPolls = 300
+    const poll = async () => {
+      try {
+        pollCount++
+        if (pollCount > maxPolls) {
+          msg._executing = false
+          msg._failed = true
+          msg._error_msg = '任务执行超时'
+          msg._status_text = '执行超时'
+          resolve()
+          return
+        }
+
+        const res = await api.systemTask.getExecution(executionId)
+        const execution = res.data
+        if (!execution) {
+          setTimeout(poll, 2000)
+          return
+        }
+
+        msg._progress = execution.progress || 0
+        msg._status_text = statusTextMap[execution.status] || '执行中...'
+
+        if (execution.status === 'completed') {
+          msg._executing = false
+          msg._done = true
+          msg._progress = 100
+          msg._status_text = '执行完成'
+          saveMessageState(msg)
+
+          const taskName = msg._selectedScripts?.map(s => s.name).join('、') || '系统任务'
+          const feedbackContent = `✅ 系统任务 **${taskName}** 已完成！\n\n- 执行ID：\`${executionId}\``
+          let feedbackId = Date.now()
+          try {
+            const fbRes = await api.ai.createMessage(currentChatId.value, { content: feedbackContent })
+            feedbackId = fbRes.data?.id || feedbackId
+          } catch {}
+          messages.value.push({ id: feedbackId, role: 'assistant', content: feedbackContent })
+          await nextTick()
+          scrollToBottom()
+          resolve()
+          return
+        }
+
+        if (execution.status === 'failed') {
+          msg._executing = false
+          msg._failed = true
+          msg._error_msg = execution.error_message || '执行失败'
+          msg._ai_suggestion = execution.ai_suggestion || null
+          msg._status_text = '执行失败'
+          saveMessageState(msg)
+
+          const taskName = msg._selectedScripts?.map(s => s.name).join('、') || '系统任务'
+          let failContent = `❌ 系统任务执行失败：**${taskName}**`
+          failContent += `\n\n**错误信息：** ${msg._error_msg}`
+          if (msg._ai_suggestion) {
+            failContent += `\n\n**AI修正建议：**\n${msg._ai_suggestion}`
+          }
+          let failId = Date.now()
+          try {
+            const fbRes = await api.ai.createMessage(currentChatId.value, { content: failContent })
+            failId = fbRes.data?.id || failId
+          } catch {}
+          messages.value.push({ id: failId, role: 'assistant', content: failContent })
+          await nextTick()
+          scrollToBottom()
+          resolve()
+          return
+        }
+
+        setTimeout(poll, 1500)
+      } catch (e) {
+        msg._executing = false
+        msg._failed = true
+        msg._error_msg = '轮询任务状态失败: ' + (e.message || '未知错误')
+        msg._status_text = '轮询失败'
+        saveMessageState(msg)
+        await nextTick()
+        scrollToBottom()
+        resolve()
+      }
+    }
+    poll()
+  })
 }
 
 onMounted(() => {
@@ -2470,6 +2813,42 @@ onMounted(() => {
   margin-top: 4px;
 }
 
+.select-option-query-info {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+/* 系统任务参数预览 */
+.tool-params-preview {
+  margin: 8px 0;
+  padding: 8px 12px;
+  background: #f5f7fa;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.tool-param-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.tool-param-row:last-child {
+  margin-bottom: 0;
+}
+
+.tool-param-label {
+  color: #606266;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.tool-param-value {
+  color: #303133;
+}
+
 /* 执行中状态（置灰） */
 .tool-card.select-card.executing {
   border-color: #b0b5bd;
@@ -2695,6 +3074,18 @@ onMounted(() => {
 .query-info-desc {
   color: #909399;
   font-size: 12px;
+}
+
+.query-fields-row {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.query-fields-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  flex: 1;
 }
 
 .query-dialog-step {

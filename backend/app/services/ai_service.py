@@ -110,6 +110,49 @@ AI_TOOLS = [
                 "required": ["query_option_name", "description"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_system_tasks",
+            "description": "列出所有可用的系统任务，包括名称、描述、任务类型、参数配置等信息。当用户提到需要执行系统任务、定时任务、自动化任务时调用此工具。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {
+                        "type": "string",
+                        "description": "可选，按名称或描述筛选的关键词"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "request_system_task",
+            "description": "当用户明确要执行系统任务时调用此工具。需要指定系统任务名称和参数值。注意：必须从用户的自然语言描述中提取所有可能的参数值填入params对象。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "system_task_name": {
+                        "type": "string",
+                        "description": "要执行的系统任务名称"
+                    },
+                    "params": {
+                        "type": "object",
+                        "description": "参数键值对，键为参数名，值为用户提供的参数值。务必从用户描述中提取所有参数值。",
+                        "additionalProperties": {"type": "string"}
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "用户原始需求的简要描述"
+                    }
+                },
+                "required": ["system_task_name", "description"]
+            }
+        }
     }
 ]
 
@@ -328,6 +371,10 @@ class AiService:
             return AiService._tool_request_export(args, user_id)
         elif tool_name == 'request_query':
             return AiService._tool_request_query(args, user_id)
+        elif tool_name == 'list_system_tasks':
+            return AiService._tool_list_system_tasks(args, user_id)
+        elif tool_name == 'request_system_task':
+            return AiService._tool_request_system_task(args, user_id)
         else:
             return {'error': f'未知工具: {tool_name}'}
 
@@ -389,6 +436,8 @@ class AiService:
             if keyword and keyword not in s.name.lower() and keyword not in (s.description or '').lower():
                 continue
             params = s.get_params_config()
+            # 从SQL中提取查询字段
+            query_fields = AiService._extract_select_columns(s.sql_text or '')
             item = {
                 'id': s.id,
                 'name': s.name,
@@ -397,9 +446,135 @@ class AiService:
                 'primary_key': s.primary_key or '',
                 'param_column': s.param_column or '',
                 'new_sheet': s.new_sheet if s.new_sheet is not None else True,
+                'query_fields': query_fields,
             }
             result.append(item)
         return {'scripts': result, 'total': len(result)}
+
+    @staticmethod
+    def _extract_select_columns(sql_text: str) -> list:
+        """从SQL语句中提取SELECT的列名"""
+        if not sql_text:
+            return []
+        import re
+        columns = []
+        # 匹配 SELECT ... FROM 模式（支持多行、大小写不敏感）
+        # 先移除注释
+        clean_sql = re.sub(r'--.*$', '', sql_text, flags=re.MULTILINE)
+        clean_sql = re.sub(r'/\*.*?\*/', '', clean_sql, flags=re.DOTALL)
+
+        # 查找所有SELECT...FROM块
+        select_pattern = re.compile(
+            r'\bSELECT\s+(.*?)\bFROM\b',
+            re.IGNORECASE | re.DOTALL
+        )
+        for match in select_pattern.finditer(clean_sql):
+            select_part = match.group(1).strip()
+            if select_part == '*':
+                columns.append('*')
+                continue
+            # 拆分列（注意处理嵌套括号和子查询）
+            parts = []
+            depth = 0
+            current = []
+            for char in select_part:
+                if char == '(':
+                    depth += 1
+                elif char == ')':
+                    depth -= 1
+                elif char == ',' and depth == 0:
+                    parts.append(''.join(current).strip())
+                    current = []
+                    continue
+                current.append(char)
+            if current:
+                parts.append(''.join(current).strip())
+
+            for part in parts:
+                # 提取别名或列名
+                part = part.strip()
+                if not part:
+                    continue
+                # 处理 AS alias 或 空格alias
+                alias_match = re.search(r'\b(?:AS|as)\s+["\`]?(\w+)["\`]?\s*$', part)
+                if alias_match:
+                    columns.append(alias_match.group(1))
+                    continue
+                # 处理 table.column 或 column
+                # 去掉函数调用，取最后的标识符
+                dot_match = re.search(r'["\`]?(\w+)["\`]?\s*$', part)
+                if dot_match:
+                    col = dot_match.group(1)
+                    # 过滤掉SQL关键字
+                    if col.upper() not in ('SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'NOT',
+                                            'GROUP', 'ORDER', 'BY', 'HAVING', 'LIMIT',
+                                            'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER',
+                                            'ON', 'AS', 'DISTINCT', 'ALL', 'TOP'):
+                        columns.append(col)
+        return columns
+
+    @staticmethod
+    def _tool_list_system_tasks(args: dict, user_id: int = None) -> dict:
+        """列出系统任务（按用户权限过滤）"""
+        from app.models.system_task import SystemTask
+        keyword = args.get('keyword', '').lower()
+        tasks = SystemTask.query.filter_by(is_enabled=True).all()
+        result = []
+        for t in tasks:
+            if keyword and keyword not in t.name.lower() and keyword not in (t.description or '').lower():
+                continue
+            params = t.get_params_config()
+            result.append({
+                'id': t.id,
+                'name': t.name,
+                'description': t.description or '',
+                'task_type': t.task_type or 'sql',
+                'params': params or [],
+            })
+        return {'tasks': result, 'total': len(result)}
+
+    @staticmethod
+    def _tool_request_system_task(args: dict, user_id: int = None) -> dict:
+        """处理系统任务执行请求 - 返回结构化信息供前端确认"""
+        from app.models.system_task import SystemTask
+        from app.models.user import User
+        task_name = args.get('system_task_name', '')
+        desc = args.get('description', '')
+        params = args.get('params', {})
+
+        task = SystemTask.query.filter_by(name=task_name, is_enabled=True).first()
+        if not task:
+            task = SystemTask.query.filter(
+                SystemTask.name.like(f'%{task_name}%'),
+                SystemTask.is_enabled == True
+            ).first()
+
+        if not task:
+            return {'error': f'未找到名为"{task_name}"的系统任务'}
+
+        # 权限校验（仅管理员可执行系统任务）
+        if user_id:
+            user = User.query.get(user_id)
+            if user and not user.is_admin():
+                return {'error': f'你没有权限执行系统任务"{task.name}"，仅管理员可执行'}
+
+        # 标准化neq参数
+        task_params = task.get_params_config() or []
+        if params:
+            for p in task_params:
+                if p.get('enum_mode') == 'neq' and p.get('neq_value') and p.get('name') in params:
+                    params[p['name']] = AiService._normalize_neq_value(params[p['name']])
+
+        return {
+            'action_type': 'system_task',
+            'task_id': task.id,
+            'task_name': task.name,
+            'task_type': task.task_type or 'sql',
+            'description': desc,
+            'params': task_params,
+            'params_values': params,
+            'confirm_message': f'AI 准备执行系统任务：{task.name}'
+        }
 
     @staticmethod
     def _normalize_neq_value(value: str) -> bool:
@@ -523,5 +698,6 @@ class AiService:
             'primary_key': script.primary_key or '',
             'param_column': script.param_column or '',
             'new_sheet': script.new_sheet if script.new_sheet is not None else True,
+            'query_fields': AiService._extract_select_columns(script.sql_text or ''),
             'confirm_message': f'AI 准备执行查询：{script.name}'
         }
