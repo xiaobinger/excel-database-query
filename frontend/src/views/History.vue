@@ -212,9 +212,9 @@
           </div>
         </div>
 
-        <div class="log-section">
+        <div v-if="detailData.is_admin" class="log-section">
           <div class="log-header">
-            <span>执行日志</span>
+            <span>执行日志（仅管理员可见）</span>
             <el-button size="small" text @click="refreshDetail">
               <i class="fas fa-sync-alt"></i> 刷新
             </el-button>
@@ -335,7 +335,9 @@ async function openDetail(row) {
   if (!taskId) return
 
   try {
-    const res = await api.query.status(taskId)
+    // 根据任务类型选择正确的状态接口
+    const isExport = row.type === 'export'
+    const res = isExport ? await api.export.status(taskId) : await api.query.status(taskId)
     const data = res.data || res || {}
     detailData.value = data
     detailLogs.value = data.logs || []
@@ -358,7 +360,8 @@ async function refreshDetail() {
   const taskId = detailData.value.task_id
   if (!taskId) return
   try {
-    const res = await api.query.status(taskId)
+    const isExport = detailData.value.type === 'export'
+    const res = isExport ? await api.export.status(taskId) : await api.query.status(taskId)
     const data = res.data || res || {}
     detailData.value = data
     detailLogs.value = data.logs || []
