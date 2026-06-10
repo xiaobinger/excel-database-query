@@ -1,6 +1,8 @@
 import json
 import logging
-from flask import Blueprint, request, jsonify, Response, stream_with_context
+import os
+import uuid
+from flask import Blueprint, request, jsonify, Response, stream_with_context, current_app
 from app import db
 from app.models.ai_config import AiConfig
 from app.models.ai_skill import AiSkill
