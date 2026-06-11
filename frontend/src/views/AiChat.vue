@@ -1077,6 +1077,210 @@ async function handleFileUpload(file) {
   return false // prevent default upload
 }
 
+// 判断用户消息是否包含查询意图
+function isQueryIntent(text) {
+  if (!text) return true // 仅上传文件也视为查询意图
+  const queryKeywords = ['查询', '查', '匹配', '比对', '查询任务', '执行查询', '查一下', '帮我查', '查数据']
+  const lowerText = text.toLowerCase()
+  return queryKeywords.some(kw => lowerText.includes(kw))
+}
+
+// 尝试智能匹配查询选项并执行
+async function trySmartMatchQuery(fileInfo, text) {
+  try {
+    const matchRes = await api.query.smartMatch(fileInfo.filename)
+    const matchedIds = matchRes.matched_script_ids || []
+    const matchedScripts = matchRes.matched_scripts || []
+
+    if (matchedIds.length === 0) {
+      return false // 未匹配到，走AI对话流程
+    }
+
+    const isDirect = matchRes.direct === true
+    const defaultParamColumn = matchRes.default_param_column || []
+
+    // 创建查询执行卡片消息
+    const cardMsg = {
+      id: Date.now() + Math.random(),
+      role: 'assistant',
+      content: '',
+      _type: 'select_options',
+      _action_type: 'query',
+      _scripts: matchedScripts.map(s => ({
+        ...s,
+        params: [],
+        query_fields: s.query_fields || [],
+      })),
+      _selected: matchedIds,
+      _selectedScripts: matchedScripts.map(s => ({
+        ...s,
+        params: [],
+        query_fields: s.query_fields || [],
+      })),
+      _select_mode: 'multi',
+      _select_message: `智能匹配到 ${matchedScripts.length} 个查询选项`,
+      _executing: false,
+      _done: false,
+      _failed: false,
+      _ignored: false,
+      _progress: 0,
+      _status_text: '',
+      _error_msg: '',
+      _download_url: '',
+    }
+    messages.value.push(cardMsg)
+    await nextTick()
+    scrollToBottom()
+
+    if (isDirect) {
+      // direct模式：自动执行查询任务
+      await smartMatchDirectExecute(cardMsg, fileInfo, defaultParamColumn)
+    } else {
+      // 非direct模式：弹出确认对话框
+      cardMsg._select_message = `智能匹配到 ${matchedScripts.length} 个查询选项，请确认执行`
+      // 打开查询对话框
+      openQueryDialogForSmartMatch(cardMsg, fileInfo, defaultParamColumn)
+    }
+
+    return true
+  } catch (e) {
+    console.error('智能匹配失败:', e)
+    return false
+  }
+}
+
+// 智能匹配direct模式：自动执行查询
+async function smartMatchDirectExecute(cardMsg, fileInfo, defaultParamColumn) {
+  // 设置卡片为执行中
+  cardMsg._executing = true
+  cardMsg._progress = 5
+  cardMsg._status_text = '正在智能匹配参数列...'
+  cardMsg._done = false
+  cardMsg._failed = false
+
+  await nextTick()
+  scrollToBottom()
+
+  try {
+    // 智能匹配参数列
+    let paramColumn = ''
+    const columns = fileInfo.columns || []
+
+    // 1. 优先使用脚本配置的primary_key/param_column
+    const selectedScripts = cardMsg._selectedScripts || []
+    for (const s of selectedScripts) {
+      if (s.primary_key && columns.includes(s.primary_key)) {
+        paramColumn = s.primary_key
+        break
+      }
+      if (s.param_column && columns.includes(s.param_column)) {
+        paramColumn = s.param_column
+        break
+      }
+    }
+
+    // 2. 使用smart-match返回的default_param_column
+    if (!paramColumn && defaultParamColumn.length > 0) {
+      for (const kw of defaultParamColumn) {
+        const found = columns.find(c => c.includes(kw))
+        if (found) {
+          paramColumn = found
+          break
+        }
+      }
+    }
+
+    // 3. 使用第一列
+    if (!paramColumn && columns.length > 0) {
+      paramColumn = columns[0]
+    }
+
+    if (!paramColumn) {
+      throw new Error('无法自动匹配参数列，请手动执行查询任务')
+    }
+
+    cardMsg._status_text = `参数列：${paramColumn}，正在执行查询...`
+    cardMsg._progress = 10
+    await nextTick()
+
+    // 决定是否新建工作表
+    const newSheet = selectedScripts.some(s => s.new_sheet === false) ? 'false' : 'true'
+
+    // 构建FormData执行查询
+    const formData = new FormData()
+    formData.append('script_ids', JSON.stringify(cardMsg._selected))
+    // 使用已上传到服务器的文件路径
+    if (fileInfo.file_path) {
+      formData.append('file_path', fileInfo.file_path)
+    }
+    formData.append('param_column', paramColumn)
+    formData.append('new_sheet', newSheet)
+
+    const res = await api.query.execute(formData)
+    const taskId = res.task_id || res.data?.task_id
+    if (!taskId) {
+      throw new Error('未获取到任务ID')
+    }
+
+    await pollQueryTaskStatus(taskId, cardMsg)
+  } catch (e) {
+    cardMsg._executing = false
+    cardMsg._failed = true
+    cardMsg._error_msg = e.message || '智能匹配执行失败'
+    cardMsg._status_text = '执行失败'
+    saveMessageState(cardMsg)
+    await nextTick()
+    scrollToBottom()
+  }
+}
+
+// 智能匹配非direct模式：打开查询对话框
+function openQueryDialogForSmartMatch(cardMsg, fileInfo, defaultParamColumn) {
+  queryDialogMsg.value = cardMsg
+  queryDialogStep.value = 2 // 跳过上传步骤，直接到确认
+  queryDialogFile.value = null // 不需要再上传
+  queryDialogFilePath.value = fileInfo.file_path || ''
+  queryDialogFileName.value = fileInfo.filename || ''
+  queryDialogRowCount.value = fileInfo.row_count || 0
+  queryDialogColumns.value = fileInfo.columns || []
+
+  // 智能匹配参数列
+  const columns = fileInfo.columns || []
+  const selectedScripts = cardMsg._selectedScripts || []
+
+  // 1. 优先使用脚本配置的primary_key/param_column
+  let paramColumn = ''
+  for (const s of selectedScripts) {
+    if (s.primary_key && columns.includes(s.primary_key)) {
+      paramColumn = s.primary_key
+      break
+    }
+    if (s.param_column && columns.includes(s.param_column)) {
+      paramColumn = s.param_column
+      break
+    }
+  }
+
+  // 2. 使用smart-match返回的default_param_column
+  if (!paramColumn && defaultParamColumn.length > 0) {
+    for (const kw of defaultParamColumn) {
+      const found = columns.find(c => c.includes(kw))
+      if (found) {
+        paramColumn = found
+        break
+      }
+    }
+  }
+
+  // 3. 使用第一列
+  if (!paramColumn && columns.length > 0) {
+    paramColumn = columns[0]
+  }
+
+  queryDialogParamColumn.value = paramColumn
+  queryDialogVisible.value = true
+}
+
 async function sendMessage() {
   const text = inputText.value.trim()
   if ((!text && !uploadedFile.value) || loading.value) return
@@ -1102,6 +1306,7 @@ async function sendMessage() {
   messages.value.push(userMsg)
 
   // Show file as separate bubble
+  const currentUploadedFile = uploadedFile.value ? { ...uploadedFile.value } : null
   if (uploadedFile.value) {
     messages.value.push({
       id: Date.now() + 1,
@@ -1113,8 +1318,21 @@ async function sendMessage() {
     })
   }
 
+  // 清除上传文件状态
+  uploadedFile.value = null
+
   await nextTick()
   scrollToBottom()
+
+  // 智能匹配：如果用户上传了文件且消息包含查询意图，尝试智能匹配查询选项
+  if (currentUploadedFile && isQueryIntent(text)) {
+    const smartMatchResult = await trySmartMatchQuery(currentUploadedFile, text)
+    if (smartMatchResult) {
+      loading.value = false
+      return
+    }
+    // 智能匹配失败，继续走AI对话流程
+  }
 
   try {
     const res = await api.ai.sendMessage(currentChatId.value, { content: content })
@@ -1503,7 +1721,14 @@ async function doExecuteQuery(msg) {
   try {
     const formData = new FormData()
     formData.append('script_ids', JSON.stringify(msg._selected))
-    formData.append('file', queryDialogFile.value)
+
+    // 文件来源：1.对话框上传的文件 2.智能匹配时已上传到服务器的文件路径
+    if (queryDialogFile.value) {
+      formData.append('file', queryDialogFile.value)
+    } else if (queryDialogFilePath.value) {
+      formData.append('file_path', queryDialogFilePath.value)
+    }
+
     formData.append('param_column', queryDialogParamColumn.value)
     // 根据脚本配置决定是否新建工作表
     const newSheet = msg._selectedScripts?.some(s => s.new_sheet === false) ? 'false' : 'true'

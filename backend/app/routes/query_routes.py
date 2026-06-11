@@ -53,26 +53,32 @@ def execute_query():
         if not script_ids:
             return jsonify({'success': False, 'message': 'No permission to use the selected query options'}), 403
 
-    if 'file' not in request.files:
+    if 'file' not in request.files and not request.form.get('file_path'):
         return jsonify({'success': False, 'message': '未上传文件'}), 400
 
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'success': False, 'message': '未选择文件'}), 400
+    # 文件来源：1.新上传的文件 2.已上传到服务器的文件路径
+    file_path_param = request.form.get('file_path', '')
+    if file_path_param and os.path.isfile(file_path_param):
+        input_path = file_path_param
+    else:
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'message': '未上传文件'}), 400
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'success': False, 'message': '未选择文件'}), 400
 
-    allowed_ext = {'xlsx', 'xls'}
-    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
-    if ext not in allowed_ext:
-        return jsonify({'success': False, 'message': '仅支持 xlsx/xls 格式'}), 400
+        allowed_ext = {'xlsx', 'xls'}
+        ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+        if ext not in allowed_ext:
+            return jsonify({'success': False, 'message': '仅支持 xlsx/xls 格式'}), 400
 
-    try:
         upload_dir = current_app.config['UPLOAD_FOLDER']
         os.makedirs(upload_dir, exist_ok=True)
-
         filename = f"{uuid.uuid4().hex[:8]}_{file.filename}"
         input_path = os.path.join(upload_dir, filename)
         file.save(input_path)
 
+    try:
         output_dir = current_app.config['OUTPUT_FOLDER']
         os.makedirs(output_dir, exist_ok=True)
 
