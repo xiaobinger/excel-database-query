@@ -459,12 +459,11 @@ def send_message(chat_id):
 
     db.session.commit()
 
-    # Get AI config
-    ai_config = AiConfig.query.filter_by(is_default=True, is_active=True).first()
-    if not ai_config:
-        ai_config = AiConfig.query.filter_by(is_active=True).first()
+    # Get ordered AI configs from strategy (with failover support)
+    from app.services.ai_service import AiService
+    ordered_configs = AiService.get_ordered_configs()
 
-    if not ai_config:
+    if not ordered_configs:
         assistant_message = AiChatMessage(
             chat_id=chat_id,
             role='assistant',
@@ -477,9 +476,10 @@ def send_message(chat_id):
             'assistant_message': assistant_message.to_dict(),
         }})
 
+    ai_config = ordered_configs[0]  # Primary config for system prompt
+
     # Build context with skills and behaviors
     try:
-        from app.services.ai_service import AiService
         context = AiService.build_chat_context(current_user.id, chat_id)
 
         # Get chat history
@@ -506,8 +506,8 @@ def send_message(chat_id):
         for msg in history:
             messages.append({'role': msg.role, 'content': msg.content})
 
-        # Call AI with function calling
-        ai_response = AiService.chat_with_tools(ai_config, messages)
+        # Call AI with failover support
+        ai_response = AiService.chat_with_failover(messages, use_tools=True)
         response_text = ai_response['content']
         tool_calls = ai_response['tool_calls']
         tokens = ai_response['tokens']
@@ -560,8 +560,8 @@ def send_message(chat_id):
                 if func_name == 'list_system_tasks' and result.get('total') == 1 and not result.get('error'):
                     task = result['tasks'][0]
                     logger.info(f'匹配到唯一系统任务: {task["name"]}，等待AI二次回复')
-                elif func_name == 'list_system_tasks' and not result.get('error'):
-                    if result.get('total', 0) > 1:
+                if func_name == 'list_system_tasks' and not result.get('error'):
+                    if result.get('total', 0) >= 1:
                         result['_select_mode'] = 'multi'
                         result['message'] = f'找到 {result["total"]} 个匹配的系统任务，请勾选后执行'
                     elif result.get('total', 0) == 0:
@@ -599,7 +599,7 @@ def send_message(chat_id):
                 # 非操作型工具（如列出选项），请求AI二次回复（支持工具调用）
                 # 使用 AiService.chat_with_tools 让AI有机会调用 request_export/request_query
                 try:
-                    ai_response2 = AiService.chat_with_tools(ai_config, messages)
+                    ai_response2 = AiService.chat_with_failover(messages, use_tools=True)
                     response_text = ai_response2['content']
                     second_tool_calls = ai_response2['tool_calls']
                     tokens = ai_response2['tokens']
@@ -846,4 +846,5 @@ def admin_restore_chat(chat_id):
 
     chat.is_deleted = False
     db.session.commit()
+    return jsonify({'success': True, 'message': '恢复成功'})
     return jsonify({'success': True, 'message': '恢复成功'})

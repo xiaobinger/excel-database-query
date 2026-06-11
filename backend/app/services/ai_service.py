@@ -190,8 +190,96 @@ class AiService:
         }
 
     @staticmethod
+    def get_ordered_configs() -> list:
+        """根据策略返回有序的模型配置列表，支持故障转移"""
+        from app.models.ai_strategy import AiStrategy
+        from app.models.ai_config import AiConfig
+        from app import db
+
+        strategy = AiStrategy.query.filter_by(is_active=True).first()
+        if not strategy:
+            # 无策略时回退到默认配置
+            config = AiConfig.query.filter_by(is_default=True, is_active=True).first()
+            if not config:
+                config = AiConfig.query.filter_by(is_active=True).first()
+            return [config] if config else []
+
+        model_ids = strategy.get_model_ids()
+        if not model_ids:
+            config = AiConfig.query.filter_by(is_default=True, is_active=True).first()
+            if not config:
+                config = AiConfig.query.filter_by(is_active=True).first()
+            return [config] if config else []
+
+        configs = []
+        for mid in model_ids:
+            cfg = AiConfig.query.get(mid)
+            if cfg and cfg.is_active:
+                configs.append(cfg)
+
+        if not configs:
+            config = AiConfig.query.filter_by(is_active=True).first()
+            return [config] if config else []
+
+        # 根据策略类型重新排序
+        if strategy.strategy_type == 'round_robin':
+            idx = strategy.get_next_round_robin_index(len(configs))
+            configs = configs[idx:] + configs[:idx]
+            db.session.commit()
+        elif strategy.strategy_type == 'token_balanced':
+            usage = strategy.get_token_usage()
+            configs.sort(key=lambda c: usage.get(str(c.id), 0))
+        # priority 和 temperature 保持原顺序（priority已按优先级排列）
+        # temperature 策略可以根据模型温度重排，暂时保持 priority 顺序
+
+        return configs
+
+    @staticmethod
+    def chat_with_failover(messages: list, use_tools: bool = False) -> Tuple:
+        """支持故障转移的AI调用，自动尝试多个模型"""
+        from app.models.ai_strategy import AiStrategy
+        from app import db
+
+        configs = AiService.get_ordered_configs()
+        if not configs:
+            raise ValueError('没有可用的AI模型配置')
+
+        strategy = AiStrategy.query.filter_by(is_active=True).first()
+        failover = strategy.failover_enabled if strategy else True
+        max_retries = strategy.failover_max_retries if strategy else 3
+        timeout = strategy.failover_timeout if strategy else 120
+
+        last_error = None
+        for i, config in enumerate(configs):
+            if not failover and i > 0:
+                break
+            try:
+                logger.info(f"尝试使用模型: {config.name} ({config.model_name})")
+                if use_tools:
+                    result = AiService.chat_with_tools(config, messages)
+                    # 记录token消耗
+                    if strategy and result.get('tokens'):
+                        strategy.record_token_usage(config.id, result['tokens'])
+                        db.session.commit()
+                    return result
+                else:
+                    content, tokens = AiService.chat(config, messages)
+                    if strategy and tokens:
+                        strategy.record_token_usage(config.id, tokens)
+                        db.session.commit()
+                    return content, tokens
+            except Exception as e:
+                last_error = e
+                logger.warning(f"模型 {config.name} 调用失败: {str(e)}，尝试下一个")
+                if not failover:
+                    raise
+                continue
+
+        raise ValueError(f'所有模型均调用失败，最后错误: {str(last_error)}')
+
+    @staticmethod
     def chat(config, messages: list) -> Tuple[str, int]:
-        """调用AI对话"""
+        """调用AI对话（单模型）"""
         api_key = config.get_api_key()
         if not api_key:
             raise ValueError('API密钥未配置')
@@ -517,8 +605,20 @@ class AiService:
     def _tool_list_system_tasks(args: dict, user_id: int = None) -> dict:
         """列出系统任务（按用户权限过滤）"""
         from app.models.system_task import SystemTask
+        from app.models.user import User
         keyword = args.get('keyword', '').lower()
         tasks = SystemTask.query.filter_by(is_enabled=True).all()
+
+        # 用户权限过滤
+        if user_id:
+            user = User.query.get(user_id)
+            if user and not user.is_admin():
+                allowed_ids = set(user.get_system_task_ids() or [])
+                if allowed_ids:
+                    tasks = [t for t in tasks if t.id in allowed_ids]
+                else:
+                    tasks = []
+
         result = []
         for t in tasks:
             if keyword and keyword not in t.name.lower() and keyword not in (t.description or '').lower():
@@ -552,11 +652,13 @@ class AiService:
         if not task:
             return {'error': f'未找到名为"{task_name}"的系统任务'}
 
-        # 权限校验（仅管理员可执行系统任务）
+        # 权限校验
         if user_id:
             user = User.query.get(user_id)
             if user and not user.is_admin():
-                return {'error': f'你没有权限执行系统任务"{task.name}"，仅管理员可执行'}
+                allowed_ids = set(user.get_system_task_ids() or [])
+                if not allowed_ids or task.id not in allowed_ids:
+                    return {'error': f'你没有权限执行系统任务"{task.name}"'}
 
         # 标准化neq参数
         task_params = task.get_params_config() or []
