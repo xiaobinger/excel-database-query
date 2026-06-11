@@ -25,15 +25,11 @@
         </el-menu-item>
         <el-menu-item v-if="store.hasMenuPermission('scripts')" index="/scripts">
           <i class="fas fa-clipboard-list"></i>
-          <template #title>查询选项</template>
+          <template #title>脚本管理</template>
         </el-menu-item>
         <el-menu-item v-if="store.hasMenuPermission('query')" index="/query">
           <i class="fas fa-play-circle"></i>
           <template #title>查询执行</template>
-        </el-menu-item>
-        <el-menu-item v-if="store.hasMenuPermission('exports')" index="/exports">
-          <i class="fas fa-file-export"></i>
-          <template #title>导出选项</template>
         </el-menu-item>
         <el-menu-item v-if="store.hasMenuPermission('export_exec')" index="/export-exec">
           <i class="fas fa-download"></i>
@@ -74,6 +70,10 @@
         <el-menu-item v-if="store.hasMenuPermission('business_systems')" index="/business">
           <i class="fas fa-th-large"></i>
           <template #title>业务系统</template>
+        </el-menu-item>
+        <el-menu-item v-if="store.hasMenuPermission('system_tasks')" index="/system-tasks">
+          <i class="fas fa-cogs"></i>
+          <template #title>系统任务</template>
         </el-menu-item>
       </el-menu>
     </el-aside>
@@ -178,9 +178,8 @@ const displayName = computed(() => {
 const titleMap = {
   '/': '仪表盘',
   '/databases': '数据库管理',
-  '/scripts': '查询选项',
+  '/scripts': '脚本管理',
   '/query': '查询执行',
-  '/exports': '导出选项',
   '/export-exec': '导出任务',
   '/auto-export': '自动导出',
   '/system': '系统配置',
@@ -190,7 +189,8 @@ const titleMap = {
   '/ai-chat': 'AI 助手',
   '/ai-sessions': 'AI会话管理',
   '/skills': 'Skills',
-  '/business': '业务系统'
+  '/business': '业务系统',
+  '/system-tasks': '系统任务'
 }
 
 const currentTitle = computed(() => titleMap[route.path] || '仪表盘')

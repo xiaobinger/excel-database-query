@@ -107,9 +107,14 @@
           <div class="ai-section">
             <div class="ai-header">
               <p class="ai-desc">配置AI模型，用于智能对话、SQL生成、行为学习等功能。</p>
-              <el-button type="primary" size="small" @click="openAiConfigDialog()">
-                <i class="fas fa-plus"></i> 添加配置
-              </el-button>
+              <div>
+                <el-button type="warning" size="small" @click="openStrategyDialog()">
+                  <i class="fas fa-random"></i> 策略配置
+                </el-button>
+                <el-button type="primary" size="small" @click="openAiConfigDialog()">
+                  <i class="fas fa-plus"></i> 添加配置
+                </el-button>
+              </div>
             </div>
 
             <el-table :data="aiConfigs" stripe style="width: 100%; margin-top: 16px">
@@ -188,6 +193,73 @@
               <template #footer>
                 <el-button @click="aiConfigDialogVisible = false">取消</el-button>
                 <el-button type="primary" :loading="savingAiConfig" @click="handleSaveAiConfig">保存</el-button>
+              </template>
+            </el-dialog>
+
+            <!-- Strategy Dialog -->
+            <el-dialog v-model="strategyDialogVisible" title="AI模型调度策略" width="650px" destroy-on-close>
+              <el-form :model="strategyForm" label-width="120px">
+                <el-form-item label="策略名称">
+                  <el-input v-model="strategyForm.name" placeholder="如: 默认策略" />
+                </el-form-item>
+                <el-form-item label="启用策略">
+                  <el-switch v-model="strategyForm.is_active" active-text="启用" inactive-text="禁用" />
+                  <span style="margin-left: 12px; color: #909399; font-size: 12px">启用后将按策略调度模型，禁用时使用默认模型</span>
+                </el-form-item>
+                <el-divider />
+                <el-form-item label="调度策略">
+                  <el-radio-group v-model="strategyForm.strategy_type">
+                    <el-radio value="priority">优先级</el-radio>
+                    <el-radio value="round_robin">轮询</el-radio>
+                    <el-radio value="token_balanced">Token均衡</el-radio>
+                  </el-radio-group>
+                </el-form-item>
+                <el-form-item>
+                  <template #label>&nbsp;</template>
+                  <div style="color: #909399; font-size: 12px; line-height: 1.6">
+                    <div v-if="strategyForm.strategy_type === 'priority'">• 按模型列表顺序优先调用，第一个失败则自动切换下一个</div>
+                    <div v-if="strategyForm.strategy_type === 'round_robin'">• 每次请求轮换使用不同的模型，实现负载均衡</div>
+                    <div v-if="strategyForm.strategy_type === 'token_balanced'">• 优先使用累计Token消耗最少的模型，实现成本均衡</div>
+                  </div>
+                </el-form-item>
+                <el-form-item label="模型列表">
+                  <el-select v-model="strategyForm.model_ids" multiple style="width: 100%" placeholder="选择参与调度的模型（按优先级排序）">
+                    <el-option
+                      v-for="c in aiConfigs.filter(c => c.is_active)"
+                      :key="c.id"
+                      :label="`${c.name} (${c.model_name || '?'})`"
+                      :value="c.id"
+                    />
+                  </el-select>
+                  <div style="color: #909399; font-size: 12px; margin-top: 4px">按选择的顺序确定优先级（第一个为最高优先级）</div>
+                </el-form-item>
+                <el-divider />
+                <el-form-item label="故障转移">
+                  <el-switch v-model="strategyForm.failover_enabled" active-text="启用" inactive-text="禁用" />
+                  <span style="margin-left: 12px; color: #909399; font-size: 12px">当前模型调用失败时自动尝试下一个可用模型</span>
+                </el-form-item>
+                <el-form-item label="重试次数" v-if="strategyForm.failover_enabled">
+                  <el-input-number v-model="strategyForm.failover_max_retries" :min="1" :max="10" style="width: 120px" />
+                </el-form-item>
+                <el-form-item label="描述">
+                  <el-input v-model="strategyForm.description" type="textarea" :rows="2" placeholder="策略说明（可选）" />
+                </el-form-item>
+                <el-form-item label="Token统计" v-if="currentStrategy && Object.keys(currentStrategy.token_usage || {}).length > 0">
+                  <div style="font-size: 13px">
+                    <div v-for="(tokens, modelId) in currentStrategy.token_usage" :key="modelId" style="margin-bottom: 4px">
+                      <el-tag size="small">{{ getModelNameById(parseInt(modelId)) }}</el-tag>
+                      <span style="margin-left: 8px">{{ Number(tokens).toLocaleString() }} tokens</span>
+                    </div>
+                    <el-button type="warning" size="small" text style="margin-top: 4px; padding: 0" @click="handleResetTokens">
+                      <i class="fas fa-redo"></i> 重置统计
+                    </el-button>
+                  </div>
+                </el-form-item>
+              </el-form>
+              <template #footer>
+                <el-button v-if="currentStrategy" type="danger" plain @click="handleDeleteStrategy">删除策略</el-button>
+                <el-button @click="strategyDialogVisible = false">取消</el-button>
+                <el-button type="primary" :loading="savingStrategy" @click="handleSaveStrategy">保存</el-button>
               </template>
             </el-dialog>
           </div>
@@ -475,7 +547,93 @@ async function deleteAiConfig(id) {
 onMounted(() => {
   fetchConfig()
   fetchAiConfigs()
+  fetchStrategy()
 })
+
+// AI Strategy
+const strategyDialogVisible = ref(false)
+const savingStrategy = ref(false)
+const currentStrategy = ref(null)
+const strategyForm = reactive({
+  name: '默认策略',
+  strategy_type: 'priority',
+  model_ids: [],
+  is_active: true,
+  failover_enabled: true,
+  failover_max_retries: 3,
+  description: '',
+})
+
+async function fetchStrategy() {
+  try {
+    const res = await api.ai.getStrategy()
+    if (res.data) {
+      currentStrategy.value = res.data
+      Object.assign(strategyForm, {
+        name: res.data.name || '默认策略',
+        strategy_type: res.data.strategy_type || 'priority',
+        model_ids: res.data.model_ids || [],
+        is_active: res.data.is_active !== false,
+        failover_enabled: res.data.failover_enabled !== false,
+        failover_max_retries: res.data.failover_max_retries || 3,
+        description: res.data.description || '',
+      })
+    } else {
+      currentStrategy.value = null
+      Object.assign(strategyForm, {
+        name: '默认策略',
+        strategy_type: 'priority',
+        model_ids: [],
+        is_active: true,
+        failover_enabled: true,
+        failover_max_retries: 3,
+        description: '',
+      })
+    }
+  } catch {
+    currentStrategy.value = null
+  }
+}
+
+function openStrategyDialog() {
+  strategyDialogVisible.value = true
+}
+
+async function handleSaveStrategy() {
+  savingStrategy.value = true
+  try {
+    await api.ai.saveStrategy({ ...strategyForm })
+    ElMessage.success('策略已保存')
+    strategyDialogVisible.value = false
+    fetchStrategy()
+  } catch {} finally {
+    savingStrategy.value = false
+  }
+}
+
+async function handleDeleteStrategy() {
+  try {
+    await ElMessageBox.confirm('确定要删除当前策略吗？删除后将使用默认模型。', '确认', { type: 'warning' })
+    await api.ai.deleteStrategy()
+    ElMessage.success('策略已删除')
+    currentStrategy.value = null
+    strategyDialogVisible.value = false
+    fetchStrategy()
+  } catch {}
+}
+
+async function handleResetTokens() {
+  try {
+    await api.ai.resetStrategyTokens()
+    ElMessage.success('Token统计已重置')
+    fetchStrategy()
+  } catch {}
+}
+
+function getModelNameById(id) {
+  const cfg = aiConfigs.value.find(c => c.id === id)
+  return cfg ? `${cfg.name} (${cfg.model_name || '?'})` : `ID: ${id}`
+}
 </script>
 
 <style scoped>

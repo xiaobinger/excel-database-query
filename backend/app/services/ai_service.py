@@ -605,6 +605,7 @@ class AiService:
     def _tool_list_system_tasks(args: dict, user_id: int = None) -> dict:
         """列出系统任务（按用户权限过滤）"""
         from app.models.system_task import SystemTask
+        from app.models.script import Script
         from app.models.user import User
         keyword = args.get('keyword', '').lower()
         tasks = SystemTask.query.filter_by(is_enabled=True).all()
@@ -623,7 +624,12 @@ class AiService:
         for t in tasks:
             if keyword and keyword not in t.name.lower() and keyword not in (t.description or '').lower():
                 continue
+            # For SQL tasks, params come from the linked script; for API tasks, from the task itself
             params = t.get_params_config()
+            if (t.task_type or 'sql') == 'sql' and t.script_id:
+                script = Script.query.get(t.script_id)
+                if script and script.get_params_config():
+                    params = script.get_params_config()
             result.append({
                 'id': t.id,
                 'name': t.name,
@@ -662,6 +668,12 @@ class AiService:
 
         # 标准化neq参数
         task_params = task.get_params_config() or []
+        # For SQL tasks, params come from the linked script
+        if (task.task_type or 'sql') == 'sql' and task.script_id:
+            from app.models.script import Script
+            script = Script.query.get(task.script_id)
+            if script and script.get_params_config():
+                task_params = script.get_params_config()
         if params:
             for p in task_params:
                 if p.get('enum_mode') == 'neq' and p.get('neq_value') and p.get('name') in params:

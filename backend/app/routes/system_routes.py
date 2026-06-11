@@ -5,13 +5,13 @@ from email.utils import formataddr, formatdate, make_msgid
 from flask import Blueprint, request, jsonify
 from app import db
 from app.models.system_config import SystemConfig
-from app.utils.auth import admin_required
+from app.utils.auth import permission_required
 
 system_bp = Blueprint('system', __name__, url_prefix='/api/system')
 
 
 @system_bp.route('/config', methods=['GET'])
-@admin_required
+@permission_required('system')
 def get_config():
     configs = SystemConfig.query.all()
     return jsonify({
@@ -21,7 +21,7 @@ def get_config():
 
 
 @system_bp.route('/config', methods=['PUT'])
-@admin_required
+@permission_required('system')
 def update_config():
     data = request.get_json()
     if not data or 'items' not in data:
@@ -57,7 +57,7 @@ def update_config():
 
 
 @system_bp.route('/test-email', methods=['POST'])
-@admin_required
+@permission_required('system')
 def test_email():
     data = request.get_json()
     if not data or not data.get('recipient'):

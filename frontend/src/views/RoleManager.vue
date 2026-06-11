@@ -157,9 +157,8 @@ const roleList = ref([])
 const menuPermLabels = {
   dashboard: '仪表盘',
   databases: '数据库管理',
-  scripts: '查询选项',
+  scripts: '脚本管理',
   query: '查询执行',
-  exports: '导出选项',
   export_exec: '导出任务',
   auto_export: '自动导出',
   system: '系统配置',
@@ -169,14 +168,15 @@ const menuPermLabels = {
   ai_chat: 'AI助手',
   ai_sessions: 'AI会话管理',
   skills: 'Skills',
-  business_systems: '业务系统'
+  business_systems: '业务系统',
+  system_tasks: '系统任务'
 }
 
 const buttonPermLabels = {
   all: '所有权限',
-  'script:create': '新建查询选项',
-  'script:edit': '编辑查询选项',
-  'script:delete': '删除查询选项',
+  'script:create': '新建脚本',
+  'script:edit': '编辑脚本',
+  'script:delete': '删除脚本',
   'database:create': '新建数据库连接',
   'database:edit': '编辑数据库连接',
   'database:delete': '删除数据库连接',
@@ -185,9 +185,6 @@ const buttonPermLabels = {
   'query:cancel': '取消查询',
   'query:download': '下载结果',
   'query:retry': '重新执行查询',
-  'export:create': '新建导出选项',
-  'export:edit': '编辑导出选项',
-  'export:delete': '删除导出选项',
   'export:execute': '执行导出',
   'export:cancel': '取消导出',
   'export:download': '下载导出结果',
@@ -204,18 +201,24 @@ const buttonPermLabels = {
   'business:sso': 'SSO单点登录',
   'ai:config': 'AI模型配置',
   'ai:chat': 'AI对话',
-  'ai:skill': 'AI技能管理'
+  'ai:skill': 'AI技能管理',
+  'system_task:create': '新建系统任务',
+  'system_task:edit': '编辑系统任务',
+  'system_task:delete': '删除系统任务',
+  'system_task:execute': '执行系统任务',
+  'system_task:view_log': '查看执行记录',
+  'system_task:delete_log': '删除执行记录'
 }
 
 const menuOptions = [
   { value: 'dashboard', label: '仪表盘' },
   { value: 'databases', label: '数据库管理' },
-  { value: 'scripts', label: '查询选项' },
+  { value: 'scripts', label: '脚本管理' },
   { value: 'query', label: '查询执行' },
-  { value: 'exports', label: '导出选项' },
   { value: 'export_exec', label: '导出任务' },
   { value: 'auto_export', label: '自动导出' },
   { value: 'system', label: '系统配置' },
+  { value: 'system_tasks', label: '系统任务' },
   { value: 'history', label: '执行历史' },
   { value: 'users', label: '用户管理' },
   { value: 'roles', label: '角色管理' },
@@ -227,7 +230,7 @@ const menuOptions = [
 
 const buttonPermGroups = [
   {
-    label: '查询选项',
+    label: '脚本管理',
     items: [
       { value: 'script:create', label: '新建' },
       { value: 'script:edit', label: '编辑' },
@@ -250,14 +253,6 @@ const buttonPermGroups = [
       { value: 'query:cancel', label: '取消查询' },
       { value: 'query:download', label: '下载结果' },
       { value: 'query:retry', label: '重新执行' }
-    ]
-  },
-  {
-    label: '导出选项',
-    items: [
-      { value: 'export:create', label: '新建' },
-      { value: 'export:edit', label: '编辑' },
-      { value: 'export:delete', label: '删除' }
     ]
   },
   {
@@ -297,6 +292,17 @@ const buttonPermGroups = [
       { value: 'business:edit', label: '编辑' },
       { value: 'business:delete', label: '删除' },
       { value: 'business:sso', label: 'SSO登录' }
+    ]
+  },
+  {
+    label: '系统任务',
+    items: [
+      { value: 'system_task:create', label: '新建' },
+      { value: 'system_task:edit', label: '编辑' },
+      { value: 'system_task:delete', label: '删除' },
+      { value: 'system_task:execute', label: '执行' },
+      { value: 'system_task:view_log', label: '查看记录' },
+      { value: 'system_task:delete_log', label: '删除记录' }
     ]
   },
   {

@@ -330,7 +330,7 @@ SET FOREIGN_KEY_CHECKS = 1;
 -- ----------------------------
 -- 默认角色：超级管理员
 INSERT INTO roles (name, description, menu_permissions, button_permissions) VALUES
-('admin', '超级管理员', '["dashboard","query","export","history","scripts","export_options","databases","auto_export","system_config","ai_config","ai_chat","skills","business_systems","user_manager","role_manager"]', '["query:execute","query:download","export:execute","export:download","script:create","script:edit","script:delete","database:create","database:edit","database:delete","database:test","ssh:create","ssh:edit","ssh:delete","auto_task:create","auto_task:edit","auto_task:delete","auto_task:execute","business:create","business:edit","business:delete","business:sso","ai:config","ai:chat","ai:skill","user:create","user:edit","user:delete","role:create","role:edit","role:delete"]');
+('admin', '超级管理员', '["dashboard","query","export","history","scripts","export_options","databases","auto_export","system_config","ai_config","ai_chat","skills","business_systems","system_tasks","user_manager","role_manager"]', '["query:execute","query:download","export:execute","export:download","script:create","script:edit","script:delete","database:create","database:edit","database:delete","database:test","ssh:create","ssh:edit","ssh:delete","auto_task:create","auto_task:edit","auto_task:delete","auto_task:execute","business:create","business:edit","business:delete","business:sso","ai:config","ai:chat","ai:skill","user:create","user:edit","user:delete","role:create","role:edit","role:delete"]');
 
 -- 默认管理员用户（密码: admin123）
 -- 注意: 实际部署时应通过应用注册接口创建，此处密码哈希由Werkzeug生成

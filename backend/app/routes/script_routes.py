@@ -162,7 +162,8 @@ def validate_script(script_id):
         return jsonify({'success': False, 'message': '脚本不存在'}), 404
 
     validator = SQLValidator()
-    result = validator.validate(script.sql_text)
+    allow_dml = script.type == 'system'
+    result = validator.validate(script.sql_text, allow_dml=allow_dml)
     suggestions = validator.suggest_improvements(script.sql_text)
     return jsonify({
         'success': True,
@@ -180,7 +181,8 @@ def validate_sql():
         return jsonify({'success': False, 'message': '缺少SQL语句'}), 400
 
     validator = SQLValidator()
-    result = validator.validate(data['sql'])
+    allow_dml = data.get('allow_dml', False)
+    result = validator.validate(data['sql'], allow_dml=allow_dml)
     suggestions = validator.suggest_improvements(data['sql'])
     return jsonify({
         'success': True,

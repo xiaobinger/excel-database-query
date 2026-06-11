@@ -20,6 +20,7 @@ class User(db.Model):
 
     script_ids = db.Column(db.Text, comment='available script id list (JSON)')
     auto_task_ids = db.Column(db.Text, comment='available auto export task id list (JSON)')
+    system_task_ids = db.Column(db.Text, comment='available system task id list (JSON)')
 
     role = db.relationship('Role', backref='users', lazy='joined')
 
@@ -51,6 +52,17 @@ class User(db.Model):
     def set_auto_task_ids(self, ids):
         self.auto_task_ids = json.dumps(ids) if ids else None
 
+    def get_system_task_ids(self):
+        if self.system_task_ids:
+            try:
+                return json.loads(self.system_task_ids)
+            except (json.JSONDecodeError, TypeError):
+                return []
+        return []
+
+    def set_system_task_ids(self, ids):
+        self.system_task_ids = json.dumps(ids) if ids else None
+
     def is_admin(self):
         if self.role and self.role.is_admin:
             return True
@@ -67,6 +79,7 @@ class User(db.Model):
             'is_active': self.is_active,
             'script_ids': self.get_script_ids(),
             'auto_task_ids': self.get_auto_task_ids(),
+            'system_task_ids': self.get_system_task_ids(),
             'created_at': beijing_isoformat(self.created_at),
         }
 

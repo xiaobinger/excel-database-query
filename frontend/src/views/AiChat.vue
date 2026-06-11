@@ -150,8 +150,8 @@
                           <span v-if="s.description" class="select-option-desc">{{ s.description }}</span>
                           <!-- 显示参数信息 -->
                           <div v-if="s.params && s.params.length > 0" class="select-option-params">
-                            <el-tag v-for="p in s.params" :key="p.name" size="small" :type="p.required ? 'danger' : 'info'" effect="plain" style="margin: 2px 4px 2px 0">
-                              {{ p.label || p.name }}{{ p.required ? '*' : '' }}
+                            <el-tag v-for="p in s.params" :key="p.name" size="small" :type="(msg._action_type === 'system_task' || p.required) ? 'danger' : 'info'" effect="plain" style="margin: 2px 4px 2px 0">
+                              {{ p.label || p.name }}{{ (msg._action_type === 'system_task' || p.required) ? '*' : '' }}
                             </el-tag>
                           </div>
                           <!-- 查询任务显示主键和查询字段 -->
@@ -854,9 +854,9 @@
               <div class="param-item-label">
                 <span class="param-name-tag">
                   {{ p.label || p.name }}
-                  <span v-if="p.required" style="color: #f56c6c; margin-left: 2px">*</span>
+                  <span v-if="sysTaskParamDialogTask.task_type === 'sql' || p.required" style="color: #f56c6c; margin-left: 2px">*</span>
                 </span>
-                <el-tag v-if="p.required" size="small" type="danger" effect="plain">必填</el-tag>
+                <el-tag v-if="sysTaskParamDialogTask.task_type === 'sql' || p.required" size="small" type="danger" effect="plain">必填</el-tag>
               </div>
               <div class="param-item-control">
                 <template v-if="p.enum_enabled && p.enum_mode === 'neq' && p.neq_value">
@@ -977,11 +977,15 @@ const sysTaskParamDialogTask = ref(null)  // 当前编辑的系统任务
 const sysTaskParamDialogValues = ref({})  // 参数值
 
 // 系统任务参数对话框：是否可以确认执行
+// SQL类型系统任务的所有参数都视为必填
 const sysTaskParamCanConfirm = computed(() => {
   const task = sysTaskParamDialogTask.value
   if (!task || !task.params) return true
+  const isSqlTask = task.task_type === 'sql'
   for (const p of task.params) {
-    if (!p.required) continue
+    // SQL类型任务所有参数必填，其他类型按required字段判断
+    const isRequired = isSqlTask || p.required
+    if (!isRequired) continue
     const val = sysTaskParamDialogValues.value[p.name]
     if (val === undefined || val === null || val === '') return false
     if (Array.isArray(val) && val.length === 0) return false
@@ -1395,6 +1399,39 @@ async function sendMessage() {
       for (const tr of res.data.tool_results) {
         const result = tr.result
         if (result && !result.error && (result.action_type === 'export' || result.action_type === 'query' || result.action_type === 'system_task')) {
+          // 系统任务：如果AI已解析到所有参数，直接执行而无需确认
+          if (result.action_type === 'system_task') {
+            const params = result.params || []
+            const paramsValues = result.params_values || {}
+            const allParamsFilled = params.length === 0 || params.every(p => {
+              const val = paramsValues[p.name]
+              return val !== undefined && val !== null && val !== ''
+            })
+            if (allParamsFilled) {
+              const autoMsg = {
+                id: tr.message_id || Date.now() + Math.random(),
+                role: 'assistant',
+                content: result.confirm_message || `正在执行系统任务：${result.task_name}`,
+                _type: 'tool',
+                _dismissed: false,
+                tool_data: result,
+                _selected: [result.task_id],
+                _selectedScripts: [{
+                  id: result.task_id,
+                  name: result.task_name || '系统任务',
+                  task_type: result.task_type || 'sql',
+                  params: params,
+                }],
+                _action_type: 'system_task',
+                _param_values: paramsValues,
+                _params_checked: true,
+              }
+              messages.value.push(autoMsg)
+              // 自动执行
+              doExecuteSystemTask(autoMsg)
+              continue
+            }
+          }
           messages.value.push({
             id: tr.message_id || Date.now() + Math.random(),
             role: 'assistant',

@@ -165,6 +165,10 @@ const ai = {
   hardDeleteMessage: (chatId, msgId) => http.delete(`/ai/chats/${chatId}/messages/${msgId}/hard`),
   adminListChats: (params) => http.get('/ai/admin/chats', { params }),
   adminRestoreChat: (chatId) => http.put(`/ai/admin/chats/${chatId}/restore`),
+  getStrategy: () => http.get('/ai-strategy'),
+  saveStrategy: (data) => http.post('/ai-strategy', data),
+  deleteStrategy: () => http.delete('/ai-strategy'),
+  resetStrategyTokens: () => http.post('/ai-strategy/reset-tokens'),
 }
 
 const business = {
@@ -177,4 +181,18 @@ const business = {
   getCategories: () => http.get('/business/categories'),
 }
 
-export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, ai, business }
+const systemTask = {
+  list: () => http.get('/system-tasks'),
+  get: (id) => http.get(`/system-tasks/${id}`),
+  create: (data) => http.post('/system-tasks', data),
+  update: (id, data) => http.put(`/system-tasks/${id}`, data),
+  delete: (id) => http.delete(`/system-tasks/${id}`),
+  execute: (id, data) => http.post(`/system-tasks/${id}/execute`, data),
+  executions: (params) => http.get('/system-tasks/executions', { params }),
+  getExecution: (executionId) => http.get(`/system-tasks/executions/${executionId}`),
+  cancelExecution: (executionId) => http.post(`/system-tasks/executions/${executionId}/cancel`),
+  deleteExecution: (executionId) => http.delete(`/system-tasks/executions/${executionId}`),
+  streamExecution: (executionId) => `/api/system-tasks/executions/${executionId}/stream`,
+}
+
+export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, ai, business, systemTask }

@@ -44,64 +44,71 @@ class SQLValidator:
         self.max_result_rows: int = 10000
         self.max_query_length: int = 10000
     
-    def validate(self, sql: str, check_tables: bool = True) -> ValidationResult:
+    def validate(self, sql: str, check_tables: bool = True, allow_dml: bool = False) -> ValidationResult:
         """
         验证 SQL 查询
-        
+
         Args:
             sql: SQL 查询语句
             check_tables: 是否检查表存在性
-        
+            allow_dml: 是否允许 DML/DDL 语句（如 UPDATE, INSERT, DELETE 等）
+
         Returns:
             ValidationResult: 验证结果
         """
         warnings = []
-        
+
         # 1. 基本检查
         if not sql or not sql.strip():
             return ValidationResult(False, "SQL 查询为空")
-        
+
         # 2. 长度检查
         if len(sql) > self.max_query_length:
             warnings.append(f"SQL 查询过长 ({len(sql)} > {self.max_query_length} 字符)")
-        
-        # 3. 参数检查
-        params = self._extract_parameters(sql)
-        if not params:
-            warnings.append("未检测到查询参数（建议使用 :value 等占位符）")
-        
+
+        # 3. 参数检查（仅对非 DML 模式提示）
+        if not allow_dml:
+            params = self._extract_parameters(sql)
+            if not params:
+                warnings.append("未检测到查询参数（建议使用 :value 等占位符）")
+
         # 4. 危险关键字检查
-        dangerous_found = self._check_dangerous_keywords(sql)
-        if dangerous_found:
-            return ValidationResult(
-                False,
-                f"检测到危险关键字: {', '.join(dangerous_found)}",
-                warnings
-            )
-        
+        if not allow_dml:
+            dangerous_found = self._check_dangerous_keywords(sql)
+            if dangerous_found:
+                return ValidationResult(
+                    False,
+                    f"检测到危险关键字: {', '.join(dangerous_found)}",
+                    warnings
+                )
+
         # 5. SQL 注入检查
         injection_risks = self._check_sql_injection(sql)
+        if allow_dml:
+            # 系统脚本允许多语句（分号），过滤掉分号检查
+            injection_risks = [r for r in injection_risks if r != r";"]
         if injection_risks:
             return ValidationResult(
                 False,
                 f"检测到潜在的 SQL 注入风险: {', '.join(injection_risks)}",
                 warnings
             )
-        
+
         # 6. 语法检查（基础）
-        syntax_errors = self._check_basic_syntax(sql)
+        syntax_errors = self._check_basic_syntax(sql, allow_dml=allow_dml)
         if syntax_errors:
             return ValidationResult(
                 False,
                 f"SQL 语法错误: {', '.join(syntax_errors)}",
                 warnings
             )
-        
+
         # 7. 性能检查
-        performance_issues = self._check_performance_issues(sql)
-        if performance_issues:
-            warnings.extend(performance_issues)
-        
+        if not allow_dml:
+            performance_issues = self._check_performance_issues(sql)
+            if performance_issues:
+                warnings.extend(performance_issues)
+
         # 8. 表存在性检查
         if check_tables and self.table_whitelist:
             tables = self._extract_tables(sql)
@@ -112,11 +119,11 @@ class SQLValidator:
                     f"表不在白名单中: {', '.join(invalid_tables)}",
                     warnings
                 )
-        
+
         # 如果有警告但验证通过
         if warnings:
             return ValidationResult(True, "SQL 验证通过，但有警告", warnings)
-        
+
         return ValidationResult(True, "SQL 验证通过")
     
     def _extract_parameters(self, sql: str) -> List[str]:
@@ -148,16 +155,16 @@ class SQLValidator:
         
         return risks
     
-    def _check_basic_syntax(self, sql: str) -> List[str]:
+    def _check_basic_syntax(self, sql: str, allow_dml: bool = False) -> List[str]:
         """基础语法检查"""
         errors = []
-        
+
         # 检查括号匹配
         open_parens = sql.count('(')
         close_parens = sql.count(')')
         if open_parens != close_parens:
             errors.append(f"括号不匹配: 开 {open_parens}, 关 {close_parens}")
-        
+
         # 检查引号匹配
         single_quotes = sql.count("'")
         double_quotes = sql.count('"')
@@ -165,17 +172,17 @@ class SQLValidator:
             errors.append("单引号不匹配")
         if double_quotes % 2 != 0:
             errors.append("双引号不匹配")
-        
-        # 检查 SELECT 语句
-        if 'SELECT' in sql.upper():
-            if not re.search(r'SELECT\s+.+\s+FROM', sql, re.IGNORECASE):
-                errors.append("SELECT 语句缺少 FROM 子句")
-        
-        # 检查 WHERE 子句中的参数
-        if 'WHERE' in sql.upper():
-            if not re.search(r':\w+', sql):
-                errors.append("WHERE 子句中缺少参数占位符")
-        
+
+        # 非 DML 模式下检查 SELECT 语句和参数占位符
+        if not allow_dml:
+            if 'SELECT' in sql.upper():
+                if not re.search(r'SELECT\s+.+\s+FROM', sql, re.IGNORECASE):
+                    errors.append("SELECT 语句缺少 FROM 子句")
+
+            if 'WHERE' in sql.upper():
+                if not re.search(r':\w+', sql):
+                    errors.append("WHERE 子句中缺少参数占位符")
+
         return errors
     
     def _check_performance_issues(self, sql: str) -> List[str]:

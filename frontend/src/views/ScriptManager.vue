@@ -3,8 +3,19 @@
     <el-card shadow="hover">
       <template #header>
         <div class="card-header">
-          <span><i class="fas fa-clipboard-list"></i> 查询选项管理</span>
+          <span><i class="fas fa-clipboard-list"></i> 脚本管理</span>
           <div class="header-actions">
+            <el-select
+              v-model="typeFilter"
+              placeholder="类型筛选"
+              clearable
+              style="width: 140px; margin-right: 12px"
+              @change="filterByType"
+            >
+              <el-option value="query" label="查询选项" />
+              <el-option value="export" label="导出选项" />
+              <el-option value="system" label="系统脚本" />
+            </el-select>
             <el-select
               v-model="tagFilter"
               placeholder="标签筛选"
@@ -15,21 +26,33 @@
               <el-option v-for="tag in tags" :key="tag" :label="tag" :value="tag" />
             </el-select>
             <el-button v-if="store.hasButtonPermission('script:create')" type="primary" @click="openDialog()">
-              <i class="fas fa-plus"></i> 新建查询选项
+              <i class="fas fa-plus"></i> 新建脚本
             </el-button>
           </div>
         </div>
       </template>
 
       <el-table :data="filteredScripts" stripe v-loading="loading" style="width: 100%">
-        <el-table-column prop="name" label="选项名称" min-width="160" show-overflow-tooltip />
-        <el-table-column prop="tag" label="标签" min-width="180" show-overflow-tooltip>
+        <el-table-column prop="name" label="脚本名称" min-width="160" show-overflow-tooltip />
+        <el-table-column label="类型" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag :type="typeTag(row.type)" size="small">
+              {{ typeLabel(row.type) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="参数数量" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag size="small" type="info">{{ getParamCount(row) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="tag" label="标签" min-width="160" show-overflow-tooltip>
           <template #default="{ row }">
             <el-tag v-if="row.tag" size="small" effect="plain">{{ row.tag }}</el-tag>
             <span v-else style="color: #c0c4cc">-</span>
           </template>
         </el-table-column>
-        <el-table-column prop="query_mode" label="查询模式" width="110" align="center">
+        <el-table-column v-if="showQueryColumns" prop="query_mode" label="查询模式" width="110" align="center">
           <template #default="{ row }">
             <el-tag :type="row.query_mode === 'in' ? 'primary' : 'success'" size="small">
               {{ row.query_mode === 'in' ? '批量' : '逐行' }}
@@ -42,7 +65,7 @@
             <el-tag v-else type="info" size="small">静态</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="batch_size" label="批量大小" width="100" align="center" />
+        <el-table-column v-if="showQueryColumns" prop="batch_size" label="批量大小" width="100" align="center" />
         <el-table-column prop="timeout" label="超时(秒)" width="100" align="center" />
         <el-table-column prop="description" label="描述" min-width="160" show-overflow-tooltip />
         <el-table-column label="操作" width="280" align="center" fixed="right">
@@ -55,7 +78,7 @@
             </el-button>
             <el-popconfirm
               v-if="store.hasButtonPermission('script:delete')"
-              title="确定要删除此查询选项吗？"
+              :title="`确定要删除此${typeLabel(row.type)}吗？`"
               confirm-button-text="确定"
               cancel-button-text="取消"
               @confirm="handleDelete(row.id)"
@@ -69,12 +92,12 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-if="!loading && filteredScripts.length === 0" description="暂无查询选项" />
+      <el-empty v-if="!loading && filteredScripts.length === 0" :description="`暂无${typeLabel(typeFilter || 'query')}脚本`" />
     </el-card>
 
     <el-dialog
       v-model="dialogVisible"
-      :title="isEdit ? '编辑查询选项' : '新建查询选项'"
+      :title="isEdit ? '编辑脚本' : '新建脚本'"
       width="90%"
       destroy-on-close
       :close-on-click-modal="false"
@@ -155,14 +178,24 @@
               label-position="top"
               class="sidebar-form"
             >
-              <el-form-item label="选项名称" prop="name">
-                <el-input v-model="form.name" placeholder="请输入选项名称" />
+              <el-form-item label="脚本名称" prop="name">
+                <el-input v-model="form.name" placeholder="请输入脚本名称" />
               </el-form-item>
 
               <div class="form-row">
+                <el-form-item label="脚本类型" prop="type" class="form-row-item">
+                  <el-select v-model="form.type" style="width: 100%">
+                    <el-option value="query" label="查询选项" />
+                    <el-option value="export" label="导出选项" />
+                    <el-option value="system" label="系统脚本" />
+                  </el-select>
+                </el-form-item>
                 <el-form-item label="标签" class="form-row-item">
                   <el-input v-model="form.tag" placeholder="请输入标签" clearable />
                 </el-form-item>
+              </div>
+
+              <div v-if="form.type !== 'system'" class="form-row">
                 <el-form-item label="查询模式" prop="query_mode" class="form-row-item">
                   <el-select v-model="form.query_mode" style="width: 100%">
                     <el-option value="in" label="批量模式" />
@@ -255,7 +288,130 @@
             </div>
           </div>
 
-          <div class="sidebar-section">
+          <div v-if="form.type === 'export' || form.type === 'system'" class="sidebar-section">
+            <div class="section-label">
+              <i class="fas fa-sliders-h"></i> 参数配置
+              <el-button size="small" type="primary" text @click="addParam" style="margin-left: auto">
+                <i class="fas fa-plus"></i> 添加
+              </el-button>
+            </div>
+            <div v-if="!form.params_config || form.params_config.length === 0" class="empty-vars">
+              暂无参数，点击"添加"配置参数
+            </div>
+
+            <!-- Export type: rich UI matching ExportManager -->
+            <div v-if="form.type === 'export'" class="params-list">
+              <div v-for="(param, index) in form.params_config" :key="index" class="param-item">
+                <div class="param-row">
+                  <el-input v-model="param.name" placeholder="参数名" size="small" style="flex: 1" />
+                  <el-input v-model="param.label" placeholder="显示标签" size="small" style="flex: 1" />
+                  <el-select v-model="param.type" placeholder="类型" size="small" style="width: 110px" @change="onParamTypeChange(param)">
+                    <el-option value="text" label="文本" />
+                    <el-option value="number" label="数字" />
+                    <el-option value="date" label="日期" />
+                    <el-option value="datetime" label="日期时间" />
+                  </el-select>
+                  <el-checkbox v-model="param.required" size="small" label="必填" style="margin-left: 4px" />
+                  <el-button size="small" type="danger" text @click="removeParam(index)">
+                    <i class="fas fa-times"></i>
+                  </el-button>
+                </div>
+                <div v-if="param.type === 'text'" class="param-row param-row-sub">
+                  <el-checkbox v-model="param.multi" size="small" label="IN参数（支持多个值）" />
+                </div>
+                <div v-if="param.type === 'text' || param.type === 'number'" class="param-row param-row-sub">
+                  <el-checkbox v-model="param.allow_all" size="small" class="allow-all-checkbox">
+                    <span class="allow-all-label">允许「全部」选项（不筛选此参数）</span>
+                  </el-checkbox>
+                </div>
+                <div v-if="param.type === 'text' || param.type === 'number'" class="param-row param-row-sub param-enum-section">
+                  <el-checkbox v-model="param.enum_enabled" size="default" label="启用枚举参数" class="enum-enable-checkbox" />
+                  <template v-if="param.enum_enabled">
+                    <div class="enum-mode-selector">
+                      <el-radio-group v-model="param.enum_mode" size="default">
+                        <el-radio-button value="list">
+                          <i class="fas fa-list-ul"></i> 列表选择
+                        </el-radio-button>
+                        <el-radio-button value="neq">
+                          <i class="fas fa-not-equal"></i> 非即不等于
+                        </el-radio-button>
+                      </el-radio-group>
+                    </div>
+                    <div v-if="param.enum_mode === 'list'" class="enum-list-config">
+                      <div class="enum-list-header">
+                        <span class="enum-list-title">枚举值列表</span>
+                        <el-button size="small" type="primary" @click="(param.enum_values = param.enum_values || []).push({ label: '', value: '' })">
+                          <i class="fas fa-plus"></i> 添加
+                        </el-button>
+                      </div>
+                      <div v-if="!param.enum_values || param.enum_values.length === 0" class="enum-empty-tip">
+                        暂无枚举值，请点击上方"添加"按钮
+                      </div>
+                      <div v-for="(item, idx) in (param.enum_values || [])" :key="idx" class="enum-value-row">
+                        <span class="enum-value-index">{{ idx + 1 }}</span>
+                        <el-input v-model="item.label" placeholder="显示名称" size="small" class="enum-input-label" />
+                        <span class="enum-value-separator">→</span>
+                        <el-input v-model="item.value" placeholder="实际值" size="small" class="enum-input-value" />
+                        <el-button size="small" type="danger" text @click="param.enum_values.splice(idx, 1)" class="enum-value-remove">
+                          <i class="fas fa-trash"></i>
+                        </el-button>
+                      </div>
+                    </div>
+                    <div v-if="param.enum_mode === 'neq'" class="enum-neq-config">
+                      <div class="neq-config-row">
+                        <span class="neq-config-label">预设值：</span>
+                        <el-input v-model="param.neq_value" placeholder="等于时的值（如：1）" size="small" class="neq-input" />
+                      </div>
+                      <div class="neq-config-row">
+                        <el-checkbox v-model="param.default_checked" size="small">
+                          默认勾选「是」
+                        </el-checkbox>
+                      </div>
+                      <div class="neq-hint">
+                        <i class="fas fa-info-circle"></i>
+                        勾选「是」时：字段 = 预设值 ｜ 勾选「否」时：字段 != 预设值
+                      </div>
+                    </div>
+                  </template>
+                </div>
+                <div v-if="param.type === 'date' || param.type === 'datetime'" class="param-row param-row-sub">
+                  <el-select v-model="param.date_format" placeholder="日期格式" size="small" style="width: 140px">
+                    <el-option value="year" label="年" />
+                    <el-option value="month" label="年-月" />
+                    <el-option value="day" label="年-月-日" />
+                    <el-option value="datetime" label="年-月-日 时:分" />
+                  </el-select>
+                  <el-checkbox v-model="param.range" size="small" label="范围" style="margin-left: 8px" />
+                  <el-checkbox v-model="param.allow_all" size="small" label="允许全部（不筛选）" style="margin-left: 8px" />
+                </div>
+                <div class="param-row param-row-sub">
+                  <el-input v-model="param.default_value" :placeholder="param.multi ? '默认值（多个以逗号分隔）' : '默认值（可选）'" size="small" style="flex: 1" />
+                </div>
+              </div>
+              <el-button type="primary" text size="small" @click="addParam" style="width: 100%">
+                <i class="fas fa-plus"></i> 添加参数
+              </el-button>
+            </div>
+
+            <!-- System type: simple UI -->
+            <div v-if="form.type === 'system'" v-for="(param, idx) in form.params_config" :key="idx" class="var-config-item">
+              <div class="var-config-header">
+                <el-input v-model="param.name" placeholder="参数名" size="small" style="width: 120px" />
+                <el-input v-model="param.label" placeholder="显示名称" size="small" style="width: 120px" />
+                <el-select v-model="param.type" placeholder="类型" size="small" style="width: 90px">
+                  <el-option value="text" label="文本" />
+                  <el-option value="number" label="数字" />
+                  <el-option value="textarea" label="多行文本" />
+                  <el-option value="date" label="日期" />
+                </el-select>
+                <el-button size="small" text type="danger" @click="removeParam(idx)">
+                  <i class="fas fa-trash"></i>
+                </el-button>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="form.type !== 'system'" class="sidebar-section">
             <div class="section-label">
               <i class="fas fa-cog"></i> 执行参数
             </div>
@@ -341,12 +497,14 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import api from '../api'
 import { useAppStore } from '../stores'
 import { ElMessage } from 'element-plus'
 import SqlEditor from '../components/SqlEditor.vue'
 
 const store = useAppStore()
+const route = useRoute()
 const loading = ref(false)
 const submitting = ref(false)
 const dialogVisible = ref(false)
@@ -356,6 +514,7 @@ const formRef = ref(null)
 const scriptList = ref([])
 const tags = ref([])
 const tagFilter = ref('')
+const typeFilter = ref('')
 const previewing = ref(false)
 const renderedPreview = ref('')
 
@@ -367,6 +526,7 @@ const defaultForm = {
   is_template: false,
   template_config: [],
   tag: '',
+  type: 'query',
   query_mode: 'in',
   batch_size: 100,
   timeout: 300,
@@ -374,7 +534,8 @@ const defaultForm = {
   merge_strategy: 'concat',
   new_sheet: true,
   primary_key: '',
-  database_ids: []
+  database_ids: [],
+  params_config: []
 }
 
 const form = reactive({ ...defaultForm })
@@ -433,15 +594,83 @@ const rules = {
 }
 
 const filteredScripts = computed(() => {
-  if (!tagFilter.value) return scriptList.value
-  return scriptList.value.filter((s) => s.tag === tagFilter.value)
+  let list = scriptList.value
+  if (tagFilter.value) {
+    list = list.filter((s) => s.tag === tagFilter.value)
+  }
+  return list
 })
 
+const showQueryColumns = computed(() => {
+  return !typeFilter.value || typeFilter.value !== 'system'
+})
+
+function typeTag(type) {
+  const map = { query: 'primary', export: 'success', system: 'warning' }
+  return map[type] || 'info'
+}
+
+function getParamCount(row) {
+  if (!row.params_config) return 0
+  try {
+    const config = typeof row.params_config === 'string' ? JSON.parse(row.params_config) : row.params_config
+    return Array.isArray(config) ? config.length : 0
+  } catch {
+    return 0
+  }
+}
+
+function typeLabel(type) {
+  const map = { query: '查询选项', export: '导出选项', system: '系统脚本' }
+  return map[type] || '脚本'
+}
+
 function filterByTag() {}
+function filterByType() {
+  fetchList()
+}
 
 function getVarTypeTag(type) {
   const map = { date_range: 'warning', date: 'success', text: '', number: 'info' }
   return map[type] || ''
+}
+
+function addParam() {
+  if (!form.params_config) form.params_config = []
+  if (form.type === 'export') {
+    form.params_config.push({
+      name: '',
+      label: '',
+      type: 'text',
+      date_format: 'day',
+      required: false,
+      multi: false,
+      range: false,
+      default_value: '',
+      enum_enabled: false,
+      enum_mode: 'list',
+      enum_values: [],
+      neq_value: '',
+      default_checked: false,
+      allow_all: false
+    })
+  } else {
+    form.params_config.push({ name: '', label: '', type: 'text' })
+  }
+}
+
+function removeParam(idx) {
+  form.params_config.splice(idx, 1)
+}
+
+function onParamTypeChange(param) {
+  if (param.type === 'date' || param.type === 'datetime') {
+    if (!param.date_format) {
+      param.date_format = 'day'
+    }
+  } else {
+    param.date_format = ''
+  }
 }
 
 function addTemplateVar() {
@@ -491,7 +720,11 @@ async function previewTemplate() {
 async function fetchList() {
   loading.value = true
   try {
-    const res = await api.scripts.list({ type: 'query' })
+    const params = {}
+    if (typeFilter.value) {
+      params.type = typeFilter.value
+    }
+    const res = await api.scripts.list(params)
     scriptList.value = res.data || res || []
   } catch {
     scriptList.value = []
@@ -515,6 +748,8 @@ function openDialog(row) {
     isEdit.value = true
     editId.value = row.id
     Object.assign(form, { ...defaultForm, ...row })
+    // 加载参数配置
+    if (!form.params_config) form.params_config = []
     // 加载模板变量配置
     templateVars.value = (row.template_config || []).map(v => ({
       ...v,
@@ -529,32 +764,34 @@ function openDialog(row) {
       }
     }))
     // 编辑时加载已有SQL的字段列表
-    const sqlToExtract = form.is_template ? form.sql_template : form.sql_text
-    if (sqlToExtract && sqlToExtract.trim()) {
-      if (form.is_template) {
-        // 模板模式先渲染再提取
-        api.scripts.renderTemplate({
-          template: form.sql_template,
-          template_config: templateVars.value
-        }).then(res => {
-          if (res.success && res.rendered_sql) {
-            return api.scripts.extractColumns({ sql: res.rendered_sql })
-          }
-          return { columns: [] }
-        }).then(res => {
-          sqlFields.value = res.columns || []
-        }).catch(() => {
-          sqlFields.value = []
-        })
+    if (form.type !== 'system') {
+      const sqlToExtract = form.is_template ? form.sql_template : form.sql_text
+      if (sqlToExtract && sqlToExtract.trim()) {
+        if (form.is_template) {
+          // 模板模式先渲染再提取
+          api.scripts.renderTemplate({
+            template: form.sql_template,
+            template_config: templateVars.value
+          }).then(res => {
+            if (res.success && res.rendered_sql) {
+              return api.scripts.extractColumns({ sql: res.rendered_sql })
+            }
+            return { columns: [] }
+          }).then(res => {
+            sqlFields.value = res.columns || []
+          }).catch(() => {
+            sqlFields.value = []
+          })
+        } else {
+          api.scripts.extractColumns({ sql: form.sql_text }).then(res => {
+            sqlFields.value = res.columns || []
+          }).catch(() => {
+            sqlFields.value = []
+          })
+        }
       } else {
-        api.scripts.extractColumns({ sql: form.sql_text }).then(res => {
-          sqlFields.value = res.columns || []
-        }).catch(() => {
-          sqlFields.value = []
-        })
+        sqlFields.value = []
       }
-    } else {
-      sqlFields.value = []
     }
   } else {
     isEdit.value = false
@@ -572,6 +809,8 @@ async function handleSubmit() {
   submitting.value = true
   try {
     const payload = { ...form }
+    // 参数配置
+    payload.params_config = form.params_config || []
     // 模板模式时设置template_config
     if (payload.is_template) {
       payload.template_config = templateVars.value
@@ -628,6 +867,10 @@ async function handleValidate(row) {
 }
 
 onMounted(() => {
+  const queryType = route.query.type
+  if (queryType && ['query', 'export', 'system'].includes(queryType)) {
+    typeFilter.value = queryType
+  }
   fetchList()
   fetchTags()
   store.fetchDatabases()
@@ -838,5 +1081,187 @@ onMounted(() => {
 
 .var-config-body {
   padding-left: 2px;
+}
+
+/* ===== Export Params Rich UI (from ExportManager) ===== */
+.params-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.param-item {
+  background: #fff;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.param-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.param-row-sub {
+  margin-top: 8px;
+}
+
+.param-enum-section {
+  margin-top: 10px;
+  padding: 12px 14px;
+  background: #f5f8ff;
+  border: 1px solid #d9e8fc;
+  border-radius: 8px;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.enum-enable-checkbox {
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.allow-all-checkbox {
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.allow-all-label {
+  color: #606266;
+}
+
+.enum-mode-selector {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed #c9d8f0;
+}
+
+.enum-mode-selector :deep(.el-radio-button__inner) {
+  padding: 8px 16px;
+}
+
+.enum-mode-selector :deep(.el-radio-button__inner i) {
+  margin-right: 4px;
+}
+
+.enum-list-config {
+  margin-top: 12px;
+}
+
+.enum-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.enum-list-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #606266;
+}
+
+.enum-empty-tip {
+  font-size: 12px;
+  color: #c0c4cc;
+  text-align: center;
+  padding: 16px 0;
+}
+
+.enum-value-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: #fff;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  transition: box-shadow 0.2s;
+}
+
+.enum-value-row:hover {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.enum-value-index {
+  width: 20px;
+  height: 20px;
+  line-height: 20px;
+  text-align: center;
+  background: #e8edf5;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 600;
+  color: #909399;
+  flex-shrink: 0;
+}
+
+.enum-input-label,
+.enum-input-value {
+  flex: 1;
+  min-width: 0;
+}
+
+.enum-value-separator {
+  color: #c0c4cc;
+  font-weight: bold;
+  flex-shrink: 0;
+  font-size: 14px;
+}
+
+.enum-value-remove {
+  flex-shrink: 0;
+  padding: 4px;
+}
+
+.enum-neq-config {
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: #fff;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+}
+
+.neq-config-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.neq-config-row:last-child {
+  margin-bottom: 0;
+}
+
+.neq-config-label {
+  font-size: 12px;
+  color: #606266;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.neq-input {
+  flex: 1;
+}
+
+.neq-hint {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #909399;
+  background: #f5f7fa;
+  border-radius: 4px;
+  padding: 6px 10px;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  line-height: 1.5;
+}
+
+.neq-hint i {
+  color: #e6a23c;
+  margin-top: 2px;
+  flex-shrink: 0;
 }
 </style>

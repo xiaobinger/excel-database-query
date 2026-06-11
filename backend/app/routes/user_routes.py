@@ -74,6 +74,9 @@ def create_user():
         if 'auto_task_ids' in data:
             user.set_auto_task_ids(data['auto_task_ids'])
 
+        if 'system_task_ids' in data:
+            user.set_system_task_ids(data['system_task_ids'])
+
         db.session.add(user)
         db.session.commit()
 
@@ -125,6 +128,9 @@ def update_user(user_id):
 
         if 'auto_task_ids' in data:
             user.set_auto_task_ids(data['auto_task_ids'])
+
+        if 'system_task_ids' in data:
+            user.set_system_task_ids(data['system_task_ids'])
 
         db.session.commit()
 

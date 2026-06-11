@@ -182,6 +182,23 @@
                 />
               </el-select>
             </el-form-item>
+            <el-form-item label="系统任务">
+              <el-select
+                v-model="form.system_task_ids"
+                multiple
+                collapse-tags
+                collapse-tags-tooltip
+                placeholder="选择可用系统任务（空为全部）"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="t in systemTaskList"
+                  :key="t.id"
+                  :label="t.name"
+                  :value="t.id"
+                />
+              </el-select>
+            </el-form-item>
           </div>
         </div>
       </el-form>
@@ -209,6 +226,7 @@ const formRef = ref(null)
 const userList = ref([])
 const roleList = ref([])
 const autoTaskList = ref([])
+const systemTaskList = ref([])
 
 const defaultForm = {
   username: '',
@@ -219,7 +237,8 @@ const defaultForm = {
   phone: '',
   role_id: null,
   script_ids: [],
-  auto_task_ids: []
+  auto_task_ids: [],
+  system_task_ids: []
 }
 
 const form = reactive({ ...defaultForm })
@@ -245,14 +264,16 @@ const rules = {
 async function fetchData() {
   loading.value = true
   try {
-    const [usersRes, rolesRes, autoRes] = await Promise.all([
+    const [usersRes, rolesRes, autoRes, sysRes] = await Promise.all([
       api.users.list(),
       api.roles.list(),
-      api.autoExport.list()
+      api.autoExport.list(),
+      api.systemTask.list()
     ])
     userList.value = usersRes.data || []
     roleList.value = rolesRes.data || []
     autoTaskList.value = autoRes.data || []
+    systemTaskList.value = sysRes.data || []
   } catch {
   } finally {
     loading.value = false
@@ -272,7 +293,8 @@ function openDialog(row) {
       phone: row.phone || '',
       role_id: row.role_id,
       script_ids: row.script_ids || [],
-      auto_task_ids: row.auto_task_ids || []
+      auto_task_ids: row.auto_task_ids || [],
+      system_task_ids: row.system_task_ids || []
     })
   } else {
     isEdit.value = false
@@ -294,7 +316,8 @@ async function handleSubmit() {
         phone: form.phone,
         role_id: form.role_id,
         script_ids: form.script_ids,
-        auto_task_ids: form.auto_task_ids
+        auto_task_ids: form.auto_task_ids,
+        system_task_ids: form.system_task_ids
       }
     if (!isEdit.value) {
       payload.password = form.password

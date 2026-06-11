@@ -8,7 +8,7 @@ from app.models.ai_config import AiConfig
 from app.models.ai_skill import AiSkill
 from app.models.user_behavior import UserBehavior
 from app.models.ai_chat import AiChat, AiChatMessage
-from app.utils.auth import login_required, admin_required, get_current_user
+from app.utils.auth import login_required, admin_required, get_current_user, permission_required
 
 logger = logging.getLogger(__name__)
 ai_bp = Blueprint('ai', __name__, url_prefix='/api/ai')
@@ -16,14 +16,14 @@ ai_bp = Blueprint('ai', __name__, url_prefix='/api/ai')
 
 # ============ AI Config ============
 @ai_bp.route('/configs', methods=['GET'])
-@admin_required
+@permission_required('system')
 def get_configs():
     configs = AiConfig.query.order_by(AiConfig.created_at.desc()).all()
     return jsonify({'success': True, 'data': [c.to_dict() for c in configs]})
 
 
 @ai_bp.route('/configs', methods=['POST'])
-@admin_required
+@permission_required('system')
 def create_config():
     data = request.get_json()
     if not data or not data.get('name'):
@@ -57,7 +57,7 @@ def create_config():
 
 
 @ai_bp.route('/configs/<int:config_id>', methods=['PUT'])
-@admin_required
+@permission_required('system')
 def update_config(config_id):
     config = AiConfig.query.get(config_id)
     if not config:
@@ -88,7 +88,7 @@ def update_config(config_id):
 
 
 @ai_bp.route('/configs/<int:config_id>', methods=['DELETE'])
-@admin_required
+@permission_required('system')
 def delete_config(config_id):
     config = AiConfig.query.get(config_id)
     if not config:
@@ -99,7 +99,7 @@ def delete_config(config_id):
 
 
 @ai_bp.route('/configs/<int:config_id>/test', methods=['POST'])
-@admin_required
+@permission_required('system')
 def test_config(config_id):
     config = AiConfig.query.get(config_id)
     if not config:
@@ -563,9 +563,10 @@ def send_message(chat_id):
                 # 系统任务列表处理
                 if func_name == 'list_system_tasks' and result.get('total') == 1 and not result.get('error'):
                     task = result['tasks'][0]
-                    logger.info(f'匹配到唯一系统任务: {task["name"]}，等待AI二次回复')
+                    logger.info(f'匹配到唯一系统任务: {task["name"]}，等待AI二次回复提取参数')
+                    # 唯一匹配时不设置_select_mode，让AI二次回复调用request_system_task
                 if func_name == 'list_system_tasks' and not result.get('error'):
-                    if result.get('total', 0) >= 1:
+                    if result.get('total', 0) > 1:
                         result['_select_mode'] = 'multi'
                         result['message'] = f'找到 {result["total"]} 个匹配的系统任务，请勾选后执行'
                     elif result.get('total', 0) == 0:

@@ -38,6 +38,8 @@ def create_app(config_name='default'):
         from app.models.ai_skill import AiSkill
         from app.models.ai_chat import AiChat, AiChatMessage
         from app.models.business_system import BusinessSystem
+        from app.models.system_task import SystemTask, SystemTaskExecution
+        from app.models.ai_strategy import AiStrategy
         db.create_all()
         _auto_migrate(app)
         _init_default_admin(app)
@@ -60,8 +62,18 @@ def _setup_logging(app):
     log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     log_file = os.path.join(log_dir, 'app.log')
 
+    # Windows-friendly timed rotating file handler
+    class SafeTimedRotatingFileHandler(TimedRotatingFileHandler):
+        def doRollover(self):
+            try:
+                super().doRollover()
+            except (PermissionError, OSError) as e:
+                # On Windows, file may be locked by another process/thread
+                # Skip rotation and continue logging to current file
+                pass
+
     # 按天分割日志，保留30天
-    file_handler = TimedRotatingFileHandler(
+    file_handler = SafeTimedRotatingFileHandler(
         log_file, when='midnight', interval=1, backupCount=30, encoding='utf-8'
     )
     file_handler.suffix = '%Y-%m-%d.log'
@@ -90,6 +102,8 @@ def _register_blueprints(app):
     from app.routes.system_routes import system_bp
     from app.routes.ai_routes import ai_bp
     from app.routes.business_system_routes import business_bp
+    from app.routes.system_task_routes import system_task_bp
+    from app.routes.ai_strategy_routes import ai_strategy_bp
 
     app.register_blueprint(ssh_bp)
     app.register_blueprint(database_bp)
@@ -104,6 +118,8 @@ def _register_blueprints(app):
     app.register_blueprint(system_bp)
     app.register_blueprint(ai_bp)
     app.register_blueprint(business_bp)
+    app.register_blueprint(system_task_bp)
+    app.register_blueprint(ai_strategy_bp)
 
 
 def _register_error_handlers(app):
@@ -213,7 +229,7 @@ def _init_default_admin(app):
             name='超级管理员',
             description='系统超级管理员，拥有所有权限',
             is_admin=True,
-            menu_permissions='["dashboard","databases","scripts","query","exports","export_exec","auto_export","history","users","roles","system","ai_chat","skills","business_systems"]',
+            menu_permissions='["dashboard","databases","scripts","query","exports","export_exec","auto_export","history","users","roles","system","ai_chat","skills","business_systems","system_tasks"]',
             button_permissions='["all"]',
         )
         db.session.add(admin_role)
@@ -222,7 +238,7 @@ def _init_default_admin(app):
         # 确保管理员角色包含新菜单权限
         try:
             menus = json.loads(admin_role.menu_permissions) if admin_role.menu_permissions else []
-            new_menus = ['ai_chat', 'skills', 'business_systems']
+            new_menus = ['ai_chat', 'skills', 'business_systems', 'system_tasks']
             updated = False
             for m in new_menus:
                 if m not in menus:
