@@ -1196,11 +1196,20 @@ async function trySmartMatchQuery(fileInfo, text) {
 
     const defaultParamColumn = matchRes.default_param_column || []
 
+    // 先通过API在数据库中创建消息记录，获取真实ID
+    const scriptNames = matchedScripts.map(s => s.name).join('、')
+    const cardContent = `智能匹配到 ${matchedScripts.length} 个查询选项：${scriptNames}`
+    let cardMsgId = Date.now()
+    try {
+      const createRes = await api.ai.createMessage(currentChatId.value, { content: cardContent })
+      cardMsgId = createRes.data?.id || cardMsgId
+    } catch {}
+
     // 创建智能匹配查询卡片（不需要用户确认，自动执行）
     const cardMsg = {
-      id: Date.now() + Math.random(),
+      id: cardMsgId,
       role: 'assistant',
-      content: '',
+      content: cardContent,
       _type: 'smart_query', // 智能匹配查询卡片类型
       _action_type: 'query',
       _scripts: matchedScripts.map(s => ({
@@ -1429,6 +1438,31 @@ async function sendMessage() {
               messages.value.push(autoMsg)
               // 自动执行
               doExecuteSystemTask(autoMsg)
+              continue
+            } else if (params.length > 0) {
+              // 参数未解析完整，直接弹出参数输入框
+              const paramMsg = {
+                id: tr.message_id || Date.now() + Math.random(),
+                role: 'assistant',
+                content: `匹配到系统任务「${result.task_name}」，以下参数需要您提供后才能执行：`,
+                _type: 'tool',
+                _dismissed: false,
+                tool_data: result,
+                _selected: [result.task_id],
+                _selectedScripts: [{
+                  id: result.task_id,
+                  name: result.task_name || '系统任务',
+                  task_type: result.task_type || 'sql',
+                  params: params,
+                }],
+                _action_type: 'system_task',
+                _param_values: paramsValues,
+                _params_checked: false,
+              }
+              messages.value.push(paramMsg)
+              // 自动打开参数设置对话框
+              await nextTick()
+              openSystemTaskParamDialog(paramMsg)
               continue
             }
           }
