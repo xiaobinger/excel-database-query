@@ -2298,10 +2298,14 @@ function openSystemTaskParamDialog(msg) {
   const task = msg._selectedScripts[0]
   if (!task) return
 
+  const existingValues = msg._param_values || {}
   const values = {}
   if (task.params) {
     for (const p of task.params) {
-      if (p.enum_enabled && p.enum_mode === 'neq' && p.neq_value) {
+      // 优先使用已有的参数值（如AI解析的）
+      if (existingValues[p.name] !== undefined && existingValues[p.name] !== '') {
+        values[p.name] = existingValues[p.name]
+      } else if (p.enum_enabled && p.enum_mode === 'neq' && p.neq_value) {
         values[p.name] = true
       } else if (p.enum_enabled && p.enum_values && p.enum_values.length > 0) {
         values[p.name] = p.multi ? [] : ''
@@ -2344,10 +2348,25 @@ async function confirmSystemTask(msg) {
   }]
   msg._action_type = 'system_task'
 
-  // 如果有参数值，直接执行；否则弹出参数设置
   const hasParams = td.params && td.params.length > 0
+  const hasRequiredParams = hasParams && td.params.some(p => p.required)
+  const paramsValues = td.params_values || {}
+
+  // 检查必填参数是否都有值
+  const missingRequired = hasParams && td.params
+    .filter(p => p.required)
+    .some(p => !paramsValues[p.name] && paramsValues[p.name] !== 0)
+
+  if (hasParams && (missingRequired || Object.keys(paramsValues).length === 0)) {
+    // 有必填参数未填写，或没有任何参数值，弹出参数设置对话框
+    msg._param_values = paramsValues
+    openSystemTaskParamDialog(msg)
+    return
+  }
+
+  // 参数已完整，直接执行
   if (hasParams) {
-    msg._param_values = td.params_values || {}
+    msg._param_values = paramsValues
     msg._params_checked = true
   }
 

@@ -490,6 +490,10 @@ def send_message(chat_id):
             messages.append({'role': 'system', 'content': ai_config.system_prompt})
         else:
             sys_prompt = context + '\n\n## 重要规则\n' \
+                '- 系统中有三种不同类型的任务，必须严格区分：\n' \
+                '  1. 导出任务（export）：从数据库导出数据到Excel，调用 list_export_options / request_export\n' \
+                '  2. 查询任务（query）：根据Excel文件中的主键数据去数据库查询匹配信息，需要上传Excel文件，调用 list_query_options / request_query\n' \
+                '  3. 系统任务（system_task）：后台运维类操作（如数据清理、缓存刷新、终端解绑等），调用 list_system_tasks / request_system_task\n' \
                 '- 当用户表达需要导出数据的意图时，调用 request_export 工具\n' \
                 '- 当用户表达需要查询数据的意图时，调用 request_query 工具\n' \
                 '- 当用户表达需要执行系统任务的意图时，调用 request_system_task 工具\n' \

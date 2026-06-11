@@ -12,7 +12,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "list_export_options",
-            "description": "列出所有可用的导出选项，包括名称、描述、参数等信息",
+            "description": "列出所有可用的导出选项。导出选项是指从数据库导出数据到Excel的脚本，与查询任务和系统任务不同。当用户需要导出数据、下载报表时调用此工具。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -46,7 +46,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "list_query_options",
-            "description": "列出所有可用的查询选项，包括名称、描述等信息",
+            "description": "列出所有可用的查询选项。查询选项是指根据Excel文件中的数据（如主键列）去数据库查询匹配数据的脚本，需要上传Excel文件。与导出任务和系统任务不同。当用户需要根据Excel数据查询匹配信息时调用此工具。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -115,7 +115,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "list_system_tasks",
-            "description": "列出所有可用的系统任务，包括名称、描述、任务类型、参数配置等信息。当用户提到需要执行系统任务、定时任务、自动化任务时调用此工具。",
+            "description": "列出所有可用的系统任务。系统任务是指后台运维类任务（如数据清理、缓存刷新、终端解绑等），与导出任务和查询任务完全不同。只有当用户明确提到\"系统任务\"或描述的是运维类操作时才调用此工具。不要将查询任务或导出任务误认为是系统任务。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -132,7 +132,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "request_system_task",
-            "description": "当用户明确要执行系统任务时调用此工具。需要指定系统任务名称和参数值。注意：必须从用户的自然语言描述中提取所有可能的参数值填入params对象。",
+            "description": "当用户明确要执行系统任务（运维类任务）时调用此工具。系统任务与导出任务、查询任务完全不同，只有运维类操作才属于系统任务。需要指定系统任务名称和参数值。注意：必须从用户的自然语言描述中提取所有可能的参数值填入params对象。",
             "parameters": {
                 "type": "object",
                 "properties": {
