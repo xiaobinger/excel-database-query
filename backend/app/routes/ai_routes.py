@@ -498,7 +498,7 @@ def send_message(chat_id):
                 '- 当用户表达需要查询数据的意图时，调用 request_query 工具\n' \
                 '- 当用户表达需要执行系统任务的意图时，调用 request_system_task 工具\n' \
                 '- 调用 request_export 时，务必从用户描述中提取所有参数值（如商户号、日期、渠道等）填入 params 对象\n' \
-                '- 调用 request_system_task 时，务必从用户描述中提取所有参数值填入 params 对象\n' \
+                '- 调用 request_system_task 时，务必从用户描述中提取所有参数值填入 params 对象，params的键名必须使用list_system_tasks返回的参数配置中的name字段值\n' \
                 '- 如果用户没有指定具体的导出选项名称，先调用 list_export_options 列出相关选项让用户选择\n' \
                 '- 如果用户没有指定具体的查询选项名称，先调用 list_query_options 列出相关选项让用户选择\n' \
                 '- 如果用户没有指定具体的系统任务名称，先调用 list_system_tasks 列出相关任务让用户选择\n' \

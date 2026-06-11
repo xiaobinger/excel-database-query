@@ -132,7 +132,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "request_system_task",
-            "description": "当用户明确要执行系统任务（运维类任务）时调用此工具。系统任务与导出任务、查询任务完全不同，只有运维类操作才属于系统任务。需要指定系统任务名称和参数值。注意：必须从用户的自然语言描述中提取所有可能的参数值填入params对象。",
+            "description": "当用户明确要执行系统任务（运维类任务）时调用此工具。系统任务与导出任务、查询任务完全不同，只有运维类操作才属于系统任务。需要指定系统任务名称和参数值。注意：1、必须从用户的自然语言描述中提取所有可能的参数值填入params对象；2、params的键名必须使用list_system_tasks返回的参数配置中的name字段值，不要自己编造参数名；3、如果之前没有调用list_system_tasks，请先调用以获取正确的参数名。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -142,7 +142,7 @@ AI_TOOLS = [
                     },
                     "params": {
                         "type": "object",
-                        "description": "参数键值对，键为参数名，值为用户提供的参数值。务必从用户描述中提取所有参数值。",
+                        "description": "参数键值对。键必须是系统任务参数配置中的name字段值（如device_sn、user_id等），值为用户提供的参数值。如果不知道参数名，请先调用list_system_tasks查看参数配置。",
                         "additionalProperties": {"type": "string"}
                     },
                     "description": {
@@ -666,7 +666,7 @@ class AiService:
                 if not allowed_ids or task.id not in allowed_ids:
                     return {'error': f'你没有权限执行系统任务"{task.name}"'}
 
-        # 标准化neq参数
+        # 标准化neq参数 + 智能匹配参数名
         task_params = task.get_params_config() or []
         # For SQL tasks, params come from the linked script
         if (task.task_type or 'sql') == 'sql' and task.script_id:
@@ -674,6 +674,48 @@ class AiService:
             script = Script.query.get(task.script_id)
             if script and script.get_params_config():
                 task_params = script.get_params_config()
+
+        # 智能匹配参数名：AI传入的key可能和配置中的name不完全一致
+        if params and task_params:
+            mapped_params = {}
+            param_names = {p['name'] for p in task_params}
+            # 先处理直接匹配的
+            for key, val in params.items():
+                if key in param_names:
+                    mapped_params[key] = val
+                else:
+                    # 尝试模糊匹配：key包含在name中，或name包含key，或key包含在label中
+                    matched = False
+                    key_lower = key.lower().replace('_', '').replace('-', '')
+                    for p in task_params:
+                        p_name = p['name']
+                        p_label = (p.get('label') or '').lower()
+                        p_name_lower = p_name.lower().replace('_', '').replace('-', '')
+                        # 精确匹配label
+                        if p_label and key.lower() == p_label:
+                            mapped_params[p_name] = val
+                            matched = True
+                            break
+                        # 模糊匹配：key和name去掉下划线后相同
+                        if key_lower == p_name_lower:
+                            mapped_params[p_name] = val
+                            matched = True
+                            break
+                        # key包含在name中，或name包含key
+                        if key_lower in p_name_lower or p_name_lower in key_lower:
+                            mapped_params[p_name] = val
+                            matched = True
+                            break
+                        # key包含在label中
+                        if p_label and key_lower in p_label.replace('_', '').replace('-', ''):
+                            mapped_params[p_name] = val
+                            matched = True
+                            break
+                    if not matched:
+                        # 无法匹配，保留原始key
+                        mapped_params[key] = val
+            params = mapped_params
+
         if params:
             for p in task_params:
                 if p.get('enum_mode') == 'neq' and p.get('neq_value') and p.get('name') in params:

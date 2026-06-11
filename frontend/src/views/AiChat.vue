@@ -2553,12 +2553,19 @@ async function doExecuteSystemTask(msg) {
     if (!task) throw new Error('未选择系统任务')
 
     const params_values = {}
-    if (msg._param_values && task.params) {
-      for (const p of task.params) {
-        const val = msg._param_values[p.name]
-        if (val !== undefined && val !== '' && val !== null) {
-          params_values[p.name] = val
+    if (msg._param_values) {
+      if (task.params && task.params.length > 0) {
+        // 按参数配置的name提取值
+        for (const p of task.params) {
+          const val = msg._param_values[p.name]
+          if (val !== undefined && val !== '' && val !== null) {
+            params_values[p.name] = val
+          }
         }
+      }
+      // 如果按参数配置提取后为空，直接使用所有传入的参数值
+      if (Object.keys(params_values).length === 0 && Object.keys(msg._param_values).length > 0) {
+        Object.assign(params_values, msg._param_values)
       }
     }
 
