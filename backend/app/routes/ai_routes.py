@@ -9,7 +9,7 @@ from app.models.ai_skill import AiSkill
 from app.models.user_behavior import UserBehavior
 from app.models.ai_chat import AiChat, AiChatMessage
 from app.utils.auth import login_required, admin_required, get_current_user, permission_required
-
+import requests
 logger = logging.getLogger(__name__)
 ai_bp = Blueprint('ai', __name__, url_prefix='/api/ai')
 
@@ -536,14 +536,14 @@ def send_message(chat_id):
                     script = result['scripts'][0]
                     logger.info(f'匹配到唯一导出选项: {script["name"]}，等待AI二次回复提取参数')
                     # 不再自动调用 request_export，让AI从用户消息中提取参数后调用
-                # 多匹配或无匹配 → 创建选择卡片
+                # 多匹配 → 创建选择卡片
                 elif func_name == 'list_export_options' and not result.get('error'):
                     if result.get('total', 0) > 1:
                         result['_select_mode'] = 'multi'
                         result['message'] = f'找到 {result["total"]} 个匹配的导出选项，请勾选需要的选项后点击确认执行'
                     elif result.get('total', 0) == 0:
-                        result['_select_mode'] = 'all'
-                        result['message'] = '未找到精确匹配的选项，以下是你有权限的所有导出选项，请勾选后执行'
+                        # 无匹配，不创建选择卡片，交给AI回复
+                        pass
 
                 # 智能处理：如果list_query_options返回唯一匹配，自动调用request_query
                 # 注意：不再自动调用，让AI在二次回复时提取参数并调用
@@ -551,14 +551,14 @@ def send_message(chat_id):
                     script = result['scripts'][0]
                     logger.info(f'匹配到唯一查询选项: {script["name"]}，等待AI二次回复')
                     # 不再自动调用 request_query，让AI处理
-                # 多匹配或无匹配 → 创建选择卡片
+                # 多匹配 → 创建选择卡片
                 elif func_name == 'list_query_options' and not result.get('error'):
                     if result.get('total', 0) > 1:
                         result['_select_mode'] = 'multi'
                         result['message'] = f'找到 {result["total"]} 个匹配的查询选项，请勾选后执行'
                     elif result.get('total', 0) == 0:
-                        result['_select_mode'] = 'all'
-                        result['message'] = '未找到精确匹配的选项，以下是你有权限的所有查询选项'
+                        # 无匹配，不创建选择卡片，交给AI回复
+                        pass
 
                 # 系统任务列表处理
                 if func_name == 'list_system_tasks' and result.get('total') == 1 and not result.get('error'):
@@ -570,8 +570,8 @@ def send_message(chat_id):
                         result['_select_mode'] = 'multi'
                         result['message'] = f'找到 {result["total"]} 个匹配的系统任务，请勾选后执行'
                     elif result.get('total', 0) == 0:
-                        result['_select_mode'] = 'all'
-                        result['message'] = '未找到精确匹配的系统任务，以下是所有可用的系统任务'
+                        # 无匹配，不创建选择卡片，交给AI回复
+                        pass
 
             # Build tool result messages for AI to generate final response
             tool_messages = []
