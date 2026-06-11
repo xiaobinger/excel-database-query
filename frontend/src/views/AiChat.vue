@@ -194,6 +194,74 @@
                   </div>
                 </div>
               </template>
+              <!-- 智能匹配查询卡片（自动执行，不需要用户确认） -->
+              <template v-else-if="msg._type === 'smart_query'">
+                <div class="tool-card smart-query-card" :class="{ done: msg._done, executing: msg._executing, failed: msg._failed }">
+                  <div class="tool-card-header">
+                    <i v-if="msg._executing" class="fas fa-spinner fa-spin tool-icon"></i>
+                    <i v-else-if="msg._done" class="fas fa-check-circle tool-icon tool-icon-success"></i>
+                    <i v-else-if="msg._failed" class="fas fa-times-circle tool-icon tool-icon-error"></i>
+                    <i v-else class="fas fa-magic tool-icon"></i>
+                    <span class="tool-title">
+                      <template v-if="msg._executing">智能匹配查询执行中...</template>
+                      <template v-else-if="msg._done">查询执行完成</template>
+                      <template v-else-if="msg._failed">查询执行失败</template>
+                      <template v-else>智能匹配查询</template>
+                    </span>
+                  </div>
+                  <div class="tool-card-body">
+                    <!-- 匹配结果信息 -->
+                    <div class="smart-match-info">
+                      <div class="smart-match-tip">
+                        <i class="fas fa-file-excel"></i>
+                        <span>{{ msg._file_info?.filename }}</span>
+                      </div>
+                      <div v-for="s in msg._selectedScripts" :key="s.id" class="smart-match-script">
+                        <div class="smart-match-script-name">
+                          <i class="fas fa-search"></i> {{ s.name }}
+                        </div>
+                        <div class="smart-match-script-detail">
+                          <el-tag v-if="s.primary_key" size="small" type="danger" effect="plain">
+                            <i class="fas fa-key"></i> 主键：{{ s.primary_key }}
+                          </el-tag>
+                          <el-tag v-if="s.query_fields && s.query_fields.length > 0" size="small" type="primary" effect="plain">
+                            查询列：{{ s.query_fields.slice(0, 3).join('、') }}{{ s.query_fields.length > 3 ? '...' : '' }}
+                          </el-tag>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- 执行进度条 -->
+                    <div v-if="msg._executing" class="tool-progress-info">
+                      <el-progress :percentage="msg._progress || 0" :stroke-width="8" />
+                      <span class="tool-progress-text">{{ msg._status_text || '正在初始化...' }}</span>
+                    </div>
+
+                    <!-- 执行完成 -->
+                    <div v-if="msg._done" class="smart-query-result">
+                      <div v-if="msg._download_url" class="tool-download-link">
+                        <el-button type="success" @click="downloadFile(msg._download_url)">
+                          <i class="fas fa-download"></i> 下载查询结果
+                        </el-button>
+                      </div>
+                      <div v-else class="smart-query-nodata">
+                        <i class="fas fa-info-circle"></i> 查询完成，未匹配到数据
+                      </div>
+                    </div>
+
+                    <!-- 执行失败 -->
+                    <div v-if="msg._failed && msg._error_msg" class="tool-error-msg">
+                      <i class="fas fa-exclamation-circle"></i>
+                      <span class="error-msg-content">
+                        <span class="error-msg-text">{{ msg._error_msg }}</span>
+                        <span v-if="msg._ai_suggestion" class="error-ai-suggestion">
+                          <i class="fas fa-lightbulb"></i> {{ msg._ai_suggestion }}
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </template>
               <!-- 参数确认消息（带操作按钮） -->
               <template v-else-if="msg._type === 'param_confirm'">
                 <div class="param-confirm-card">
@@ -784,7 +852,10 @@
           <div class="params-card">
             <div class="param-item" v-for="p in (sysTaskParamDialogTask.params || [])" :key="p.name">
               <div class="param-item-label">
-                <span class="param-name-tag">{{ p.label || p.name }}</span>
+                <span class="param-name-tag">
+                  {{ p.label || p.name }}
+                  <span v-if="p.required" style="color: #f56c6c; margin-left: 2px">*</span>
+                </span>
                 <el-tag v-if="p.required" size="small" type="danger" effect="plain">必填</el-tag>
               </div>
               <div class="param-item-control">
@@ -837,9 +908,12 @@
 
       <template #footer>
         <el-button @click="sysTaskParamDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="confirmSystemTaskParamDialog">
+        <el-button type="primary" :disabled="!sysTaskParamCanConfirm" @click="confirmSystemTaskParamDialog">
           <i class="fas fa-play"></i> 确认执行
         </el-button>
+        <div v-if="!sysTaskParamCanConfirm" style="color: #E6A23C; font-size: 12px; margin-top: 4px">
+          <i class="fas fa-exclamation-triangle"></i> 请填写所有必填参数
+        </div>
       </template>
     </el-dialog>
   </div>
@@ -901,6 +975,19 @@ const sysTaskParamDialogVisible = ref(false)
 const sysTaskParamDialogMsg = ref(null)  // 关联的select_options卡片消息
 const sysTaskParamDialogTask = ref(null)  // 当前编辑的系统任务
 const sysTaskParamDialogValues = ref({})  // 参数值
+
+// 系统任务参数对话框：是否可以确认执行
+const sysTaskParamCanConfirm = computed(() => {
+  const task = sysTaskParamDialogTask.value
+  if (!task || !task.params) return true
+  for (const p of task.params) {
+    if (!p.required) continue
+    const val = sysTaskParamDialogValues.value[p.name]
+    if (val === undefined || val === null || val === '') return false
+    if (Array.isArray(val) && val.length === 0) return false
+  }
+  return true
+})
 
 // 参数对话框：是否可以确认执行
 const paramDialogCanConfirm = computed(() => {
@@ -965,6 +1052,13 @@ async function selectChat(chatId) {
         base._all_checked = {}
         base._selectedScripts = []
         base._missing_required_params = []
+      } else if (meta._type === 'smart_query') {
+        base._type = 'smart_query'
+        base._action_type = meta.action_type || 'query'
+        base._scripts = meta.scripts || []
+        base._selected = meta.selected || []
+        base._selectedScripts = meta.scripts || []
+        base._file_info = meta.file_info || null
       }
         // 恢复执行状态
         if (meta._executing) base._executing = true
@@ -1096,15 +1190,14 @@ async function trySmartMatchQuery(fileInfo, text) {
       return false // 未匹配到，走AI对话流程
     }
 
-    const isDirect = matchRes.direct === true
     const defaultParamColumn = matchRes.default_param_column || []
 
-    // 创建查询执行卡片消息
+    // 创建智能匹配查询卡片（不需要用户确认，自动执行）
     const cardMsg = {
       id: Date.now() + Math.random(),
       role: 'assistant',
       content: '',
-      _type: 'select_options',
+      _type: 'smart_query', // 智能匹配查询卡片类型
       _action_type: 'query',
       _scripts: matchedScripts.map(s => ({
         ...s,
@@ -1117,7 +1210,6 @@ async function trySmartMatchQuery(fileInfo, text) {
         params: [],
         query_fields: s.query_fields || [],
       })),
-      _select_mode: 'multi',
       _select_message: `智能匹配到 ${matchedScripts.length} 个查询选项`,
       _executing: false,
       _done: false,
@@ -1127,20 +1219,14 @@ async function trySmartMatchQuery(fileInfo, text) {
       _status_text: '',
       _error_msg: '',
       _download_url: '',
+      _file_info: fileInfo,
     }
     messages.value.push(cardMsg)
     await nextTick()
     scrollToBottom()
 
-    if (isDirect) {
-      // direct模式：自动执行查询任务
-      await smartMatchDirectExecute(cardMsg, fileInfo, defaultParamColumn)
-    } else {
-      // 非direct模式：弹出确认对话框
-      cardMsg._select_message = `智能匹配到 ${matchedScripts.length} 个查询选项，请确认执行`
-      // 打开查询对话框
-      openQueryDialogForSmartMatch(cardMsg, fileInfo, defaultParamColumn)
-    }
+    // 自动执行查询任务
+    await smartMatchDirectExecute(cardMsg, fileInfo, defaultParamColumn)
 
     return true
   } catch (e) {
@@ -1149,12 +1235,12 @@ async function trySmartMatchQuery(fileInfo, text) {
   }
 }
 
-// 智能匹配direct模式：自动执行查询
+// 智能匹配自动执行查询
 async function smartMatchDirectExecute(cardMsg, fileInfo, defaultParamColumn) {
   // 设置卡片为执行中
   cardMsg._executing = true
   cardMsg._progress = 5
-  cardMsg._status_text = '正在智能匹配参数列...'
+  cardMsg._status_text = '正在智能匹配参数列和主键...'
   cardMsg._done = false
   cardMsg._failed = false
 
@@ -1164,18 +1250,21 @@ async function smartMatchDirectExecute(cardMsg, fileInfo, defaultParamColumn) {
   try {
     // 智能匹配参数列
     let paramColumn = ''
+    let primaryKey = ''
     const columns = fileInfo.columns || []
 
     // 1. 优先使用脚本配置的primary_key/param_column
     const selectedScripts = cardMsg._selectedScripts || []
     for (const s of selectedScripts) {
-      if (s.primary_key && columns.includes(s.primary_key)) {
-        paramColumn = s.primary_key
-        break
+      if (s.primary_key) {
+        primaryKey = s.primary_key
+        // 如果Excel中有对应列，也设置为参数列
+        if (columns.includes(s.primary_key)) {
+          paramColumn = s.primary_key
+        }
       }
-      if (s.param_column && columns.includes(s.param_column)) {
+      if (!paramColumn && s.param_column && columns.includes(s.param_column)) {
         paramColumn = s.param_column
-        break
       }
     }
 
@@ -1199,7 +1288,7 @@ async function smartMatchDirectExecute(cardMsg, fileInfo, defaultParamColumn) {
       throw new Error('无法自动匹配参数列，请手动执行查询任务')
     }
 
-    cardMsg._status_text = `参数列：${paramColumn}，正在执行查询...`
+    cardMsg._status_text = `参数列：${paramColumn}${primaryKey ? '，主键：' + primaryKey : ''}，正在执行查询...`
     cardMsg._progress = 10
     await nextTick()
 
@@ -1215,6 +1304,10 @@ async function smartMatchDirectExecute(cardMsg, fileInfo, defaultParamColumn) {
     }
     formData.append('param_column', paramColumn)
     formData.append('new_sheet', newSheet)
+    // 设置主键
+    if (primaryKey) {
+      formData.append('primary_key', primaryKey)
+    }
 
     const res = await api.query.execute(formData)
     const taskId = res.task_id || res.data?.task_id
@@ -1234,52 +1327,7 @@ async function smartMatchDirectExecute(cardMsg, fileInfo, defaultParamColumn) {
   }
 }
 
-// 智能匹配非direct模式：打开查询对话框
-function openQueryDialogForSmartMatch(cardMsg, fileInfo, defaultParamColumn) {
-  queryDialogMsg.value = cardMsg
-  queryDialogStep.value = 2 // 跳过上传步骤，直接到确认
-  queryDialogFile.value = null // 不需要再上传
-  queryDialogFilePath.value = fileInfo.file_path || ''
-  queryDialogFileName.value = fileInfo.filename || ''
-  queryDialogRowCount.value = fileInfo.row_count || 0
-  queryDialogColumns.value = fileInfo.columns || []
 
-  // 智能匹配参数列
-  const columns = fileInfo.columns || []
-  const selectedScripts = cardMsg._selectedScripts || []
-
-  // 1. 优先使用脚本配置的primary_key/param_column
-  let paramColumn = ''
-  for (const s of selectedScripts) {
-    if (s.primary_key && columns.includes(s.primary_key)) {
-      paramColumn = s.primary_key
-      break
-    }
-    if (s.param_column && columns.includes(s.param_column)) {
-      paramColumn = s.param_column
-      break
-    }
-  }
-
-  // 2. 使用smart-match返回的default_param_column
-  if (!paramColumn && defaultParamColumn.length > 0) {
-    for (const kw of defaultParamColumn) {
-      const found = columns.find(c => c.includes(kw))
-      if (found) {
-        paramColumn = found
-        break
-      }
-    }
-  }
-
-  // 3. 使用第一列
-  if (!paramColumn && columns.length > 0) {
-    paramColumn = columns[0]
-  }
-
-  queryDialogParamColumn.value = paramColumn
-  queryDialogVisible.value = true
-}
 
 async function sendMessage() {
   const text = inputText.value.trim()
@@ -1441,6 +1489,14 @@ async function saveMessageState(msg) {
   if (msg._download_url) metadata._download_url = msg._download_url
   if (msg._error_msg) metadata._error_msg = msg._error_msg
   if (msg._ai_suggestion) metadata._ai_suggestion = msg._ai_suggestion
+  // 保存smart_query类型的元数据
+  if (msg._type === 'smart_query') {
+    metadata._type = 'smart_query'
+    metadata.action_type = msg._action_type || 'query'
+    metadata.scripts = msg._selectedScripts || []
+    metadata.selected = msg._selected || []
+    metadata.file_info = msg._file_info || null
+  }
   if (Object.keys(metadata).length > 0) {
     try {
       await api.ai.updateMessage(currentChatId.value, msg.id, { metadata })
@@ -2269,7 +2325,46 @@ function pollTaskStatus(taskId, msg) {
 }
 
 function downloadFile(url) {
-  window.open(url, '_blank')
+  // 使用fetch下载文件（支持认证token）
+  const token = localStorage.getItem('token')
+  const headers = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  fetch(url, { headers })
+    .then(res => {
+      if (!res.ok) {
+        return res.json().then(data => {
+          throw new Error(data.message || '下载失败')
+        }).catch(e => {
+          if (e.message && e.message !== 'Unexpected end of JSON input') {
+            ElMessage.error(e.message)
+          } else {
+            ElMessage.error('文件下载失败，请稍后重试')
+          }
+          throw e
+        })
+      }
+      // 从Content-Disposition获取文件名
+      const disposition = res.headers.get('Content-Disposition')
+      let filename = 'result.xlsx'
+      if (disposition) {
+        const match = disposition.match(/filename\*?=(?:UTF-8'')?([^;\n]+)/i)
+        if (match) filename = decodeURIComponent(match[1].replace(/['"]/g, ''))
+      }
+      return res.blob().then(blob => ({ blob, filename }))
+    })
+    .then(({ blob, filename }) => {
+      const blobUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = blobUrl
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(blobUrl)
+    })
+    .catch(() => {})
 }
 
 async function confirmQuery(msg) {
@@ -3091,6 +3186,74 @@ onMounted(() => {
 
 .tool-param-value {
   color: #303133;
+}
+
+/* 智能匹配查询卡片样式 */
+.smart-query-card {
+  border-left: 3px solid #409eff;
+}
+
+.smart-query-card.done {
+  border-left-color: #67c23a;
+  opacity: 0.85;
+}
+
+.smart-query-card.failed {
+  border-left-color: #f56c6c;
+}
+
+.smart-match-info {
+  margin-bottom: 12px;
+}
+
+.smart-match-tip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #606266;
+  margin-bottom: 8px;
+}
+
+.smart-match-tip i {
+  color: #67c23a;
+}
+
+.smart-match-script {
+  background: #f5f7fa;
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 6px;
+}
+
+.smart-match-script-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: #303133;
+  margin-bottom: 4px;
+}
+
+.smart-match-script-name i {
+  color: #409eff;
+  margin-right: 4px;
+}
+
+.smart-match-script-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.smart-query-result {
+  margin-top: 8px;
+}
+
+.smart-query-nodata {
+  color: #909399;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* 执行中状态（置灰） */
