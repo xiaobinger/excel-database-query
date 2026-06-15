@@ -66,6 +66,13 @@ def _setup_logging(app):
 
     # Windows-friendly timed rotating file handler
     class SafeTimedRotatingFileHandler(TimedRotatingFileHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            # 确保converter属性存在（Python 3.13兼容）
+            if not hasattr(self, 'converter'):
+                import time as _time
+                self.converter = _time.localtime
+
         def doRollover(self):
             """Override to handle Windows file locking during rotation."""
             if self.stream:

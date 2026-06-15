@@ -738,6 +738,7 @@ def send_message(chat_id):
                 for tr in tool_results
                 if tr.get('result', {}).get('action_type') == 'system_task'
             )
+            logger.info(f'普通路由-自动执行检测: has_auto_exec_system_task={has_auto_exec_system_task}, has_action={has_action}')
             # 如果所有system_task都是auto_executed，则不算action
             if has_auto_exec_system_task:
                 all_system_task_auto = all(
@@ -1378,6 +1379,7 @@ def send_message_stream(chat_id):
                     for tr in tool_results_list
                     if tr.get('result', {}).get('action_type') == 'system_task'
                 )
+                logger.info(f'流式路由-自动执行检测: has_auto_exec_system_task={has_auto_exec_system_task}, has_action={has_action}')
                 # 如果所有system_task都是auto_executed，则不算action
                 if has_auto_exec_system_task:
                     all_system_task_auto = all(

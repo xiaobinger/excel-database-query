@@ -849,9 +849,12 @@ class AiService:
         )
         needs_dbSelection = len(databases_info) > 1 and not matched_db_id
 
+        logger.info(f'API系统任务自动执行判断: is_api_task={is_api_task}, all_params_filled={all_params_filled}, needs_dbSelection={needs_dbSelection}, task_params={len(task_params)}, params={params}')
+
         if is_api_task and all_params_filled and not needs_dbSelection:
             try:
                 exec_result = SystemTaskService.execute_api_sync(task, params)
+                logger.info(f'API系统任务同步执行完成: task={task.name}, success={exec_result.get("success")}, mapping_summary={exec_result.get("mapping_summary", "")}')
                 # 构建返回给AI的结果，包含映射摘要
                 result = {
                     'action_type': 'system_task',
