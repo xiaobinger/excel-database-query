@@ -81,12 +81,12 @@ class ConnectionPoolManager:
             connector = self._connectors.get(conn_id)
 
         if connector:
-            # 检查连接是否仍然有效
-            if self._check_connector_health(connector):
+            # 简单检查engine是否存在，不做SQL查询（避免频繁SELECT 1）
+            if connector.engine:
                 return connector
             else:
-                # 连接失效，移除旧连接并重建
-                logger.info(f'连接池管理器: 连接 [ID={conn_id}] 已失效，正在重建...')
+                # engine不存在，移除旧连接并重建
+                logger.info(f'连接池管理器: 连接 [ID={conn_id}] engine已失效，正在重建...')
                 self._remove_connector(conn_id)
 
         # 创建新连接

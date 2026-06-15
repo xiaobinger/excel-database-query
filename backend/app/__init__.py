@@ -326,6 +326,16 @@ def _init_default_admin(app):
 
 def _init_connection_pool(app):
     """启动时预建立SSH隧道和数据库连接池"""
+    # Flask debug模式下reloader会重启进程，只在主进程中初始化连接池
+    import os
+    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+        # 这是reloader启动的子进程，正常初始化
+        pass
+    elif app.debug and os.environ.get('WERKZEUG_RUN_MAIN') is None:
+        # 这是主进程（reloader监视器），跳过连接池初始化避免重复
+        app.logger.info('连接池初始化: 跳过主进程（debug reloader模式，子进程会初始化）')
+        return
+
     try:
         from app.utils.connection_pool import ConnectionPoolManager
         pool = ConnectionPoolManager.get_instance()
