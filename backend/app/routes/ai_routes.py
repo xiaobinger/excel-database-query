@@ -1167,6 +1167,8 @@ def send_message_stream(chat_id):
                 resp = requests.post(url, headers=headers, json=payload, timeout=180, stream=True)
                 logger.info(f'流式请求响应状态: {resp.status_code}')
                 resp.raise_for_status()
+                # 确保使用UTF-8解码，避免中文乱码（部分API不返回charset头）
+                resp.encoding = 'utf-8'
 
                 chunk_count = 0
                 for line in resp.iter_lines(decode_unicode=True):
@@ -1509,6 +1511,7 @@ def send_message_stream(chat_id):
                     if config_enable_streaming:
                         resp2 = requests.post(url, headers=headers, json=payload2, timeout=180, stream=True)
                         resp2.raise_for_status()
+                        resp2.encoding = 'utf-8'
                         for line2 in resp2.iter_lines(decode_unicode=True):
                             if not line2:
                                 continue
