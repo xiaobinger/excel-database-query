@@ -293,12 +293,17 @@
                   </div>
                   <div v-show="!msg._thinking_collapsed" class="thinking-content">{{ msg._thinking }}</div>
                 </div>
-                <!-- 正文内容 -->
-                <div class="message-text" v-html="renderMarkdown(msg.content)"></div>
+                <!-- 正文内容（非空时才显示） -->
+                <div v-if="msg.content.trim()" class="message-text" v-html="renderMarkdown(msg.content)"></div>
                 <!-- 流式输出光标 -->
                 <span v-if="msg._streaming" class="streaming-cursor"></span>
+                <!-- 耗时和token统计 -->
+                <div v-if="!msg._streaming && (msg._tokens || msg._elapsed) && msg.role === 'assistant'" class="message-meta">
+                  <span v-if="msg._elapsed"><i class="fas fa-clock"></i> {{ msg._elapsed }}s</span>
+                  <span v-if="msg._tokens"><i class="fas fa-coins"></i> {{ msg._tokens }} tokens</span>
+                </div>
                 <!-- 重试按钮：仅AI文本消息且非流式中、非卡片类型 -->
-                <div v-if="msg.role === 'assistant' && !msg._streaming && !msg._type" class="message-retry">
+                <div v-if="msg.role === 'assistant' && !msg._streaming && !msg._type && msg.content.trim()" class="message-retry">
                   <el-button text size="small" class="retry-btn" @click="retryAiMessage(msg)" :loading="msg._retrying">
                     <i class="fas fa-redo"></i> 重新回答
                   </el-button>
@@ -2031,6 +2036,8 @@ async function sendStreamMessage(content, modelId) {
     _thinking: '',
     _thinking_done: false,
     _show_thinking: false,
+    _tokens: 0,
+    _elapsed: 0,
   })
   messages.value.push(streamMsg)
   await nextTick()
@@ -2153,6 +2160,8 @@ async function sendStreamMessage(content, modelId) {
               streamMsg._streaming = false
               streamMsg._thinking_done = true
               streamMsg.id = event.message_id || streamMsg.id
+              streamMsg._tokens = event.tokens || 0
+              streamMsg._elapsed = event.elapsed || 0
             } else if (event.type === 'error') {
               streamMsg._streaming = false
               streamMsg.content = event.content || 'AI服务调用失败'
@@ -3814,6 +3823,20 @@ onMounted(() => {
 }
 
 /* 重试按钮 */
+.message-meta {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+  padding-left: 16px;
+  font-size: 11px;
+  color: #b0b5bd;
+}
+
+.message-meta i {
+  margin-right: 3px;
+  font-size: 10px;
+}
+
 .message-retry {
   margin-top: 4px;
   padding-left: 16px;

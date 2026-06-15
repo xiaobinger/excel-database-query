@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import time
 import uuid
 from flask import Blueprint, request, jsonify, Response, stream_with_context, current_app
 from app import db
@@ -1134,6 +1135,7 @@ def send_message_stream(chat_id):
         # 注册活跃流
         request_id = str(uuid.uuid4())
         _active_streams[chat_id] = {'aborted': False, 'request_id': request_id}
+        start_time = time.time()
 
         # 先发送一个心跳事件，确认SSE连接已建立
         yield f"data: {json.dumps({'type': 'heartbeat'}, ensure_ascii=False)}\n\n"
@@ -1816,7 +1818,8 @@ def send_message_stream(chat_id):
             _active_streams.pop(chat_id, None)
 
             # 发送完成信号
-            yield f"data: {json.dumps({'type': 'done', 'message_id': msg_id, 'tokens': tokens_used}, ensure_ascii=False)}\n\n"
+            elapsed = round(time.time() - start_time, 2)
+            yield f"data: {json.dumps({'type': 'done', 'message_id': msg_id, 'tokens': tokens_used, 'elapsed': elapsed}, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             logger.error(f'流式响应异常: {e}', exc_info=True)
