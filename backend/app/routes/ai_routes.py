@@ -713,11 +713,34 @@ def send_message(chat_id):
             # Build tool result messages for AI to generate final response
             tool_messages = []
             for tr in tool_results:
-                tool_messages.append({
-                    'role': 'tool',
-                    'tool_call_id': tr['tool_call_id'],
-                    'content': json.dumps(tr['result'], ensure_ascii=False),
-                })
+                result = tr.get('result', {})
+                # 对auto_executed的系统任务结果精简，避免过大导致AI无法处理
+                if result.get('auto_executed') and result.get('action_type') == 'system_task':
+                    concise_result = {
+                        'action_type': 'system_task',
+                        'task_name': result.get('task_name', ''),
+                        'auto_executed': True,
+                        'success': result.get('success', False),
+                        'status_code': result.get('status_code'),
+                        'mapping_summary': result.get('mapping_summary', ''),
+                        'mapping_info': result.get('mapping_info', ''),
+                    }
+                    if result.get('error'):
+                        concise_result['error'] = result['error']
+                    # 如果mapping_summary为空，附上简化的response
+                    if not result.get('mapping_summary') and isinstance(result.get('response'), dict):
+                        concise_result['response'] = result['response']
+                    tool_messages.append({
+                        'role': 'tool',
+                        'tool_call_id': tr['tool_call_id'],
+                        'content': json.dumps(concise_result, ensure_ascii=False),
+                    })
+                else:
+                    tool_messages.append({
+                        'role': 'tool',
+                        'tool_call_id': tr['tool_call_id'],
+                        'content': json.dumps(result, ensure_ascii=False),
+                    })
 
             # Ask AI to generate final response with tool results
             messages.append({
@@ -764,6 +787,7 @@ def send_message(chat_id):
                 tokens = tokens  # 保持原有 token 计数
             elif has_lookup_needs_reply or has_auto_exec_system_task or not lookup_tool_calls:
                 # 需要AI二次回复：1)有lookup需要归总结果；2)API系统任务自动执行需要反馈结果；3)非操作型工具需要AI回复
+                logger.info(f'普通路由-进入AI二次回复: has_lookup_needs_reply={has_lookup_needs_reply}, has_auto_exec_system_task={has_auto_exec_system_task}, lookup_tool_calls={len(lookup_tool_calls)}')
                 try:
                     # 构建二次回复提示
                     reply_hints = []
@@ -781,6 +805,7 @@ def send_message(chat_id):
                     response_text = ai_response2['content']
                     second_tool_calls = ai_response2['tool_calls']
                     tokens = ai_response2['tokens']
+                    logger.info(f'普通路由-AI二次回复完成: response_text长度={len(response_text or "")}, second_tool_calls={len(second_tool_calls or [])}')
 
                     # 如果AI在二次回复中调用了工具，执行它们
                     if second_tool_calls:
@@ -1399,13 +1424,37 @@ def send_message_stream(chat_id):
 
                 if not has_action and not has_select and (has_lookup_needs_reply or has_auto_exec_system_task or not lookup_tc_exists):
                     # 需要AI二次回复：1)有lookup需要归总结果；2)API系统任务自动执行需要反馈结果；3)非操作型工具需要AI回复
+                    logger.info(f'流式路由-进入AI二次回复: has_lookup_needs_reply={has_lookup_needs_reply}, has_auto_exec_system_task={has_auto_exec_system_task}, lookup_tc_exists={lookup_tc_exists}')
                     tool_messages = []
                     for tr in tool_results_list:
-                        tool_messages.append({
-                            'role': 'tool',
-                            'tool_call_id': tr['tool_call_id'],
-                            'content': json.dumps(tr['result'], ensure_ascii=False),
-                        })
+                        result = tr.get('result', {})
+                        # 对auto_executed的系统任务结果精简，避免过大导致AI无法处理
+                        if result.get('auto_executed') and result.get('action_type') == 'system_task':
+                            concise_result = {
+                                'action_type': 'system_task',
+                                'task_name': result.get('task_name', ''),
+                                'auto_executed': True,
+                                'success': result.get('success', False),
+                                'status_code': result.get('status_code'),
+                                'mapping_summary': result.get('mapping_summary', ''),
+                                'mapping_info': result.get('mapping_info', ''),
+                            }
+                            if result.get('error'):
+                                concise_result['error'] = result['error']
+                            # 如果mapping_summary为空，附上简化的response
+                            if not result.get('mapping_summary') and isinstance(result.get('response'), dict):
+                                concise_result['response'] = result['response']
+                            tool_messages.append({
+                                'role': 'tool',
+                                'tool_call_id': tr['tool_call_id'],
+                                'content': json.dumps(concise_result, ensure_ascii=False),
+                            })
+                        else:
+                            tool_messages.append({
+                                'role': 'tool',
+                                'tool_call_id': tr['tool_call_id'],
+                                'content': json.dumps(result, ensure_ascii=False),
+                            })
 
                     # 构建二次请求的消息列表
                     messages.append({
