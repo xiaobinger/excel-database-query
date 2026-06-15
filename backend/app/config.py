@@ -47,7 +47,7 @@ class Config:
     LOG_FOLDER = os.environ.get('LOG_FOLDER', os.path.join(base_dir, _storage_conf.get('log_folder', 'logs').lstrip('./')))
     MAX_CONTENT_LENGTH = _storage_conf.get('max_content_length_mb', 50) * 1024 * 1024
     FILE_RETENTION_HOURS = _storage_conf.get('file_retention_hours', 24)
-    ALLOWED_EXTENSIONS = {'xlsx', 'xls'}
+    ALLOWED_UPLOAD_EXTENSIONS = set(_storage_conf.get('allowed_upload_extensions', ['xlsx', 'xls', 'csv']))
     ENCRYPTION_KEY = os.environ.get('ENCRYPTION_KEY', _security_conf.get('encryption_key', 'encryption-key-32-bytes-long-change!'))
     LOG_LEVEL = _logging_conf.get('level', 'INFO')
 

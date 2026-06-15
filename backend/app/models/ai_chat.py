@@ -33,7 +33,10 @@ class AiChatMessage(db.Model):
     chat_id = db.Column(db.Integer, db.ForeignKey('ai_chats.id'), nullable=False, comment='对话ID')
     role = db.Column(db.String(20), nullable=False, comment='角色: user/assistant/system')
     content = db.Column(db.Text, comment='消息内容')
-    tokens_used = db.Column(db.Integer, default=0, comment='消耗token数')
+    tokens_used = db.Column(db.Integer, default=0, comment='消耗token总数')
+    prompt_tokens = db.Column(db.Integer, default=0, comment='输入token数')
+    completion_tokens = db.Column(db.Integer, default=0, comment='输出token数')
+    elapsed = db.Column(db.Float, default=0, comment='响应耗时(秒)')
     is_deleted = db.Column(db.Boolean, default=False, comment='是否软删除')
     msg_metadata = db.Column('metadata', db.Text, comment='消息元数据(JSON)，用于存储工具调用状态等')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -45,6 +48,9 @@ class AiChatMessage(db.Model):
             'role': self.role,
             'content': self.content,
             'tokens_used': self.tokens_used,
+            'prompt_tokens': self.prompt_tokens,
+            'completion_tokens': self.completion_tokens,
+            'elapsed': self.elapsed,
             'created_at': beijing_isoformat(self.created_at),
         }
         if self.msg_metadata:

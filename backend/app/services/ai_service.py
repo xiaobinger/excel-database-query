@@ -502,12 +502,17 @@ class AiService:
         message = choice.get('message', {})
         content = message.get('content', '')
         tool_calls = message.get('tool_calls', [])
-        tokens = result.get('usage', {}).get('total_tokens', 0)
+        usage = result.get('usage', {})
+        tokens = usage.get('total_tokens', 0)
+        prompt_tokens = usage.get('prompt_tokens', 0)
+        completion_tokens = usage.get('completion_tokens', 0)
 
         return {
             'content': content,
             'tool_calls': tool_calls,
             'tokens': tokens,
+            'prompt_tokens': prompt_tokens,
+            'completion_tokens': completion_tokens,
         }
 
     @staticmethod

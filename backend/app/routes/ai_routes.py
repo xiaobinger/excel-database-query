@@ -546,9 +546,9 @@ def upload_file():
         return jsonify({'success': False, 'message': '文件名为空'}), 400
 
     ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
-    allowed_ext = {'xlsx', 'xls', 'csv'}
+    allowed_ext = current_app.config.get('ALLOWED_UPLOAD_EXTENSIONS', {'xlsx', 'xls', 'csv'})
     if ext not in allowed_ext:
-        return jsonify({'success': False, 'message': f'仅支持 {", ".join(allowed_ext)} 格式的文件'}), 400
+        return jsonify({'success': False, 'message': f'仅支持 {", ".join(sorted(allowed_ext))} 格式的文件'}), 400
 
     try:
         from app.services.excel_service import ExcelService
@@ -567,7 +567,7 @@ def upload_file():
             'data': {
                 'file_path': input_path,
                 'filename': file.filename,
-                'row_count': info.get('row_count', 0),
+                'row_count': info.get('data_rows', 0),
                 'columns': columns,
                 'preview': info.get('preview_rows', []),
             }
@@ -645,6 +645,8 @@ def send_message(chat_id):
     data = request.get_json()
     if not data or not data.get('content'):
         return jsonify({'success': False, 'message': '消息内容不能为空'}), 400
+
+    start_time = time.time()
 
     user_message = AiChatMessage(
         chat_id=chat_id,
@@ -738,6 +740,8 @@ def send_message(chat_id):
         response_text = ai_response['content']
         tool_calls = ai_response['tool_calls']
         tokens = ai_response['tokens']
+        prompt_tokens = ai_response.get('prompt_tokens', 0)
+        completion_tokens = ai_response.get('completion_tokens', 0)
 
         # If AI wants to call tools, execute them
         tool_results = []
@@ -935,6 +939,8 @@ def send_message(chat_id):
                     response_text = ai_response2['content']
                     second_tool_calls = ai_response2['tool_calls']
                     tokens = ai_response2['tokens']
+                    prompt_tokens += ai_response2.get('prompt_tokens', 0)
+                    completion_tokens += ai_response2.get('completion_tokens', 0)
                     logger.info(f'普通路由-AI二次回复完成: response_text长度={len(response_text or "")}, second_tool_calls={len(second_tool_calls or [])}')
 
                     # 如果AI在二次回复中调用了工具，执行它们
@@ -1013,7 +1019,10 @@ def send_message(chat_id):
                             response2.raise_for_status()
                             result3 = response2.json()
                             response_text = result3['choices'][0].get('message', {}).get('content', '') if result3.get('choices') else ''
-                            tokens = result3.get('usage', {}).get('total_tokens', tokens)
+                            usage3 = result3.get('usage', {})
+                            tokens = usage3.get('total_tokens', tokens)
+                            prompt_tokens += usage3.get('prompt_tokens', 0)
+                            completion_tokens += usage3.get('completion_tokens', 0)
                 except Exception as e:
                     logger.error(f'AI二次回复失败: {e}', exc_info=True)
                     response_text = '处理失败，请稍后重试'
@@ -1026,11 +1035,17 @@ def send_message(chat_id):
 
         # Save assistant message (skip if empty content AND there are tool results)
         if response_text.strip() or not tool_results:
+            elapsed = round(time.time() - start_time, 2)
+            if elapsed < 0.01:
+                elapsed = 0.01
             assistant_message = AiChatMessage(
                 chat_id=chat_id,
                 role='assistant',
                 content=response_text,
                 tokens_used=tokens,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                elapsed=elapsed,
             )
             db.session.add(assistant_message)
             db.session.flush()
@@ -1256,6 +1271,8 @@ def send_message_stream(chat_id):
         full_content = ''
         thinking_content = ''
         tokens_used = 0
+        prompt_tokens_used = 0
+        completion_tokens_used = 0
         accumulated_tool_calls = {}  # {index: {id, function: {name, arguments}}}
 
         # 注册活跃流
@@ -1352,6 +1369,8 @@ def send_message_stream(chat_id):
                             # token 统计
                             if chunk.get('usage'):
                                 tokens_used = chunk['usage'].get('total_tokens', 0)
+                                prompt_tokens_used = chunk['usage'].get('prompt_tokens', 0)
+                                completion_tokens_used = chunk['usage'].get('completion_tokens', 0)
                         except json.JSONDecodeError:
                             continue
 
@@ -1389,6 +1408,8 @@ def send_message_stream(chat_id):
                 # token 统计
                 if result.get('usage'):
                     tokens_used = result['usage'].get('total_tokens', 0)
+                    prompt_tokens_used = result['usage'].get('prompt_tokens', 0)
+                    completion_tokens_used = result['usage'].get('completion_tokens', 0)
 
             # 处理工具调用
             tool_results_list = []
@@ -1683,6 +1704,8 @@ def send_message_stream(chat_id):
                                                     second_accumulated_tool_calls[idx2]['function']['arguments'] += fn2['arguments']
                                         if chunk2.get('usage'):
                                             tokens_used = chunk2['usage'].get('total_tokens', 0)
+                                            prompt_tokens_used += chunk2['usage'].get('prompt_tokens', 0)
+                                            completion_tokens_used += chunk2['usage'].get('completion_tokens', 0)
                                 except json.JSONDecodeError:
                                     continue
                     else:
@@ -1713,6 +1736,8 @@ def send_message_stream(chat_id):
                                 }
                         if result2.get('usage'):
                             tokens_used = result2['usage'].get('total_tokens', 0)
+                            prompt_tokens_used += result2['usage'].get('prompt_tokens', 0)
+                            completion_tokens_used += result2['usage'].get('completion_tokens', 0)
 
                     # 处理二次回复中的工具调用
                     if second_accumulated_tool_calls:
@@ -1860,6 +1885,8 @@ def send_message_stream(chat_id):
                                         yield f"data: {json.dumps({'type': 'content', 'content': final_text}, ensure_ascii=False)}\n\n"
                                     if result3.get('usage'):
                                         tokens_used = result3['usage'].get('total_tokens', 0)
+                                        prompt_tokens_used += result3['usage'].get('prompt_tokens', 0)
+                                        completion_tokens_used += result3['usage'].get('completion_tokens', 0)
                                 except Exception as e3:
                                     logger.error(f'流式AI三次回复失败: {e3}', exc_info=True)
                             elif second_full_content:
@@ -1896,17 +1923,24 @@ def send_message_stream(chat_id):
                                         yield f"data: {json.dumps({'type': 'content', 'content': final_text}, ensure_ascii=False)}\n\n"
                                     if result3.get('usage'):
                                         tokens_used = result3['usage'].get('total_tokens', 0)
+                                        prompt_tokens_used += result3['usage'].get('prompt_tokens', 0)
+                                        completion_tokens_used += result3['usage'].get('completion_tokens', 0)
                                 except Exception as e3:
                                     logger.error(f'流式AI三次回复失败: {e3}', exc_info=True)
 
-
             # 流式结束，保存消息
             try:
+                elapsed = round(time.time() - start_time, 2)
+                if elapsed < 0.01:
+                    elapsed = 0.01
                 assistant_message = AiChatMessage(
                     chat_id=chat_id,
                     role='assistant',
                     content=full_content,
                     tokens_used=tokens_used,
+                    prompt_tokens=prompt_tokens_used,
+                    completion_tokens=completion_tokens_used,
+                    elapsed=elapsed,
                 )
                 if thinking_content:
                     assistant_message.msg_metadata = json.dumps({
@@ -1944,10 +1978,7 @@ def send_message_stream(chat_id):
             _active_streams.pop(chat_id, None)
 
             # 发送完成信号
-            elapsed = round(time.time() - start_time, 2)
-            if elapsed < 0.01:
-                elapsed = 0.01
-            yield f"data: {json.dumps({'type': 'done', 'message_id': msg_id, 'tokens': tokens_used, 'elapsed': elapsed}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'message_id': msg_id, 'tokens': tokens_used, 'prompt_tokens': prompt_tokens_used, 'completion_tokens': completion_tokens_used, 'elapsed': elapsed}, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             logger.error(f'流式响应异常: {e}', exc_info=True)

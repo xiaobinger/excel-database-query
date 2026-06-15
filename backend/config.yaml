@@ -25,6 +25,10 @@ storage:
   log_folder: "./logs"
   max_content_length_mb: 50
   file_retention_hours: 24
+  allowed_upload_extensions:
+    - "xlsx"
+    - "xls"
+    - "csv"
 
 logging:
   level: "INFO"

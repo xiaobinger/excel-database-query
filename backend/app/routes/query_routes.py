@@ -67,10 +67,10 @@ def execute_query():
         if file.filename == '':
             return jsonify({'success': False, 'message': '未选择文件'}), 400
 
-        allowed_ext = {'xlsx', 'xls'}
+        allowed_ext = current_app.config.get('ALLOWED_UPLOAD_EXTENSIONS', {'xlsx', 'xls', 'csv'})
         ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
         if ext not in allowed_ext:
-            return jsonify({'success': False, 'message': '仅支持 xlsx/xls 格式'}), 400
+            return jsonify({'success': False, 'message': f'仅支持 {", ".join(sorted(allowed_ext))} 格式'}), 400
 
         upload_dir = current_app.config['UPLOAD_FOLDER']
         os.makedirs(upload_dir, exist_ok=True)

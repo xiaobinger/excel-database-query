@@ -300,7 +300,7 @@
                 <!-- 耗时和token统计 -->
                 <div v-if="!msg._streaming && (msg._tokens > 0 || msg._elapsed > 0) && msg.role === 'assistant'" class="message-meta">
                   <span v-if="msg._elapsed > 0"><i class="fas fa-clock"></i> {{ msg._elapsed }}s</span>
-                  <span v-if="msg._tokens > 0"><i class="fas fa-coins"></i> {{ msg._tokens }} tokens</span>
+                  <span v-if="msg._tokens > 0"><i class="fas fa-coins"></i> {{ msg._tokens }} = ↑{{ msg._prompt_tokens || 0 }} + ↓{{ msg._completion_tokens || 0 }}</span>
                 </div>
                 <!-- 重试按钮：仅AI文本消息且非流式中、非卡片类型 -->
                 <div v-if="msg.role === 'assistant' && !msg._streaming && !msg._type && msg.content.trim()" class="message-retry">
@@ -1392,7 +1392,7 @@ async function selectChat(chatId) {
     const res = await api.ai.getMessages(chatId)
     const msgs = res.data || []
     messages.value = msgs.map(m => {
-      const base = { ...m, _dismissed: false }
+      const base = { ...m, _dismissed: false, _tokens: m.tokens_used || 0, _prompt_tokens: m.prompt_tokens || 0, _completion_tokens: m.completion_tokens || 0, _elapsed: m.elapsed || 0 }
       // 恢复工具卡片状态
       if (m._metadata) {
         const meta = m._metadata
@@ -2036,6 +2036,8 @@ async function sendStreamMessage(content, modelId) {
     _thinking_done: false,
     _show_thinking: false,
     _tokens: 0,
+    _prompt_tokens: 0,
+    _completion_tokens: 0,
     _elapsed: 0,
   })
   messages.value.push(streamMsg)
@@ -2160,6 +2162,8 @@ async function sendStreamMessage(content, modelId) {
               streamMsg._thinking_done = true
               streamMsg.id = event.message_id || streamMsg.id
               streamMsg._tokens = event.tokens || 0
+              streamMsg._prompt_tokens = event.prompt_tokens || 0
+              streamMsg._completion_tokens = event.completion_tokens || 0
               streamMsg._elapsed = event.elapsed || 0
             } else if (event.type === 'error') {
               streamMsg._streaming = false
@@ -2197,6 +2201,10 @@ async function sendStreamMessage(content, modelId) {
             streamMsg._streaming = false
             streamMsg._thinking_done = true
             streamMsg.id = event.message_id || streamMsg.id
+            streamMsg._tokens = event.tokens || 0
+            streamMsg._prompt_tokens = event.prompt_tokens || 0
+            streamMsg._completion_tokens = event.completion_tokens || 0
+            streamMsg._elapsed = event.elapsed || 0
           } else if (event.type === 'error') {
             streamMsg._streaming = false
             streamMsg.content = event.content || 'AI服务调用失败'

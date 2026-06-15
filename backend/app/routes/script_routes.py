@@ -83,10 +83,19 @@ def create_script():
             script.set_template_config(data['template_config'])
 
         db.session.add(script)
+        db.session.flush()  # 获取script.id
+
+        # 自动将新脚本授权给创建者（非管理员需要显式授权才能看到）
+        current_user = get_current_user()
+        if current_user and not current_user.is_admin():
+            allowed_ids = current_user.get_script_ids()
+            if script.id not in allowed_ids:
+                allowed_ids.append(script.id)
+                current_user.set_script_ids(allowed_ids)
+
         db.session.commit()
 
         # 记录用户行为
-        current_user = get_current_user()
         if current_user:
             track_behavior(current_user.id, 'create', 'script', script.id, {
                 'name': script.name,
