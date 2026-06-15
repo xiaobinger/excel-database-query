@@ -843,10 +843,21 @@ class AiService:
 
         # API类型任务 + 参数齐全 + 不需要选择数据库 → 直接同步执行
         is_api_task = (task.task_type or 'sql') == 'api'
-        all_params_filled = len(task_params) == 0 or all(
-            p.get('name') in params and params[p.get('name')] not in (None, '')
-            for p in task_params if p.get('required', False)
-        )
+        # 检查所有配置的参数是否都有值（不仅仅是required的）
+        if task_params:
+            all_params_filled = all(
+                p.get('name') in params and params[p.get('name')] not in (None, '')
+                for p in task_params
+            )
+        else:
+            # 没有配置参数，检查body中是否有未替换的占位符
+            api_body = task.api_body or ''
+            import re as _re
+            placeholders = _re.findall(r'\{\{(\w+)\}\}', api_body)
+            if placeholders:
+                all_params_filled = all(p in params and params[p] not in (None, '') for p in placeholders)
+            else:
+                all_params_filled = True
         needs_dbSelection = len(databases_info) > 1 and not matched_db_id
 
         logger.info(f'API系统任务自动执行判断: is_api_task={is_api_task}, all_params_filled={all_params_filled}, needs_dbSelection={needs_dbSelection}, task_params={len(task_params)}, params={params}')

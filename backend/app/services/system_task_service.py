@@ -419,6 +419,11 @@ class SystemTaskService:
             except (json.JSONDecodeError, TypeError):
                 pass
 
+        # 如果body为空但有params，且是JSON请求，将params作为JSON body发送
+        if not body and request_params and headers.get('Content-Type', '').startswith('application/json'):
+            request_body = request_params
+            request_params = {}  # 避免参数重复
+
         # Make request
         try:
             if method == 'GET':
@@ -427,8 +432,13 @@ class SystemTaskService:
             elif method == 'POST':
                 if isinstance(request_body, dict):
                     resp = requests.post(url, headers=headers, json=request_body, timeout=timeout)
-                else:
+                elif request_body:
                     resp = requests.post(url, headers=headers, data=request_body, timeout=timeout)
+                elif request_params:
+                    # body为空且有params，作为form data发送
+                    resp = requests.post(url, headers=headers, data=request_params, timeout=timeout)
+                else:
+                    resp = requests.post(url, headers=headers, timeout=timeout)
             elif method == 'PUT':
                 if isinstance(request_body, dict):
                     resp = requests.put(url, headers=headers, json=request_body, timeout=timeout)
@@ -654,6 +664,11 @@ class SystemTaskService:
             except (json.JSONDecodeError, TypeError):
                 pass
 
+        # 如果body为空但有params，且是JSON请求，将params作为JSON body发送
+        if not body and request_params and headers.get('Content-Type', '').startswith('application/json'):
+            request_body = request_params
+            request_params = {}  # 避免参数重复
+
         # Make request
         try:
             if method == 'GET':
@@ -661,8 +676,13 @@ class SystemTaskService:
             elif method == 'POST':
                 if isinstance(request_body, dict):
                     resp = requests.post(url, headers=headers, json=request_body, timeout=timeout)
-                else:
+                elif request_body:
                     resp = requests.post(url, headers=headers, data=request_body, timeout=timeout)
+                elif request_params:
+                    # body为空且有params，作为form data发送
+                    resp = requests.post(url, headers=headers, data=request_params, timeout=timeout)
+                else:
+                    resp = requests.post(url, headers=headers, timeout=timeout)
             elif method == 'PUT':
                 if isinstance(request_body, dict):
                     resp = requests.put(url, headers=headers, json=request_body, timeout=timeout)
