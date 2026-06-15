@@ -849,7 +849,7 @@ class AiService:
         )
         needs_dbSelection = len(databases_info) > 1 and not matched_db_id
 
-        if is_api_task and all_params_filled and not needsDbSelection:
+        if is_api_task and all_params_filled and not needs_dbSelection:
             try:
                 exec_result = SystemTaskService.execute_api_sync(task, params)
                 # 构建返回给AI的结果，包含映射摘要
