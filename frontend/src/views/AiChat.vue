@@ -482,36 +482,66 @@
               <i class="fas fa-times file-remove" @click="uploadedFile = null"></i>
             </div>
             <div class="input-row">
-              <el-input
-                ref="inputRef"
-                v-model="inputText"
-                type="textarea"
-                :rows="2"
-                placeholder="输入消息，@ 选择模型，按 Enter 发送，Shift+Enter 换行..."
-                resize="none"
-                @keydown="handleKeydown"
-                @input="handleInputChange"
-                @blur="handleInputBlur"
-              />
-              <!-- @mention 浮层 -->
-              <div
-                v-if="mentionPopupVisible && filteredModels.length > 0"
-                class="mention-dropdown"
-              >
-                <div class="mention-dropdown-title">选择模型</div>
-                <div class="mention-list">
-                  <div
-                    v-for="model in filteredModels"
-                    :key="model.id"
-                    class="mention-item"
-                    @mousedown.prevent="selectMentionModel(model)"
-                  >
-                    <i class="fas fa-robot"></i>
-                    <span class="mention-name">{{ model.name }}</span>
-                    <span class="mention-model">{{ model.model_name }}</span>
-                    <el-tag size="small" type="info" effect="plain" style="margin-left: 4px">{{ model.provider }}</el-tag>
-                    <i v-if="model.enable_streaming" class="fas fa-bolt" style="color: #e6a23c; margin-left: 4px" title="流式输出"></i>
-                    <i v-if="model.enable_thinking" class="fas fa-brain" style="color: #9b59b6; margin-left: 4px" title="深度思考"></i>
+              <!-- 模型下拉选择 -->
+              <el-dropdown trigger="click" @command="selectDropdownModel" class="model-dropdown">
+                <div class="model-dropdown-trigger" :class="{ 'model-selected': selectedModel }">
+                  <i class="fas fa-robot"></i>
+                  <span class="model-dropdown-label">{{ selectedModel ? selectedModel.name : 'Auto' }}</span>
+                  <i class="fas fa-chevron-down model-dropdown-arrow"></i>
+                </div>
+                <template #dropdown>
+                  <el-dropdown-menu class="model-dropdown-menu">
+                    <el-dropdown-item command="auto" :class="{ 'is-active': !selectedModel }">
+                      <div class="model-option">
+                        <i class="fas fa-magic"></i>
+                        <span class="model-option-name">Auto</span>
+                        <span class="model-option-desc">系统策略自动选择</span>
+                      </div>
+                    </el-dropdown-item>
+                    <el-dropdown-item v-for="model in activeModels" :key="model.id" :command="model.id" :class="{ 'is-active': selectedModel?.id === model.id }">
+                      <div class="model-option">
+                        <i class="fas fa-robot"></i>
+                        <span class="model-option-name">{{ model.name }}</span>
+                        <span class="model-option-desc">{{ model.model_name }}</span>
+                        <i v-if="model.enable_streaming" class="fas fa-bolt" style="color: #e6a23c; margin-left: 4px" title="流式输出"></i>
+                        <i v-if="model.enable_thinking" class="fas fa-brain" style="color: #9b59b6; margin-left: 4px" title="深度思考"></i>
+                      </div>
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+              <div class="input-text-wrapper">
+                <el-input
+                  ref="inputRef"
+                  v-model="inputText"
+                  type="textarea"
+                  :rows="2"
+                  placeholder="输入消息，@ 选择模型，按 Enter 发送，Shift+Enter 换行..."
+                  resize="none"
+                  @keydown="handleKeydown"
+                  @input="handleInputChange"
+                  @blur="handleInputBlur"
+                />
+                <!-- @mention 浮层 -->
+                <div
+                  v-if="mentionPopupVisible && filteredModels.length > 0"
+                  class="mention-dropdown"
+                >
+                  <div class="mention-dropdown-title">选择模型</div>
+                  <div class="mention-list">
+                    <div
+                      v-for="model in filteredModels"
+                      :key="model.id"
+                      class="mention-item"
+                      @mousedown.prevent="selectMentionModel(model)"
+                    >
+                      <i class="fas fa-robot"></i>
+                      <span class="mention-name">{{ model.name }}</span>
+                      <span class="mention-model">{{ model.model_name }}</span>
+                      <el-tag size="small" type="info" effect="plain" style="margin-left: 4px">{{ model.provider }}</el-tag>
+                      <i v-if="model.enable_streaming" class="fas fa-bolt" style="color: #e6a23c; margin-left: 4px" title="流式输出"></i>
+                      <i v-if="model.enable_thinking" class="fas fa-brain" style="color: #9b59b6; margin-left: 4px" title="深度思考"></i>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -521,10 +551,20 @@
                   :before-upload="handleFileUpload"
                   accept=".xlsx,.xls,.csv"
                 >
-                  <el-button type="info" size="small" :disabled="loading" title="上传Excel文件">
-                    <i class="fas fa-file-upload"></i>
+                  <el-button size="small" :disabled="loading" title="上传附件">
+                    <i class="fas fa-paperclip"></i>
                   </el-button>
                 </el-upload>
+                <el-button
+                  size="small"
+                  :type="isRecording ? 'danger' : 'default'"
+                  :disabled="!speechSupported"
+                  @click="toggleVoiceInput"
+                  :title="isRecording ? '停止录音' : '语音输入'"
+                  :class="{ 'is-recording': isRecording }"
+                >
+                  <i :class="isRecording ? 'fas fa-stop' : 'fas fa-microphone'"></i>
+                </el-button>
                 <el-button type="primary" :loading="loading" :disabled="!canSend" @click="sendMessage">
                   <i class="fas fa-paper-plane"></i>
                 </el-button>
@@ -1141,6 +1181,63 @@ const selectedModel = ref(null)  // { id, name, model_name, provider }
 const mentionTriggerIndex = ref(-1)  // position of @ in inputText
 const inputRef = ref(null)  // ref for the textarea element
 
+// 语音输入
+const isRecording = ref(false)
+const speechSupported = ref(false)
+let recognition = null
+
+// 初始化语音识别
+if (typeof window !== 'undefined' && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+  recognition = new SpeechRecognition()
+  recognition.continuous = false
+  recognition.interimResults = true
+  recognition.lang = 'zh-CN'
+  speechSupported.value = true
+
+  recognition.onresult = (event) => {
+    let transcript = ''
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      transcript += event.results[i][0].transcript
+    }
+    if (event.results[event.results.length - 1].isFinal) {
+      inputText.value += transcript
+      isRecording.value = false
+    } else {
+      // 中间结果，可以实时显示（暂不处理）
+    }
+  }
+  recognition.onerror = () => {
+    isRecording.value = false
+  }
+  recognition.onend = () => {
+    isRecording.value = false
+  }
+}
+
+function toggleVoiceInput() {
+  if (!recognition) return
+  if (isRecording.value) {
+    recognition.stop()
+    isRecording.value = false
+  } else {
+    recognition.start()
+    isRecording.value = true
+  }
+}
+
+// 模型下拉选择
+function selectDropdownModel(command) {
+  if (command === 'auto') {
+    selectedModel.value = null
+  } else {
+    const model = activeModels.value.find(m => m.id === command)
+    if (model) {
+      selectedModel.value = model
+    }
+  }
+}
+
 const filteredModels = computed(() => {
   if (!mentionSearch.value) return activeModels.value
   const q = mentionSearch.value.toLowerCase()
@@ -1255,6 +1352,7 @@ async function createNewChat() {
 
 async function selectChat(chatId) {
   currentChatId.value = chatId
+  selectedModel.value = null  // 切换对话时重置模型选择为Auto
   try {
     const res = await api.ai.getMessages(chatId)
     const msgs = res.data || []
@@ -1714,8 +1812,8 @@ async function sendMessage() {
     // 智能匹配失败，继续走AI对话流程
   }
 
-  // 清除选中的模型（在判断useStreaming之后）
-  selectedModel.value = null
+  // 不清除选中的模型，让用户可以连续使用同一模型
+  // 切换对话时会自动清除
 
   try {
     if (useStreaming) {
@@ -4472,24 +4570,35 @@ onMounted(() => {
 
 /* ===== Input Area ===== */
 .input-area {
-  padding: 12px 24px 16px;
+  padding: 12px 20px 16px;
   border-top: 1px solid #eef2f7;
+  background: #fff;
 }
 
 .input-wrapper {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+  background: #f7f8fa;
+  border: 1px solid #e4e7ed;
+  border-radius: 12px;
+  padding: 10px 12px 8px;
+  transition: border-color 0.25s, box-shadow 0.25s;
+}
+
+.input-wrapper:focus-within {
+  border-color: #409eff;
+  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.12);
 }
 
 .file-attachment {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 6px 10px;
   background: #f0f9eb;
   border: 1px solid #d9f0be;
-  border-radius: 8px;
+  border-radius: 6px;
   font-size: 12px;
   color: #606266;
   align-self: flex-start;
@@ -4529,19 +4638,128 @@ onMounted(() => {
   position: relative;
 }
 
-.input-row :deep(.el-textarea__inner) {
-  border-radius: 8px;
+.input-text-wrapper {
   flex: 1;
+  position: relative;
+}
+
+.input-text-wrapper :deep(.el-textarea__inner) {
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  padding: 6px 8px;
+  box-shadow: none !important;
+}
+
+.input-text-wrapper :deep(.el-textarea__inner):focus {
+  border: none;
+  box-shadow: none !important;
+}
+
+/* 模型下拉选择 */
+.model-dropdown {
+  flex-shrink: 0;
+}
+
+.model-dropdown-trigger {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  background: #fff;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+  height: 36px;
+  box-sizing: border-box;
+  font-size: 13px;
+}
+
+.model-dropdown-trigger:hover {
+  border-color: #409eff;
+  background: #f0f7ff;
+}
+
+.model-dropdown-trigger.model-selected {
+  background: linear-gradient(135deg, #f0f9eb, #e8f5e0);
+  border-color: #95d475;
+  color: #529b2e;
+}
+
+.model-dropdown-trigger.model-selected:hover {
+  background: linear-gradient(135deg, #e1f3d8, #d4edca);
+  border-color: #7ec449;
+}
+
+.model-dropdown-trigger .fa-robot {
+  font-size: 13px;
+  color: #909399;
+  transition: color 0.2s;
+}
+
+.model-dropdown-trigger.model-selected .fa-robot {
+  color: #529b2e;
+}
+
+.model-dropdown-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #606266;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-dropdown-trigger.model-selected .model-dropdown-label {
+  color: #529b2e;
+}
+
+.model-dropdown-arrow {
+  font-size: 9px;
+  color: #c0c4cc;
+  transition: transform 0.2s;
+}
+
+.model-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 220px;
+}
+
+.model-option-name {
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.model-option-desc {
+  font-size: 11px;
+  color: #909399;
+  margin-left: auto;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-dropdown-menu .el-dropdown-menu__item.is-active {
+  color: #529b2e;
+  font-weight: 600;
+  background: #f0f9eb;
 }
 
 .model-tag-bar {
   display: flex;
   align-items: center;
-  padding: 4px 0;
+  padding: 2px 0;
 }
 
 .model-tag-bar .el-tag {
   font-size: 12px;
+  border-radius: 6px;
 }
 
 .thinking-badge {
@@ -4552,8 +4770,35 @@ onMounted(() => {
 
 .input-buttons {
   display: flex;
-  gap: 6px;
+  gap: 4px;
   align-items: center;
+}
+
+.input-buttons .el-button {
+  border-radius: 8px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+}
+
+.input-buttons .el-button--primary {
+  width: 40px;
+  height: 36px;
+}
+
+.input-buttons .el-button .fas {
+  font-size: 14px;
+}
+
+/* 录音动画 */
+@keyframes pulse-recording {
+  0% { box-shadow: 0 0 0 0 rgba(245, 108, 108, 0.4); }
+  70% { box-shadow: 0 0 0 8px rgba(245, 108, 108, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(245, 108, 108, 0); }
+}
+
+.input-buttons .el-button--danger.is-recording {
+  animation: pulse-recording 1.5s infinite;
 }
 
 /* Markdown 渲染样式 */
