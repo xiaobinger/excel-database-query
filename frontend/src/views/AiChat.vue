@@ -515,7 +515,7 @@
                   ref="inputRef"
                   v-model="inputText"
                   type="textarea"
-                  :rows="2"
+                  :autosize="{ minRows: 3, maxRows: 8 }"
                   placeholder="输入消息，@ 选择模型，按 Enter 发送，Shift+Enter 换行..."
                   resize="none"
                   @keydown="handleKeydown"
@@ -565,7 +565,10 @@
                 >
                   <i :class="isRecording ? 'fas fa-stop' : 'fas fa-microphone'"></i>
                 </el-button>
-                <el-button type="primary" :loading="loading" :disabled="!canSend" @click="sendMessage">
+                <el-button v-if="loading" type="danger" @click="abortRequest" title="终止任务">
+                  <i class="fas fa-stop"></i>
+                </el-button>
+                <el-button v-else type="primary" :disabled="!canSend" @click="sendMessage">
                   <i class="fas fa-paper-plane"></i>
                 </el-button>
               </div>
@@ -1167,6 +1170,7 @@ const currentChatId = ref(null)
 const messages = ref([])
 const inputText = ref('')
 const loading = ref(false)
+const abortController = ref(null)  // 用于终止流式请求
 const messagesRef = ref(null)
 const uploadedFile = ref(null)
 const store = useAppStore()
@@ -1223,6 +1227,33 @@ function toggleVoiceInput() {
   } else {
     recognition.start()
     isRecording.value = true
+  }
+}
+
+// 终止AI请求
+async function abortRequest() {
+  if (!loading.value) return
+  try {
+    // 终止前端fetch请求
+    if (abortController.value) {
+      abortController.value.abort()
+      abortController.value = null
+    }
+    // 通知后端终止
+    if (currentChatId.value) {
+      await api.ai.abortRequest(currentChatId.value)
+    }
+  } catch {}
+  loading.value = false
+  // 给当前流式消息添加终止标记
+  const streamMsg = messages.value.find(m => m._streaming)
+  if (streamMsg) {
+    streamMsg._streaming = false
+    if (!streamMsg.content.trim()) {
+      streamMsg.content = '任务已被用户手动终止'
+    } else {
+      streamMsg.content += '\n\n*任务已被用户手动终止*'
+    }
   }
 }
 
@@ -2008,6 +2039,10 @@ async function sendStreamMessage(content, modelId) {
   const url = api.ai.sendMessageStream(currentChatId.value, { content, ai_config_id: modelId })
   const token = localStorage.getItem('token')
 
+  // 创建AbortController
+  const controller = new AbortController()
+  abortController.value = controller
+
   try {
     console.log('[SSE] 发起流式请求:', url)
     const response = await fetch(url, {
@@ -2019,6 +2054,7 @@ async function sendStreamMessage(content, modelId) {
         'Cache-Control': 'no-cache',
       },
       body: JSON.stringify({ content, ai_config_id: modelId }),
+      signal: controller.signal,
     })
 
     console.log('[SSE] 响应状态:', response.status, response.ok, 'Content-Type:', response.headers.get('content-type'))
@@ -2120,6 +2156,13 @@ async function sendStreamMessage(content, modelId) {
             } else if (event.type === 'error') {
               streamMsg._streaming = false
               streamMsg.content = event.content || 'AI服务调用失败'
+            } else if (event.type === 'aborted') {
+              streamMsg._streaming = false
+              if (!streamMsg.content.trim()) {
+                streamMsg.content = '任务已被用户手动终止'
+              } else {
+                streamMsg.content += '\n\n*任务已被用户手动终止*'
+              }
             }
           } catch (parseErr) {
             console.warn('[SSE] JSON解析失败:', dataStr, parseErr)
@@ -2157,7 +2200,18 @@ async function sendStreamMessage(content, modelId) {
     }
   } catch (e) {
     streamMsg._streaming = false
-    streamMsg.content += '\n\n[连接中断]'
+    if (e.name === 'AbortError') {
+      // 用户主动终止
+      if (!streamMsg.content.trim()) {
+        streamMsg.content = '任务已被用户手动终止'
+      } else {
+        streamMsg.content += '\n\n*任务已被用户手动终止*'
+      }
+    } else {
+      streamMsg.content += '\n\n[连接中断]'
+    }
+  } finally {
+    abortController.value = null
   }
 
   // 如果流式消息内容为空且有工具结果，移除空消息
@@ -3596,6 +3650,7 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   background: #fafbfc;
+  transition: width 0.2s;
 }
 
 .sidebar-header {
@@ -4664,17 +4719,17 @@ onMounted(() => {
 .model-dropdown-trigger {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 6px 10px;
+  gap: 4px;
+  padding: 4px 8px;
   background: #fff;
   border: 1px solid #e4e7ed;
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s;
   white-space: nowrap;
-  height: 36px;
+  height: 32px;
   box-sizing: border-box;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .model-dropdown-trigger:hover {
@@ -4694,7 +4749,7 @@ onMounted(() => {
 }
 
 .model-dropdown-trigger .fa-robot {
-  font-size: 13px;
+  font-size: 12px;
   color: #909399;
   transition: color 0.2s;
 }
@@ -4704,10 +4759,10 @@ onMounted(() => {
 }
 
 .model-dropdown-label {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: #606266;
-  max-width: 80px;
+  max-width: 70px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -4775,19 +4830,19 @@ onMounted(() => {
 }
 
 .input-buttons .el-button {
-  border-radius: 8px;
-  width: 36px;
-  height: 36px;
+  border-radius: 6px;
+  width: 32px;
+  height: 32px;
   padding: 0;
 }
 
 .input-buttons .el-button--primary {
-  width: 40px;
-  height: 36px;
+  width: 36px;
+  height: 32px;
 }
 
 .input-buttons .el-button .fas {
-  font-size: 14px;
+  font-size: 13px;
 }
 
 /* 录音动画 */
@@ -4799,6 +4854,17 @@ onMounted(() => {
 
 .input-buttons .el-button--danger.is-recording {
   animation: pulse-recording 1.5s infinite;
+}
+
+/* 终止按钮脉冲动画 */
+@keyframes pulse-abort {
+  0% { box-shadow: 0 0 0 0 rgba(245, 108, 108, 0.5); }
+  70% { box-shadow: 0 0 0 6px rgba(245, 108, 108, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(245, 108, 108, 0); }
+}
+
+.input-buttons .el-button--danger:not(.is-recording) {
+  animation: pulse-abort 1.5s infinite;
 }
 
 /* Markdown 渲染样式 */
@@ -5153,6 +5219,123 @@ onMounted(() => {
 @keyframes streaming-glow {
   0%, 100% { box-shadow: 0 0 0 rgba(64, 158, 255, 0); }
   50% { box-shadow: 0 0 8px rgba(64, 158, 255, 0.08); }
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 1200px) {
+  .chat-sidebar {
+    width: 220px;
+  }
+  .messages-area {
+    padding: 16px 18px;
+  }
+  .input-area {
+    padding: 10px 16px 14px;
+  }
+}
+
+@media (max-width: 900px) {
+  .chat-sidebar {
+    width: 180px;
+  }
+  .messages-area {
+    padding: 12px 14px;
+  }
+  .input-area {
+    padding: 8px 12px 12px;
+  }
+  .input-wrapper {
+    padding: 8px 10px 6px;
+    border-radius: 10px;
+  }
+  .model-dropdown-trigger {
+    height: 28px;
+    padding: 3px 6px;
+    font-size: 11px;
+  }
+  .model-dropdown-label {
+    max-width: 50px;
+    font-size: 10px;
+  }
+  .input-buttons .el-button {
+    width: 28px;
+    height: 28px;
+  }
+  .input-buttons .el-button--primary {
+    width: 32px;
+    height: 28px;
+  }
+  .input-buttons .el-button .fas {
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 640px) {
+  .ai-chat {
+    height: calc(100vh - 80px);
+    border-radius: 0;
+    border: none;
+  }
+  .chat-sidebar {
+    width: 56px;
+    min-width: 56px;
+  }
+  .sidebar-header .el-button span {
+    display: none;
+  }
+  .chat-item-title {
+    display: none;
+  }
+  .chat-item {
+    justify-content: center;
+    padding: 10px 6px;
+  }
+  .messages-area {
+    padding: 10px 10px;
+  }
+  .message {
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+  .input-area {
+    padding: 6px 8px 10px;
+  }
+  .input-wrapper {
+    padding: 6px 8px 4px;
+    gap: 4px;
+    border-radius: 8px;
+  }
+  .input-row {
+    gap: 4px;
+  }
+  .model-dropdown-trigger {
+    height: 26px;
+    padding: 2px 5px;
+    gap: 3px;
+    border-radius: 5px;
+  }
+  .model-dropdown-label {
+    max-width: 40px;
+    font-size: 10px;
+  }
+  .model-dropdown-trigger .fa-robot {
+    font-size: 11px;
+  }
+  .input-buttons .el-button {
+    width: 26px;
+    height: 26px;
+    border-radius: 5px;
+  }
+  .input-buttons .el-button--primary {
+    width: 30px;
+    height: 26px;
+  }
+  .input-buttons .el-button .fas {
+    font-size: 11px;
+  }
+  .input-buttons {
+    gap: 3px;
+  }
 }
 </style>
 

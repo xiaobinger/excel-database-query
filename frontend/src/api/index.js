@@ -161,6 +161,7 @@ const ai = {
   getMessages: (chatId) => http.get(`/ai/chats/${chatId}/messages`),
   sendMessage: (chatId, data) => http.post(`/ai/chats/${chatId}/send`, data, { timeout: 180000 }),
   sendMessageStream: (chatId, data) => `/api/ai/chats/${chatId}/send-stream`,
+  abortRequest: (chatId) => http.post(`/ai/chats/${chatId}/abort`),
   uploadFile: (formData) => http.post('/ai/upload-file', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   matchQuery: (data) => http.post('/ai/match-query', data),
   updateMessage: (chatId, msgId, data) => http.put(`/ai/chats/${chatId}/messages/${msgId}`, data),

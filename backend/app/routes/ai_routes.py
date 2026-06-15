@@ -13,6 +13,9 @@ import requests
 logger = logging.getLogger(__name__)
 ai_bp = Blueprint('ai', __name__, url_prefix='/api/ai')
 
+# 活跃流式请求跟踪：{chat_id: {'aborted': bool, 'request_id': str}}
+_active_streams = {}
+
 
 # ============ AI Config ============
 @ai_bp.route('/configs', methods=['GET'])
@@ -1128,6 +1131,10 @@ def send_message_stream(chat_id):
         tokens_used = 0
         accumulated_tool_calls = {}  # {index: {id, function: {name, arguments}}}
 
+        # 注册活跃流
+        request_id = str(uuid.uuid4())
+        _active_streams[chat_id] = {'aborted': False, 'request_id': request_id}
+
         # 先发送一个心跳事件，确认SSE连接已建立
         yield f"data: {json.dumps({'type': 'heartbeat'}, ensure_ascii=False)}\n\n"
 
@@ -1163,6 +1170,10 @@ def send_message_stream(chat_id):
 
                 chunk_count = 0
                 for line in resp.iter_lines(decode_unicode=True):
+                    # 检查是否被用户终止
+                    if _active_streams.get(chat_id, {}).get('aborted'):
+                        logger.info(f'流式请求被用户终止: chat_id={chat_id}')
+                        break
                     if not line:
                         continue
                     if line.startswith('data: '):
@@ -1251,7 +1262,11 @@ def send_message_stream(chat_id):
 
             # 处理工具调用
             tool_results_list = []
-            if accumulated_tool_calls:
+            if _active_streams.get(chat_id, {}).get('aborted'):
+                # 用户已终止请求，跳过工具调用
+                logger.info(f'工具调用前检测到终止: chat_id={chat_id}')
+                yield f"data: {json.dumps({'type': 'aborted', 'content': '任务已被用户手动终止'}, ensure_ascii=False)}\n\n"
+            elif accumulated_tool_calls:
                 from app.services.ai_service import AiService
                 for idx in sorted(accumulated_tool_calls.keys()):
                     tc = accumulated_tool_calls[idx]
@@ -1794,6 +1809,9 @@ def send_message_stream(chat_id):
                     pass
                 msg_id = None
 
+            # 清理活跃流
+            _active_streams.pop(chat_id, None)
+
             # 发送完成信号
             yield f"data: {json.dumps({'type': 'done', 'message_id': msg_id, 'tokens': tokens_used}, ensure_ascii=False)}\n\n"
 
@@ -1817,6 +1835,10 @@ def send_message_stream(chat_id):
                     pass
             yield f"data: {json.dumps({'type': 'error', 'content': f'AI服务调用失败: {str(e)}'}, ensure_ascii=False)}\n\n"
 
+        finally:
+            # 确保清理活跃流
+            _active_streams.pop(chat_id, None)
+
     return Response(
         stream_with_context(generate()),
         mimetype='text/event-stream',
@@ -1826,6 +1848,24 @@ def send_message_stream(chat_id):
             'Connection': 'keep-alive',
         }
     )
+
+
+# ============ Abort AI Request ============
+@ai_bp.route('/chats/<int:chat_id>/abort', methods=['POST'])
+@login_required
+def abort_chat_request(chat_id):
+    """终止正在进行的AI请求"""
+    current_user = get_current_user()
+    chat = AiChat.query.filter_by(id=chat_id, user_id=current_user.id).first()
+    if not chat:
+        return jsonify({'success': False, 'message': '对话不存在'}), 404
+
+    stream_info = _active_streams.get(chat_id)
+    if stream_info and not stream_info.get('aborted'):
+        stream_info['aborted'] = True
+        logger.info(f'用户终止AI请求: chat_id={chat_id}, request_id={stream_info.get("request_id")}')
+        return jsonify({'success': True, 'message': '请求已终止'})
+    return jsonify({'success': True, 'message': '无活跃请求'})
 
 
 # ============ Update Message Metadata ============
