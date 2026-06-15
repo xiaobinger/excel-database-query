@@ -284,6 +284,8 @@ class SystemTaskService:
                         else:
                             rowcount = result.rowcount if hasattr(result, 'rowcount') else 0
                             total_affected += rowcount
+                            # DML语句需要显式提交事务
+                            conn.commit()
                             db_results.append({
                                 'statement_index': stmt_idx,
                                 'statement': stmt[:200],
