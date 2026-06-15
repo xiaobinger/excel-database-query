@@ -82,9 +82,20 @@ def _setup_logging(app):
             # Get the time for the new filename
             import time as _time
             currentTime = int(self.rolloverAt - self.interval)
-            fileTime = self.converter(currentTime)
+            converter = getattr(self, 'converter', _time.localtime)
+            fileTime = converter(currentTime)
             dfn = self.rotation_filename(self.baseFilename + "." +
                                          _time.strftime(self.suffix, fileTime))
+
+            # 如果当前日志文件不存在，跳过轮转直接重新打开
+            if not os.path.exists(self.baseFilename):
+                if not self.delay:
+                    self.stream = self._open()
+                newRolloverAt = self.computeRollover(currentTime + self.interval)
+                while newRolloverAt <= currentTime:
+                    newRolloverAt = newRolloverAt + self.interval
+                self.rolloverAt = newRolloverAt
+                return
 
             # Retry rename with delay for Windows file locking
             max_retries = 3
