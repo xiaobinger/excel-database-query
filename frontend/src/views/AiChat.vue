@@ -298,9 +298,9 @@
                 <!-- 流式输出光标 -->
                 <span v-if="msg._streaming" class="streaming-cursor"></span>
                 <!-- 耗时和token统计 -->
-                <div v-if="!msg._streaming && (msg._tokens || msg._elapsed) && msg.role === 'assistant'" class="message-meta">
-                  <span v-if="msg._elapsed"><i class="fas fa-clock"></i> {{ msg._elapsed }}s</span>
-                  <span v-if="msg._tokens"><i class="fas fa-coins"></i> {{ msg._tokens }} tokens</span>
+                <div v-if="!msg._streaming && (msg._tokens > 0 || msg._elapsed > 0) && msg.role === 'assistant'" class="message-meta">
+                  <span v-if="msg._elapsed > 0"><i class="fas fa-clock"></i> {{ msg._elapsed }}s</span>
+                  <span v-if="msg._tokens > 0"><i class="fas fa-coins"></i> {{ msg._tokens }} tokens</span>
                 </div>
                 <!-- 重试按钮：仅AI文本消息且非流式中、非卡片类型 -->
                 <div v-if="msg.role === 'assistant' && !msg._streaming && !msg._type && msg.content.trim()" class="message-retry">

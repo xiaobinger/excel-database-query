@@ -1819,6 +1819,8 @@ def send_message_stream(chat_id):
 
             # 发送完成信号
             elapsed = round(time.time() - start_time, 2)
+            if elapsed < 0.01:
+                elapsed = 0.01
             yield f"data: {json.dumps({'type': 'done', 'message_id': msg_id, 'tokens': tokens_used, 'elapsed': elapsed}, ensure_ascii=False)}\n\n"
 
         except Exception as e:
