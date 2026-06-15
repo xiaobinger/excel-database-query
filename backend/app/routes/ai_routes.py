@@ -116,6 +116,44 @@ def delete_config(config_id):
     return jsonify({'success': True, 'message': '删除成功'})
 
 
+@ai_bp.route('/configs/batch-delete', methods=['POST'])
+@permission_required('system')
+def batch_delete_configs():
+    data = request.get_json()
+    if not data or 'ids' not in data:
+        return jsonify({'success': False, 'message': '请提供要删除的ID列表'}), 400
+
+    ids = data.get('ids', [])
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'success': False, 'message': 'ids必须是非空列表'}), 400
+
+    deleted_count = 0
+    for config_id in ids:
+        config = AiConfig.query.get(config_id)
+        if config:
+            db.session.delete(config)
+            deleted_count += 1
+
+    try:
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'成功删除{deleted_count}个配置', 'deleted_count': deleted_count})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
+@ai_bp.route('/configs/all', methods=['DELETE'])
+@permission_required('system')
+def delete_all_configs():
+    try:
+        deleted_count = AiConfig.query.delete()
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'成功删除{deleted_count}个配置', 'deleted_count': deleted_count})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
 @ai_bp.route('/configs/<int:config_id>/test', methods=['POST'])
 @permission_required('system')
 def test_config(config_id):
@@ -223,6 +261,52 @@ def delete_skill(skill_id):
     db.session.delete(skill)
     db.session.commit()
     return jsonify({'success': True, 'message': '删除成功'})
+
+
+@ai_bp.route('/skills/batch-delete', methods=['POST'])
+@login_required
+def batch_delete_skills():
+    data = request.get_json()
+    if not data or 'ids' not in data:
+        return jsonify({'success': False, 'message': '请提供要删除的ID列表'}), 400
+
+    ids = data.get('ids', [])
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'success': False, 'message': 'ids必须是非空列表'}), 400
+
+    current_user = get_current_user()
+    deleted_count = 0
+    for skill_id in ids:
+        skill = AiSkill.query.get(skill_id)
+        if not skill:
+            continue
+        if not current_user.is_admin() and skill.user_id != current_user.id:
+            continue
+        db.session.delete(skill)
+        deleted_count += 1
+
+    try:
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'成功删除{deleted_count}个技能', 'deleted_count': deleted_count})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
+@ai_bp.route('/skills/all', methods=['DELETE'])
+@login_required
+def delete_all_skills():
+    current_user = get_current_user()
+    try:
+        if current_user.is_admin():
+            deleted_count = AiSkill.query.delete()
+        else:
+            deleted_count = AiSkill.query.filter_by(user_id=current_user.id).delete()
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'成功删除{deleted_count}个技能', 'deleted_count': deleted_count})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 400
 
 
 # ============ Behavior Tracking ============
@@ -375,6 +459,48 @@ def hard_delete_chat(chat_id):
     db.session.delete(chat)
     db.session.commit()
     return jsonify({'success': True, 'message': '永久删除成功'})
+
+
+@ai_bp.route('/chats/batch-hard-delete', methods=['POST'])
+@login_required
+def batch_hard_delete_chats():
+    """批量永久删除对话：仅管理员可操作"""
+    current_user = get_current_user()
+    if not current_user.is_admin():
+        return jsonify({'success': False, 'message': '无权限'}), 403
+
+    data = request.get_json()
+    ids = data.get('ids', [])
+    if not ids or not isinstance(ids, list):
+        return jsonify({'success': False, 'message': '请提供要删除的ID列表'}), 400
+
+    deleted_count = 0
+    for chat_id in ids:
+        chat = AiChat.query.filter_by(id=chat_id).first()
+        if chat:
+            AiChatMessage.query.filter_by(chat_id=chat_id).delete()
+            db.session.delete(chat)
+            deleted_count += 1
+    db.session.commit()
+    return jsonify({'success': True, 'message': f'成功永久删除 {deleted_count} 个对话', 'deleted_count': deleted_count})
+
+
+@ai_bp.route('/chats/all-hard', methods=['DELETE'])
+@login_required
+def hard_delete_all_chats():
+    """永久删除全部对话：仅管理员可操作"""
+    current_user = get_current_user()
+    if not current_user.is_admin():
+        return jsonify({'success': False, 'message': '无权限'}), 403
+
+    count = AiChat.query.count()
+    # 先删除所有消息
+    chat_ids = [c.id for c in AiChat.query.with_entities(AiChat.id).all()]
+    for chat_id in chat_ids:
+        AiChatMessage.query.filter_by(chat_id=chat_id).delete()
+    AiChat.query.delete()
+    db.session.commit()
+    return jsonify({'success': True, 'message': f'成功永久删除 {count} 个对话', 'deleted_count': count})
 
 
 @ai_bp.route('/chats/<int:chat_id>/messages/<int:message_id>', methods=['DELETE'])
@@ -1960,4 +2086,31 @@ def admin_restore_chat(chat_id):
     chat.is_deleted = False
     db.session.commit()
     return jsonify({'success': True, 'message': '恢复成功'})
-    return jsonify({'success': True, 'message': '恢复成功'})
+
+
+@ai_bp.route('/admin/chats/batch-restore', methods=['POST'])
+@admin_required
+def batch_restore_chats():
+    """批量恢复已删除对话"""
+    data = request.get_json()
+    ids = data.get('ids', [])
+    if not ids or not isinstance(ids, list):
+        return jsonify({'success': False, 'message': '请提供要恢复的ID列表'}), 400
+
+    restored_count = 0
+    for chat_id in ids:
+        chat = AiChat.query.filter_by(id=chat_id, is_deleted=True).first()
+        if chat:
+            chat.is_deleted = False
+            restored_count += 1
+    db.session.commit()
+    return jsonify({'success': True, 'message': f'成功恢复 {restored_count} 个对话', 'restored_count': restored_count})
+
+
+@ai_bp.route('/admin/chats/restore-all', methods=['PUT'])
+@admin_required
+def restore_all_chats():
+    """恢复全部已删除对话"""
+    count = AiChat.query.filter_by(is_deleted=True).update({'is_deleted': False})
+    db.session.commit()
+    return jsonify({'success': True, 'message': f'成功恢复 {count} 个对话', 'restored_count': count})

@@ -5,6 +5,12 @@
         <div class="card-header">
           <span><i class="fas fa-history"></i> 执行历史</span>
           <div class="header-actions">
+            <el-button v-hasPermi="['history:delete']" type="danger" size="small" :disabled="selectedRows.length === 0" @click="handleBatchDelete">
+              <i class="fas fa-trash-alt"></i> 批量删除{{ selectedRows.length > 0 ? `(${selectedRows.length})` : '' }}
+            </el-button>
+            <el-button v-hasPermi="['history:delete']" type="danger" size="small" plain @click="handleDeleteAll">
+              <i class="fas fa-trash"></i> 删除全部
+            </el-button>
             <el-select
               v-model="statusFilter"
               placeholder="状态筛选"
@@ -25,7 +31,8 @@
         </div>
       </template>
 
-      <el-table :data="tasks" stripe v-loading="loading" style="width: 100%" @row-click="openDetail">
+      <el-table :data="tasks" stripe v-loading="loading" style="width: 100%" @row-click="openDetail" @selection-change="handleSelectionChange" ref="tableRef">
+        <el-table-column type="selection" width="55" />
         <el-table-column prop="task_id" label="任务ID" width="130" show-overflow-tooltip />
         <el-table-column prop="script_name" label="查询选项" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">
@@ -280,6 +287,8 @@ const detailLogs = ref([])
 const logContentRef = ref(null)
 const fileRetentionHours = ref(24)
 const retrying = ref(false)
+const selectedRows = ref([])
+const tableRef = ref(null)
 
 const statusMap = {
   pending: { label: '等待中', type: 'info' },
@@ -385,6 +394,49 @@ async function handleDelete(row) {
       await api.query.deleteTask(id)
     }
     ElMessage.success('删除成功')
+    fetchTasks()
+  } catch {
+  }
+}
+
+function handleSelectionChange(rows) {
+  selectedRows.value = rows
+}
+
+async function handleBatchDelete() {
+  if (selectedRows.value.length === 0) return
+  try {
+    await ElMessageBox.confirm(`确定要删除选中的 ${selectedRows.value.length} 条记录吗？`, '批量删除', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+  } catch {
+    return
+  }
+  try {
+    await api.query.batchDeleteTasks(selectedRows.value.map(r => r.id))
+    ElMessage.success('批量删除成功')
+    selectedRows.value = []
+    fetchTasks()
+  } catch {
+  }
+}
+
+async function handleDeleteAll() {
+  try {
+    await ElMessageBox.confirm('确定要删除全部历史记录吗？此操作不可恢复！', '删除全部', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+  } catch {
+    return
+  }
+  try {
+    await api.query.deleteAllTasks()
+    ElMessage.success('全部删除成功')
+    selectedRows.value = []
     fetchTasks()
   } catch {
   }

@@ -4,13 +4,22 @@
       <template #header>
         <div class="card-header">
           <span><i class="fas fa-user-shield"></i> 角色管理</span>
-          <el-button type="primary" @click="openDialog()">
-            <i class="fas fa-plus"></i> 新建角色
-          </el-button>
+          <div class="card-header-actions">
+            <el-button type="danger" :disabled="selectedRows.length === 0" v-hasPermi="['role:delete']" @click="handleBatchDelete">
+              <i class="fas fa-trash-alt"></i> 批量删除
+            </el-button>
+            <el-button type="danger" plain v-hasPermi="['role:delete']" @click="handleDeleteAll">
+              <i class="fas fa-trash"></i> 删除全部
+            </el-button>
+            <el-button type="primary" @click="openDialog()">
+              <i class="fas fa-plus"></i> 新建角色
+            </el-button>
+          </div>
         </div>
       </template>
 
-      <el-table :data="roleList" stripe v-loading="loading" style="width: 100%">
+      <el-table ref="tableRef" :data="roleList" stripe v-loading="loading" style="width: 100%" @selection-change="handleSelectionChange">
+        <el-table-column type="selection" width="55" align="center" />
         <el-table-column prop="name" label="名称" min-width="120" show-overflow-tooltip />
         <el-table-column prop="description" label="描述" min-width="160" show-overflow-tooltip>
           <template #default="{ row }">
@@ -144,7 +153,7 @@
 <script setup>
 import { ref, reactive, onMounted, watch } from 'vue'
 import api from '../api'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -152,6 +161,8 @@ const dialogVisible = ref(false)
 const isEdit = ref(false)
 const editId = ref(null)
 const formRef = ref(null)
+const tableRef = ref(null)
+const selectedRows = ref([])
 const roleList = ref([])
 
 const menuPermLabels = {
@@ -388,6 +399,41 @@ async function handleSubmit() {
   }
 }
 
+function handleSelectionChange(rows) {
+  selectedRows.value = rows
+}
+
+async function handleBatchDelete() {
+  if (selectedRows.value.length === 0) return
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除选中的 ${selectedRows.value.length} 个角色吗？`,
+      '批量删除',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+    )
+    await api.roles.batchDelete(selectedRows.value.map(r => r.id))
+    ElMessage.success('批量删除成功')
+    fetchRoles()
+  } catch {
+    // 用户取消或请求失败
+  }
+}
+
+async function handleDeleteAll() {
+  try {
+    await ElMessageBox.confirm(
+      '确定要删除所有角色吗？此操作不可恢复！',
+      '删除全部',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+    )
+    await api.roles.deleteAll()
+    ElMessage.success('删除全部成功')
+    fetchRoles()
+  } catch {
+    // 用户取消或请求失败
+  }
+}
+
 async function handleDelete(id) {
   try {
     await api.roles.delete(id)
@@ -411,6 +457,12 @@ onMounted(fetchRoles)
   justify-content: space-between;
   font-size: 16px;
   font-weight: 600;
+}
+
+.card-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .card-header i {

@@ -114,3 +114,49 @@ def delete_role(role_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 400
+
+
+@role_bp.route('/batch-delete', methods=['POST'])
+@admin_required
+def batch_delete_roles():
+    data = request.get_json()
+    if not data or 'ids' not in data:
+        return jsonify({'success': False, 'message': '请提供要删除的ID列表'}), 400
+
+    ids = data.get('ids', [])
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'success': False, 'message': 'ids必须是非空列表'}), 400
+
+    deleted_count = 0
+    for role_id in ids:
+        role = Role.query.get(role_id)
+        if role:
+            user_count = User.query.filter_by(role_id=role_id).count()
+            if user_count == 0:
+                db.session.delete(role)
+                deleted_count += 1
+
+    try:
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'成功删除{deleted_count}个角色', 'deleted_count': deleted_count})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
+@role_bp.route('/all', methods=['DELETE'])
+@admin_required
+def delete_all_roles():
+    try:
+        roles = Role.query.all()
+        deleted_count = 0
+        for role in roles:
+            user_count = User.query.filter_by(role_id=role.id).count()
+            if user_count == 0:
+                db.session.delete(role)
+                deleted_count += 1
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'成功删除{deleted_count}个角色', 'deleted_count': deleted_count})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 400

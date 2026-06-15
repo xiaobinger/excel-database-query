@@ -56,6 +56,44 @@ def update_config():
     })
 
 
+@system_bp.route('/config/batch-delete', methods=['POST'])
+@permission_required('system')
+def batch_delete_configs():
+    data = request.get_json()
+    if not data or 'ids' not in data:
+        return jsonify({'success': False, 'message': '请提供要删除的ID列表'}), 400
+
+    ids = data.get('ids', [])
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'success': False, 'message': 'ids必须是非空列表'}), 400
+
+    deleted_count = 0
+    for config_id in ids:
+        config = SystemConfig.query.get(config_id)
+        if config:
+            db.session.delete(config)
+            deleted_count += 1
+
+    try:
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'成功删除{deleted_count}个配置', 'deleted_count': deleted_count})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
+@system_bp.route('/config/all', methods=['DELETE'])
+@permission_required('system')
+def delete_all_configs():
+    try:
+        deleted_count = SystemConfig.query.delete()
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'成功删除{deleted_count}个配置', 'deleted_count': deleted_count})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
 @system_bp.route('/test-email', methods=['POST'])
 @permission_required('system')
 def test_email():

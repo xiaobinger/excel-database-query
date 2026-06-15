@@ -15,6 +15,12 @@
         >
           <template #prefix><i class="fas fa-search"></i></template>
         </el-input>
+        <el-button v-if="store.hasButtonPermission('business:delete')" type="danger" :disabled="selectedRows.length === 0" @click="handleBatchDelete">
+          <i class="fas fa-trash-alt"></i> 批量删除{{ selectedRows.length > 0 ? `(${selectedRows.length})` : '' }}
+        </el-button>
+        <el-button v-if="store.hasButtonPermission('business:delete')" type="danger" plain @click="handleDeleteAll">
+          <i class="fas fa-trash"></i> 删除全部
+        </el-button>
         <el-button v-if="store.hasButtonPermission('business:create')" type="primary" @click="openDialog()">
           <i class="fas fa-plus"></i> 添加系统
         </el-button>
@@ -37,49 +43,61 @@
       >{{ cat }}</span>
     </div>
 
-    <!-- 系统卡片网格 -->
-    <div v-if="filteredSystems.length > 0" class="systems-grid">
-      <div
-        v-for="sys in filteredSystems"
-        :key="sys.id"
-        class="system-card"
-        :class="{ 'sso-enabled': sys.sso_enabled }"
-      >
-        <div class="card-glow"></div>
-        <div class="card-content" @click="handleCardClick(sys)">
-          <div class="card-logo">
-            <img v-if="sys.logo_url && !sys.logo_url.startsWith('fas')" :src="sys.logo_url" :alt="sys.name" @error="onLogoError($event, sys)" />
-            <i v-else :class="sys.logo_url || 'fas fa-globe'" class="logo-icon"></i>
+    <!-- 系统列表表格 -->
+    <el-table
+      v-if="filteredSystems.length > 0"
+      ref="tableRef"
+      :data="filteredSystems"
+      @selection-change="handleSelectionChange"
+      stripe
+      border
+      style="width: 100%"
+    >
+      <el-table-column type="selection" width="50" align="center" />
+      <el-table-column prop="name" label="系统名称" min-width="160">
+        <template #default="{ row }">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <img v-if="row.logo_url && !row.logo_url.startsWith('fas')" :src="row.logo_url" :alt="row.name" style="width: 28px; height: 28px; border-radius: 6px; object-fit: contain;" @error="onLogoError($event, row)" />
+            <i v-else :class="row.logo_url || 'fas fa-globe'" style="font-size: 18px; color: #409eff;"></i>
+            <span style="font-weight: 600;">{{ row.name }}</span>
           </div>
-          <div class="card-info">
-            <h3 class="card-name">{{ sys.name }}</h3>
-            <p class="card-desc">{{ sys.description || '暂无描述' }}</p>
-          </div>
-          <div class="card-badges">
-            <el-tag v-if="sys.sso_enabled" type="success" size="small" effect="dark" class="sso-badge">
-              <i class="fas fa-key"></i> SSO
-            </el-tag>
-            <el-tag v-if="sys.category" size="small" effect="plain" class="cat-badge">
-              {{ sys.category }}
-            </el-tag>
-          </div>
-          <div class="card-hover-overlay">
-            <div class="overlay-content">
-              <i class="fas fa-external-link-alt"></i>
-              <span>{{ sys.sso_enabled ? '单点登录' : '访问系统' }}</span>
-            </div>
-          </div>
-        </div>
-        <!-- 管理员操作按钮 -->
-        <div v-if="isAdmin" class="card-actions" @click.stop>
-          <el-button size="small" type="primary" text @click="openDialog(sys)">
+        </template>
+      </el-table-column>
+      <el-table-column prop="website_url" label="系统网址" min-width="200" show-overflow-tooltip>
+        <template #default="{ row }">
+          <el-link :href="row.website_url" target="_blank" type="primary" :underline="false">{{ row.website_url }}</el-link>
+        </template>
+      </el-table-column>
+      <el-table-column prop="category" label="分类" width="120" align="center">
+        <template #default="{ row }">
+          <el-tag v-if="row.category" size="small" effect="plain">{{ row.category }}</el-tag>
+          <span v-else style="color: #c0c4cc;">-</span>
+        </template>
+      </el-table-column>
+      <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.description || '-' }}</template>
+      </el-table-column>
+      <el-table-column label="SSO" width="80" align="center">
+        <template #default="{ row }">
+          <el-tag v-if="row.sso_enabled" type="success" size="small" effect="dark">启用</el-tag>
+          <el-tag v-else type="info" size="small" effect="plain">关闭</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="sort_order" label="排序" width="80" align="center" />
+      <el-table-column label="操作" width="200" align="center" fixed="right">
+        <template #default="{ row }">
+          <el-button size="small" type="primary" text @click="handleCardClick(row)">
+            <i class="fas fa-external-link-alt"></i> 访问
+          </el-button>
+          <el-button v-if="isAdmin" size="small" type="primary" text @click="openDialog(row)">
             <i class="fas fa-edit"></i>
           </el-button>
           <el-popconfirm
+            v-if="isAdmin"
             title="确定要删除此业务系统吗？"
             confirm-button-text="确定"
             cancel-button-text="取消"
-            @confirm="handleDelete(sys.id)"
+            @confirm="handleDelete(row.id)"
           >
             <template #reference>
               <el-button size="small" type="danger" text>
@@ -87,9 +105,9 @@
               </el-button>
             </template>
           </el-popconfirm>
-        </div>
-      </div>
-    </div>
+        </template>
+      </el-table-column>
+    </el-table>
 
     <el-empty v-else-if="!loading" description="暂无业务系统" />
 
@@ -188,11 +206,13 @@ const dialogVisible = ref(false)
 const isEdit = ref(false)
 const editId = ref(null)
 const formRef = ref(null)
+const tableRef = ref(null)
 const systemList = ref([])
 const categories = ref([])
 const searchText = ref('')
 const activeCategory = ref('')
 const extraParamsStr = ref('')
+const selectedRows = ref([])
 
 const defaultForm = {
   name: '',
@@ -378,6 +398,34 @@ async function handleDelete(id) {
   } catch {}
 }
 
+function handleSelectionChange(rows) {
+  selectedRows.value = rows
+}
+
+async function handleBatchDelete() {
+  if (selectedRows.value.length === 0) {
+    ElMessage.warning('请先选择要删除的系统')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(`确定要删除选中的 ${selectedRows.value.length} 个业务系统吗？`, '批量删除', { type: 'warning' })
+    await api.business.batchDeleteSystems(selectedRows.value.map(r => r.id))
+    ElMessage.success('批量删除成功')
+    selectedRows.value = []
+    fetchList()
+  } catch {}
+}
+
+async function handleDeleteAll() {
+  try {
+    await ElMessageBox.confirm('确定要删除所有业务系统吗？此操作不可恢复！', '删除全部', { type: 'warning' })
+    await api.business.deleteAllSystems()
+    ElMessage.success('删除全部成功')
+    selectedRows.value = []
+    fetchList()
+  } catch {}
+}
+
 onMounted(() => {
   fetchList()
 })
@@ -452,192 +500,6 @@ onMounted(() => {
   border-color: var(--primary-color, #409eff);
 }
 
-/* 系统卡片网格 */
-.systems-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 20px;
-}
-
-.system-card {
-  position: relative;
-  border-radius: 16px;
-  overflow: hidden;
-  cursor: pointer;
-  transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
-  background: var(--card-bg, #fff);
-  border: 1px solid var(--border-color, #ebeef5);
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
-}
-
-.system-card:hover {
-  transform: translateY(-6px);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
-  border-color: var(--primary-color, #409eff);
-}
-
-.system-card.sso-enabled {
-  border-color: rgba(103, 194, 58, 0.3);
-}
-
-.system-card.sso-enabled:hover {
-  border-color: #67c23a;
-  box-shadow: 0 12px 32px rgba(103, 194, 58, 0.15);
-}
-
-.card-glow {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 4px;
-  background: linear-gradient(90deg, var(--primary-color, #409eff), #a855f7, #ec4899);
-  opacity: 0;
-  transition: opacity 0.3s;
-}
-
-.system-card:hover .card-glow {
-  opacity: 1;
-}
-
-.system-card.sso-enabled .card-glow {
-  background: linear-gradient(90deg, #67c23a, #409eff, #a855f7);
-}
-
-.card-content {
-  padding: 24px 20px 20px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  position: relative;
-  min-height: 200px;
-}
-
-.card-logo {
-  width: 72px;
-  height: 72px;
-  border-radius: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 16px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  box-shadow: 0 4px 16px rgba(102, 126, 234, 0.3);
-  overflow: hidden;
-  transition: transform 0.3s;
-}
-
-.system-card:hover .card-logo {
-  transform: scale(1.08);
-}
-
-.card-logo img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  padding: 6px;
-  background: #fff;
-  border-radius: 12px;
-}
-
-.logo-icon {
-  font-size: 32px;
-  color: #fff;
-}
-
-.card-actions {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  display: flex;
-  gap: 2px;
-  z-index: 10;
-  opacity: 0;
-  transition: opacity 0.2s;
-  background: rgba(255, 255, 255, 0.9);
-  border-radius: 8px;
-  padding: 2px 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-.system-card:hover .card-actions {
-  opacity: 1;
-}
-
-.card-info {
-  flex: 1;
-}
-
-.card-name {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin: 0 0 6px;
-}
-
-.card-desc {
-  font-size: 12px;
-  color: var(--text-muted, #909399);
-  line-height: 1.5;
-  margin: 0;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.card-badges {
-  display: flex;
-  gap: 6px;
-  margin-top: 12px;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-
-.sso-badge {
-  animation: pulse-glow 2s infinite;
-}
-
-@keyframes pulse-glow {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(103, 194, 58, 0.4); }
-  50% { box-shadow: 0 0 8px 2px rgba(103, 194, 58, 0.2); }
-}
-
-.card-hover-overlay {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(135deg, rgba(64, 158, 255, 0.9), rgba(168, 85, 247, 0.9));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transition: opacity 0.3s;
-  border-radius: 16px;
-}
-
-.system-card.sso-enabled .card-hover-overlay {
-  background: linear-gradient(135deg, rgba(103, 194, 58, 0.9), rgba(64, 158, 255, 0.9));
-}
-
-.system-card:hover .card-hover-overlay {
-  opacity: 1;
-}
-
-.overlay-content {
-  color: #fff;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.overlay-content i {
-  font-size: 28px;
-}
-
 .form-row {
   display: flex;
   gap: 16px;
@@ -646,16 +508,5 @@ onMounted(() => {
 .form-row-item {
   flex: 1;
   min-width: 0;
-}
-
-/* 暗黑主题适配 */
-:root[theme="dark"] .system-card {
-  background: #1a1a2e;
-  border-color: #2d2d44;
-}
-
-:root[theme="dark"] .card-logo {
-  background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 </style>

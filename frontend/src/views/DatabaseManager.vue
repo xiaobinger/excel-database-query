@@ -4,12 +4,21 @@
       <el-tab-pane label="数据库连接" name="databases">
         <div class="tab-header">
           <span><i class="fas fa-database"></i> 数据库连接管理</span>
-          <el-button v-if="store.hasButtonPermission('database:create')" type="primary" size="small" @click="openDbDialog()">
-            <i class="fas fa-plus"></i> 新建连接
-          </el-button>
+          <div class="tab-header-actions">
+            <el-button v-hasPermi="['database:delete']" type="danger" size="small" :disabled="selectedRows.length === 0" @click="handleBatchDelete">
+              <i class="fas fa-trash-alt"></i> 批量删除{{ selectedRows.length > 0 ? `(${selectedRows.length})` : '' }}
+            </el-button>
+            <el-button v-hasPermi="['database:delete']" type="danger" size="small" plain @click="handleDeleteAll">
+              <i class="fas fa-trash"></i> 删除全部
+            </el-button>
+            <el-button v-if="store.hasButtonPermission('database:create')" type="primary" size="small" @click="openDbDialog()">
+              <i class="fas fa-plus"></i> 新建连接
+            </el-button>
+          </div>
         </div>
 
-        <el-table :data="dbList" stripe v-loading="dbLoading" style="width: 100%">
+        <el-table ref="tableRef" :data="dbList" stripe v-loading="dbLoading" style="width: 100%" @selection-change="handleSelectionChange">
+          <el-table-column type="selection" width="50" align="center" />
           <el-table-column prop="name" label="名称" min-width="140" show-overflow-tooltip />
           <el-table-column prop="db_type" label="类型" width="100" align="center">
             <template #default="{ row }">
@@ -285,7 +294,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import api from '../api'
 import { useAppStore } from '../stores'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const store = useAppStore()
 const activeTab = ref('databases')
@@ -298,6 +307,8 @@ const dbEditId = ref(null)
 const dbFormRef = ref(null)
 const dbList = ref([])
 const dbTypes = ref([])
+const selectedRows = ref([])
+const tableRef = ref(null)
 
 const sshLoading = ref(false)
 const sshSubmitting = ref(false)
@@ -466,6 +477,43 @@ async function handleDbDelete(id) {
   }
 }
 
+function handleSelectionChange(rows) {
+  selectedRows.value = rows
+}
+
+async function handleBatchDelete() {
+  if (selectedRows.value.length === 0) return
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除选中的 ${selectedRows.value.length} 个数据库连接吗？`,
+      '批量删除确认',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+    )
+    await api.databases.batchDelete(selectedRows.value.map(r => r.id))
+    ElMessage.success('批量删除成功')
+    selectedRows.value = []
+    fetchDbList()
+    store.fetchDatabases()
+  } catch {
+  }
+}
+
+async function handleDeleteAll() {
+  try {
+    await ElMessageBox.confirm(
+      '确定要删除所有数据库连接吗？此操作不可恢复！',
+      '删除全部确认',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+    )
+    await api.databases.deleteAll()
+    ElMessage.success('删除全部成功')
+    selectedRows.value = []
+    fetchDbList()
+    store.fetchDatabases()
+  } catch {
+  }
+}
+
 async function testDbConnection(row) {
   try {
     ElMessage.info('正在测试连接...')
@@ -572,5 +620,11 @@ onMounted(() => {
 .tab-header i {
   margin-right: 8px;
   color: var(--primary-color, #409eff);
+}
+
+.tab-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>

@@ -7,16 +7,34 @@
             <el-option v-for="u in users" :key="u.id" :label="u.display_name || u.username" :value="u.id" />
           </el-select>
         </el-form-item>
-        <el-form-item>
-          <el-checkbox v-model="includeDeleted" label="包含已删除" @change="fetchSessions" />
+        <el-form-item label="状态">
+          <el-select v-model="statusFilter" placeholder="全部状态" clearable style="width: 130px" @change="handleStatusFilterChange">
+            <el-option label="活跃" value="active" />
+            <el-option label="已删除" value="deleted" />
+          </el-select>
         </el-form-item>
       </el-form>
       <el-button type="primary" @click="fetchSessions">
         <i class="fas fa-sync-alt"></i> 刷新
       </el-button>
     </div>
+    <div class="toolbar-actions" v-if="store.user?.role?.is_admin">
+      <el-button type="success" :disabled="!selectedRows.length" @click="handleBatchRestore">
+        <i class="fas fa-undo"></i> 批量恢复<template v-if="selectedRows.length"> ({{ selectedRows.length }})</template>
+      </el-button>
+      <el-button type="success" plain @click="handleRestoreAll">
+        <i class="fas fa-undo-alt"></i> 全部恢复
+      </el-button>
+      <el-button type="danger" :disabled="!selectedRows.length" @click="handleBatchHardDelete">
+        <i class="fas fa-trash"></i> 批量永久删除<template v-if="selectedRows.length"> ({{ selectedRows.length }})</template>
+      </el-button>
+      <el-button type="danger" plain @click="handleHardDeleteAll">
+        <i class="fas fa-trash-alt"></i> 全部永久删除
+      </el-button>
+    </div>
 
-    <el-table :data="sessions" stripe v-loading="loading" style="width: 100%">
+    <el-table :data="filteredSessions" stripe v-loading="loading" ref="tableRef" @selection-change="handleSelectionChange" style="width: 100%">
+      <el-table-column type="selection" width="50" align="center" />
       <el-table-column prop="id" label="ID" width="70" />
       <el-table-column label="用户" width="120">
         <template #default="{ row }">
@@ -97,7 +115,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import { useAppStore } from '../stores'
@@ -108,13 +126,26 @@ const sessions = ref([])
 const users = ref([])
 const userMap = ref({})
 const selectedUserId = ref(null)
-const includeDeleted = ref(false)
+const statusFilter = ref(null)
 const loading = ref(false)
+const selectedRows = ref([])
+const tableRef = ref(null)
 
 const detailVisible = ref(false)
 const detailChatId = ref(null)
 const detailMessages = ref([])
 const detailLoading = ref(false)
+
+const filteredSessions = computed(() => {
+  if (!statusFilter.value) return sessions.value
+  if (statusFilter.value === 'active') return sessions.value.filter(s => !s.is_deleted)
+  if (statusFilter.value === 'deleted') return sessions.value.filter(s => s.is_deleted)
+  return sessions.value
+})
+
+function handleStatusFilterChange() {
+  // 纯前端筛选，无需重新请求
+}
 
 async function fetchUsers() {
   try {
@@ -130,7 +161,7 @@ async function fetchUsers() {
 async function fetchSessions() {
   loading.value = true
   try {
-    const params = { include_deleted: includeDeleted.value }
+    const params = { include_deleted: true }
     if (selectedUserId.value) params.user_id = selectedUserId.value
     const res = await api.ai.adminListChats(params)
     sessions.value = res.data || []
@@ -184,6 +215,54 @@ async function hardDeleteChat(chatId) {
   } catch {}
 }
 
+function handleSelectionChange(rows) {
+  selectedRows.value = rows
+}
+
+async function handleBatchHardDelete() {
+  if (!selectedRows.value.length) return
+  try {
+    await ElMessageBox.confirm(`此操作将永久删除选中的 ${selectedRows.value.length} 个对话及其所有消息记录，不可恢复！确定要永久删除吗？`, '批量永久删除确认', { confirmButtonText: '永久删除', cancelButtonText: '取消', type: 'error' })
+    const ids = selectedRows.value.map(r => r.id)
+    await api.ai.batchHardDeleteChats(ids)
+    ElMessage.success('批量永久删除成功')
+    selectedRows.value = []
+    fetchSessions()
+  } catch {}
+}
+
+async function handleHardDeleteAll() {
+  try {
+    await ElMessageBox.confirm('此操作将永久删除全部对话及其所有消息记录，不可恢复！确定要永久删除全部对话吗？', '全部永久删除确认', { confirmButtonText: '全部永久删除', cancelButtonText: '取消', type: 'error' })
+    await api.ai.hardDeleteAllChats()
+    ElMessage.success('全部永久删除成功')
+    selectedRows.value = []
+    fetchSessions()
+  } catch {}
+}
+
+async function handleBatchRestore() {
+  if (!selectedRows.value.length) return
+  try {
+    await ElMessageBox.confirm(`确定要恢复选中的 ${selectedRows.value.length} 个对话吗？`, '批量恢复确认', { confirmButtonText: '恢复', cancelButtonText: '取消', type: 'info' })
+    const ids = selectedRows.value.map(r => r.id)
+    await api.ai.batchRestoreChats(ids)
+    ElMessage.success('批量恢复成功')
+    selectedRows.value = []
+    fetchSessions()
+  } catch {}
+}
+
+async function handleRestoreAll() {
+  try {
+    await ElMessageBox.confirm('确定要恢复全部已删除的对话吗？', '全部恢复确认', { confirmButtonText: '全部恢复', cancelButtonText: '取消', type: 'info' })
+    await api.ai.restoreAllChats()
+    ElMessage.success('全部恢复成功')
+    selectedRows.value = []
+    fetchSessions()
+  } catch {}
+}
+
 async function softDeleteDetailMessage(msg) {
   try {
     await ElMessageBox.confirm('确定要删除此消息吗？', '删除确认', { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' })
@@ -226,7 +305,12 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
+}
+.toolbar-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 .dialog-messages {
   display: flex;

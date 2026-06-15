@@ -17,6 +17,12 @@
               <el-option label="用户" value="user" />
               <el-option label="自动" value="auto" />
             </el-select>
+            <el-button v-hasPermi="['skill:delete']" type="danger" size="small" :disabled="selectedRows.length === 0" @click="handleBatchDelete">
+              <i class="fas fa-trash-alt"></i> 批量删除{{ selectedRows.length > 0 ? `(${selectedRows.length})` : '' }}
+            </el-button>
+            <el-button v-hasPermi="['skill:delete']" type="danger" size="small" plain @click="handleDeleteAll">
+              <i class="fas fa-trash"></i> 删除全部
+            </el-button>
             <el-button v-if="store.hasButtonPermission('skill:create')" type="primary" @click="openDialog()">
               <i class="fas fa-plus"></i> 新建 Skill
             </el-button>
@@ -24,7 +30,8 @@
         </div>
       </template>
 
-      <el-table :data="skills" stripe v-loading="loading" style="width: 100%">
+      <el-table ref="tableRef" :data="skills" stripe v-loading="loading" style="width: 100%" @selection-change="handleSelectionChange">
+        <el-table-column type="selection" width="50" align="center" />
         <el-table-column prop="name" label="名称" min-width="140" show-overflow-tooltip />
         <el-table-column prop="category" label="分类" width="100" align="center">
           <template #default="{ row }">
@@ -112,7 +119,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import api from '../api'
 import { useAppStore } from '../stores'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const store = useAppStore()
 const loading = ref(false)
@@ -124,6 +131,8 @@ const formRef = ref(null)
 const skills = ref([])
 const filterCategory = ref('')
 const filterType = ref('')
+const selectedRows = ref([])
+const tableRef = ref(null)
 
 const defaultForm = {
   name: '',
@@ -219,6 +228,39 @@ async function handleDelete(id) {
   try {
     await api.ai.deleteSkill(id)
     ElMessage.success('删除成功')
+    fetchSkills()
+  } catch {}
+}
+
+function handleSelectionChange(rows) {
+  selectedRows.value = rows
+}
+
+async function handleBatchDelete() {
+  if (selectedRows.value.length === 0) return
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除选中的 ${selectedRows.value.length} 个Skill吗？`,
+      '批量删除确认',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+    )
+    await api.ai.batchDeleteSkills(selectedRows.value.map(r => r.id))
+    ElMessage.success('批量删除成功')
+    selectedRows.value = []
+    fetchSkills()
+  } catch {}
+}
+
+async function handleDeleteAll() {
+  try {
+    await ElMessageBox.confirm(
+      '确定要删除所有Skill吗？此操作不可恢复！',
+      '删除全部确认',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+    )
+    await api.ai.deleteAllSkills()
+    ElMessage.success('删除全部成功')
+    selectedRows.value = []
     fetchSkills()
   } catch {}
 }

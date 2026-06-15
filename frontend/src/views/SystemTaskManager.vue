@@ -17,7 +17,16 @@
 
       <el-tabs v-model="activeTab">
         <el-tab-pane label="任务列表" name="tasks">
-          <el-table :data="taskList" stripe v-loading="loading" style="width: 100%">
+          <div v-if="store.hasButtonPermission('system_task:delete')" style="margin-bottom: 12px; display: flex; gap: 10px;">
+            <el-button type="danger" plain :disabled="selectedRows.length === 0" @click="handleBatchDelete">
+              <i class="fas fa-trash-alt"></i> 批量删除 <span v-if="selectedRows.length > 0">({{ selectedRows.length }})</span>
+            </el-button>
+            <el-button type="danger" plain @click="handleDeleteAll">
+              <i class="fas fa-trash"></i> 删除全部
+            </el-button>
+          </div>
+          <el-table ref="tableRef" :data="taskList" stripe v-loading="loading" style="width: 100%" @selection-change="handleSelectionChange">
+            <el-table-column type="selection" width="55" align="center" />
             <el-table-column prop="name" label="任务名称" min-width="140" show-overflow-tooltip />
             <el-table-column label="任务类型" width="100" align="center">
               <template #default="{ row }">
@@ -454,7 +463,7 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
 import { useAppStore } from '../stores'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const store = useAppStore()
 const router = useRouter()
@@ -470,6 +479,8 @@ const progressDialogVisible = ref(false)
 const isEdit = ref(false)
 const editId = ref(null)
 const formRef = ref(null)
+const tableRef = ref(null)
+const selectedRows = ref([])
 const taskList = ref([])
 const executionList = ref([])
 const sqlScripts = ref([])
@@ -761,6 +772,41 @@ async function handleDelete(id) {
   try {
     await api.systemTask.delete(id)
     ElMessage.success('删除成功')
+    fetchList()
+  } catch {
+  }
+}
+
+function handleSelectionChange(rows) {
+  selectedRows.value = rows
+}
+
+async function handleBatchDelete() {
+  if (selectedRows.value.length === 0) return
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除选中的 ${selectedRows.value.length} 个任务吗？`,
+      '批量删除',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+    )
+    await api.systemTask.batchDelete(selectedRows.value.map(r => r.id))
+    ElMessage.success('批量删除成功')
+    selectedRows.value = []
+    fetchList()
+  } catch {
+  }
+}
+
+async function handleDeleteAll() {
+  try {
+    await ElMessageBox.confirm(
+      '确定要删除全部任务吗？此操作不可恢复！',
+      '删除全部',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+    )
+    await api.systemTask.deleteAll()
+    ElMessage.success('全部删除成功')
+    selectedRows.value = []
     fetchList()
   } catch {
   }

@@ -26,6 +26,12 @@
             >
               <el-option v-for="tag in tags" :key="tag" :label="tag" :value="tag" />
             </el-select>
+            <el-button v-hasPermi="['script:delete']" type="danger" size="small" :disabled="selectedRows.length === 0" @click="handleBatchDelete">
+              <i class="fas fa-trash-alt"></i> 批量删除{{ selectedRows.length > 0 ? `(${selectedRows.length})` : '' }}
+            </el-button>
+            <el-button v-hasPermi="['script:delete']" type="danger" size="small" plain @click="handleDeleteAll">
+              <i class="fas fa-trash"></i> 删除全部
+            </el-button>
             <el-button v-if="store.hasButtonPermission('script:create')" type="primary" @click="openDialog()">
               <i class="fas fa-plus"></i> 新建脚本
             </el-button>
@@ -33,7 +39,8 @@
         </div>
       </template>
 
-      <el-table :data="filteredScripts" stripe v-loading="loading" style="width: 100%">
+      <el-table ref="tableRef" :data="filteredScripts" stripe v-loading="loading" style="width: 100%" @selection-change="handleSelectionChange">
+        <el-table-column type="selection" width="50" align="center" />
         <el-table-column prop="name" label="脚本名称" min-width="160" show-overflow-tooltip />
         <el-table-column label="类型" width="100" align="center">
           <template #default="{ row }">
@@ -519,7 +526,7 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../api'
 import { useAppStore } from '../stores'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import SqlEditor from '../components/SqlEditor.vue'
 
 const store = useAppStore()
@@ -530,6 +537,8 @@ const dialogVisible = ref(false)
 const isEdit = ref(false)
 const editId = ref(null)
 const formRef = ref(null)
+const tableRef = ref(null)
+const selectedRows = ref([])
 const scriptList = ref([])
 const tags = ref([])
 const tagFilter = ref('')
@@ -866,6 +875,43 @@ async function handleDelete(id) {
   try {
     await api.scripts.delete(id)
     ElMessage.success('删除成功')
+    fetchList()
+    store.fetchScripts()
+  } catch {
+  }
+}
+
+function handleSelectionChange(rows) {
+  selectedRows.value = rows
+}
+
+async function handleBatchDelete() {
+  if (selectedRows.value.length === 0) return
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除选中的 ${selectedRows.value.length} 个脚本吗？`,
+      '批量删除确认',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+    )
+    await api.scripts.batchDelete(selectedRows.value.map(r => r.id))
+    ElMessage.success('批量删除成功')
+    selectedRows.value = []
+    fetchList()
+    store.fetchScripts()
+  } catch {
+  }
+}
+
+async function handleDeleteAll() {
+  try {
+    await ElMessageBox.confirm(
+      '确定要删除所有脚本吗？此操作不可恢复！',
+      '删除全部确认',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+    )
+    await api.scripts.deleteAll()
+    ElMessage.success('删除全部成功')
+    selectedRows.value = []
     fetchList()
     store.fetchScripts()
   } catch {

@@ -98,6 +98,46 @@ def delete_system(system_id):
     return jsonify({'success': True})
 
 
+@business_bp.route('/systems/batch-delete', methods=['POST'])
+@admin_required
+def batch_delete_systems():
+    """批量删除业务系统"""
+    data = request.get_json()
+    if not data or 'ids' not in data:
+        return jsonify({'success': False, 'message': '请提供要删除的ID列表'}), 400
+
+    ids = data.get('ids', [])
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'success': False, 'message': 'ids必须是非空列表'}), 400
+
+    deleted_count = 0
+    for system_id in ids:
+        system = BusinessSystem.query.get(system_id)
+        if system:
+            db.session.delete(system)
+            deleted_count += 1
+
+    try:
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'成功删除{deleted_count}个系统', 'deleted_count': deleted_count})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
+@business_bp.route('/systems/all', methods=['DELETE'])
+@admin_required
+def delete_all_systems():
+    """删除所有业务系统"""
+    try:
+        deleted_count = BusinessSystem.query.delete()
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'成功删除{deleted_count}个系统', 'deleted_count': deleted_count})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
 @business_bp.route('/systems/<int:system_id>/sso', methods=['POST'])
 @login_required
 def generate_sso_url(system_id):

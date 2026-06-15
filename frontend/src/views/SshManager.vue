@@ -4,13 +4,22 @@
       <template #header>
         <div class="card-header">
           <span><i class="fas fa-shield-alt"></i> SSH 配置管理</span>
-          <el-button type="primary" @click="openDialog()">
-            <i class="fas fa-plus"></i> 新建配置
-          </el-button>
+          <div>
+            <el-button type="primary" @click="openDialog()">
+              <i class="fas fa-plus"></i> 新建配置
+            </el-button>
+            <el-button type="danger" :disabled="!selectedRows.length" v-hasPermi="['ssh:delete']" @click="handleBatchDelete">
+              <i class="fas fa-trash-alt"></i> 批量删除
+            </el-button>
+            <el-button type="danger" v-hasPermi="['ssh:delete']" @click="handleDeleteAll">
+              <i class="fas fa-trash"></i> 删除全部
+            </el-button>
+          </div>
         </div>
       </template>
 
-      <el-table :data="sshList" stripe v-loading="loading" style="width: 100%">
+      <el-table :data="sshList" stripe v-loading="loading" style="width: 100%" @selection-change="handleSelectionChange" ref="tableRef">
+        <el-table-column type="selection" width="55" />
         <el-table-column prop="name" label="名称" min-width="140" show-overflow-tooltip />
         <el-table-column label="主机" min-width="200" show-overflow-tooltip>
           <template #default="{ row }">
@@ -114,7 +123,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import api from '../api'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -122,6 +131,8 @@ const dialogVisible = ref(false)
 const isEdit = ref(false)
 const editId = ref(null)
 const formRef = ref(null)
+const tableRef = ref(null)
+const selectedRows = ref([])
 const sshList = ref([])
 const dbList = ref([])
 
@@ -211,6 +222,39 @@ async function handleSubmit() {
   } finally {
     submitting.value = false
   }
+}
+
+function handleSelectionChange(rows) {
+  selectedRows.value = rows
+}
+
+async function handleBatchDelete() {
+  if (!selectedRows.value.length) return
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除选中的 ${selectedRows.value.length} 条SSH配置吗？`,
+      '批量删除',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+    )
+    await api.ssh.batchDelete(selectedRows.value.map(r => r.id))
+    ElMessage.success('批量删除成功')
+    fetchList()
+    fetchDbList()
+  } catch {}
+}
+
+async function handleDeleteAll() {
+  try {
+    await ElMessageBox.confirm(
+      '确定要删除所有SSH配置吗？此操作不可恢复！',
+      '删除全部',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+    )
+    await api.ssh.deleteAll()
+    ElMessage.success('删除全部成功')
+    fetchList()
+    fetchDbList()
+  } catch {}
 }
 
 async function handleDelete(id) {

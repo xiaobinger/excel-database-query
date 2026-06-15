@@ -1,4 +1,6 @@
 from flask import Blueprint, request, jsonify
+from app import db
+from app.models.ssh_config import SshConfig
 from app.services.ssh_service import SshService
 
 ssh_bp = Blueprint('ssh', __name__, url_prefix='/api/ssh')
@@ -58,6 +60,39 @@ def delete_ssh_config(ssh_id):
     if not result:
         return jsonify({'success': False, 'message': 'SSH配置不存在或已被数据库连接引用，无法删除'}), 400
     return jsonify({'success': True, 'message': '删除成功'})
+
+
+@ssh_bp.route('/batch-delete', methods=['POST'])
+def batch_delete_ssh_configs():
+    data = request.get_json()
+    if not data or 'ids' not in data:
+        return jsonify({'success': False, 'message': '请提供要删除的ID列表'}), 400
+
+    ids = data.get('ids', [])
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'success': False, 'message': 'ids必须是非空列表'}), 400
+
+    deleted_count = 0
+    for ssh_id in ids:
+        result = SshService.delete(ssh_id)
+        if result:
+            deleted_count += 1
+
+    return jsonify({'success': True, 'message': f'成功删除{deleted_count}个SSH配置', 'deleted_count': deleted_count})
+
+
+@ssh_bp.route('/all', methods=['DELETE'])
+def delete_all_ssh_configs():
+    try:
+        configs = SshConfig.query.all()
+        deleted_count = 0
+        for config in configs:
+            result = SshService.delete(config.id)
+            if result:
+                deleted_count += 1
+        return jsonify({'success': True, 'message': f'成功删除{deleted_count}个SSH配置', 'deleted_count': deleted_count})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 400
 
 
 @ssh_bp.route('/<int:ssh_id>/test', methods=['POST'])

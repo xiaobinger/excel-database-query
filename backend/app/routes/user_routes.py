@@ -160,6 +160,51 @@ def delete_user(user_id):
         return jsonify({'success': False, 'message': str(e)}), 400
 
 
+@user_bp.route('/batch-delete', methods=['POST'])
+@admin_required
+def batch_delete_users():
+    data = request.get_json()
+    if not data or 'ids' not in data:
+        return jsonify({'success': False, 'message': '请提供要删除的ID列表'}), 400
+
+    ids = data.get('ids', [])
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'success': False, 'message': 'ids必须是非空列表'}), 400
+
+    current_user = g.user
+    deleted_count = 0
+    for uid in ids:
+        if current_user and current_user.id == uid:
+            continue
+        user = User.query.get(uid)
+        if user:
+            db.session.delete(user)
+            deleted_count += 1
+
+    try:
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'成功删除{deleted_count}个用户', 'deleted_count': deleted_count})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
+@user_bp.route('/all', methods=['DELETE'])
+@admin_required
+def delete_all_users():
+    current_user = g.user
+    try:
+        query = User.query
+        if current_user:
+            query = query.filter(User.id != current_user.id)
+        deleted_count = query.delete()
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'成功删除{deleted_count}个用户', 'deleted_count': deleted_count})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
 @user_bp.route('/<int:user_id>/scripts', methods=['PUT'])
 @admin_required
 def set_user_scripts(user_id):

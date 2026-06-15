@@ -108,6 +108,12 @@
             <div class="ai-header">
               <p class="ai-desc">配置AI模型，用于智能对话、SQL生成、行为学习等功能。</p>
               <div>
+                <el-button v-hasPermi="['system:delete']" type="danger" size="small" :disabled="selectedRows.length === 0" @click="handleBatchDelete">
+                  <i class="fas fa-trash-alt"></i> 批量删除
+                </el-button>
+                <el-button v-hasPermi="['system:delete']" type="danger" size="small" plain @click="handleDeleteAll">
+                  <i class="fas fa-trash"></i> 删除全部
+                </el-button>
                 <el-button type="warning" size="small" @click="openStrategyDialog()">
                   <i class="fas fa-random"></i> 策略配置
                 </el-button>
@@ -117,7 +123,8 @@
               </div>
             </div>
 
-            <el-table :data="aiConfigs" stripe style="width: 100%; margin-top: 16px">
+            <el-table ref="tableRef" :data="aiConfigs" stripe style="width: 100%; margin-top: 16px" @selection-change="handleSelectionChange">
+              <el-table-column type="selection" width="55" />
               <el-table-column prop="name" label="名称" min-width="120" />
               <el-table-column prop="provider" label="提供商" width="120" align="center">
                 <template #default="{ row }">
@@ -453,6 +460,41 @@ const editAiConfigId = ref(null)
 const savingAiConfig = ref(false)
 const testingAi = ref(null)
 const aiConfigFormRef = ref(null)
+const tableRef = ref(null)
+const selectedRows = ref([])
+
+function handleSelectionChange(rows) {
+  selectedRows.value = rows
+}
+
+async function handleBatchDelete() {
+  if (selectedRows.value.length === 0) return
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除选中的 ${selectedRows.value.length} 条配置吗？`,
+      '批量删除确认',
+      { type: 'warning' }
+    )
+    await api.system.batchDelete(selectedRows.value.map(r => r.id))
+    ElMessage.success('批量删除成功')
+    selectedRows.value = []
+    fetchAiConfigs()
+  } catch {}
+}
+
+async function handleDeleteAll() {
+  try {
+    await ElMessageBox.confirm(
+      '确定要删除全部配置吗？此操作不可恢复！',
+      '删除全部确认',
+      { type: 'warning' }
+    )
+    await api.system.deleteAll()
+    ElMessage.success('全部删除成功')
+    selectedRows.value = []
+    fetchAiConfigs()
+  } catch {}
+}
 
 const defaultAiConfigForm = {
   name: '',

@@ -5,6 +5,12 @@
         <div class="card-header">
           <span><i class="fas fa-clock"></i> 自动导出任务</span>
           <div class="header-actions">
+            <el-button v-hasPermi="['auto_export:delete']" type="danger" size="small" :disabled="selectedRows.length === 0" @click="handleBatchDelete">
+              <i class="fas fa-trash-alt"></i> 批量删除{{ selectedRows.length > 0 ? `(${selectedRows.length})` : '' }}
+            </el-button>
+            <el-button v-hasPermi="['auto_export:delete']" type="danger" size="small" plain @click="handleDeleteAll">
+              <i class="fas fa-trash"></i> 删除全部
+            </el-button>
             <el-button v-if="store.hasButtonPermission('auto_export:create')" type="primary" @click="openDialog()">
               <i class="fas fa-plus"></i> 新建任务
             </el-button>
@@ -12,7 +18,8 @@
         </div>
       </template>
 
-      <el-table :data="taskList" stripe v-loading="loading" style="width: 100%">
+      <el-table ref="tableRef" :data="taskList" stripe v-loading="loading" style="width: 100%" @selection-change="handleSelectionChange">
+        <el-table-column type="selection" width="50" align="center" />
         <el-table-column prop="name" label="任务名称" min-width="140" show-overflow-tooltip />
         <el-table-column prop="cron_expression" label="Cron表达式" width="130" show-overflow-tooltip />
         <el-table-column label="导出选项" min-width="200" show-overflow-tooltip>
@@ -344,6 +351,8 @@ const dialogVisible = ref(false)
 const isEdit = ref(false)
 const editId = ref(null)
 const formRef = ref(null)
+const tableRef = ref(null)
+const selectedRows = ref([])
 const taskList = ref([])
 const exportScripts = ref([])
 const paramOptionsData = ref({ time: [], fixed: [] })
@@ -717,6 +726,41 @@ async function handleDelete(id) {
   try {
     await api.autoExport.delete(id)
     ElMessage.success('删除成功')
+    fetchList()
+  } catch {
+  }
+}
+
+function handleSelectionChange(rows) {
+  selectedRows.value = rows
+}
+
+async function handleBatchDelete() {
+  if (selectedRows.value.length === 0) return
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除选中的 ${selectedRows.value.length} 个任务吗？`,
+      '批量删除确认',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+    )
+    await api.autoExport.batchDelete(selectedRows.value.map(r => r.id))
+    ElMessage.success('批量删除成功')
+    selectedRows.value = []
+    fetchList()
+  } catch {
+  }
+}
+
+async function handleDeleteAll() {
+  try {
+    await ElMessageBox.confirm(
+      '确定要删除所有自动导出任务吗？此操作不可恢复！',
+      '删除全部确认',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+    )
+    await api.autoExport.deleteAll()
+    ElMessage.success('删除全部成功')
+    selectedRows.value = []
     fetchList()
   } catch {
   }

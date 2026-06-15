@@ -238,6 +238,53 @@ def delete_export_task(task_identifier):
     return jsonify({'success': True, 'message': '任务已删除'})
 
 
+@export_bp.route('/tasks/batch-delete', methods=['POST'])
+@login_required
+def batch_delete_export_tasks():
+    data = request.get_json()
+    if not data or 'ids' not in data:
+        return jsonify({'success': False, 'message': '请提供要删除的ID列表'}), 400
+
+    ids = data.get('ids', [])
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'success': False, 'message': 'ids必须是非空列表'}), 400
+
+    current_user = get_current_user()
+    deleted_count = 0
+    for task_id in ids:
+        task = QueryTask.query.filter(QueryTask.id == task_id, QueryTask.type == 'export').first()
+        if not task:
+            continue
+        if current_user and not current_user.is_admin():
+            if task.created_by != current_user.id:
+                continue
+        db.session.delete(task)
+        deleted_count += 1
+
+    try:
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'成功删除{deleted_count}个任务', 'deleted_count': deleted_count})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
+@export_bp.route('/tasks/all', methods=['DELETE'])
+@login_required
+def delete_all_export_tasks():
+    current_user = get_current_user()
+    try:
+        if current_user and current_user.is_admin():
+            deleted_count = QueryTask.query.filter_by(type='export').delete()
+        else:
+            deleted_count = QueryTask.query.filter_by(type='export', created_by=current_user.id).delete()
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'成功删除{deleted_count}个任务', 'deleted_count': deleted_count})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
 @export_bp.route('/retry/<task_id>', methods=['POST'])
 def retry_export(task_id):
     task = QueryTask.query.filter_by(task_id=task_id, type='export').first()

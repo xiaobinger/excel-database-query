@@ -486,8 +486,42 @@
               <span class="file-info">{{ uploadedFile.row_count }} 行 · {{ uploadedFile.columns.length }} 列</span>
               <i class="fas fa-times file-remove" @click="uploadedFile = null"></i>
             </div>
-            <div class="input-row">
-              <!-- 模型下拉选择 -->
+            <div class="input-text-wrapper">
+              <el-input
+                ref="inputRef"
+                v-model="inputText"
+                type="textarea"
+                :autosize="{ minRows: 3, maxRows: 8 }"
+                placeholder="输入消息，@ 选择模型，按 Enter 发送，Shift+Enter 换行..."
+                resize="none"
+                @keydown="handleKeydown"
+                @input="handleInputChange"
+                @blur="handleInputBlur"
+              />
+              <!-- @mention 浮层 -->
+              <div
+                v-if="mentionPopupVisible && filteredModels.length > 0"
+                class="mention-dropdown"
+              >
+                <div class="mention-dropdown-title">选择模型</div>
+                <div class="mention-list">
+                  <div
+                    v-for="model in filteredModels"
+                    :key="model.id"
+                    class="mention-item"
+                    @mousedown.prevent="selectMentionModel(model)"
+                  >
+                    <i class="fas fa-robot"></i>
+                    <span class="mention-name">{{ model.name }}</span>
+                    <span class="mention-model">{{ model.model_name }}</span>
+                    <el-tag size="small" type="info" effect="plain" style="margin-left: 4px">{{ model.provider }}</el-tag>
+                    <i v-if="model.enable_streaming" class="fas fa-bolt" style="color: #e6a23c; margin-left: 4px" title="流式输出"></i>
+                    <i v-if="model.enable_thinking" class="fas fa-brain" style="color: #9b59b6; margin-left: 4px" title="深度思考"></i>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="input-bottom-bar">
               <el-dropdown trigger="click" @command="selectDropdownModel" class="model-dropdown">
                 <div class="model-dropdown-trigger" :class="{ 'model-selected': selectedModel }">
                   <i class="fas fa-robot"></i>
@@ -515,41 +549,6 @@
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
-              <div class="input-text-wrapper">
-                <el-input
-                  ref="inputRef"
-                  v-model="inputText"
-                  type="textarea"
-                  :autosize="{ minRows: 3, maxRows: 8 }"
-                  placeholder="输入消息，@ 选择模型，按 Enter 发送，Shift+Enter 换行..."
-                  resize="none"
-                  @keydown="handleKeydown"
-                  @input="handleInputChange"
-                  @blur="handleInputBlur"
-                />
-                <!-- @mention 浮层 -->
-                <div
-                  v-if="mentionPopupVisible && filteredModels.length > 0"
-                  class="mention-dropdown"
-                >
-                  <div class="mention-dropdown-title">选择模型</div>
-                  <div class="mention-list">
-                    <div
-                      v-for="model in filteredModels"
-                      :key="model.id"
-                      class="mention-item"
-                      @mousedown.prevent="selectMentionModel(model)"
-                    >
-                      <i class="fas fa-robot"></i>
-                      <span class="mention-name">{{ model.name }}</span>
-                      <span class="mention-model">{{ model.model_name }}</span>
-                      <el-tag size="small" type="info" effect="plain" style="margin-left: 4px">{{ model.provider }}</el-tag>
-                      <i v-if="model.enable_streaming" class="fas fa-bolt" style="color: #e6a23c; margin-left: 4px" title="流式输出"></i>
-                      <i v-if="model.enable_thinking" class="fas fa-brain" style="color: #9b59b6; margin-left: 4px" title="深度思考"></i>
-                    </div>
-                  </div>
-                </div>
-              </div>
               <div class="input-buttons">
                 <el-upload
                   :show-file-list="false"
@@ -4709,11 +4708,11 @@ onMounted(() => {
   color: #f56c6c;
 }
 
-.input-row {
+.input-bottom-bar {
   display: flex;
-  gap: 8px;
-  align-items: flex-end;
-  position: relative;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2px;
 }
 
 .input-text-wrapper {
@@ -4725,7 +4724,7 @@ onMounted(() => {
   border-radius: 8px;
   border: none;
   background: transparent;
-  padding: 6px 8px;
+  padding: 4px 0;
   box-shadow: none !important;
 }
 
@@ -4740,40 +4739,40 @@ onMounted(() => {
 }
 
 .model-dropdown-trigger {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 8px;
-  background: #fff;
-  border: 1px solid #e4e7ed;
-  border-radius: 6px;
+  padding: 3px 8px 3px 6px;
+  background: transparent;
+  border: none;
+  border-radius: 14px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.2s ease;
   white-space: nowrap;
-  height: 32px;
+  height: 28px;
   box-sizing: border-box;
   font-size: 12px;
+  color: #a0a4ad;
+  user-select: none;
 }
 
 .model-dropdown-trigger:hover {
-  border-color: #409eff;
-  background: #f0f7ff;
+  background: rgba(64, 158, 255, 0.06);
+  color: #409eff;
 }
 
 .model-dropdown-trigger.model-selected {
-  background: linear-gradient(135deg, #f0f9eb, #e8f5e0);
-  border-color: #95d475;
+  background: rgba(82, 155, 46, 0.06);
   color: #529b2e;
 }
 
 .model-dropdown-trigger.model-selected:hover {
-  background: linear-gradient(135deg, #e1f3d8, #d4edca);
-  border-color: #7ec449;
+  background: rgba(82, 155, 46, 0.12);
+  color: #3d7a22;
 }
 
 .model-dropdown-trigger .fa-robot {
   font-size: 12px;
-  color: #909399;
   transition: color 0.2s;
 }
 
@@ -4783,11 +4782,11 @@ onMounted(() => {
 
 .model-dropdown-label {
   font-size: 11px;
-  font-weight: 600;
-  color: #606266;
-  max-width: 70px;
+  font-weight: 500;
+  max-width: 80px;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1;
 }
 
 .model-dropdown-trigger.model-selected .model-dropdown-label {
@@ -4795,9 +4794,13 @@ onMounted(() => {
 }
 
 .model-dropdown-arrow {
-  font-size: 9px;
-  color: #c0c4cc;
-  transition: transform 0.2s;
+  font-size: 8px;
+  opacity: 0.5;
+  transition: transform 0.2s, opacity 0.2s;
+}
+
+.model-dropdown-trigger:hover .model-dropdown-arrow {
+  opacity: 0.8;
 }
 
 .model-option {
@@ -4805,28 +4808,59 @@ onMounted(() => {
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-width: 220px;
+  min-width: 240px;
+  padding: 2px 0;
+}
+
+.model-option .fa-robot,
+.model-option .fa-magic {
+  font-size: 13px;
+  color: #909399;
+  width: 18px;
+  text-align: center;
 }
 
 .model-option-name {
   font-weight: 500;
   font-size: 13px;
+  color: #303133;
 }
 
 .model-option-desc {
   font-size: 11px;
-  color: #909399;
+  color: #b0b5bd;
   margin-left: auto;
-  max-width: 120px;
+  max-width: 130px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.model-option .fa-bolt,
+.model-option .fa-brain {
+  font-size: 11px;
+}
+
+.model-dropdown-menu .el-dropdown-menu__item {
+  padding: 8px 14px;
+  border-radius: 8px;
+  margin: 2px 4px;
+  transition: background 0.15s;
 }
 
 .model-dropdown-menu .el-dropdown-menu__item.is-active {
   color: #529b2e;
   font-weight: 600;
   background: #f0f9eb;
+}
+
+.model-dropdown-menu .el-dropdown-menu__item.is-active .model-option-name {
+  color: #529b2e;
+}
+
+.model-dropdown-menu .el-dropdown-menu__item.is-active .fa-robot,
+.model-dropdown-menu .el-dropdown-menu__item.is-active .fa-magic {
+  color: #529b2e;
 }
 
 .model-tag-bar {
@@ -5272,8 +5306,8 @@ onMounted(() => {
     border-radius: 10px;
   }
   .model-dropdown-trigger {
-    height: 28px;
-    padding: 3px 6px;
+    height: 26px;
+    padding: 2px 6px 2px 4px;
     font-size: 11px;
   }
   .model-dropdown-label {
@@ -5328,21 +5362,25 @@ onMounted(() => {
     gap: 4px;
     border-radius: 8px;
   }
-  .input-row {
+  .input-bottom-bar {
     gap: 4px;
   }
   .model-dropdown-trigger {
-    height: 26px;
-    padding: 2px 5px;
+    height: 24px;
+    padding: 2px 6px 2px 4px;
     gap: 3px;
-    border-radius: 5px;
-  }
-  .model-dropdown-label {
-    max-width: 40px;
+    border-radius: 12px;
     font-size: 10px;
   }
+  .model-dropdown-label {
+    max-width: 36px;
+    font-size: 9px;
+  }
   .model-dropdown-trigger .fa-robot {
-    font-size: 11px;
+    font-size: 10px;
+  }
+  .model-dropdown-arrow {
+    font-size: 7px;
   }
   .input-buttons .el-button {
     width: 26px;

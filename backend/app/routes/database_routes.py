@@ -83,6 +83,47 @@ def delete_database(conn_id):
     return jsonify({'success': False, 'message': '连接不存在'}), 404
 
 
+@database_bp.route('/batch-delete', methods=['POST'])
+def batch_delete_databases():
+    data = request.get_json()
+    if not data or 'ids' not in data:
+        return jsonify({'success': False, 'message': '请提供要删除的ID列表'}), 400
+
+    ids = data.get('ids', [])
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'success': False, 'message': 'ids必须是非空列表'}), 400
+
+    deleted_count = 0
+    for conn_id in ids:
+        if DatabaseService.delete(conn_id):
+            try:
+                from app.utils.connection_pool import ConnectionPoolManager
+                ConnectionPoolManager.get_instance().remove_connector(conn_id)
+            except Exception:
+                pass
+            deleted_count += 1
+
+    return jsonify({'success': True, 'message': f'成功删除{deleted_count}个连接', 'deleted_count': deleted_count})
+
+
+@database_bp.route('/all', methods=['DELETE'])
+def delete_all_databases():
+    try:
+        connections = DatabaseConnection.query.all()
+        deleted_count = 0
+        for conn in connections:
+            if DatabaseService.delete(conn.id):
+                try:
+                    from app.utils.connection_pool import ConnectionPoolManager
+                    ConnectionPoolManager.get_instance().remove_connector(conn.id)
+                except Exception:
+                    pass
+                deleted_count += 1
+        return jsonify({'success': True, 'message': f'成功删除{deleted_count}个连接', 'deleted_count': deleted_count})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
 @database_bp.route('/<int:conn_id>/test', methods=['POST'])
 def test_database_connection(conn_id):
     result = DatabaseService.test_connection(conn_id)

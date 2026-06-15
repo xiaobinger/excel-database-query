@@ -173,6 +173,58 @@ def delete_auto_task(task_id):
     return jsonify({'success': True, 'message': '已删除'})
 
 
+@auto_export_bp.route('/batch-delete', methods=['POST'])
+@login_required
+def batch_delete_auto_tasks():
+    data = request.get_json()
+    if not data or 'ids' not in data:
+        return jsonify({'success': False, 'message': '请提供要删除的ID列表'}), 400
+
+    ids = data.get('ids', [])
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'success': False, 'message': 'ids必须是非空列表'}), 400
+
+    current_user = get_current_user()
+    deleted_count = 0
+    for task_id in ids:
+        task = AutoExportTask.query.get(task_id)
+        if not task:
+            continue
+        if current_user and not current_user.is_admin():
+            allowed_ids = current_user.get_auto_task_ids()
+            if task_id not in (allowed_ids or []):
+                continue
+        db.session.delete(task)
+        deleted_count += 1
+
+    try:
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'成功删除{deleted_count}个任务', 'deleted_count': deleted_count})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
+@auto_export_bp.route('/all', methods=['DELETE'])
+@login_required
+def delete_all_auto_tasks():
+    current_user = get_current_user()
+    try:
+        if current_user and current_user.is_admin():
+            deleted_count = AutoExportTask.query.delete()
+        else:
+            allowed_ids = current_user.get_auto_task_ids() if current_user else []
+            if allowed_ids:
+                deleted_count = AutoExportTask.query.filter(AutoExportTask.id.in_(allowed_ids)).delete(synchronize_session=False)
+            else:
+                deleted_count = 0
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'成功删除{deleted_count}个任务', 'deleted_count': deleted_count})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
 @auto_export_bp.route('/<int:task_id>/toggle', methods=['POST'])
 @login_required
 def toggle_auto_task(task_id):
