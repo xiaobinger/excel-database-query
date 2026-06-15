@@ -98,29 +98,31 @@ def _setup_logging(app):
                 return
 
             # Retry rename with delay for Windows file locking
+            rotated = False
             max_retries = 3
             for attempt in range(max_retries):
                 try:
                     if os.path.exists(dfn):
                         os.remove(dfn)
                     self.rotate(self.baseFilename, dfn)
+                    rotated = True
                     break
-                except PermissionError:
+                except (PermissionError, OSError):
                     if attempt < max_retries - 1:
                         _time.sleep(0.5)
                     else:
-                        # Give up on rotation, reopen original file
+                        # 轮转失败，记录但不中断日志写入
                         pass
 
-            # Clean up old log files
-            if self.backupCount > 0:
+            # Clean up old log files only if rotation succeeded
+            if rotated and self.backupCount > 0:
                 for s in self.getFilesToDelete(self.baseFilename):
                     try:
                         os.remove(s)
                     except (PermissionError, OSError):
                         pass
 
-            # Reopen the log file
+            # 确保重新打开日志文件（无论轮转是否成功）
             if not self.delay:
                 self.stream = self._open()
 
