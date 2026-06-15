@@ -186,6 +186,14 @@
                 <el-form-item label="启用">
                   <el-switch v-model="aiConfigForm.is_active" active-text="是" inactive-text="否" />
                 </el-form-item>
+                <el-form-item label="深度思考">
+                  <el-switch v-model="aiConfigForm.enable_thinking" active-text="是" inactive-text="否" />
+                  <span style="margin-left: 12px; color: #909399; font-size: 12px">启用后展示模型的思考过程</span>
+                </el-form-item>
+                <el-form-item label="流式输出">
+                  <el-switch v-model="aiConfigForm.enable_streaming" active-text="是" inactive-text="否" />
+                  <span style="margin-left: 12px; color: #909399; font-size: 12px">启用后逐字打印AI回复内容</span>
+                </el-form-item>
                 <el-form-item label="系统提示词">
                   <el-input v-model="aiConfigForm.system_prompt" type="textarea" :rows="4" placeholder="AI助手的行为设定（可选）" />
                 </el-form-item>
@@ -456,6 +464,8 @@ const defaultAiConfigForm = {
   temperature: 0.7,
   is_default: false,
   is_active: true,
+  enable_thinking: false,
+  enable_streaming: true,
   system_prompt: '',
 }
 
@@ -491,6 +501,8 @@ function openAiConfigDialog(row) {
       temperature: row.temperature ?? 0.7,
       is_default: row.is_default || false,
       is_active: row.is_active !== false,
+      enable_thinking: row.enable_thinking || false,
+      enable_streaming: row.enable_streaming || false,
       system_prompt: row.system_prompt || '',
     })
   } else {

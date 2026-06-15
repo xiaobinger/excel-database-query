@@ -13,7 +13,8 @@ from app.models.ai_skill import AiSkill
 from app.models.ai_chat import AiChat, AiChatMessage
 from app.models.business_system import BusinessSystem
 from app.models.system_task import SystemTask, SystemTaskExecution
+from app.models.tool_memory import ToolMemory
 
 __all__ = ['SshConfig', 'DatabaseConnection', 'Script', 'QueryTask', 'Role', 'User',
            'SystemConfig', 'AutoExportTask', 'AiConfig', 'AiStrategy', 'UserBehavior', 'AiSkill',
-           'AiChat', 'AiChatMessage', 'BusinessSystem', 'SystemTask', 'SystemTaskExecution']
+           'AiChat', 'AiChatMessage', 'BusinessSystem', 'SystemTask', 'SystemTaskExecution', 'ToolMemory']

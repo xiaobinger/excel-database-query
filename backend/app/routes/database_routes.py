@@ -41,6 +41,12 @@ def create_database():
 
     try:
         conn = DatabaseService.create(data)
+        # 通知连接池新建连接
+        try:
+            from app.utils.connection_pool import ConnectionPoolManager
+            ConnectionPoolManager.get_instance().reload_connector(conn.id)
+        except Exception:
+            pass
         return jsonify({'success': True, 'data': conn.to_dict()}), 201
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 400
@@ -55,12 +61,24 @@ def update_database(conn_id):
     conn = DatabaseService.update(conn_id, data)
     if not conn:
         return jsonify({'success': False, 'message': '连接不存在'}), 404
+    # 通知连接池重新加载连接
+    try:
+        from app.utils.connection_pool import ConnectionPoolManager
+        ConnectionPoolManager.get_instance().reload_connector(conn_id)
+    except Exception:
+        pass
     return jsonify({'success': True, 'data': conn.to_dict()})
 
 
 @database_bp.route('/<int:conn_id>', methods=['DELETE'])
 def delete_database(conn_id):
     if DatabaseService.delete(conn_id):
+        # 通知连接池移除连接
+        try:
+            from app.utils.connection_pool import ConnectionPoolManager
+            ConnectionPoolManager.get_instance().remove_connector(conn_id)
+        except Exception:
+            pass
         return jsonify({'success': True, 'message': '删除成功'})
     return jsonify({'success': False, 'message': '连接不存在'}), 404
 
@@ -78,7 +96,10 @@ def get_database_tables(conn_id):
         return jsonify({'success': False, 'message': '连接不存在'}), 404
 
     try:
-        connector = DatabaseConnector(conn.to_config_dict())
+        from app.utils.connection_pool import ConnectionPoolManager
+        connector = ConnectionPoolManager.get_instance().get_connector(conn_id)
+        if not connector:
+            connector = DatabaseConnector(conn.to_config_dict())
         db_type = conn.db_type.lower()
 
         with connector.get_connection() as conn_obj:
@@ -101,7 +122,6 @@ def get_database_tables(conn_id):
                 ), {'schema': conn.database_name})
                 tables = [{'name': row[0], 'comment': ''} for row in result.fetchall()]
 
-        connector.close()
         return jsonify({'success': True, 'data': tables})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -114,12 +134,11 @@ def get_table_columns(conn_id, table_name):
         return jsonify({'success': False, 'message': '连接不存在'}), 404
 
     try:
-        table_info = DatabaseService.get_connector(conn_id)
-        if not table_info:
+        connector = DatabaseService.get_connector(conn_id)
+        if not connector:
             return jsonify({'success': False, 'message': '无法创建连接'}), 500
 
-        result = table_info.get_table_info(table_name)
-        table_info.close()
+        result = connector.get_table_info(table_name)
         return jsonify({'success': True, 'data': result})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500

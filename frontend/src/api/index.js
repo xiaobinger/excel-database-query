@@ -141,6 +141,7 @@ const download = {
 
 const ai = {
   getConfigs: () => http.get('/ai/configs'),
+  getActiveModels: () => http.get('/ai/active-models'),
   createConfig: (data) => http.post('/ai/configs', data),
   updateConfig: (id, data) => http.put(`/ai/configs/${id}`, data),
   deleteConfig: (id) => http.delete(`/ai/configs/${id}`),
@@ -155,8 +156,11 @@ const ai = {
   createChat: (data) => http.post('/ai/chats', data),
   deleteChat: (id) => http.delete(`/ai/chats/${id}`),
   hardDeleteChat: (id) => http.delete(`/ai/chats/${id}/hard`),
+  clearChatMessages: (id, data) => http.post(`/ai/chats/${id}/clear`, data),
+  retryMessage: (chatId, msgId) => http.post(`/ai/chats/${chatId}/messages/${msgId}/retry`),
   getMessages: (chatId) => http.get(`/ai/chats/${chatId}/messages`),
   sendMessage: (chatId, data) => http.post(`/ai/chats/${chatId}/send`, data, { timeout: 180000 }),
+  sendMessageStream: (chatId, data) => `/api/ai/chats/${chatId}/send-stream`,
   uploadFile: (formData) => http.post('/ai/upload-file', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   matchQuery: (data) => http.post('/ai/match-query', data),
   updateMessage: (chatId, msgId, data) => http.put(`/ai/chats/${chatId}/messages/${msgId}`, data),
@@ -195,4 +199,8 @@ const systemTask = {
   streamExecution: (executionId) => `/api/system-tasks/executions/${executionId}/stream`,
 }
 
-export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, ai, business, systemTask }
+const lookup = {
+  execute: (data) => http.post('/lookup/execute', data),
+}
+
+export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, ai, business, systemTask, lookup }

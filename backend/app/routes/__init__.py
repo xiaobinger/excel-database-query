@@ -6,5 +6,6 @@ from app.routes.auth_routes import auth_bp
 from app.routes.user_routes import user_bp
 from app.routes.role_routes import role_bp
 from app.routes.ai_routes import ai_bp
+from app.routes.lookup_routes import lookup_bp
 
-__all__ = ['database_bp', 'script_bp', 'query_bp', 'download_bp', 'auth_bp', 'user_bp', 'role_bp', 'ai_bp']
+__all__ = ['database_bp', 'script_bp', 'query_bp', 'download_bp', 'auth_bp', 'user_bp', 'role_bp', 'ai_bp', 'lookup_bp']

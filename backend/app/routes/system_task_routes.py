@@ -29,6 +29,11 @@ def get_system_tasks():
             # Include script's params_config so frontend can read params without separate lookup
             if script and script.get_params_config():
                 d['script_params_config'] = script.get_params_config()
+            # Include script's database_ids as fallback for execution DB selection
+            if script and not d.get('database_ids'):
+                script_db_ids = script.get_database_ids()
+                if script_db_ids:
+                    d['database_ids'] = script_db_ids
         if task.database_connection_id:
             conn = DatabaseConnection.query.get(task.database_connection_id)
             d['database_name'] = conn.name if conn else '未知'
@@ -97,9 +102,19 @@ def create_system_task():
         task.set_api_headers(data['api_headers'])
     if data.get('params_config'):
         task.set_params_config(data['params_config'])
+    if data.get('response_mapping'):
+        task.set_response_mapping(data['response_mapping'])
 
     db.session.add(task)
     db.session.commit()
+
+    # 自动授权：非admin用户创建的系统任务自动加入其权限列表
+    if current_user and not current_user.is_admin():
+        existing_ids = current_user.get_system_task_ids() or []
+        if task.id not in existing_ids:
+            existing_ids.append(task.id)
+            current_user.set_system_task_ids(existing_ids)
+            db.session.commit()
 
     # 记录用户行为
     if current_user:
@@ -141,6 +156,8 @@ def update_system_task(task_id):
         task.set_api_headers(data['api_headers'])
     if 'params_config' in data:
         task.set_params_config(data['params_config'])
+    if 'response_mapping' in data:
+        task.set_response_mapping(data['response_mapping'])
 
     db.session.commit()
     return jsonify({'success': True, 'data': task.to_dict(), 'message': '更新成功'})
@@ -182,6 +199,7 @@ def execute_system_task(task_id):
 
     data = request.get_json() or {}
     params_values = data.get('params_values', {})
+    database_id = data.get('database_id')  # 指定数据库连接ID（可选）
 
     try:
         execution = SystemTaskService.create_execution(
@@ -194,6 +212,7 @@ def execute_system_task(task_id):
             execution_id=execution.execution_id,
             system_task_id=task.id,
             params_values=params_values,
+            database_id=database_id,
         )
 
         # 记录用户行为

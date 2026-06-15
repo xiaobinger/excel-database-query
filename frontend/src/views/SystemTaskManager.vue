@@ -33,6 +33,9 @@
                 </span>
                 <span v-else>
                   {{ row.api_method }} {{ row.api_url || '-' }}
+                  <div v-if="row.api_body" style="color: #909399; font-size: 12px; margin-top: 2px">
+                    Body: {{ row.api_body.length > 50 ? row.api_body.substring(0, 50) + '...' : row.api_body }}
+                  </div>
                 </span>
               </template>
             </el-table-column>
@@ -169,7 +172,7 @@
             </el-select>
           </el-form-item>
           <el-form-item label="数据库连接">
-            <el-select v-model="form.database_connection_id" placeholder="请选择数据库（可选，默认使用脚本配置）" style="width: 100%" clearable filterable>
+            <el-select v-model="form.database_ids" multiple :collapse-tags="true" :collapse-tags-tooltip="true" placeholder="请选择数据库（可选，可多选，不选则使用脚本配置）" style="width: 100%" clearable filterable>
               <el-option
                 v-for="d in databases"
                 :key="d.id"
@@ -255,6 +258,37 @@
           </el-form-item>
         </template>
         </template>
+
+        <!-- Response Mapping (only for API tasks) -->
+        <template v-if="form.task_type === 'api'">
+          <el-divider content-position="left">响应字段映射</el-divider>
+          <el-form-item label="字段映射">
+            <div class="mapping-hint" style="margin-bottom: 8px; color: #909399; font-size: 12px;">
+              配置API响应字段的意义枚举映射，执行结果中会自动将原始值替换为可读文本（如 status: 0→失败, 1→成功）
+            </div>
+            <div v-for="(item, idx) in form.response_mapping" :key="idx" class="mapping-row" style="margin-bottom: 8px;">
+              <el-input v-model="item.field" placeholder="字段路径(如status或data.code)" style="width: 180px" />
+              <el-input v-model="item.label" placeholder="字段含义(如状态)" style="width: 120px" />
+              <div class="mapping-enum" style="flex: 1;">
+                <div v-for="(val, key) in item.mappingEntries" :key="key" style="display: flex; gap: 4px; margin-bottom: 4px;">
+                  <el-input v-model="item.mappingEntries[key].key" placeholder="原始值" style="width: 100px" />
+                  <span style="line-height: 32px; color: #909399;">→</span>
+                  <el-input v-model="item.mappingEntries[key].value" placeholder="含义" style="width: 100px" />
+                  <el-button type="danger" text @click="item.mappingEntries.splice(key, 1)"><i class="fas fa-times"></i></el-button>
+                </div>
+                <el-button type="primary" text size="small" @click="item.mappingEntries.push({key: '', value: ''})">
+                  <i class="fas fa-plus"></i> 添加枚举
+                </el-button>
+              </div>
+              <el-button type="danger" text @click="form.response_mapping.splice(idx, 1)">
+                <i class="fas fa-trash"></i>
+              </el-button>
+            </div>
+            <el-button type="primary" text @click="addResponseMapping">
+              <i class="fas fa-plus"></i> 添加字段映射
+            </el-button>
+          </el-form-item>
+        </template>
       </el-form>
 
       <template #footer>
@@ -281,7 +315,21 @@
           <el-tag size="small" style="margin-left: 8px">{{ currentTask.task_type }}</el-tag>
         </p>
         <el-form label-width="100px" label-position="right">
-          <el-form-item v-for="param in currentTaskParamsConfig" :key="param.name" :label="param.label || param.name">
+          <el-form-item v-if="currentTaskDatabases.length > 0 && currentTask.task_type === 'sql'" label="数据库连接">
+            <el-select v-model="executeDatabaseId" placeholder="全部数据库（默认）" clearable style="width: 100%">
+              <el-option
+                v-for="db in currentTaskDatabases"
+                :key="db.id"
+                :label="db.name"
+                :value="db.id"
+              />
+            </el-select>
+            <div style="color: #909399; font-size: 12px; margin-top: 4px">不选择则默认在所有关联数据库上执行</div>
+          </el-form-item>
+          <el-form-item v-for="param in currentTaskParamsConfig" :key="param.name">
+            <template #label>
+              <span v-if="currentTask.task_type === 'sql' || param.required" style="color: #f56c6c">* </span>{{ param.label || param.name }}
+            </template>
             <el-input
               v-if="param.type === 'textarea'"
               v-model="executeParams[param.name]"
@@ -303,12 +351,20 @@
           </el-form-item>
           <el-empty v-if="currentTaskParamsConfig.length === 0" description="此任务无需参数" :image-size="60" />
         </el-form>
+        <div v-if="currentTaskParamsConfig.length > 0 && !allParamsFilled" style="color: #e6a23c; font-size: 13px; margin-top: 8px; text-align: center;">
+          <i class="fas fa-exclamation-triangle"></i> 请填写所有必填参数后才能执行
+        </div>
       </div>
 
       <template #footer>
         <div class="dialog-footer">
           <el-button @click="executeDialogVisible = false">取消</el-button>
-          <el-button type="primary" :loading="executing" @click="handleExecute">
+          <el-button
+            type="primary"
+            :loading="executing"
+            :disabled="currentTaskParamsConfig.length > 0 && !allParamsFilled"
+            @click="handleExecute"
+          >
             <i class="fas fa-play"></i> 立即执行
           </el-button>
         </div>
@@ -421,10 +477,37 @@ const databases = ref([])
 const currentTask = ref(null)
 const currentExecution = ref(null)
 const executeParams = reactive({})
+const executeDatabaseId = ref(null)
 
 const currentTaskParamsConfig = computed(() => {
   if (!currentTask.value) return []
   return getTaskParamsConfig(currentTask.value)
+})
+
+// 所有必填参数是否已填写（SQL类型任务所有参数必填）
+const allParamsFilled = computed(() => {
+  if (!currentTask.value) return false
+  const params = currentTaskParamsConfig.value
+  if (params.length === 0) return true
+  if (currentTask.value.task_type === 'sql') {
+    return params.every(p => {
+      const v = executeParams[p.name]
+      return v !== undefined && v !== null && v !== ''
+    })
+  }
+  // API类型按required字段判断
+  return params.filter(p => p.required).every(p => {
+    const v = executeParams[p.name]
+    return v !== undefined && v !== null && v !== ''
+  })
+})
+
+// 当前任务关联的数据库连接列表
+const currentTaskDatabases = computed(() => {
+  if (!currentTask.value) return []
+  const dbIds = currentTask.value.database_ids || []
+  if (dbIds.length <= 1) return []  // 只有一个或没有，不需要选择
+  return databases.value.filter(d => dbIds.includes(d.id))
 })
 
 const progressValue = ref(0)
@@ -439,13 +522,14 @@ const defaultForm = {
   description: '',
   task_type: 'sql',
   script_id: null,
-  database_connection_id: null,
+  database_ids: [],
   api_method: 'POST',
   api_url: '',
   api_headers: {},
   api_body: '',
   api_timeout: 30,
   params_config: [],
+  response_mapping: [],
   sign_enabled: false,
   sign_key: '',
   sign_method: 'md5',
@@ -498,6 +582,31 @@ function addParam() {
 
 function removeParam(idx) {
   form.params_config.splice(idx, 1)
+}
+
+function addResponseMapping() {
+  if (!form.response_mapping) form.response_mapping = []
+  form.response_mapping.push({ field: '', label: '', mapping: {}, mappingEntries: [{ key: '', value: '' }] })
+}
+
+// 将mappingEntries转换为mapping对象（提交时调用）
+function convertMappingEntriesToMapping(entries) {
+  const mapping = {}
+  if (entries && Array.isArray(entries)) {
+    entries.forEach(e => {
+      if (e.key !== '' && e.value !== '') {
+        mapping[e.key] = e.value
+      }
+    })
+  }
+  return mapping
+}
+
+// 将mapping对象转换为mappingEntries数组（编辑时调用）
+function convertMappingToEntries(mapping) {
+  if (!mapping || typeof mapping !== 'object') return [{ key: '', value: '' }]
+  const entries = Object.entries(mapping).map(([key, value]) => ({ key, value }))
+  return entries.length > 0 ? entries : [{ key: '', value: '' }]
 }
 
 async function fetchList() {
@@ -555,12 +664,21 @@ function openDialog(row) {
       description: row.description || '',
       task_type: row.task_type || 'sql',
       script_id: row.script_id || null,
-      database_connection_id: row.database_connection_id || null,
+      database_ids: row.database_ids && row.database_ids.length > 0 ? [...row.database_ids] : [],
       api_method: row.api_method || 'POST',
       api_url: row.api_url || '',
+      api_headers: row.api_headers || {},
       api_body: row.api_body || '',
       api_timeout: row.api_timeout || 30,
       params_config: row.params_config && row.params_config.length > 0 ? JSON.parse(JSON.stringify(row.params_config)) : [],
+      response_mapping: (row.response_mapping && row.response_mapping.length > 0)
+        ? row.response_mapping.map(m => ({
+            field: m.field || '',
+            label: m.label || '',
+            mapping: m.mapping || {},
+            mappingEntries: convertMappingToEntries(m.mapping),
+          }))
+        : [],
       sign_enabled: row.sign_enabled || false,
       sign_key: row.sign_key || '',
       sign_method: row.sign_method || 'md5',
@@ -571,7 +689,7 @@ function openDialog(row) {
   } else {
     isEdit.value = false
     editId.value = null
-    Object.assign(form, { ...defaultForm, params_config: [] })
+    Object.assign(form, { ...defaultForm, params_config: [], response_mapping: [] })
   }
   dialogVisible.value = true
 }
@@ -586,7 +704,7 @@ async function handleSubmit() {
       description: form.description,
       task_type: form.task_type,
       script_id: form.script_id,
-      database_connection_id: form.database_connection_id,
+      database_ids: form.database_ids || [],
       api_method: form.api_method,
       api_url: form.api_url,
       api_body: form.api_body,
@@ -598,11 +716,17 @@ async function handleSubmit() {
       sign_append_type: form.sign_append_type,
       is_enabled: form.is_enabled,
     }
-    if (form.database_connection_id) {
-      payload.database_ids = [form.database_connection_id]
-    }
     if (form.task_type === 'api') {
       payload.params_config = form.params_config || []
+      // 转换response_mapping：将mappingEntries转为mapping对象
+      payload.response_mapping = (form.response_mapping || [])
+        .filter(m => m.field)
+        .map(m => ({
+          field: m.field,
+          label: m.label || m.field,
+          mapping: convertMappingEntriesToMapping(m.mappingEntries),
+        }))
+        .filter(m => Object.keys(m.mapping).length > 0)
     }
     if (form.api_headers && Object.keys(form.api_headers).length > 0) {
       payload.api_headers = form.api_headers
@@ -659,6 +783,7 @@ function getTaskParamsConfig(row) {
 
 function openExecuteDialog(row) {
   currentTask.value = row
+  executeDatabaseId.value = null
   Object.keys(executeParams).forEach(k => delete executeParams[k])
   const paramsConfig = getTaskParamsConfig(row)
   if (paramsConfig && paramsConfig.length > 0) {
@@ -680,7 +805,11 @@ async function handleExecute() {
         params[p.name] = executeParams[p.name]
       })
     }
-    const res = await api.systemTask.execute(currentTask.value.id, { params_values: params })
+    const payload = { params_values: params }
+    if (executeDatabaseId.value) {
+      payload.database_id = executeDatabaseId.value
+    }
+    const res = await api.systemTask.execute(currentTask.value.id, payload)
     executeDialogVisible.value = false
     ElMessage.success('任务已提交执行')
     startProgressStream(res.execution_id)

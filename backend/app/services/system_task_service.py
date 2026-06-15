@@ -59,16 +59,16 @@ class SystemTaskService:
         return execution
 
     @staticmethod
-    def execute_async(execution_id: str, system_task_id: int, params_values: Dict[str, Any]):
+    def execute_async(execution_id: str, system_task_id: int, params_values: Dict[str, Any], database_id: int = None):
         thread = threading.Thread(
             target=SystemTaskService._execute_background,
-            args=(execution_id, system_task_id, params_values),
+            args=(execution_id, system_task_id, params_values, database_id),
             daemon=True
         )
         thread.start()
 
     @staticmethod
-    def _execute_background(execution_id: str, system_task_id: int, params_values: Dict[str, Any]):
+    def _execute_background(execution_id: str, system_task_id: int, params_values: Dict[str, Any], database_id: int = None):
         try:
             from app import create_app
             app = create_app()
@@ -101,7 +101,7 @@ class SystemTaskService:
                 update_execution_progress(execution_id, 5, '开始执行系统任务')
 
                 if system_task.task_type == 'sql':
-                    SystemTaskService._execute_sql(execution, system_task, params_values)
+                    SystemTaskService._execute_sql(execution, system_task, params_values, database_id)
                 elif system_task.task_type == 'api':
                     SystemTaskService._execute_api(execution, system_task, params_values)
                 else:
@@ -162,7 +162,7 @@ class SystemTaskService:
 
     @staticmethod
     def _execute_sql(execution: SystemTaskExecution, system_task: SystemTask,
-                     params_values: Dict[str, Any]):
+                     params_values: Dict[str, Any], database_id: int = None):
         execution_id = execution.execution_id
         execution.progress = 10
         execution.add_log('执行SQL类型系统任务')
@@ -214,6 +214,14 @@ class SystemTaskService:
         if not db_ids:
             raise ValueError('没有配置数据库连接')
 
+        # 如果指定了数据库ID，只使用指定的那一个
+        if database_id:
+            database_id = int(database_id)
+            if database_id in db_ids:
+                db_ids = [database_id]
+            else:
+                raise ValueError(f'指定的数据库连接(ID:{database_id})不在任务关联的数据库列表中')
+
         all_results = []
         total_dbs = len(db_ids)
 
@@ -224,9 +232,11 @@ class SystemTaskService:
                 continue
 
             try:
-                connector = DatabaseConnector(conn_model.to_config_dict())
-                if not connector.test_connection():
-                    execution.add_log(f'数据库连接测试失败: {conn_model.name}', 'warning')
+                from app.utils.connection_pool import ConnectionPoolManager
+                pool = ConnectionPoolManager.get_instance()
+                connector = pool.get_connector(conn_id)
+                if not connector:
+                    execution.add_log(f'数据库连接失败: {conn_model.name}', 'warning')
                     continue
 
                 execution.add_log(f'连接到数据库: {conn_model.name}')
@@ -291,7 +301,7 @@ class SystemTaskService:
                 })
                 execution.add_log(f'数据库 {conn_model.name} 执行完成，{len(statements)} 条语句')
 
-                connector.close()
+                # 连接由连接池管理，不再手动关闭
             except Exception as e:
                 all_results.append({
                     'db_name': conn_model.name if conn_model else str(conn_id),
@@ -444,9 +454,19 @@ class SystemTaskService:
 
             is_success = 200 <= resp.status_code < 300
 
+            # 应用响应字段映射
+            resp_data_mapped = resp_data
+            mapping_info = ''
+            response_mapping = system_task.get_response_mapping()
+            if response_mapping and isinstance(resp_data, dict):
+                resp_data_mapped, mapping_info = SystemTaskService._apply_response_mapping(resp_data, response_mapping)
+
             execution.set_result_data({
                 'status_code': resp.status_code,
-                'response': resp_data if isinstance(resp_data, (dict, list)) else resp_text,
+                'response': resp_data_mapped if isinstance(resp_data_mapped, (dict, list)) else resp_text,
+                'response_raw': resp_data if isinstance(resp_data, (dict, list)) else resp_text,
+                'mapping_applied': bool(mapping_info),
+                'mapping_info': mapping_info,
                 'response_headers': dict(resp.headers),
                 'success': is_success,
             })
@@ -499,6 +519,215 @@ class SystemTaskService:
         else:
             # Default to md5
             return hashlib.md5(sign_str.encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def _apply_response_mapping(resp_data: dict, response_mapping: list) -> tuple:
+        """应用响应字段映射，将原始值替换为可读文本，同时保留原始值。
+        返回 (mapped_data, mapping_info_str)
+        """
+        import copy
+        mapped = copy.deepcopy(resp_data)
+        info_parts = []
+
+        for m in response_mapping:
+            field = m.get('field', '')
+            label = m.get('label', field)
+            mapping = m.get('mapping', {})
+            if not field or not mapping:
+                continue
+
+            # 支持嵌套字段，如 data.status
+            value = SystemTaskService._get_nested_value(resp_data, field)
+            if value is None:
+                continue
+
+            value_str = str(value)
+            if value_str in mapping:
+                readable = mapping[value_str]
+                # 在映射后的数据中，将原始值替换为 "原始值(可读文本)" 格式
+                SystemTaskService._set_nested_value(mapped, field, f'{value_str}({readable})')
+                info_parts.append(f'{label}({field}): {value_str} → {readable}')
+
+        mapping_info = '; '.join(info_parts) if info_parts else ''
+        return mapped, mapping_info
+
+    @staticmethod
+    def _get_nested_value(data: dict, field_path: str):
+        """获取嵌套字段值，支持 data.status 格式"""
+        keys = field_path.split('.')
+        current = data
+        for key in keys:
+            if isinstance(current, dict):
+                current = current.get(key)
+            elif isinstance(current, list) and key.isdigit():
+                idx = int(key)
+                if 0 <= idx < len(current):
+                    current = current[idx]
+                else:
+                    return None
+            else:
+                return None
+        return current
+
+    @staticmethod
+    def _set_nested_value(data: dict, field_path: str, value):
+        """设置嵌套字段值，支持 data.status 格式"""
+        keys = field_path.split('.')
+        current = data
+        for key in keys[:-1]:
+            if isinstance(current, dict):
+                current = current.setdefault(key, {})
+            elif isinstance(current, list) and key.isdigit():
+                idx = int(key)
+                if 0 <= idx < len(current):
+                    current = current[idx]
+                else:
+                    return
+            else:
+                return
+        last_key = keys[-1]
+        if isinstance(current, dict):
+            current[last_key] = value
+        elif isinstance(current, list) and last_key.isdigit():
+            idx = int(last_key)
+            if 0 <= idx < len(current):
+                current[idx] = value
+
+    @staticmethod
+    def execute_api_sync(system_task: SystemTask, params_values: Dict[str, Any]) -> Dict[str, Any]:
+        """同步执行API类型系统任务，直接返回执行结果（用于AI自动执行场景）"""
+        if not system_task.api_url:
+            return {'error': 'API地址未配置', 'success': False}
+
+        url = system_task.api_url
+        method = (system_task.api_method or 'POST').upper()
+        headers = system_task.get_api_headers()
+        timeout = system_task.api_timeout or 30
+
+        # Prepare params and body
+        request_params = dict(params_values) if params_values else {}
+        body = system_task.api_body or ''
+
+        # Replace placeholders in body {{param}}
+        if body and params_values:
+            for key, val in params_values.items():
+                placeholder = f'{{{{{key}}}}}'
+                if placeholder in body:
+                    body = body.replace(placeholder, str(val))
+
+        # Replace placeholders in url
+        if params_values:
+            for key, val in params_values.items():
+                placeholder = f'{{{{{key}}}}}'
+                if placeholder in url:
+                    url = url.replace(placeholder, str(val))
+
+        # Signing
+        if system_task.sign_enabled and system_task.sign_key:
+            sign = SystemTaskService._compute_sign(
+                request_params, body, headers,
+                system_task.sign_key, system_task.sign_method
+            )
+            sign_name = system_task.sign_param_name or 'sign'
+            append_type = system_task.sign_append_type or 'query'
+
+            if append_type == 'query':
+                separator = '&' if '?' in url else '?'
+                url = f"{url}{separator}{sign_name}={sign}"
+            elif append_type == 'body':
+                try:
+                    body_obj = json.loads(body) if body else {}
+                    if isinstance(body_obj, dict):
+                        body_obj[sign_name] = sign
+                        body = json.dumps(body_obj, ensure_ascii=False)
+                except (json.JSONDecodeError, TypeError):
+                    if 'application/x-www-form-urlencoded' in headers.get('Content-Type', ''):
+                        body = f"{body}&{sign_name}={sign}" if body else f"{sign_name}={sign}"
+            elif append_type == 'header':
+                headers[sign_name] = sign
+
+        # Parse body for JSON content-type
+        request_body = body
+        if headers.get('Content-Type', '').startswith('application/json') and body:
+            try:
+                request_body = json.loads(body)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Make request
+        try:
+            if method == 'GET':
+                resp = requests.get(url, headers=headers, params=request_params, timeout=timeout)
+            elif method == 'POST':
+                if isinstance(request_body, dict):
+                    resp = requests.post(url, headers=headers, json=request_body, timeout=timeout)
+                else:
+                    resp = requests.post(url, headers=headers, data=request_body, timeout=timeout)
+            elif method == 'PUT':
+                if isinstance(request_body, dict):
+                    resp = requests.put(url, headers=headers, json=request_body, timeout=timeout)
+                else:
+                    resp = requests.put(url, headers=headers, data=request_body, timeout=timeout)
+            elif method == 'DELETE':
+                resp = requests.delete(url, headers=headers, params=request_params, timeout=timeout)
+            else:
+                return {'error': f'不支持的HTTP方法: {method}', 'success': False}
+
+            # Try to parse response as JSON
+            try:
+                resp_data = resp.json()
+                resp_text = json.dumps(resp_data, ensure_ascii=False)
+            except (json.JSONDecodeError, ValueError):
+                resp_data = resp.text
+                resp_text = resp.text
+
+            is_success = 200 <= resp.status_code < 300
+
+            # 应用响应字段映射
+            resp_data_mapped = resp_data
+            mapping_info = ''
+            mapping_summary = ''
+            response_mapping = system_task.get_response_mapping()
+            if response_mapping and isinstance(resp_data, dict):
+                resp_data_mapped, mapping_info = SystemTaskService._apply_response_mapping(resp_data, response_mapping)
+                mapping_summary = SystemTaskService._build_mapping_summary(resp_data, response_mapping)
+
+            return {
+                'status_code': resp.status_code,
+                'response': resp_data_mapped if isinstance(resp_data_mapped, (dict, list)) else resp_text,
+                'response_raw': resp_data if isinstance(resp_data, (dict, list)) else resp_text,
+                'mapping_applied': bool(mapping_info),
+                'mapping_info': mapping_info,
+                'mapping_summary': mapping_summary,
+                'success': is_success,
+                'auto_executed': True,
+            }
+
+        except requests.exceptions.Timeout:
+            return {'error': f'API请求超时({timeout}秒)', 'success': False}
+        except requests.exceptions.RequestException as e:
+            return {'error': f'API请求失败: {str(e)}', 'success': False}
+
+    @staticmethod
+    def _build_mapping_summary(resp_data: dict, response_mapping: list) -> str:
+        """根据响应字段映射构建可读的结果摘要，供AI直接反馈给用户"""
+        parts = []
+        for m in response_mapping:
+            field = m.get('field', '')
+            label = m.get('label', field)
+            mapping = m.get('mapping', {})
+            if not field or not mapping:
+                continue
+            value = SystemTaskService._get_nested_value(resp_data, field)
+            if value is None:
+                continue
+            value_str = str(value)
+            if value_str in mapping:
+                readable = mapping[value_str]
+                parts.append(f'{label}: {readable}')
+            else:
+                parts.append(f'{label}: {value_str}')
+        return '；'.join(parts) if parts else ''
 
     @staticmethod
     def get_execution_status(execution_id: str) -> Optional[Dict[str, Any]]:

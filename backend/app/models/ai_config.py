@@ -18,6 +18,8 @@ class AiConfig(db.Model):
     temperature = db.Column(db.Float, default=0.7, comment='温度参数')
     system_prompt = db.Column(db.Text, comment='系统提示词')
     description = db.Column(db.String(500), comment='描述')
+    enable_thinking = db.Column(db.Boolean, default=False, comment='是否启用深度思考(展示思考过程)')
+    enable_streaming = db.Column(db.Boolean, default=True, comment='是否启用流式输出(逐字打印)')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -57,6 +59,8 @@ class AiConfig(db.Model):
             'temperature': self.temperature,
             'system_prompt': self.system_prompt,
             'description': self.description,
+            'enable_thinking': self.enable_thinking or False,
+            'enable_streaming': self.enable_streaming if self.enable_streaming is not None else True,
             'has_api_key': bool(self.api_key),
             'created_at': beijing_isoformat(self.created_at),
             'updated_at': beijing_isoformat(self.updated_at),

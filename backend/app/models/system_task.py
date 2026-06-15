@@ -28,6 +28,9 @@ class SystemTask(db.Model):
     # Common params config (placeholder definitions)
     params_config = db.Column(db.Text, comment='参数配置(JSON)')
 
+    # Response field mapping (for API tasks)
+    response_mapping = db.Column(db.Text, comment='响应字段意义映射(JSON)，格式: [{"field":"status","label":"状态","mapping":{"0":"失败","1":"成功"}}]')
+
     # Signing
     sign_enabled = db.Column(db.Boolean, default=False, comment='是否启用加签')
     sign_key = db.Column(db.String(500), comment='加签密钥')
@@ -75,6 +78,17 @@ class SystemTask(db.Model):
     def set_params_config(self, config: list):
         self.params_config = json.dumps(config, ensure_ascii=False) if config else None
 
+    def get_response_mapping(self) -> list:
+        if self.response_mapping:
+            try:
+                return json.loads(self.response_mapping)
+            except (json.JSONDecodeError, TypeError):
+                return []
+        return []
+
+    def set_response_mapping(self, mapping: list):
+        self.response_mapping = json.dumps(mapping, ensure_ascii=False) if mapping else None
+
     def to_dict(self) -> dict:
         return {
             'id': self.id,
@@ -90,6 +104,7 @@ class SystemTask(db.Model):
             'api_body': self.api_body,
             'api_timeout': self.api_timeout,
             'params_config': self.get_params_config(),
+            'response_mapping': self.get_response_mapping(),
             'sign_enabled': self.sign_enabled,
             'sign_key': self.sign_key,
             'sign_method': self.sign_method,

@@ -5,6 +5,9 @@
         <el-button type="primary" style="width: 100%" @click="createNewChat">
           <i class="fas fa-plus"></i> 新对话
         </el-button>
+        <el-button v-if="currentChatId" type="danger" plain style="width: 100%; margin-top: 8px; margin-left: 0" @click="clearCurrentChat">
+          <i class="fas fa-trash-alt"></i> 清空对话
+        </el-button>
       </div>
       <div class="chat-list">
         <div
@@ -40,20 +43,20 @@
         <h2>AI 智能助手</h2>
         <p>我可以帮你生成SQL查询、创建查询选项、优化语句、执行导出任务、解析Excel文件等</p>
         <div class="quick-actions">
-          <el-button @click="quickAsk('帮我导出商户123456的信息')">执行导出任务</el-button>
-          <el-button @click="quickAsk('帮我生成一个查询商户信息的SQL')">生成SQL查询</el-button>
-          <el-button @click="quickAsk('帮我优化这个SQL语句')">优化SQL</el-button>
-          <el-button @click="quickAsk('如何配置自动导出任务？')">使用帮助</el-button>
+          <el-button @click="quickAsk('列出所有导出任务')">执行导出任务</el-button>
+          <el-button @click="quickAsk('列出所有查询任务')">执行查询匹配任务</el-button>
+          <el-button @click="quickAsk('列出所有系统任务')">执行系统任务</el-button>
+          <el-button @click="quickAsk('你是谁？你能为我做什么？')">使用帮助</el-button>
         </div>
       </div>
 
       <template v-else>
         <div class="messages-area" ref="messagesRef">
-          <div v-for="msg in messages" :key="msg.id" class="message" :class="msg.role" @mouseenter="msg._showActions = true" @mouseleave="msg._showActions = false">
+          <div v-for="msg in messages" :key="msg.id" class="message" :class="[msg.role, { streaming: msg._streaming }]" @mouseenter="msg._showActions = true" @mouseleave="msg._showActions = false">
             <div class="message-avatar">
               <i :class="msg.role === 'user' ? 'fas fa-user' : 'fas fa-robot'"></i>
             </div>
-            <div class="message-content" :class="{ 'full-width': msg._type === 'tool' || msg._type === 'file' }">
+            <div class="message-content" :class="{ 'full-width': msg._type === 'tool' || msg._type === 'file' || msg._type === 'lookup' }">
               <!-- 删除按钮（悬浮显示，执行中的任务不显示删除按钮） -->
               <div class="message-actions" v-show="msg._showActions && !msg._executing">
                 <el-dropdown v-if="isAdmin" trigger="click" @command="(cmd) => handleMsgDelete(cmd, msg)">
@@ -278,9 +281,28 @@
                   </div>
                 </div>
               </template>
-              <!-- 普通文本消息 -->
+              <!-- 普通文本消息 / 流式消息 -->
               <template v-else-if="msg._type !== 'tool'">
+                <!-- 思考过程（深度思考模型） -->
+                <div v-if="msg._show_thinking && msg._thinking" class="thinking-block" :class="{ 'thinking-done': msg._thinking_done }">
+                  <div class="thinking-header" @click="msg._thinking_collapsed = !msg._thinking_collapsed">
+                    <i class="fas fa-brain"></i>
+                    <span v-if="!msg._thinking_done" class="thinking-label">思考中...</span>
+                    <span v-else class="thinking-label">思考过程</span>
+                    <i :class="msg._thinking_collapsed ? 'fas fa-chevron-right' : 'fas fa-chevron-down'" class="thinking-toggle"></i>
+                  </div>
+                  <div v-show="!msg._thinking_collapsed" class="thinking-content">{{ msg._thinking }}</div>
+                </div>
+                <!-- 正文内容 -->
                 <div class="message-text" v-html="renderMarkdown(msg.content)"></div>
+                <!-- 流式输出光标 -->
+                <span v-if="msg._streaming" class="streaming-cursor"></span>
+                <!-- 重试按钮：仅AI文本消息且非流式中、非卡片类型 -->
+                <div v-if="msg.role === 'assistant' && !msg._streaming && !msg._type" class="message-retry">
+                  <el-button text size="small" class="retry-btn" @click="retryAiMessage(msg)" :loading="msg._retrying">
+                    <i class="fas fa-redo"></i> 重新回答
+                  </el-button>
+                </div>
               </template>
               <!-- 工具调用确认卡片 -->
               <template v-else-if="!msg._dismissed">
@@ -377,6 +399,55 @@
                   </div>
                 </div>
               </template>
+
+              <!-- 信息查询结果卡片 -->
+              <template v-if="msg._type === 'lookup'">
+                <div class="tool-card lookup-card" :class="{ done: msg._done, failed: msg._failed }">
+                  <div class="tool-card-header">
+                    <i v-if="msg._failed" class="fas fa-times-circle tool-icon tool-icon-error"></i>
+                    <i v-else class="fas fa-search tool-icon"></i>
+                    <span class="tool-title">{{ msg.tool_data?.script_name || '信息查询' }}</span>
+                  </div>
+                  <div class="tool-card-body">
+                    <!-- 查询参数 -->
+                    <div v-if="msg.tool_data?.params_values && Object.keys(msg.tool_data.params_values).length" class="lookup-params">
+                      <span class="lookup-params-label">查询参数：</span>
+                      <span v-for="(val, key) in msg.tool_data.params_values" :key="key" class="lookup-param-tag">
+                        {{ key }}={{ val }}
+                      </span>
+                    </div>
+                    <!-- 查询结果 -->
+                    <div v-if="msg._done && msg.tool_data?.results?.length" class="lookup-results">
+                      <div class="lookup-result-count">共 {{ msg.tool_data.row_count }} 条结果</div>
+                      <div class="lookup-table-wrapper">
+                        <table class="lookup-table">
+                          <thead>
+                            <tr>
+                              <th v-for="col in msg.tool_data.columns" :key="col">{{ col }}</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr v-for="(row, idx) in msg.tool_data.results.slice(0, 20)" :key="idx">
+                              <td v-for="col in msg.tool_data.columns" :key="col">{{ row[col] ?? '-' }}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                      <div v-if="msg.tool_data.results.length > 20" class="lookup-more">
+                        仅显示前20条，共 {{ msg.tool_data.row_count }} 条
+                      </div>
+                    </div>
+                    <!-- 无结果 -->
+                    <div v-else-if="msg._done && (!msg.tool_data?.results || msg.tool_data.results.length === 0)" class="lookup-no-data">
+                      <i class="fas fa-info-circle"></i> 未查询到匹配的数据
+                    </div>
+                    <!-- 错误 -->
+                    <div v-if="msg._failed" class="lookup-error">
+                      <i class="fas fa-exclamation-triangle"></i> {{ msg._error_msg || '查询执行失败' }}
+                    </div>
+                  </div>
+                </div>
+              </template>
             </div>
           </div>
           <div v-if="loading" class="message assistant">
@@ -391,6 +462,19 @@
 
         <div class="input-area">
           <div class="input-wrapper">
+            <!-- Selected model tag -->
+            <div v-if="selectedModel" class="model-tag-bar">
+              <el-tag closable type="success" effect="dark" @close="removeSelectedModel">
+                <i class="fas fa-robot"></i> @{{ selectedModel.name }}
+                <span style="opacity: 0.7; margin-left: 4px">{{ selectedModel.model_name }}</span>
+                <span v-if="selectedModel.enable_streaming" class="thinking-badge" title="流式输出">
+                  <i class="fas fa-bolt"></i>
+                </span>
+                <span v-if="selectedModel.enable_thinking" class="thinking-badge" title="深度思考">
+                  <i class="fas fa-brain"></i>
+                </span>
+              </el-tag>
+            </div>
             <div v-if="uploadedFile" class="file-attachment">
               <i class="fas fa-file-excel"></i>
               <span class="file-name">{{ uploadedFile.filename }}</span>
@@ -399,13 +483,38 @@
             </div>
             <div class="input-row">
               <el-input
+                ref="inputRef"
                 v-model="inputText"
                 type="textarea"
                 :rows="2"
-                placeholder="输入消息，按 Enter 发送，Shift+Enter 换行..."
+                placeholder="输入消息，@ 选择模型，按 Enter 发送，Shift+Enter 换行..."
                 resize="none"
                 @keydown="handleKeydown"
+                @input="handleInputChange"
+                @blur="handleInputBlur"
               />
+              <!-- @mention 浮层 -->
+              <div
+                v-if="mentionPopupVisible && filteredModels.length > 0"
+                class="mention-dropdown"
+              >
+                <div class="mention-dropdown-title">选择模型</div>
+                <div class="mention-list">
+                  <div
+                    v-for="model in filteredModels"
+                    :key="model.id"
+                    class="mention-item"
+                    @mousedown.prevent="selectMentionModel(model)"
+                  >
+                    <i class="fas fa-robot"></i>
+                    <span class="mention-name">{{ model.name }}</span>
+                    <span class="mention-model">{{ model.model_name }}</span>
+                    <el-tag size="small" type="info" effect="plain" style="margin-left: 4px">{{ model.provider }}</el-tag>
+                    <i v-if="model.enable_streaming" class="fas fa-bolt" style="color: #e6a23c; margin-left: 4px" title="流式输出"></i>
+                    <i v-if="model.enable_thinking" class="fas fa-brain" style="color: #9b59b6; margin-left: 4px" title="深度思考"></i>
+                  </div>
+                </div>
+              </div>
               <div class="input-buttons">
                 <el-upload
                   :show-file-list="false"
@@ -904,6 +1013,21 @@
             </div>
           </div>
         </div>
+        <!-- 数据库连接选择 -->
+        <div v-if="sysTaskParamDialogDatabases.length > 1" class="param-section" style="margin-top: 12px">
+          <div class="param-section-title">
+            <i class="fas fa-database"></i> 数据库连接
+            <span style="color: #f56c6c; margin-left: 2px">*</span>
+          </div>
+          <el-select v-model="sysTaskParamDialogDatabaseId" placeholder="请选择数据库连接" style="width: 100%">
+            <el-option
+              v-for="db in sysTaskParamDialogDatabases"
+              :key="db.id"
+              :label="db.name"
+              :value="db.id"
+            />
+          </el-select>
+        </div>
       </div>
 
       <template #footer>
@@ -916,11 +1040,68 @@
         </div>
       </template>
     </el-dialog>
+
+    <!-- 信息查询参数设置对话框 -->
+    <el-dialog
+      v-model="lookupParamDialogVisible"
+      title="信息查询参数设置"
+      width="500px"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <div v-if="lookupParamDialogScript" class="param-dialog-body">
+        <div class="param-section">
+          <div class="param-section-title">
+            <i class="fas fa-search"></i> {{ lookupParamDialogScript.name }}
+            <el-tag size="small" type="info" style="margin-left: 8px">信息查询</el-tag>
+          </div>
+          <div class="params-card">
+            <div class="param-item" v-for="p in (lookupParamDialogScript.params || [])" :key="p.name">
+              <div class="param-item-label">
+                <span class="param-name-tag">
+                  {{ p.label || p.name }}
+                  <span v-if="p.required" style="color: #f56c6c; margin-left: 2px">*</span>
+                </span>
+                <el-tag v-if="p.required" size="small" type="danger" effect="plain">必填</el-tag>
+              </div>
+              <div class="param-item-control">
+                <template v-if="p.type === 'date'">
+                  <el-date-picker
+                    v-model="lookupParamDialogValues[p.name]"
+                    type="date"
+                    :placeholder="'请选择' + (p.label || p.name)"
+                    value-format="YYYY-MM-DD"
+                    style="width: 100%"
+                  />
+                </template>
+                <template v-else>
+                  <el-input
+                    v-model="lookupParamDialogValues[p.name]"
+                    :type="p.type === 'number' ? 'number' : 'text'"
+                    :placeholder="'请输入' + (p.label || p.name)"
+                  />
+                </template>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="lookupParamDialogVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!lookupParamCanConfirm" @click="confirmLookupParamDialog">
+          <i class="fas fa-search"></i> 查询
+        </el-button>
+        <div v-if="!lookupParamCanConfirm" style="color: #E6A23C; font-size: 12px; margin-top: 4px">
+          <i class="fas fa-exclamation-triangle"></i> 请填写所有必填参数
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick, onUnmounted, computed } from 'vue'
+import { ref, reactive, onMounted, nextTick, onUnmounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import { useAppStore } from '../stores'
@@ -949,7 +1130,24 @@ const loading = ref(false)
 const messagesRef = ref(null)
 const uploadedFile = ref(null)
 const store = useAppStore()
+
 const isAdmin = computed(() => store.isAdmin)
+
+// @mention model selection
+const activeModels = ref([])
+const mentionPopupVisible = ref(false)
+const mentionSearch = ref('')
+const selectedModel = ref(null)  // { id, name, model_name, provider }
+const mentionTriggerIndex = ref(-1)  // position of @ in inputText
+const inputRef = ref(null)  // ref for the textarea element
+
+const filteredModels = computed(() => {
+  if (!mentionSearch.value) return activeModels.value
+  const q = mentionSearch.value.toLowerCase()
+  return activeModels.value.filter(m =>
+    m.name.toLowerCase().includes(q) || m.model_name.toLowerCase().includes(q)
+  )
+})
 
 // 参数设置对话框状态
 const paramDialogVisible = ref(false)
@@ -976,11 +1174,32 @@ const sysTaskParamDialogMsg = ref(null)  // 关联的select_options卡片消息
 const sysTaskParamDialogTask = ref(null)  // 当前编辑的系统任务
 const sysTaskParamDialogValues = ref({})  // 参数值
 
+// 信息查询参数对话框状态
+const lookupParamDialogVisible = ref(false)
+const lookupParamDialogMsg = ref(null)
+const lookupParamDialogScript = ref(null)
+const lookupParamDialogValues = ref({})
+
+const lookupParamCanConfirm = computed(() => {
+  const script = lookupParamDialogScript.value
+  if (!script || !script.params) return true
+  for (const p of script.params) {
+    if (!p.required) continue
+    const val = lookupParamDialogValues.value[p.name]
+    if (val === undefined || val === null || val === '') return false
+  }
+  return true
+})
+
 // 系统任务参数对话框：是否可以确认执行
 // SQL类型系统任务的所有参数都视为必填
 const sysTaskParamCanConfirm = computed(() => {
   const task = sysTaskParamDialogTask.value
-  if (!task || !task.params) return true
+  if (!task || !task.params) {
+    // 无参数时，检查是否需要选择数据库
+    if (sysTaskParamDialogDatabases.value.length > 1 && !sysTaskParamDialogDatabaseId.value) return false
+    return true
+  }
   const isSqlTask = task.task_type === 'sql'
   for (const p of task.params) {
     // SQL类型任务所有参数必填，其他类型按required字段判断
@@ -990,6 +1209,8 @@ const sysTaskParamCanConfirm = computed(() => {
     if (val === undefined || val === null || val === '') return false
     if (Array.isArray(val) && val.length === 0) return false
   }
+  // 多个数据库时需要选择
+  if (sysTaskParamDialogDatabases.value.length > 1 && !sysTaskParamDialogDatabaseId.value) return false
   return true
 })
 
@@ -1063,6 +1284,19 @@ async function selectChat(chatId) {
         base._selected = meta.selected || []
         base._selectedScripts = meta.scripts || []
         base._file_info = meta.file_info || null
+      } else if (meta._type === 'lookup') {
+        base._type = 'lookup'
+        base.tool_data = meta.tool_data || {}
+        base._done = meta._done || false
+        base._failed = meta._failed || false
+        if (meta._error_msg) base._error_msg = meta._error_msg
+      }
+      // 恢复思考内容
+      if (meta._thinking) {
+        base._thinking = meta._thinking
+        base._thinking_done = meta._thinking_done || false
+        base._show_thinking = true
+        base._thinking_collapsed = true
       }
         // 恢复执行状态
         if (meta._executing) base._executing = true
@@ -1154,6 +1388,84 @@ async function hardDeleteChat(chatId) {
       messages.value = []
     }
   } catch {}
+}
+
+async function clearCurrentChat() {
+  if (!currentChatId.value) return
+  try {
+    let hard = false
+    if (isAdmin.value) {
+      try {
+        await ElMessageBox.confirm(
+          '确定要清空当前对话的所有消息吗？',
+          '清空对话',
+          {
+            distinguishCancelAndClose: true,
+            confirmButtonText: '彻底删除',
+            cancelButtonText: '软删除',
+            type: 'warning',
+          }
+        )
+        // 点击"彻底删除"
+        hard = true
+      } catch (action) {
+        if (action === 'cancel') {
+          // 点击"软删除"
+          hard = false
+        } else {
+          // 点击关闭按钮，取消操作
+          return
+        }
+      }
+    } else {
+      await ElMessageBox.confirm(
+        '确定要清空当前对话的所有消息吗？清空后消息将不再显示。',
+        '清空对话',
+        { confirmButtonText: '清空', cancelButtonText: '取消', type: 'warning' }
+      )
+    }
+    await api.ai.clearChatMessages(currentChatId.value, { hard })
+    messages.value = []
+    ElMessage.success('已清空对话')
+  } catch {}
+}
+
+async function retryAiMessage(msg) {
+  if (!currentChatId.value || loading.value) return
+  try {
+    msg._retrying = true
+    const res = await api.ai.retryMessage(currentChatId.value, msg.id)
+    if (res.data?.user_content) {
+      // 不删除任何消息，直接重新发送用户问题
+      loading.value = true
+      try {
+        // 根据模型配置决定是否使用流式输出
+        const modelConfig = activeModels.value[0] || null
+        const useStreaming = modelConfig ? modelConfig.enable_streaming !== false : true
+        if (useStreaming) {
+          await sendStreamMessage(res.data.user_content, null)
+        } else {
+          const sendRes = await api.ai.sendMessage(currentChatId.value, { content: res.data.user_content })
+          if (sendRes.data?.assistant_message) {
+            messages.value.push(sendRes.data.assistant_message)
+          }
+          if (sendRes.data?.tool_results && sendRes.data.tool_results.length > 0) {
+            await handleToolResults(sendRes.data.tool_results)
+          }
+        }
+        await nextTick()
+        scrollToBottom()
+      } catch {
+        ElMessage.error('重新回答失败')
+      } finally {
+        loading.value = false
+      }
+    }
+  } catch {
+    ElMessage.error('重试失败')
+  } finally {
+    msg._retrying = false
+  }
 }
 
 async function handleFileUpload(file) {
@@ -1359,8 +1671,15 @@ async function sendMessage() {
     content = text ? `${content}\n\n[${fileDesc}]` : fileDesc
   }
 
+  const currentModelId = selectedModel.value?.id || null
+  const currentModel = selectedModel.value
   inputText.value = ''
   loading.value = true
+
+  // 根据模型配置决定是否使用流式响应
+  const modelConfig = currentModel || activeModels.value[0] || null
+  const useStreaming = modelConfig ? modelConfig.enable_streaming !== false : true
+  console.log('[Chat] 发送消息, useStreaming:', useStreaming, 'chatId:', currentChatId.value, 'modelConfig:', modelConfig?.name)
 
   // Optimistic add user message
   const userMsg = { id: Date.now(), role: 'user', content: content }
@@ -1395,109 +1714,25 @@ async function sendMessage() {
     // 智能匹配失败，继续走AI对话流程
   }
 
+  // 清除选中的模型（在判断useStreaming之后）
+  selectedModel.value = null
+
   try {
-    const res = await api.ai.sendMessage(currentChatId.value, { content: content })
+    if (useStreaming) {
+      // 流式响应
+      await sendStreamMessage(content, currentModelId)
+    } else {
+      // 普通响应
+      const res = await api.ai.sendMessage(currentChatId.value, { content: content, ai_config_id: currentModelId })
 
-    // Add AI text reply
-    if (res.data?.assistant_message) {
-      messages.value.push(res.data.assistant_message)
-    }
+      // Add AI text reply
+      if (res.data?.assistant_message) {
+        messages.value.push(res.data.assistant_message)
+      }
 
-    // Handle tool call results
-    if (res.data?.tool_results && res.data.tool_results.length > 0) {
-      for (const tr of res.data.tool_results) {
-        const result = tr.result
-        if (result && !result.error && (result.action_type === 'export' || result.action_type === 'query' || result.action_type === 'system_task')) {
-          // 系统任务：如果AI已解析到所有参数，直接执行而无需确认
-          if (result.action_type === 'system_task') {
-            const params = result.params || []
-            const paramsValues = result.params_values || {}
-            const allParamsFilled = params.length === 0 || params.every(p => {
-              const val = paramsValues[p.name]
-              return val !== undefined && val !== null && val !== ''
-            })
-            if (allParamsFilled) {
-              const autoMsg = {
-                id: tr.message_id || Date.now() + Math.random(),
-                role: 'assistant',
-                content: result.confirm_message || `正在执行系统任务：${result.task_name}`,
-                _type: 'tool',
-                _dismissed: false,
-                tool_data: result,
-                _selected: [result.task_id],
-                _selectedScripts: [{
-                  id: result.task_id,
-                  name: result.task_name || '系统任务',
-                  task_type: result.task_type || 'sql',
-                  params: params,
-                }],
-                _action_type: 'system_task',
-                _param_values: paramsValues,
-                _params_checked: true,
-              }
-              messages.value.push(autoMsg)
-              // 自动执行
-              doExecuteSystemTask(autoMsg)
-              continue
-            } else if (params.length > 0) {
-              // 参数未解析完整，直接弹出参数输入框
-              const paramMsg = {
-                id: tr.message_id || Date.now() + Math.random(),
-                role: 'assistant',
-                content: `匹配到系统任务「${result.task_name}」，以下参数需要您提供后才能执行：`,
-                _type: 'tool',
-                _dismissed: false,
-                tool_data: result,
-                _selected: [result.task_id],
-                _selectedScripts: [{
-                  id: result.task_id,
-                  name: result.task_name || '系统任务',
-                  task_type: result.task_type || 'sql',
-                  params: params,
-                }],
-                _action_type: 'system_task',
-                _param_values: paramsValues,
-                _params_checked: false,
-              }
-              messages.value.push(paramMsg)
-              // 自动打开参数设置对话框
-              await nextTick()
-              openSystemTaskParamDialog(paramMsg)
-              continue
-            }
-          }
-          messages.value.push({
-            id: tr.message_id || Date.now() + Math.random(),
-            role: 'assistant',
-            content: '',
-            _type: 'tool',
-            _dismissed: false,
-            tool_data: result,
-          })
-        } else if (result && result._select_mode) {
-          // 选项选择卡片：列出多个/全部选项供用户勾选
-          messages.value.push({
-            id: tr.message_id || Date.now() + Math.random(),
-            role: 'assistant',
-            content: result.message || '',
-            _type: 'select_options',
-            _select_mode: result._select_mode,
-            _scripts: result.scripts || result.tasks || [],
-            _action_type: (result.scripts || result.tasks || []).length > 0 ? (tr.name === 'list_export_options' ? 'export' : tr.name === 'list_system_tasks' ? 'system_task' : 'query') : '',
-            _selected: [],
-            _params_checked: false,
-            _param_values: {},
-            _all_checked: {},
-            _selectedScripts: [],
-            _missing_required_params: [],
-          })
-        } else if (result && result.error) {
-          messages.value.push({
-            id: Date.now() + Math.random(),
-            role: 'assistant',
-            content: `⚠️ ${result.error}`,
-          })
-        }
+      // Handle tool call results
+      if (res.data?.tool_results && res.data.tool_results.length > 0) {
+        await handleToolResults(res.data.tool_results)
       }
     }
 
@@ -1518,7 +1753,333 @@ function quickAsk(text) {
   sendMessage()
 }
 
+// 处理工具调用结果（普通和流式共用）
+async function handleToolResults(toolResults) {
+  if (!toolResults || toolResults.length === 0) return
+  for (const tr of toolResults) {
+    const result = tr.result
+    if (result && (result.action_type === 'export' || result.action_type === 'query' || result.action_type === 'system_task' || result.action_type === 'lookup')) {
+      // 系统任务：API自动执行的结果由AI二次回复直接反馈，不创建卡片
+      if (result.action_type === 'system_task' && result.auto_executed) {
+        continue
+      }
+      // 系统任务：如果AI已解析到所有参数，直接执行而无需确认
+      if (result.action_type === 'system_task' && !result.error) {
+        const params = result.params || []
+        const paramsValues = result.params_values || {}
+        const databases = result.databases || []
+        const databaseId = result.database_id || null
+        const allParamsFilled = params.length === 0 || params.every(p => {
+          const val = paramsValues[p.name]
+          return val !== undefined && val !== null && val !== ''
+        })
+        const needsDbSelection = databases.length > 1 && !databaseId
+        if (allParamsFilled && !needsDbSelection) {
+          const autoMsg = {
+            id: tr.message_id || Date.now() + Math.random(),
+            role: 'assistant',
+            content: result.confirm_message || `正在执行系统任务：${result.task_name}`,
+            _type: 'tool',
+            _dismissed: false,
+            tool_data: result,
+            _selected: [result.task_id],
+            _selectedScripts: [{
+              id: result.task_id,
+              name: result.task_name || '系统任务',
+              task_type: result.task_type || 'sql',
+              params: params,
+            }],
+            _action_type: 'system_task',
+            _param_values: paramsValues,
+            _params_checked: true,
+            _database_id: databaseId,
+          }
+          messages.value.push(autoMsg)
+          doExecuteSystemTask(autoMsg)
+          continue
+        } else if (!allParamsFilled || needsDbSelection) {
+          const paramMsg = {
+            id: tr.message_id || Date.now() + Math.random(),
+            role: 'assistant',
+            content: needsDbSelection && !allParamsFilled
+              ? `匹配到系统任务「${result.task_name}」，需要填写参数并选择数据库连接：`
+              : needsDbSelection
+                ? `匹配到系统任务「${result.task_name}」，该任务关联多个数据库，请选择执行数据库：`
+                : `匹配到系统任务「${result.task_name}」，以下参数需要您提供后才能执行：`,
+            _type: 'tool',
+            _dismissed: false,
+            tool_data: result,
+            _selected: [result.task_id],
+            _selectedScripts: [{
+              id: result.task_id,
+              name: result.task_name || '系统任务',
+              task_type: result.task_type || 'sql',
+              params: params,
+            }],
+            _action_type: 'system_task',
+            _param_values: paramsValues,
+            _params_checked: false,
+            _databases: databases,
+            _database_id: databaseId,
+          }
+          messages.value.push(paramMsg)
+          await nextTick()
+          openSystemTaskParamDialog(paramMsg)
+          continue
+        }
+      }
+      // 信息查询：只有show_all_fields=true时才创建卡片，否则由AI二次回复自然语言回答
+      if (result.action_type === 'lookup') {
+        if (result.show_all_fields) {
+          const hasError = !!result.error
+          messages.value.push({
+            id: tr.message_id || Date.now() + Math.random(),
+            role: 'assistant',
+            content: hasError ? '' : (result.confirm_message || `查询完成：${result.script_name}`),
+            _type: 'lookup',
+            _done: true,
+            _failed: hasError,
+            _error_msg: hasError ? result.error : '',
+            tool_data: result,
+          })
+        }
+        // show_all_fields=false时不创建卡片，AI二次回复会以自然语言回答用户
+        continue
+      }
+      // 导出/查询/system_task：成功才显示工具卡片，失败显示错误消息
+      if (result.error) {
+        messages.value.push({
+          id: Date.now() + Math.random(),
+          role: 'assistant',
+          content: `⚠️ ${result.error}`,
+        })
+        continue
+      }
+      messages.value.push({
+        id: tr.message_id || Date.now() + Math.random(),
+        role: 'assistant',
+        content: '',
+        _type: 'tool',
+        _dismissed: false,
+        tool_data: result,
+      })
+    } else if (result && result._select_mode) {
+      messages.value.push({
+        id: tr.message_id || Date.now() + Math.random(),
+        role: 'assistant',
+        content: result.message || '',
+        _type: 'select_options',
+        _select_mode: result._select_mode,
+        _scripts: result.scripts || result.tasks || [],
+        _action_type: (result.scripts || result.tasks || []).length > 0 ? (tr.name === 'list_export_options' ? 'export' : tr.name === 'list_system_tasks' ? 'system_task' : tr.name === 'list_lookup_options' ? 'lookup' : 'query') : '',
+        _selected: [],
+        _params_checked: false,
+        _param_values: {},
+        _all_checked: {},
+        _selectedScripts: [],
+        _missing_required_params: [],
+      })
+    } else if (result && result.error) {
+      messages.value.push({
+        id: Date.now() + Math.random(),
+        role: 'assistant',
+        content: `⚠️ ${result.error}`,
+      })
+    }
+  }
+  await nextTick()
+  scrollToBottom()
+}
+
+// 流式发送消息
+async function sendStreamMessage(content, modelId) {
+  // 创建AI助手消息占位
+  const streamMsg = reactive({
+    id: Date.now(),
+    role: 'assistant',
+    content: '',
+    _streaming: true,
+    _thinking: '',
+    _thinking_done: false,
+    _show_thinking: false,
+  })
+  messages.value.push(streamMsg)
+  await nextTick()
+  scrollToBottom()
+
+  const url = api.ai.sendMessageStream(currentChatId.value, { content, ai_config_id: modelId })
+  const token = localStorage.getItem('token')
+
+  try {
+    console.log('[SSE] 发起流式请求:', url)
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': token ? `Bearer ${token}` : '',
+        'Accept': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+      },
+      body: JSON.stringify({ content, ai_config_id: modelId }),
+    })
+
+    console.log('[SSE] 响应状态:', response.status, response.ok, 'Content-Type:', response.headers.get('content-type'))
+
+    if (!response.ok) {
+      console.warn('[SSE] 流式请求失败，状态码:', response.status)
+      streamMsg._streaming = false
+      // 流式请求失败，回退到普通发送
+      const idx = messages.value.findIndex(m => m.id === streamMsg.id)
+      if (idx > -1) messages.value.splice(idx, 1)
+      try {
+        const res = await api.ai.sendMessage(currentChatId.value, { content, ai_config_id: modelId })
+        if (res.data?.assistant_message) {
+          messages.value.push(res.data.assistant_message)
+        }
+        if (res.data?.tool_results && res.data.tool_results.length > 0) {
+          await handleToolResults(res.data.tool_results)
+        }
+      } catch {
+        messages.value.push({ id: Date.now(), role: 'assistant', content: '请求失败，请稍后重试' })
+      }
+      return
+    }
+
+    if (!response.body) {
+      console.error('[SSE] response.body 为空，不支持ReadableStream')
+      streamMsg._streaming = false
+      // 回退到普通发送
+      const idx = messages.value.findIndex(m => m.id === streamMsg.id)
+      if (idx > -1) messages.value.splice(idx, 1)
+      try {
+        const res = await api.ai.sendMessage(currentChatId.value, { content, ai_config_id: modelId })
+        if (res.data?.assistant_message) {
+          messages.value.push(res.data.assistant_message)
+        }
+        if (res.data?.tool_results && res.data.tool_results.length > 0) {
+          await handleToolResults(res.data.tool_results)
+        }
+      } catch {
+        messages.value.push({ id: Date.now(), role: 'assistant', content: '请求失败，请稍后重试' })
+      }
+      return
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let chunkCount = 0
+    let eventCount = 0
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) {
+        console.log('[SSE] 流结束，共收到', chunkCount, '个数据块')
+        break
+      }
+
+      chunkCount++
+      const decodedChunk = decoder.decode(value, { stream: true })
+      if (chunkCount <= 3) {
+        console.log('[SSE] 收到数据块 #' + chunkCount + ':', decodedChunk.substring(0, 200))
+      }
+      buffer += decodedChunk
+
+      // 按双换行分割SSE事件
+      const eventBlocks = buffer.split('\n\n')
+      buffer = eventBlocks.pop() || ''
+
+      for (const block of eventBlocks) {
+        const lines = block.split('\n')
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const dataStr = line.slice(6).trim()
+          if (!dataStr) continue
+
+          try {
+            const event = JSON.parse(dataStr)
+
+            if (event.type === 'heartbeat') {
+              // 心跳事件，确认SSE连接已建立
+              console.log('[SSE] 连接已建立（收到心跳）')
+            } else if (event.type === 'thinking') {
+              streamMsg._thinking += event.content
+              streamMsg._show_thinking = true
+              eventCount++
+            } else if (event.type === 'content') {
+              streamMsg.content += event.content
+              eventCount++
+              if (eventCount <= 5) {
+                console.log('[SSE] 收到content事件 #' + eventCount + ', 当前内容长度:', streamMsg.content.length)
+              }
+            } else if (event.type === 'tool_results') {
+              // 处理工具调用结果（渲染为卡片）
+              handleToolResults(event.tool_results)
+            } else if (event.type === 'done') {
+              streamMsg._streaming = false
+              streamMsg._thinking_done = true
+              streamMsg.id = event.message_id || streamMsg.id
+            } else if (event.type === 'error') {
+              streamMsg._streaming = false
+              streamMsg.content = event.content || 'AI服务调用失败'
+            }
+          } catch (parseErr) {
+            console.warn('[SSE] JSON解析失败:', dataStr, parseErr)
+          }
+        }
+      }
+
+      await nextTick()
+      scrollToBottom()
+    }
+
+    // 处理buffer中剩余的数据
+    if (buffer.trim()) {
+      const lines = buffer.split('\n')
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        const dataStr = line.slice(6).trim()
+        if (!dataStr) continue
+        try {
+          const event = JSON.parse(dataStr)
+          if (event.type === 'content') {
+            streamMsg.content += event.content
+          } else if (event.type === 'done') {
+            streamMsg._streaming = false
+            streamMsg._thinking_done = true
+            streamMsg.id = event.message_id || streamMsg.id
+          } else if (event.type === 'error') {
+            streamMsg._streaming = false
+            streamMsg.content = event.content || 'AI服务调用失败'
+          }
+        } catch (parseErr) {
+          console.warn('[SSE] buffer剩余数据JSON解析失败:', dataStr, parseErr)
+        }
+      }
+    }
+  } catch (e) {
+    streamMsg._streaming = false
+    streamMsg.content += '\n\n[连接中断]'
+  }
+
+  // 如果流式消息内容为空且有工具结果，移除空消息
+  if (!streamMsg.content.trim() && !streamMsg._thinking) {
+    const idx = messages.value.findIndex(m => m.id === streamMsg.id)
+    if (idx > -1) messages.value.splice(idx, 1)
+  }
+
+  // 流式结束后保存思考内容到后端
+  if (streamMsg._thinking || streamMsg._thinking_done) {
+    saveMessageState(streamMsg)
+  }
+
+  await nextTick()
+  scrollToBottom()
+}
+
 function handleKeydown(e) {
+  // Handle Escape for @mention popup
+  if (handleMentionKeydown(e)) return
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     sendMessage()
@@ -1568,6 +2129,16 @@ async function saveMessageState(msg) {
     metadata.selected = msg._selected || []
     metadata.file_info = msg._file_info || null
   }
+  // 保存lookup类型的元数据
+  if (msg._type === 'lookup') {
+    metadata._type = 'lookup'
+    metadata.tool_data = msg.tool_data || {}
+  }
+  // 保存思考内容的元数据
+  if (msg._thinking) {
+    metadata._thinking = msg._thinking
+    metadata._thinking_done = msg._thinking_done || false
+  }
   if (Object.keys(metadata).length > 0) {
     try {
       await api.ai.updateMessage(currentChatId.value, msg.id, { metadata })
@@ -1602,6 +2173,19 @@ async function executeSelectedOptions(msg) {
     }
     // 有参数，弹出参数设置对话框
     openSystemTaskParamDialog(msg)
+    return
+  }
+
+  if (msg._action_type === 'lookup') {
+    // 信息查询：需要填写参数后执行
+    const hasAnyParams = msg._selectedScripts.some(s => s.params && s.params.length > 0)
+    if (!hasAnyParams) {
+      // 无参数，直接执行
+      doExecuteLookup(msg)
+      return
+    }
+    // 有参数，弹出参数设置对话框
+    openLookupParamDialog(msg)
     return
   }
 
@@ -2484,6 +3068,8 @@ function openSystemTaskParamDialog(msg) {
   sysTaskParamDialogMsg.value = msg
   sysTaskParamDialogTask.value = task
   sysTaskParamDialogValues.value = values
+  sysTaskParamDialogDatabases.value = msg._databases || []
+  sysTaskParamDialogDatabaseId.value = msg._database_id || null
   sysTaskParamDialogVisible.value = true
 }
 
@@ -2496,6 +3082,7 @@ async function confirmSystemTaskParamDialog() {
   // 将参数值写入卡片消息
   msg._param_values = { ...sysTaskParamDialogValues.value }
   msg._params_checked = true
+  msg._database_id = sysTaskParamDialogDatabaseId.value || null
 
   sysTaskParamDialogVisible.value = false
   await nextTick()
@@ -2517,15 +3104,20 @@ async function confirmSystemTask(msg) {
   const hasParams = td.params && td.params.length > 0
   const hasRequiredParams = hasParams && td.params.some(p => p.required)
   const paramsValues = td.params_values || {}
+  const databases = td.databases || []
+  const databaseId = td.database_id || null
+  const needsDbSelection = databases.length > 1 && !databaseId
 
   // 检查必填参数是否都有值
   const missingRequired = hasParams && td.params
     .filter(p => p.required)
     .some(p => !paramsValues[p.name] && paramsValues[p.name] !== 0)
 
-  if (hasParams && (missingRequired || Object.keys(paramsValues).length === 0)) {
-    // 有必填参数未填写，或没有任何参数值，弹出参数设置对话框
+  if ((hasParams && (missingRequired || Object.keys(paramsValues).length === 0)) || needsDbSelection) {
+    // 有必填参数未填写，或需要选择数据库，弹出参数设置对话框
     msg._param_values = paramsValues
+    msg._databases = databases
+    msg._database_id = databaseId
     openSystemTaskParamDialog(msg)
     return
   }
@@ -2535,6 +3127,7 @@ async function confirmSystemTask(msg) {
     msg._param_values = paramsValues
     msg._params_checked = true
   }
+  msg._database_id = databaseId
 
   doExecuteSystemTask(msg)
 }
@@ -2569,7 +3162,11 @@ async function doExecuteSystemTask(msg) {
       }
     }
 
-    const res = await api.systemTask.execute(task.id, { params_values })
+    const payload = { params_values }
+    if (msg._database_id) {
+      payload.database_id = msg._database_id
+    }
+    const res = await api.systemTask.execute(task.id, payload)
     if (!res.execution_id && !res.data?.execution_id) {
       throw new Error('未获取到执行ID')
     }
@@ -2583,6 +3180,117 @@ async function doExecuteSystemTask(msg) {
     await nextTick()
     scrollToBottom()
   }
+}
+
+// 打开信息查询参数对话框
+function openLookupParamDialog(msg) {
+  const script = msg._selectedScripts[0]
+  if (!script) return
+
+  const existingValues = msg._param_values || {}
+  const values = {}
+  if (script.params) {
+    for (const p of script.params) {
+      if (existingValues[p.name] !== undefined && existingValues[p.name] !== '') {
+        values[p.name] = existingValues[p.name]
+      } else {
+        values[p.name] = ''
+      }
+    }
+  }
+
+  lookupParamDialogMsg.value = msg
+  lookupParamDialogScript.value = script
+  lookupParamDialogValues.value = values
+  lookupParamDialogVisible.value = true
+}
+
+// 确认信息查询参数并执行
+async function confirmLookupParamDialog() {
+  const msg = lookupParamDialogMsg.value
+  const script = lookupParamDialogScript.value
+  if (!msg || !script) return
+
+  msg._param_values = { ...lookupParamDialogValues.value }
+  msg._params_checked = true
+
+  lookupParamDialogVisible.value = false
+  await nextTick()
+  doExecuteLookup(msg)
+}
+
+// 执行信息查询
+async function doExecuteLookup(msg) {
+  const script = msg._selectedScripts?.[0]
+  if (!script) return
+
+  // 创建lookup结果卡片
+  const params_values = {}
+  if (msg._param_values) {
+    if (script.params && script.params.length > 0) {
+      for (const p of script.params) {
+        const val = msg._param_values[p.name]
+        if (val !== undefined && val !== '' && val !== null) {
+          params_values[p.name] = val
+        }
+      }
+    }
+    if (Object.keys(params_values).length === 0 && Object.keys(msg._param_values).length > 0) {
+      Object.assign(params_values, msg._param_values)
+    }
+  }
+
+  let cardMsgId = Date.now()
+  try {
+    const cardContent = `正在执行信息查询：${script.name}`
+    const createRes = await api.ai.createMessage(currentChatId.value, { content: cardContent })
+    cardMsgId = createRes.data?.id || cardMsgId
+  } catch {}
+
+  const cardMsg = {
+    id: cardMsgId,
+    role: 'assistant',
+    content: '',
+    _type: 'lookup',
+    _done: false,
+    _failed: false,
+    tool_data: {
+      script_name: script.name,
+      params_values: params_values,
+      results: [],
+      columns: [],
+      row_count: 0,
+    },
+  }
+  messages.value.push(cardMsg)
+  await nextTick()
+  scrollToBottom()
+
+  try {
+    const res = await api.lookup.execute({
+      script_id: script.id,
+      params_values: params_values,
+    })
+
+    cardMsg._done = true
+    const data = res.data || res
+    cardMsg._failed = !data.success
+    if (data.success) {
+      cardMsg.tool_data.results = data.results || []
+      cardMsg.tool_data.columns = data.columns || []
+      cardMsg.tool_data.row_count = data.row_count || 0
+    } else {
+      cardMsg._error_msg = data.error_message || res.message || '查询执行失败'
+    }
+  } catch (e) {
+    cardMsg._done = true
+    cardMsg._failed = true
+    cardMsg._error_msg = e.message || '查询执行失败'
+  }
+
+  saveMessageState(cardMsg)
+  await nextTick()
+  scrollToBottom()
 }
 
 // 轮询系统任务状态
@@ -2683,8 +3391,94 @@ function pollSystemTaskStatus(executionId, msg) {
   })
 }
 
+async function fetchActiveModels() {
+  try {
+    const res = await api.ai.getActiveModels()
+    activeModels.value = res.data || res || []
+  } catch {
+    activeModels.value = []
+  }
+}
+
+function handleInputChange(val) {
+  // Detect @ trigger in input
+  const text = inputText.value
+  // Get cursor position from the actual textarea DOM element
+  let cursorPos = text.length
+  try {
+    const textareaEl = inputRef.value?.$el?.querySelector('textarea') || inputRef.value?.textarea
+    if (textareaEl) {
+      cursorPos = textareaEl.selectionStart
+    }
+  } catch {}
+  // Find the last @ before cursor
+  const textBeforeCursor = text.substring(0, cursorPos)
+  const lastAt = textBeforeCursor.lastIndexOf('@')
+  if (lastAt >= 0) {
+    // Check if there's a space between @ and cursor (means @ is not active)
+    const afterAt = textBeforeCursor.substring(lastAt + 1)
+    if (!afterAt.includes(' ') && !afterAt.includes('\n')) {
+      mentionSearch.value = afterAt
+      mentionTriggerIndex.value = lastAt
+      mentionPopupVisible.value = true
+      return
+    }
+  }
+  mentionPopupVisible.value = false
+  mentionSearch.value = ''
+  mentionTriggerIndex.value = -1
+}
+
+function handleInputBlur() {
+  // Delay closing to allow mousedown on mention items to fire first
+  setTimeout(() => {
+    mentionPopupVisible.value = false
+    mentionSearch.value = ''
+    mentionTriggerIndex.value = -1
+  }, 200)
+}
+
+function selectMentionModel(model) {
+  selectedModel.value = model
+  // Remove @... from input text and don't add model name to text
+  // The model is shown as a tag above the input instead
+  if (mentionTriggerIndex.value >= 0) {
+    const text = inputText.value
+    const beforeAt = text.substring(0, mentionTriggerIndex.value)
+    // Find end of @query (until space, newline, or end)
+    const afterAt = text.substring(mentionTriggerIndex.value + 1)
+    const match = afterAt.match(/^[^\s]+/)
+    const afterMention = match ? text.substring(mentionTriggerIndex.value + 1 + match[0].length) : text.substring(mentionTriggerIndex.value + 1)
+    inputText.value = beforeAt + afterMention
+  }
+  mentionPopupVisible.value = false
+  mentionSearch.value = ''
+  mentionTriggerIndex.value = -1
+  // Refocus the input
+  nextTick(() => {
+    const textareaEl = inputRef.value?.$el?.querySelector('textarea') || inputRef.value?.textarea
+    if (textareaEl) textareaEl.focus()
+  })
+}
+
+function removeSelectedModel() {
+  selectedModel.value = null
+}
+
+function handleMentionKeydown(e) {
+  if (mentionPopupVisible.value && filteredModels.value.length > 0) {
+    if (e.key === 'Escape') {
+      mentionPopupVisible.value = false
+      e.preventDefault()
+      return true
+    }
+  }
+  return false
+}
+
 onMounted(() => {
   fetchChats()
+  fetchActiveModels()
 })
 </script>
 
@@ -2864,6 +3658,23 @@ onMounted(() => {
 
 .msg-action-btn:hover {
   color: #f56c6c;
+}
+
+/* 重试按钮 */
+.message-retry {
+  margin-top: 4px;
+  padding-left: 16px;
+}
+
+.retry-btn {
+  color: #909399;
+  font-size: 12px;
+  padding: 2px 4px;
+  min-height: auto;
+}
+
+.retry-btn:hover {
+  color: var(--primary-color, #409eff);
 }
 
 .message.user .message-actions {
@@ -3715,11 +4526,28 @@ onMounted(() => {
   display: flex;
   gap: 8px;
   align-items: flex-end;
+  position: relative;
 }
 
 .input-row :deep(.el-textarea__inner) {
   border-radius: 8px;
   flex: 1;
+}
+
+.model-tag-bar {
+  display: flex;
+  align-items: center;
+  padding: 4px 0;
+}
+
+.model-tag-bar .el-tag {
+  font-size: 12px;
+}
+
+.thinking-badge {
+  margin-left: 6px;
+  color: #a78bfa;
+  font-size: 12px;
 }
 
 .input-buttons {
@@ -3859,5 +4687,279 @@ onMounted(() => {
 @keyframes typing {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
   30% { transform: translateY(-6px); opacity: 1; }
+}
+
+/* ===== Lookup 信息查询卡片样式 ===== */
+.lookup-card .tool-card-body {
+  padding: 12px 16px;
+}
+
+.lookup-params {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.lookup-params-label {
+  font-size: 12px;
+  color: #909399;
+  font-weight: 500;
+}
+
+.lookup-param-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  background: #ecf5ff;
+  border: 1px solid #d9ecff;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #409eff;
+  font-family: 'Consolas', 'Monaco', monospace;
+}
+
+.lookup-results {
+  margin-top: 4px;
+}
+
+.lookup-result-count {
+  font-size: 12px;
+  color: #909399;
+  margin-bottom: 8px;
+}
+
+.lookup-table-wrapper {
+  overflow-x: auto;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+}
+
+.lookup-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.lookup-table th {
+  background: #f5f7fa;
+  padding: 8px 12px;
+  text-align: left;
+  font-weight: 600;
+  color: #606266;
+  border-bottom: 1px solid #ebeef5;
+  white-space: nowrap;
+}
+
+.lookup-table td {
+  padding: 6px 12px;
+  border-bottom: 1px solid #f2f6fc;
+  color: #303133;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lookup-table tr:last-child td {
+  border-bottom: none;
+}
+
+.lookup-table tr:hover td {
+  background: #f5f7fa;
+}
+
+.lookup-more {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 6px;
+  text-align: center;
+}
+
+.lookup-no-data {
+  padding: 16px;
+  text-align: center;
+  color: #909399;
+  font-size: 13px;
+}
+
+.lookup-no-data i {
+  margin-right: 4px;
+}
+
+.lookup-error {
+  padding: 12px 16px;
+  background: #fef0f0;
+  border: 1px solid #fde2e2;
+  border-radius: 6px;
+  color: #f56c6c;
+  font-size: 13px;
+}
+
+.lookup-error i {
+  margin-right: 4px;
+}
+
+/* ===== 深度思考样式 ===== */
+.thinking-block {
+  margin-bottom: 12px;
+  border: 1px solid #e2e6ea;
+  border-radius: 10px;
+  overflow: hidden;
+  background: linear-gradient(135deg, #fafbfc 0%, #f5f7fa 100%);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.thinking-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+  background: linear-gradient(135deg, #f0f2f5 0%, #e8ecf1 100%);
+  font-size: 13px;
+  color: #606266;
+  transition: all 0.25s ease;
+}
+
+.thinking-header:hover {
+  background: linear-gradient(135deg, #e8eaed 0%, #dde0e5 100%);
+}
+
+.thinking-header .fa-brain {
+  color: #8b5cf6;
+  font-size: 14px;
+}
+
+.thinking-label {
+  font-weight: 500;
+  flex: 1;
+}
+
+.thinking-toggle {
+  font-size: 11px;
+  color: #909399;
+  transition: transform 0.25s ease;
+}
+
+.thinking-content {
+  padding: 12px 14px;
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+  animation: thinking-fade-in 0.3s ease;
+}
+
+@keyframes thinking-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.thinking-block:not(.thinking-done) .thinking-label {
+  color: #8b5cf6;
+}
+
+.thinking-block:not(.thinking-done) .thinking-header {
+  background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%);
+}
+
+.thinking-block:not(.thinking-done) .thinking-header .fa-brain {
+  animation: pulse-brain 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-brain {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.95); }
+}
+
+.streaming-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: linear-gradient(180deg, #409eff 0%, #66b1ff 100%);
+  border-radius: 1px;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: cursor-blink 1s ease-in-out infinite;
+  box-shadow: 0 0 4px rgba(64, 158, 255, 0.4);
+}
+
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
+}
+
+/* 流式消息淡入效果 */
+.message.assistant .message-text {
+  transition: opacity 0.15s ease;
+}
+
+/* 流式输出时消息气泡的呼吸效果 */
+.message.assistant.streaming .message-text {
+  animation: streaming-glow 2s ease-in-out infinite;
+}
+
+@keyframes streaming-glow {
+  0%, 100% { box-shadow: 0 0 0 rgba(64, 158, 255, 0); }
+  50% { box-shadow: 0 0 8px rgba(64, 158, 255, 0.08); }
+}
+</style>
+
+<style>
+.mention-dropdown {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  width: 320px;
+  max-height: 280px;
+  background: #fff;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  z-index: 2000;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.mention-dropdown-title {
+  padding: 8px 12px 4px;
+  font-size: 12px;
+  color: #909399;
+  font-weight: 500;
+  border-bottom: 1px solid #f2f6fc;
+}
+.mention-list {
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.mention-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.mention-item:hover {
+  background: #f0f9eb;
+}
+.mention-item i {
+  color: #67c23a;
+  font-size: 14px;
+}
+.mention-name {
+  font-weight: 500;
+  color: #303133;
+}
+.mention-model {
+  color: #909399;
+  font-size: 12px;
+  margin-left: 2px;
 }
 </style>

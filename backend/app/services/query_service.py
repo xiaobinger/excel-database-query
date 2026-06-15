@@ -153,16 +153,18 @@ class QueryService:
                         if not conn_model:
                             continue
                         try:
-                            connector = DatabaseConnector(conn_model.to_config_dict())
-                            if connector.test_connection():
+                            from app.utils.connection_pool import ConnectionPoolManager
+                            pool = ConnectionPoolManager.get_instance()
+                            connector = pool.get_connector(conn_id)
+                            if connector:
                                 connectors[conn_id] = {
                                     'connector': connector,
                                     'name': conn_model.name,
                                     'model': conn_model
                                 }
-                                task.add_log(f'数据库连接成功: {conn_model.name}')
+                                task.add_log(f'数据库连接就绪: {conn_model.name}')
                             else:
-                                task.add_log(f'数据库连接测试失败: {conn_model.name}', 'warning')
+                                task.add_log(f'数据库连接失败: {conn_model.name}', 'warning')
                         except Exception as e:
                             task.add_log(f'数据库连接失败 {conn_model.name}: {str(e)}', 'error')
 
@@ -217,11 +219,7 @@ class QueryService:
                                 task.add_log(f'数据库查询失败: {str(e)}', 'error')
                                 db.session.commit()
 
-                    for conn_id, conn_info in connectors.items():
-                        try:
-                            conn_info['connector'].close()
-                        except Exception:
-                            pass
+                    # 连接由连接池管理，不再手动关闭
 
                 task.progress = 85
                 task.add_log('开始处理查询结果并写入Excel')

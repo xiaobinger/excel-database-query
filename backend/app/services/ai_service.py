@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import requests
+from datetime import datetime
 from typing import Tuple, Optional
 
 logger = logging.getLogger(__name__)
@@ -115,7 +116,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "list_system_tasks",
-            "description": "列出所有可用的系统任务。系统任务是指后台运维类任务（如数据清理、缓存刷新、终端解绑等），与导出任务和查询任务完全不同。只有当用户明确提到\"系统任务\"或描述的是运维类操作时才调用此工具。不要将查询任务或导出任务误认为是系统任务。",
+            "description": "列出所有可用的系统任务。系统任务是指后台运维类任务（如数据清理、缓存刷新、终端解绑等），与导出任务和查询任务完全不同。只有当用户明确提到\"系统任务\"或描述的是运维类操作时才调用此工具。不要将查询任务或导出任务误认为是系统任务。返回结果中API类型任务可能包含response_mapping字段，表示响应字段的意义枚举映射。API类型任务参数齐全时会自动执行并返回结果，SQL类型任务需要用户确认后执行。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -132,7 +133,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "request_system_task",
-            "description": "当用户明确要执行系统任务（运维类任务）时调用此工具。系统任务与导出任务、查询任务完全不同，只有运维类操作才属于系统任务。需要指定系统任务名称和参数值。注意：1、必须从用户的自然语言描述中提取所有可能的参数值填入params对象；2、params的键名必须使用list_system_tasks返回的参数配置中的name字段值，不要自己编造参数名；3、如果之前没有调用list_system_tasks，请先调用以获取正确的参数名。",
+            "description": "当用户明确要执行系统任务（运维类任务）时调用此工具。系统任务与导出任务、查询任务完全不同，只有运维类操作才属于系统任务。需要指定系统任务名称和参数值。注意：1、必须从用户的自然语言描述中提取所有可能的参数值填入params对象；2、params的键名必须使用list_system_tasks返回的参数配置中的name字段值，不要自己编造参数名；3、如果之前没有调用list_system_tasks，请先调用以获取正确的参数名；4、如果任务关联了多个数据库连接，请从用户描述中提取数据库名称填入database_name；5、API类型任务参数齐全时会自动执行，结果中包含mapping_summary（映射摘要）字段，请直接根据映射摘要用自然语言告诉用户执行结果；6、如果用户同时要求对多个对象执行同样的API任务（如解绑多个SN），请在同一次回复中同时调用多个request_system_task，每个调用对应一个对象，系统会自动并行执行，你只需汇总所有结果用列表形式反馈给用户。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -145,12 +146,72 @@ AI_TOOLS = [
                         "description": "参数键值对。键必须是系统任务参数配置中的name字段值（如device_sn、user_id等），值为用户提供的参数值。如果不知道参数名，请先调用list_system_tasks查看参数配置。",
                         "additionalProperties": {"type": "string"}
                     },
+                    "database_name": {
+                        "type": "string",
+                        "description": "用户指定的数据库连接名称。如果任务关联了多个数据库且用户提到了数据库名称，填入此字段。"
+                    },
                     "description": {
                         "type": "string",
                         "description": "用户原始需求的简要描述"
                     }
                 },
                 "required": ["system_task_name", "description"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_lookup_options",
+            "description": "列出所有可用的信息查询选项。信息查询是指根据用户提供的参数值（如SN号、商户号、订单号等）快速查询数据库返回结果，结果直接在对话中展示，不需要上传Excel文件也不需要下载。与导出任务、查询任务和系统任务完全不同。当用户询问某个实体的状态、信息、详情时调用此工具。重要：如果用户提供了具体的参数值，务必同时传入params参数，这样当匹配到唯一查询时系统可以自动执行查询，大幅加快响应速度。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {
+                        "type": "string",
+                        "description": "可选，按名称或描述筛选的关键词"
+                    },
+                    "params": {
+                        "type": "object",
+                        "description": "参数键值对。如果用户提供了具体的参数值（如SN号、商户号等），务必在此传入，这样当匹配到唯一查询时系统可以自动执行查询。键名应使用可能的查询参数名（如device_sn、merchant_no等）。",
+                        "additionalProperties": {"type": "string"}
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "用户原始需求的简要描述"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "request_lookup",
+            "description": "当用户要执行信息查询时调用此工具。信息查询是根据参数值快速查询数据库返回结果。注意：1、必须从用户的自然语言描述中提取所有参数值填入params对象；2、params的键名必须使用list_lookup_options返回的参数配置中的name字段值；3、如果之前没有调用list_lookup_options，请先调用以获取正确的参数名；4、默认情况下直接用自然语言回答用户的问题即可，只有当用户明确要求查看所有字段、详细信息、完整结果或卡片展示时，才将show_all_fields设为true；5、当用户的查询涉及多个不同维度的信息时，应在同一次回复中同时调用多个request_lookup工具分别查询，系统会归总所有结果后统一回答用户。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "lookup_name": {
+                        "type": "string",
+                        "description": "要使用的信息查询选项名称"
+                    },
+                    "params": {
+                        "type": "object",
+                        "description": "参数键值对。键必须是查询选项参数配置中的name字段值（如device_sn、merchant_no等），值为用户提供的参数值。",
+                        "additionalProperties": {"type": "string"}
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "用户原始需求的简要描述"
+                    },
+                    "show_all_fields": {
+                        "type": "boolean",
+                        "description": "是否以卡片形式展示所有字段的查询结果。只有当用户明确要求查看所有字段、详细信息、完整结果或卡片展示时才设为true，默认为false。"
+                    }
+                },
+                "required": ["lookup_name", "description"]
             }
         }
     }
@@ -235,12 +296,15 @@ class AiService:
         return configs
 
     @staticmethod
-    def chat_with_failover(messages: list, use_tools: bool = False) -> Tuple:
-        """支持故障转移的AI调用，自动尝试多个模型"""
+    def chat_with_failover(messages: list, use_tools: bool = False, override_configs: list = None) -> Tuple:
+        """支持故障转移的AI调用，自动尝试多个模型。如果提供 override_configs 则使用指定模型"""
         from app.models.ai_strategy import AiStrategy
         from app import db
 
-        configs = AiService.get_ordered_configs()
+        if override_configs:
+            configs = override_configs
+        else:
+            configs = AiService.get_ordered_configs()
         if not configs:
             raise ValueError('没有可用的AI模型配置')
 
@@ -348,6 +412,11 @@ class AiService:
             context_parts.append('\n## 用户近期行为摘要')
             for key, count in sorted(action_counts.items(), key=lambda x: -x[1]):
                 context_parts.append(f'- {key}: {count}次')
+
+        # Add tool call memories
+        memory_context = AiService.build_memory_context(user_id)
+        if memory_context:
+            context_parts.append(memory_context)
 
         return '\n'.join(context_parts)
 
@@ -463,6 +532,10 @@ class AiService:
             return AiService._tool_list_system_tasks(args, user_id)
         elif tool_name == 'request_system_task':
             return AiService._tool_request_system_task(args, user_id)
+        elif tool_name == 'list_lookup_options':
+            return AiService._tool_list_lookup_options(args, user_id)
+        elif tool_name == 'request_lookup':
+            return AiService._tool_request_lookup(args, user_id)
         else:
             return {'error': f'未知工具: {tool_name}'}
 
@@ -606,6 +679,7 @@ class AiService:
         """列出系统任务（按用户权限过滤）"""
         from app.models.system_task import SystemTask
         from app.models.script import Script
+        from app.models.database import DatabaseConnection
         from app.models.user import User
         keyword = args.get('keyword', '').lower()
         tasks = SystemTask.query.filter_by(is_enabled=True).all()
@@ -630,23 +704,49 @@ class AiService:
                 script = Script.query.get(t.script_id)
                 if script and script.get_params_config():
                     params = script.get_params_config()
+            # 获取数据库连接信息
+            db_ids = t.get_database_ids()
+            databases_info = []
+            if db_ids:
+                for db_id in db_ids:
+                    conn = DatabaseConnection.query.get(db_id)
+                    if conn:
+                        databases_info.append({'id': conn.id, 'name': conn.name})
+            # 获取响应字段映射（仅API类型任务）
+            response_mapping_info = []
+            if (t.task_type or 'sql') == 'api':
+                response_mapping = t.get_response_mapping()
+                if response_mapping:
+                    response_mapping_info = response_mapping
             result.append({
                 'id': t.id,
                 'name': t.name,
                 'description': t.description or '',
                 'task_type': t.task_type or 'sql',
                 'params': params or [],
+                'databases': databases_info,
+                'response_mapping': response_mapping_info,
             })
         return {'tasks': result, 'total': len(result)}
 
     @staticmethod
     def _tool_request_system_task(args: dict, user_id: int = None) -> dict:
-        """处理系统任务执行请求 - 返回结构化信息供前端确认"""
+        """处理系统任务执行请求 - API类型任务参数齐全时直接同步执行，其他返回结构化信息供前端确认"""
         from app.models.system_task import SystemTask
+        from app.models.database import DatabaseConnection
         from app.models.user import User
+        from app.services.system_task_service import SystemTaskService
         task_name = args.get('system_task_name', '')
         desc = args.get('description', '')
         params = args.get('params', {})
+        if isinstance(params, str):
+            try:
+                params = json.loads(params)
+            except (json.JSONDecodeError, TypeError):
+                params = {}
+        if not isinstance(params, dict):
+            params = {}
+        database_name = args.get('database_name', '')
 
         task = SystemTask.query.filter_by(name=task_name, is_enabled=True).first()
         if not task:
@@ -721,6 +821,64 @@ class AiService:
                 if p.get('enum_mode') == 'neq' and p.get('neq_value') and p.get('name') in params:
                     params[p['name']] = AiService._normalize_neq_value(params[p['name']])
 
+        # 获取数据库连接信息
+        db_ids = task.get_database_ids()
+        databases_info = []
+        matched_db_id = None
+        if db_ids:
+            for db_id in db_ids:
+                conn = DatabaseConnection.query.get(db_id)
+                if conn:
+                    databases_info.append({'id': conn.id, 'name': conn.name})
+                    # 匹配用户指定的数据库名称
+                    if database_name and (database_name.lower() in conn.name.lower() or conn.name.lower() in database_name.lower()):
+                        matched_db_id = conn.id
+
+        # 获取响应字段映射（仅API类型任务）
+        response_mapping_info = []
+        if (task.task_type or 'sql') == 'api':
+            response_mapping = task.get_response_mapping()
+            if response_mapping:
+                response_mapping_info = response_mapping
+
+        # API类型任务 + 参数齐全 + 不需要选择数据库 → 直接同步执行
+        is_api_task = (task.task_type or 'sql') == 'api'
+        all_params_filled = len(task_params) == 0 or all(
+            p.get('name') in params and params[p.get('name')] not in (None, '')
+            for p in task_params if p.get('required', False)
+        )
+        needs_dbSelection = len(databases_info) > 1 and not matched_db_id
+
+        if is_api_task and all_params_filled and not needsDbSelection:
+            try:
+                exec_result = SystemTaskService.execute_api_sync(task, params)
+                # 构建返回给AI的结果，包含映射摘要
+                result = {
+                    'action_type': 'system_task',
+                    'task_id': task.id,
+                    'task_name': task.name,
+                    'task_type': 'api',
+                    'description': desc,
+                    'params_values': params,
+                    'auto_executed': True,
+                    'success': exec_result.get('success', False),
+                    'status_code': exec_result.get('status_code'),
+                    'response': exec_result.get('response'),
+                    'response_raw': exec_result.get('response_raw'),
+                    'mapping_applied': exec_result.get('mapping_applied', False),
+                    'mapping_info': exec_result.get('mapping_info', ''),
+                    'mapping_summary': exec_result.get('mapping_summary', ''),
+                    'response_mapping': response_mapping_info,
+                    'confirm_message': f'系统任务「{task.name}」已自动执行完成',
+                }
+                if exec_result.get('error'):
+                    result['error'] = exec_result['error']
+                return result
+            except Exception as e:
+                logger.warning(f'API系统任务同步执行失败: {e}')
+                # 执行失败，回退到确认卡片模式
+                pass
+
         return {
             'action_type': 'system_task',
             'task_id': task.id,
@@ -729,8 +887,182 @@ class AiService:
             'description': desc,
             'params': task_params,
             'params_values': params,
+            'databases': databases_info,
+            'database_id': matched_db_id,
+            'response_mapping': response_mapping_info,
             'confirm_message': f'AI 准备执行系统任务：{task.name}'
         }
+
+    @staticmethod
+    def _tool_list_lookup_options(args: dict, user_id: int = None) -> dict:
+        """列出信息查询选项（按用户权限过滤）"""
+        from app.models.script import Script
+        keyword = args.get('keyword', '').lower()
+        scripts = Script.query.filter_by(type='lookup', is_active=True).all()
+        scripts = AiService._filter_script_by_user(scripts, user_id)
+        result = []
+        for s in scripts:
+            if keyword and keyword not in s.name.lower() and keyword not in (s.description or '').lower():
+                continue
+            params = s.get_params_config()
+            query_fields = AiService._extract_select_columns(s.sql_text or '')
+            result.append({
+                'id': s.id,
+                'name': s.name,
+                'description': s.description or '',
+                'params': params,
+                'query_fields': query_fields,
+            })
+        return {'scripts': result, 'total': len(result)}
+
+    @staticmethod
+    def _tool_request_lookup(args: dict, user_id: int = None) -> dict:
+        """处理信息查询请求 - 直接执行并返回结果"""
+        from app.models.script import Script
+        from app.models.user import User
+        from app.services.lookup_service import LookupService
+        lookup_name = args.get('lookup_name', '')
+        desc = args.get('description', '')
+        params = args.get('params', {})
+        if isinstance(params, str):
+            # AI可能将params传为字符串，尝试解析为dict
+            try:
+                params = json.loads(params)
+            except (json.JSONDecodeError, TypeError):
+                params = {}
+        if not isinstance(params, dict):
+            params = {}
+        show_all_fields = args.get('show_all_fields', False)
+
+        script = Script.query.filter_by(name=lookup_name, type='lookup', is_active=True).first()
+        if not script:
+            script = Script.query.filter(
+                Script.name.like(f'%{lookup_name}%'),
+                Script.type == 'lookup',
+                Script.is_active == True
+            ).first()
+
+        if not script:
+            return {'error': f'未找到名为"{lookup_name}"的信息查询选项', 'action_type': 'lookup'}
+
+        # 权限校验
+        if user_id:
+            user = User.query.get(user_id)
+            if user and not user.is_admin():
+                allowed_ids = user.get_script_ids()
+                if allowed_ids and script.id not in allowed_ids:
+                    return {'error': f'你没有权限使用信息查询选项"{script.name}"', 'action_type': 'lookup'}
+
+        # 智能匹配参数名
+        task_params = script.get_params_config() or []
+        if params and task_params:
+            mapped_params = {}
+            param_names = {p['name'] for p in task_params}
+            for key, val in params.items():
+                if key in param_names:
+                    mapped_params[key] = val
+                else:
+                    key_lower = key.lower().replace('_', '').replace('-', '')
+                    matched = False
+                    for p in task_params:
+                        p_name = p['name']
+                        p_label = (p.get('label') or '').lower()
+                        p_name_lower = p_name.lower().replace('_', '').replace('-', '')
+                        if p_label and key.lower() == p_label:
+                            mapped_params[p_name] = val
+                            matched = True
+                            break
+                        if key_lower == p_name_lower:
+                            mapped_params[p_name] = val
+                            matched = True
+                            break
+                        if key_lower in p_name_lower or p_name_lower in key_lower:
+                            mapped_params[p_name] = val
+                            matched = True
+                            break
+                        if p_label and key_lower in p_label.replace('_', '').replace('-', ''):
+                            mapped_params[p_name] = val
+                            matched = True
+                            break
+                    if not matched:
+                        mapped_params[key] = val
+            params = mapped_params
+            logger.info(f'Lookup参数匹配结果: 原始={args.get("params", {})}, 映射后={params}, 脚本参数={[p["name"] for p in task_params]}')
+        elif not params and task_params:
+            # AI没有传params，尝试从description中提取参数值
+            logger.warning(f'Lookup未收到params参数, description={desc}, 脚本参数={[p["name"] for p in task_params]}')
+
+        # 检查必填参数
+        missing_required = []
+        for p in task_params:
+            if p.get('required') and p['name'] not in params:
+                missing_required.append(p.get('label') or p['name'])
+
+        if missing_required:
+            return {
+                'error': f'缺少必填参数：{", ".join(missing_required)}',
+                'missing_required': missing_required,
+                'action_type': 'lookup',
+            }
+
+        # 直接执行查询
+        result = LookupService.execute_lookup(script.id, params, user_id)
+
+        if result.get('success'):
+            return {
+                'action_type': 'lookup',
+                'script_id': script.id,
+                'script_name': script.name,
+                'description': desc,
+                'params': task_params,
+                'params_values': params,
+                'query_fields': result.get('columns', []),
+                'results': result.get('results', []),
+                'row_count': result.get('row_count', 0),
+                'columns': result.get('columns', []),
+                'confirm_message': f'查询完成：{script.name}',
+                'show_all_fields': show_all_fields,
+            }
+        else:
+            return {
+                'action_type': 'lookup',
+                'script_id': script.id,
+                'script_name': script.name,
+                'description': desc,
+                'params': task_params,
+                'params_values': params,
+                'error': result.get('error_message', '查询执行失败'),
+                'show_all_fields': show_all_fields,
+            }
+
+    @staticmethod
+    def extract_params_from_message(message: str, param_configs: list) -> dict:
+        """尝试从用户消息中提取参数值，作为AI未传params时的fallback"""
+        if not message or not param_configs:
+            return {}
+        params = {}
+        for p in param_configs:
+            name = p['name']
+            label = (p.get('label') or '').strip()
+            # 构建搜索词列表
+            search_terms = []
+            if label:
+                search_terms.append(label)
+            search_terms.append(name)
+            for term in search_terms:
+                # 模式1: term=value, term：value, term: value
+                match = re.search(rf'{re.escape(term)}\s*[=：:]\s*([^\s,，]+)', message, re.IGNORECASE)
+                if match:
+                    params[name] = match.group(1)
+                    break
+            if name not in params:
+                # 模式2: 常见中文模式 "SN号 ABC123" "商户号12345"
+                for term in search_terms:
+                    match = re.search(rf'{re.escape(term)}\s*[号号码]?\s*[:：]?\s*([A-Za-z0-9_\-]+)', message, re.IGNORECASE)
+                    if match and match.group(1).lower() not in ('的', '是', '有', '在', '了', '和', '不', '没'):
+                        params[name] = match.group(1)
+                        break
+        return params
 
     @staticmethod
     def _normalize_neq_value(value: str) -> bool:
@@ -777,6 +1109,13 @@ class AiService:
         from app.models.user import User
         export_name = args.get('export_option_name', '')
         params = args.get('params', {})
+        if isinstance(params, str):
+            try:
+                params = json.loads(params)
+            except (json.JSONDecodeError, TypeError):
+                params = {}
+        if not isinstance(params, dict):
+            params = {}
         desc = args.get('description', '')
 
         # 查找匹配的导出选项
@@ -857,3 +1196,61 @@ class AiService:
             'query_fields': AiService._extract_select_columns(script.sql_text or ''),
             'confirm_message': f'AI 准备执行查询：{script.name}'
         }
+
+    # ============ 工具调用记忆 ============
+
+    @staticmethod
+    def record_tool_memory(user_id: int, intent: str, tool_name: str, tool_args: dict):
+        """记录成功的工具调用模式，供后续对话参考"""
+        from app.models.tool_memory import ToolMemory
+        from app import db
+        try:
+            # 查找是否已有相同意图+工具的记录
+            existing = ToolMemory.query.filter_by(
+                user_id=user_id, intent=intent, tool_name=tool_name
+            ).first()
+            if existing:
+                existing.success_count += 1
+                existing.last_used_at = datetime.utcnow()
+                existing.tool_args = json.dumps(tool_args, ensure_ascii=False)
+            else:
+                memory = ToolMemory(
+                    user_id=user_id,
+                    intent=intent,
+                    tool_name=tool_name,
+                    tool_args=json.dumps(tool_args, ensure_ascii=False),
+                    success_count=1,
+                )
+                db.session.add(memory)
+            db.session.commit()
+        except Exception as e:
+            logger.warning(f'记录工具调用记忆失败: {e}')
+            try:
+                db.session.rollback()
+            except:
+                pass
+
+    @staticmethod
+    def get_tool_memories(user_id: int, limit: int = 20) -> list:
+        """获取用户的工具调用记忆，按成功次数和使用时间排序"""
+        from app.models.tool_memory import ToolMemory
+        try:
+            memories = ToolMemory.query.filter_by(user_id=user_id)\
+                .order_by(ToolMemory.success_count.desc(), ToolMemory.last_used_at.desc())\
+                .limit(limit).all()
+            return memories
+        except Exception:
+            return []
+
+    @staticmethod
+    def build_memory_context(user_id: int) -> str:
+        """构建工具调用记忆上下文，注入到系统提示词中"""
+        memories = AiService.get_tool_memories(user_id, limit=20)
+        if not memories:
+            return ''
+
+        lines = ['\n## 用户操作记忆（以下是你之前成功执行过的操作模式，当用户表达类似意图时，请直接参考这些模式调用对应工具，不要重新分析）']
+        for m in memories:
+            args_str = m.tool_args or '{}'
+            lines.append(f'- 意图"{m.intent}" → 调用 {m.tool_name}({args_str}) [成功{m.success_count}次]')
+        return '\n'.join(lines)

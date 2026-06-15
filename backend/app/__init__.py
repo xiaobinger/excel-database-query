@@ -40,9 +40,11 @@ def create_app(config_name='default'):
         from app.models.business_system import BusinessSystem
         from app.models.system_task import SystemTask, SystemTaskExecution
         from app.models.ai_strategy import AiStrategy
+        from app.models.tool_memory import ToolMemory
         db.create_all()
         _auto_migrate(app)
         _init_default_admin(app)
+        _init_connection_pool(app)
 
     _start_auto_export_scheduler(app)
 
@@ -65,12 +67,50 @@ def _setup_logging(app):
     # Windows-friendly timed rotating file handler
     class SafeTimedRotatingFileHandler(TimedRotatingFileHandler):
         def doRollover(self):
-            try:
-                super().doRollover()
-            except (PermissionError, OSError) as e:
-                # On Windows, file may be locked by another process/thread
-                # Skip rotation and continue logging to current file
-                pass
+            """Override to handle Windows file locking during rotation."""
+            if self.stream:
+                self.stream.close()
+                self.stream = None
+
+            # Get the time for the new filename
+            import time as _time
+            currentTime = int(self.rolloverAt - self.interval)
+            fileTime = self.converter(currentTime)
+            dfn = self.rotation_filename(self.baseFilename + "." +
+                                         _time.strftime(self.suffix, fileTime))
+
+            # Retry rename with delay for Windows file locking
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    if os.path.exists(dfn):
+                        os.remove(dfn)
+                    self.rotate(self.baseFilename, dfn)
+                    break
+                except PermissionError:
+                    if attempt < max_retries - 1:
+                        _time.sleep(0.5)
+                    else:
+                        # Give up on rotation, reopen original file
+                        pass
+
+            # Clean up old log files
+            if self.backupCount > 0:
+                for s in self.getFilesToDelete(self.baseFilename):
+                    try:
+                        os.remove(s)
+                    except (PermissionError, OSError):
+                        pass
+
+            # Reopen the log file
+            if not self.delay:
+                self.stream = self._open()
+
+            # Update next rollover time
+            newRolloverAt = self.computeRollover(currentTime + self.interval)
+            while newRolloverAt <= currentTime:
+                newRolloverAt = newRolloverAt + self.interval
+            self.rolloverAt = newRolloverAt
 
     # 按天分割日志，保留30天
     file_handler = SafeTimedRotatingFileHandler(
@@ -104,6 +144,7 @@ def _register_blueprints(app):
     from app.routes.business_system_routes import business_bp
     from app.routes.system_task_routes import system_task_bp
     from app.routes.ai_strategy_routes import ai_strategy_bp
+    from app.routes.lookup_routes import lookup_bp
 
     app.register_blueprint(ssh_bp)
     app.register_blueprint(database_bp)
@@ -120,6 +161,7 @@ def _register_blueprints(app):
     app.register_blueprint(business_bp)
     app.register_blueprint(system_task_bp)
     app.register_blueprint(ai_strategy_bp)
+    app.register_blueprint(lookup_bp)
 
 
 def _register_error_handlers(app):
@@ -260,3 +302,13 @@ def _init_default_admin(app):
         admin_user.set_password('admin123')
         db.session.add(admin_user)
         db.session.commit()
+
+
+def _init_connection_pool(app):
+    """启动时预建立SSH隧道和数据库连接池"""
+    try:
+        from app.utils.connection_pool import ConnectionPoolManager
+        pool = ConnectionPoolManager.get_instance()
+        pool.initialize(app)
+    except Exception as e:
+        app.logger.warning(f'连接池初始化失败（将在首次请求时建立连接）: {e}')

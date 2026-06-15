@@ -15,6 +15,7 @@
               <el-option value="query" label="查询选项" />
               <el-option value="export" label="导出选项" />
               <el-option value="system" label="系统脚本" />
+              <el-option value="lookup" label="信息查询" />
             </el-select>
             <el-select
               v-model="tagFilter"
@@ -188,6 +189,7 @@
                     <el-option value="query" label="查询选项" />
                     <el-option value="export" label="导出选项" />
                     <el-option value="system" label="系统脚本" />
+                    <el-option value="lookup" label="信息查询" />
                   </el-select>
                 </el-form-item>
                 <el-form-item label="标签" class="form-row-item">
@@ -195,7 +197,7 @@
                 </el-form-item>
               </div>
 
-              <div v-if="form.type !== 'system'" class="form-row">
+              <div v-if="form.type !== 'system' && form.type !== 'lookup'" class="form-row">
                 <el-form-item label="查询模式" prop="query_mode" class="form-row-item">
                   <el-select v-model="form.query_mode" style="width: 100%">
                     <el-option value="in" label="批量模式" />
@@ -288,7 +290,7 @@
             </div>
           </div>
 
-          <div v-if="form.type === 'export' || form.type === 'system'" class="sidebar-section">
+          <div v-if="form.type === 'export' || form.type === 'system' || form.type === 'lookup'" class="sidebar-section">
             <div class="section-label">
               <i class="fas fa-sliders-h"></i> 参数配置
               <el-button size="small" type="primary" text @click="addParam" style="margin-left: auto">
@@ -409,9 +411,26 @@
                 </el-button>
               </div>
             </div>
+
+            <!-- Lookup type: simple UI -->
+            <div v-if="form.type === 'lookup'" v-for="(param, idx) in form.params_config" :key="'lk'+idx" class="var-config-item">
+              <div class="var-config-header">
+                <el-input v-model="param.name" placeholder="参数名" size="small" style="width: 120px" />
+                <el-input v-model="param.label" placeholder="显示名称" size="small" style="width: 120px" />
+                <el-select v-model="param.type" placeholder="类型" size="small" style="width: 90px">
+                  <el-option value="text" label="文本" />
+                  <el-option value="number" label="数字" />
+                  <el-option value="date" label="日期" />
+                </el-select>
+                <el-checkbox v-model="param.required" size="small" label="必填" style="margin-left: 4px" />
+                <el-button size="small" text type="danger" @click="removeParam(idx)">
+                  <i class="fas fa-trash"></i>
+                </el-button>
+              </div>
+            </div>
           </div>
 
-          <div v-if="form.type !== 'system'" class="sidebar-section">
+          <div v-if="form.type !== 'system' && form.type !== 'lookup'" class="sidebar-section">
             <div class="section-label">
               <i class="fas fa-cog"></i> 执行参数
             </div>
@@ -602,11 +621,11 @@ const filteredScripts = computed(() => {
 })
 
 const showQueryColumns = computed(() => {
-  return !typeFilter.value || typeFilter.value !== 'system'
+  return !typeFilter.value || (typeFilter.value !== 'system' && typeFilter.value !== 'lookup')
 })
 
 function typeTag(type) {
-  const map = { query: 'primary', export: 'success', system: 'warning' }
+  const map = { query: 'primary', export: 'success', system: 'warning', lookup: 'info' }
   return map[type] || 'info'
 }
 
@@ -621,7 +640,7 @@ function getParamCount(row) {
 }
 
 function typeLabel(type) {
-  const map = { query: '查询选项', export: '导出选项', system: '系统脚本' }
+  const map = { query: '查询选项', export: '导出选项', system: '系统脚本', lookup: '信息查询' }
   return map[type] || '脚本'
 }
 
@@ -868,7 +887,7 @@ async function handleValidate(row) {
 
 onMounted(() => {
   const queryType = route.query.type
-  if (queryType && ['query', 'export', 'system'].includes(queryType)) {
+  if (queryType && ['query', 'export', 'system', 'lookup'].includes(queryType)) {
     typeFilter.value = queryType
   }
   fetchList()

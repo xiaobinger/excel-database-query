@@ -89,6 +89,13 @@ class DatabaseService:
 
     @staticmethod
     def get_connector(conn_id: int) -> Optional[DatabaseConnector]:
+        """获取数据库连接器（优先从连接池获取，池中无则新建）"""
+        from app.utils.connection_pool import ConnectionPoolManager
+        pool = ConnectionPoolManager.get_instance()
+        connector = pool.get_connector(conn_id)
+        if connector:
+            return connector
+        # 连接池获取失败，回退到直接创建
         conn = DatabaseConnection.query.get(conn_id)
         if not conn:
             return None
