@@ -35,18 +35,21 @@ def login_required(f):
         if auth_header.startswith('Bearer '):
             token = auth_header[7:]
 
-        g.user_id = None
-        g.user = None
+        if not token:
+            return jsonify({'success': False, 'message': 'Authentication required'}), 401
 
-        if token:
-            payload = verify_token(token)
-            if payload is None:
-                return jsonify({'success': False, 'message': 'Token invalid or expired'}), 401
-            g.user_id = payload.get('user_id')
-            user = User.query.get(g.user_id)
-            if user and not user.is_active:
-                return jsonify({'success': False, 'message': 'User is disabled'}), 401
-            g.user = user
+        payload = verify_token(token)
+        if payload is None:
+            return jsonify({'success': False, 'message': 'Token invalid or expired'}), 401
+
+        g.user_id = payload.get('user_id')
+        user = User.query.get(g.user_id)
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 401
+        if not user.is_active:
+            return jsonify({'success': False, 'message': 'User is disabled'}), 401
+
+        g.user = user
 
         return f(*args, **kwargs)
     return decorated_function

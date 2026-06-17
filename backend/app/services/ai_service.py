@@ -7,6 +7,39 @@ from typing import Tuple, Optional
 
 logger = logging.getLogger(__name__)
 
+
+def _is_anthropic_api(api_base: str) -> bool:
+    """判断是否为Anthropic API（原生或兼容代理）"""
+    if not api_base:
+        return False
+    return 'anthropic' in api_base.lower()
+
+
+def _apply_cache_control(messages: list, provider: str, api_base: str) -> list:
+    """为消息添加缓存控制标记，使API端启用prompt caching
+
+    - Anthropic: 在system消息和最后一条用户消息上添加 cache_control: {"type": "ephemeral"}
+    - OpenAI/DeepSeek等: 自动缓存，无需额外标记
+    """
+    if not _is_anthropic_api(api_base) and provider not in ('anthropic', 'claude'):
+        return messages
+
+    result = []
+    for i, msg in enumerate(messages):
+        new_msg = dict(msg)
+        # 为system消息添加缓存标记
+        if msg.get('role') == 'system' and 'cache_control' not in new_msg:
+            new_msg['cache_control'] = [{'type': 'ephemeral'}]
+        result.append(new_msg)
+
+    # 为最后一条用户消息添加缓存标记
+    for i in range(len(result) - 1, -1, -1):
+        if result[i].get('role') == 'user' and 'cache_control' not in result[i]:
+            result[i]['cache_control'] = [{'type': 'ephemeral'}]
+            break
+
+    return result
+
 # ============ Tool Definitions ============
 AI_TOOLS = [
     {
@@ -116,7 +149,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "list_system_tasks",
-            "description": "列出所有可用的系统任务。系统任务是指后台运维类任务（如数据清理、缓存刷新、终端解绑等），与导出任务和查询任务完全不同。只有当用户明确提到\"系统任务\"或描述的是运维类操作时才调用此工具。不要将查询任务或导出任务误认为是系统任务。返回结果中API类型任务可能包含response_mapping字段，表示响应字段的意义枚举映射。API类型任务参数齐全时会自动执行并返回结果，SQL类型任务需要用户确认后执行。",
+            "description": "列出所有可用的系统任务。系统任务是指后台运维类任务（如数据清理、缓存刷新、终端解绑等），与导出任务和查询任务完全不同。只有当用户明确提到\"系统任务\"或描述的是运维类操作时才调用此工具。不要将查询任务或导出任务误认为是系统任务。返回结果中API类型任务可能包含response_mapping字段，表示响应字段的意义枚举映射。API类型任务参数齐全时会自动执行并返回结果，SQL类型和本地脚本类型任务需要用户确认后执行。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -327,11 +360,11 @@ class AiService:
                         db.session.commit()
                     return result
                 else:
-                    content, tokens = AiService.chat(config, messages)
+                    content, tokens, p_tokens, c_tokens, cache_create, cache_read = AiService.chat(config, messages)
                     if strategy and tokens:
                         strategy.record_token_usage(config.id, tokens)
                         db.session.commit()
-                    return content, tokens
+                    return content, tokens, p_tokens, c_tokens, cache_create, cache_read
             except Exception as e:
                 last_error = e
                 logger.warning(f"模型 {config.name} 调用失败: {str(e)}，尝试下一个")
@@ -350,6 +383,9 @@ class AiService:
 
         api_base = config.api_base or 'https://api.openai.com/v1'
         url = f"{api_base.rstrip('/')}/chat/completions"
+
+        # 应用缓存控制
+        messages = _apply_cache_control(messages, config.provider, api_base)
 
         headers = {
             'Authorization': f'Bearer {api_key}',
@@ -371,37 +407,55 @@ class AiService:
         if result.get('choices') and len(result['choices']) > 0:
             content = result['choices'][0].get('message', {}).get('content', '')
 
-        tokens = result.get('usage', {}).get('total_tokens', 0)
-        return content, tokens
+        usage = result.get('usage', {})
+        tokens = usage.get('total_tokens', 0)
+        prompt_tokens = usage.get('prompt_tokens', 0)
+        completion_tokens = usage.get('completion_tokens', 0)
+
+        # 提取缓存token信息
+        cache_creation_tokens = 0
+        cache_read_tokens = 0
+        if 'cache_creation_input_tokens' in usage:
+            cache_creation_tokens = usage.get('cache_creation_input_tokens', 0)
+        if 'cache_read_input_tokens' in usage:
+            cache_read_tokens = usage.get('cache_read_input_tokens', 0)
+        prompt_details = usage.get('prompt_tokens_details', {})
+        if isinstance(prompt_details, dict) and 'cached_tokens' in prompt_details:
+            cache_read_tokens = prompt_details.get('cached_tokens', 0)
+
+        return content, tokens, prompt_tokens, completion_tokens, cache_creation_tokens, cache_read_tokens
 
     @staticmethod
-    def build_chat_context(user_id: int, chat_id: int = None) -> str:
-        """构建AI对话上下文，包含用户Skills和行为摘要"""
+    def build_chat_context(user_id: int, chat_id: int = None, agent_id: int = None) -> str:
+        """构建AI对话上下文，包含用户Skills和行为摘要，按agent_id筛选"""
         from app.models.ai_skill import AiSkill
         from app.models.user_behavior import UserBehavior
 
-        context_parts = ['你是Excel数据库查询系统的AI助手。你可以帮助用户：\n'
-                        '1. 根据自然语言需求生成SQL查询语句\n'
-                        '2. 创建查询选项和导出选项\n'
-                        '3. 配置自动导出任务\n'
-                        '4. 优化SQL语句\n'
-                        '5. 分析数据并提供洞察\n'
-                        '6. 解答系统使用问题\n']
+        context_parts = []
 
-        # Add user skills
-        skills = AiSkill.query.filter(
+        # Add user skills (筛选当前Agent的技能 + 无Agent关联的技能)
+        skill_query = AiSkill.query.filter(
             (AiSkill.skill_type == 'system') | (AiSkill.user_id == user_id),
             AiSkill.is_active == True
-        ).all()
+        )
+        if agent_id:
+            skill_query = skill_query.filter(
+                (AiSkill.agent_id == agent_id)
+            )
+        skills = skill_query.all()
 
         if skills:
             context_parts.append('\n## 用户技能库')
             for skill in skills:
                 context_parts.append(f'- {skill.name}({skill.category}): {skill.description}')
 
-        # Add recent behavior summary
-        recent_behaviors = UserBehavior.query.filter_by(user_id=user_id)\
-            .order_by(UserBehavior.created_at.desc()).limit(20).all()
+        # Add recent behavior summary (筛选当前Agent的行为)
+        behavior_query = UserBehavior.query.filter_by(user_id=user_id)
+        if agent_id:
+            behavior_query = behavior_query.filter(
+                (UserBehavior.agent_id == agent_id)
+            )
+        recent_behaviors = behavior_query.order_by(UserBehavior.created_at.desc()).limit(20).all()
 
         if recent_behaviors:
             action_counts = {}
@@ -413,8 +467,8 @@ class AiService:
             for key, count in sorted(action_counts.items(), key=lambda x: -x[1]):
                 context_parts.append(f'- {key}: {count}次')
 
-        # Add tool call memories
-        memory_context = AiService.build_memory_context(user_id)
+        # Add tool call memories (筛选当前Agent的记忆)
+        memory_context = AiService.build_memory_context(user_id, agent_id=agent_id)
         if memory_context:
             context_parts.append(memory_context)
 
@@ -480,6 +534,9 @@ class AiService:
         api_base = config.api_base or 'https://api.openai.com/v1'
         url = f"{api_base.rstrip('/')}/chat/completions"
 
+        # 应用缓存控制
+        messages = _apply_cache_control(messages, config.provider, api_base)
+
         headers = {
             'Authorization': f'Bearer {api_key}',
             'Content-Type': 'application/json',
@@ -507,12 +564,27 @@ class AiService:
         prompt_tokens = usage.get('prompt_tokens', 0)
         completion_tokens = usage.get('completion_tokens', 0)
 
+        # 提取缓存token信息（兼容不同API提供商）
+        cache_creation_tokens = 0
+        cache_read_tokens = 0
+        # Anthropic格式: cache_creation_input_tokens / cache_read_input_tokens
+        if 'cache_creation_input_tokens' in usage:
+            cache_creation_tokens = usage.get('cache_creation_input_tokens', 0)
+        if 'cache_read_input_tokens' in usage:
+            cache_read_tokens = usage.get('cache_read_input_tokens', 0)
+        # OpenAI格式: prompt_tokens_details.cached_tokens
+        prompt_details = usage.get('prompt_tokens_details', {})
+        if isinstance(prompt_details, dict) and 'cached_tokens' in prompt_details:
+            cache_read_tokens = prompt_details.get('cached_tokens', 0)
+
         return {
             'content': content,
             'tool_calls': tool_calls,
             'tokens': tokens,
             'prompt_tokens': prompt_tokens,
             'completion_tokens': completion_tokens,
+            'cache_creation_tokens': cache_creation_tokens,
+            'cache_read_tokens': cache_read_tokens,
         }
 
     @staticmethod
@@ -723,6 +795,13 @@ class AiService:
                 response_mapping = t.get_response_mapping()
                 if response_mapping:
                     response_mapping_info = response_mapping
+            # 本地脚本类型信息
+            script_info = {}
+            if (t.task_type or 'sql') == 'script':
+                script_info = {
+                    'script_type': t.script_type or 'python',
+                    'script_path': t.script_path or '',
+                }
             result.append({
                 'id': t.id,
                 'name': t.name,
@@ -731,6 +810,7 @@ class AiService:
                 'params': params or [],
                 'databases': databases_info,
                 'response_mapping': response_mapping_info,
+                'script_info': script_info,
             })
         return {'tasks': result, 'total': len(result)}
 
@@ -848,6 +928,7 @@ class AiService:
 
         # API类型任务 + 参数齐全 + 不需要选择数据库 → 直接同步执行
         is_api_task = (task.task_type or 'sql') == 'api'
+        is_script_task = (task.task_type or 'sql') == 'script'
         # 检查所有配置的参数是否都有值（不仅仅是required的）
         if task_params:
             all_params_filled = all(
@@ -865,7 +946,7 @@ class AiService:
                 all_params_filled = True
         needs_dbSelection = len(databases_info) > 1 and not matched_db_id
 
-        logger.info(f'API系统任务自动执行判断: is_api_task={is_api_task}, all_params_filled={all_params_filled}, needs_dbSelection={needs_dbSelection}, task_params={len(task_params)}, params={params}')
+        logger.info(f'系统任务自动执行判断: task_type={task.task_type}, is_api_task={is_api_task}, is_script_task={is_script_task}, all_params_filled={all_params_filled}, needs_dbSelection={needs_dbSelection}, task_params={len(task_params)}, params={params}')
 
         if is_api_task and all_params_filled and not needs_dbSelection:
             try:
@@ -896,6 +977,32 @@ class AiService:
             except Exception as e:
                 logger.warning(f'API系统任务同步执行失败: {e}')
                 # 执行失败，回退到确认卡片模式
+                pass
+
+        # 本地脚本类型任务 + 参数齐全 → 直接同步执行
+        if is_script_task and all_params_filled:
+            try:
+                exec_result = SystemTaskService.execute_script_sync(task, params)
+                logger.info(f'本地脚本任务同步执行完成: task={task.name}, success={exec_result.get("success")}')
+                result = {
+                    'action_type': 'system_task',
+                    'task_id': task.id,
+                    'task_name': task.name,
+                    'task_type': 'script',
+                    'description': desc,
+                    'params_values': params,
+                    'auto_executed': True,
+                    'success': exec_result.get('success', False),
+                    'returncode': exec_result.get('returncode'),
+                    'stdout': exec_result.get('stdout'),
+                    'stderr': exec_result.get('stderr'),
+                    'confirm_message': f'系统任务「{task.name}」已自动执行完成',
+                }
+                if exec_result.get('error'):
+                    result['error'] = exec_result['error']
+                return result
+            except Exception as e:
+                logger.warning(f'本地脚本任务同步执行失败: {e}')
                 pass
 
         return {
@@ -1219,15 +1326,20 @@ class AiService:
     # ============ 工具调用记忆 ============
 
     @staticmethod
-    def record_tool_memory(user_id: int, intent: str, tool_name: str, tool_args: dict):
+    def record_tool_memory(user_id: int, intent: str, tool_name: str, tool_args: dict, agent_id: int = None):
         """记录成功的工具调用模式，供后续对话参考"""
         from app.models.tool_memory import ToolMemory
         from app import db
         try:
-            # 查找是否已有相同意图+工具的记录
-            existing = ToolMemory.query.filter_by(
+            # 查找是否已有相同意图+工具+Agent的记录
+            query = ToolMemory.query.filter_by(
                 user_id=user_id, intent=intent, tool_name=tool_name
-            ).first()
+            )
+            if agent_id:
+                query = query.filter_by(agent_id=agent_id)
+            else:
+                query = query.filter_by(agent_id=None)
+            existing = query.first()
             if existing:
                 existing.success_count += 1
                 existing.last_used_at = datetime.utcnow()
@@ -1235,6 +1347,7 @@ class AiService:
             else:
                 memory = ToolMemory(
                     user_id=user_id,
+                    agent_id=agent_id,
                     intent=intent,
                     tool_name=tool_name,
                     tool_args=json.dumps(tool_args, ensure_ascii=False),
@@ -1250,21 +1363,25 @@ class AiService:
                 pass
 
     @staticmethod
-    def get_tool_memories(user_id: int, limit: int = 20) -> list:
-        """获取用户的工具调用记忆，按成功次数和使用时间排序"""
+    def get_tool_memories(user_id: int, limit: int = 20, agent_id: int = None) -> list:
+        """获取用户的工具调用记忆，按成功次数和使用时间排序，按agent_id筛选"""
         from app.models.tool_memory import ToolMemory
         try:
-            memories = ToolMemory.query.filter_by(user_id=user_id)\
-                .order_by(ToolMemory.success_count.desc(), ToolMemory.last_used_at.desc())\
+            query = ToolMemory.query.filter_by(user_id=user_id)
+            if agent_id:
+                query = query.filter(
+                    (ToolMemory.agent_id == agent_id)
+                )
+            memories = query.order_by(ToolMemory.success_count.desc(), ToolMemory.last_used_at.desc())\
                 .limit(limit).all()
             return memories
         except Exception:
             return []
 
     @staticmethod
-    def build_memory_context(user_id: int) -> str:
-        """构建工具调用记忆上下文，注入到系统提示词中"""
-        memories = AiService.get_tool_memories(user_id, limit=20)
+    def build_memory_context(user_id: int, agent_id: int = None) -> str:
+        """构建工具调用记忆上下文，注入到系统提示词中，按agent_id筛选"""
+        memories = AiService.get_tool_memories(user_id, limit=20, agent_id=agent_id)
         if not memories:
             return ''
 

@@ -2,7 +2,9 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import re
+import subprocess
 import threading
 import time
 import uuid
@@ -104,6 +106,8 @@ class SystemTaskService:
                     SystemTaskService._execute_sql(execution, system_task, params_values, database_id)
                 elif system_task.task_type == 'api':
                     SystemTaskService._execute_api(execution, system_task, params_values)
+                elif system_task.task_type == 'script':
+                    SystemTaskService._execute_script(execution, system_task, params_values)
                 else:
                     raise ValueError(f'不支持的任务类型: {system_task.task_type}')
 
@@ -498,6 +502,125 @@ class SystemTaskService:
             raise ValueError(f'API请求失败: {str(e)}')
 
     @staticmethod
+    def _execute_script(execution: SystemTaskExecution, system_task: SystemTask,
+                        params_values: Dict[str, Any]):
+        """执行本地脚本类型的系统任务"""
+        execution_id = execution.execution_id
+        execution.progress = 10
+        execution.add_log('执行本地脚本类型系统任务')
+        db.session.commit()
+        update_execution_progress(execution_id, 10, '执行本地脚本类型系统任务')
+
+        if not system_task.script_path:
+            raise ValueError('本地脚本路径未配置')
+
+        script_path = system_task.script_path
+        script_type = system_task.script_type or 'python'
+        timeout = system_task.script_timeout or 60
+
+        # 验证脚本文件存在
+        if not os.path.isfile(script_path):
+            raise ValueError(f'脚本文件不存在: {script_path}')
+
+        # 构建命令
+        if script_type == 'python':
+            cmd = ['python', script_path]
+        elif script_type in ('shell', 'bash', 'sh'):
+            cmd = ['bash', script_path]
+        elif script_type == 'bat':
+            cmd = ['cmd', '/c', script_path]
+        elif script_type == 'powershell':
+            cmd = ['powershell', '-ExecutionPolicy', 'Bypass', '-File', script_path]
+        else:
+            # 自定义解释器
+            cmd = [script_type, script_path]
+
+        # 将参数作为命令行参数追加
+        if params_values:
+            for key, val in params_values.items():
+                if val is not None and val != '':
+                    cmd.append(f'--{key}')
+                    cmd.append(str(val))
+
+        execution.progress = 20
+        execution.add_log(f'准备执行: {" ".join(cmd)}')
+        db.session.commit()
+        update_execution_progress(execution_id, 20, f'准备执行脚本')
+
+        # 构建环境变量
+        env = os.environ.copy()
+        script_env = system_task.get_script_env()
+        if script_env:
+            for k, v in script_env.items():
+                env[str(k)] = str(v)
+            # 同时将参数值设为环境变量（SCRIPT_PARAM_前缀）
+            if params_values:
+                for k, v in params_values.items():
+                    env[f'SCRIPT_PARAM_{k.upper()}'] = str(v) if v is not None else ''
+
+        execution.progress = 30
+        db.session.commit()
+        update_execution_progress(execution_id, 30, '脚本执行中')
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=env,
+                cwd=os.path.dirname(script_path) or None,
+            )
+
+            execution.progress = 80
+            stdout = result.stdout or ''
+            stderr = result.stderr or ''
+            returncode = result.returncode
+
+            execution.add_log(f'脚本执行完成，返回码: {returncode}')
+            if stdout:
+                # 截取前2000字符避免过大
+                log_stdout = stdout[:2000] + '...' if len(stdout) > 2000 else stdout
+                execution.add_log(f'标准输出: {log_stdout}')
+            if stderr:
+                log_stderr = stderr[:2000] + '...' if len(stderr) > 2000 else stderr
+                execution.add_log(f'标准错误: {log_stderr}', 'warning')
+
+            is_success = returncode == 0
+
+            # 尝试解析stdout为JSON
+            stdout_data = stdout.strip()
+            parsed_output = None
+            if stdout_data:
+                try:
+                    parsed_output = json.loads(stdout_data)
+                except (json.JSONDecodeError, ValueError):
+                    parsed_output = stdout_data
+
+            execution.set_result_data({
+                'returncode': returncode,
+                'stdout': parsed_output if parsed_output is not None else stdout,
+                'stderr': stderr,
+                'success': is_success,
+            })
+
+            execution.progress = 100
+            execution.status = 'completed' if is_success else 'failed'
+            execution.completed_at = datetime.utcnow()
+            if not is_success:
+                execution.error_message = f'脚本执行失败，返回码: {returncode}' + (f'\n{stderr[:500]}' if stderr else '')
+            execution.add_log(f'脚本任务执行完成，返回码: {returncode}')
+            db.session.commit()
+            update_execution_progress(execution_id, 100, '脚本任务执行完成')
+
+        except subprocess.TimeoutExpired:
+            raise ValueError(f'脚本执行超时({timeout}秒)')
+        except FileNotFoundError as e:
+            raise ValueError(f'脚本解释器未找到: {str(e)}')
+        except Exception as e:
+            raise ValueError(f'脚本执行失败: {str(e)}')
+
+    @staticmethod
     def _compute_sign(params: Dict[str, Any], body: str, headers: Dict[str, str],
                       sign_key: str, sign_method: str) -> str:
         """Compute signature based on method."""
@@ -729,6 +852,87 @@ class SystemTaskService:
             return {'error': f'API请求超时({timeout}秒)', 'success': False}
         except requests.exceptions.RequestException as e:
             return {'error': f'API请求失败: {str(e)}', 'success': False}
+
+    @staticmethod
+    def execute_script_sync(system_task: SystemTask, params_values: Dict[str, Any]) -> Dict[str, Any]:
+        """同步执行本地脚本类型系统任务，直接返回执行结果（用于AI自动执行场景）"""
+        if not system_task.script_path:
+            return {'error': '本地脚本路径未配置', 'success': False}
+
+        script_path = system_task.script_path
+        script_type = system_task.script_type or 'python'
+        timeout = system_task.script_timeout or 60
+
+        if not os.path.isfile(script_path):
+            return {'error': f'脚本文件不存在: {script_path}', 'success': False}
+
+        # 构建命令
+        if script_type == 'python':
+            cmd = ['python', script_path]
+        elif script_type in ('shell', 'bash', 'sh'):
+            cmd = ['bash', script_path]
+        elif script_type == 'bat':
+            cmd = ['cmd', '/c', script_path]
+        elif script_type == 'powershell':
+            cmd = ['powershell', '-ExecutionPolicy', 'Bypass', '-File', script_path]
+        else:
+            cmd = [script_type, script_path]
+
+        # 将参数作为命令行参数追加
+        if params_values:
+            for key, val in params_values.items():
+                if val is not None and val != '':
+                    cmd.append(f'--{key}')
+                    cmd.append(str(val))
+
+        # 构建环境变量
+        env = os.environ.copy()
+        script_env = system_task.get_script_env()
+        if script_env:
+            for k, v in script_env.items():
+                env[str(k)] = str(v)
+        if params_values:
+            for k, v in params_values.items():
+                env[f'SCRIPT_PARAM_{k.upper()}'] = str(v) if v is not None else ''
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=env,
+                cwd=os.path.dirname(script_path) or None,
+            )
+
+            stdout = result.stdout or ''
+            stderr = result.stderr or ''
+            returncode = result.returncode
+            is_success = returncode == 0
+
+            # 尝试解析stdout为JSON
+            stdout_data = stdout.strip()
+            parsed_output = None
+            if stdout_data:
+                try:
+                    parsed_output = json.loads(stdout_data)
+                except (json.JSONDecodeError, ValueError):
+                    parsed_output = stdout_data
+
+            return {
+                'returncode': returncode,
+                'stdout': parsed_output if parsed_output is not None else stdout,
+                'stderr': stderr,
+                'success': is_success,
+                'auto_executed': True,
+            }
+
+        except subprocess.TimeoutExpired:
+            return {'error': f'脚本执行超时({timeout}秒)', 'success': False}
+        except FileNotFoundError as e:
+            return {'error': f'脚本解释器未找到: {str(e)}', 'success': False}
+        except Exception as e:
+            return {'error': f'脚本执行失败: {str(e)}', 'success': False}
 
     @staticmethod
     def _build_mapping_summary(resp_data: dict, response_mapping: list) -> str:

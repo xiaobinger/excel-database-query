@@ -14,6 +14,7 @@ class AiSkill(db.Model):
     content = db.Column(db.Text, comment='技能内容JSON')
     trigger_conditions = db.Column(db.Text, comment='触发条件JSON')
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), comment='所属用户ID(system类型为空)')
+    agent_id = db.Column(db.Integer, db.ForeignKey('ai_agents.id'), comment='关联Agent ID')
     is_active = db.Column(db.Boolean, default=True, comment='是否启用')
     version = db.Column(db.Integer, default=1, comment='版本号')
     usage_count = db.Column(db.Integer, default=0, comment='使用次数')
@@ -45,6 +46,7 @@ class AiSkill(db.Model):
             'content': content_data,
             'trigger_conditions': trigger_data,
             'user_id': self.user_id,
+            'agent_id': self.agent_id,
             'is_active': self.is_active,
             'version': self.version,
             'usage_count': self.usage_count,

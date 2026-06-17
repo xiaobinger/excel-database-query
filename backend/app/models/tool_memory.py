@@ -9,6 +9,7 @@ class ToolMemory(db.Model):
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, comment='用户ID')
+    agent_id = db.Column(db.Integer, db.ForeignKey('ai_agents.id'), comment='关联Agent ID')
     intent = db.Column(db.String(200), nullable=False, comment='用户意图关键词，如"查询SN绑定状态"')
     tool_name = db.Column(db.String(100), nullable=False, comment='工具名称，如request_lookup')
     tool_args = db.Column(db.Text, comment='工具参数JSON，如{"lookup_name":"查询SN激活绑定状态","params":{"device_sn":"..."}}')
@@ -27,6 +28,7 @@ class ToolMemory(db.Model):
         return {
             'id': self.id,
             'user_id': self.user_id,
+            'agent_id': self.agent_id,
             'intent': self.intent,
             'tool_name': self.tool_name,
             'tool_args': tool_args_data,

@@ -200,6 +200,19 @@ const ai = {
   saveStrategy: (data) => http.post('/ai-strategy', data),
   deleteStrategy: () => http.delete('/ai-strategy'),
   resetStrategyTokens: () => http.post('/ai-strategy/reset-tokens'),
+  getCacheStats: () => http.get('/ai/cache/stats'),
+}
+
+const agent = {
+  list: () => http.get('/agents'),
+  getAll: () => http.get('/agents/all'),
+  getDefault: () => http.get('/agents/default'),
+  create: (data) => http.post('/agents', data),
+  update: (id, data) => http.put(`/agents/${id}`, data),
+  delete: (id) => http.delete(`/agents/${id}`),
+  batchDelete: (ids) => http.post('/agents/batch-delete', { ids }),
+  deleteAll: () => http.delete('/agents/all'),
+  setDefault: (id) => http.post(`/agents/${id}/set-default`),
 }
 
 const business = {
@@ -234,4 +247,4 @@ const lookup = {
   execute: (data) => http.post('/lookup/execute', data),
 }
 
-export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, ai, business, systemTask, lookup }
+export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, ai, agent, business, systemTask, lookup }

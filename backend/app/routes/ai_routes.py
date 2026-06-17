@@ -9,6 +9,7 @@ from app.models.ai_config import AiConfig
 from app.models.ai_skill import AiSkill
 from app.models.user_behavior import UserBehavior
 from app.models.ai_chat import AiChat, AiChatMessage
+from app.models.ai_agent import AiAgent
 from app.utils.auth import login_required, admin_required, get_current_user, permission_required
 import requests
 logger = logging.getLogger(__name__)
@@ -16,6 +17,18 @@ ai_bp = Blueprint('ai', __name__, url_prefix='/api/ai')
 
 # 活跃流式请求跟踪：{chat_id: {'aborted': bool, 'request_id': str}}
 _active_streams = {}
+
+
+def _extract_cache_tokens(usage):
+    """从API usage响应中提取缓存token信息"""
+    if not usage or not isinstance(usage, dict):
+        return 0, 0
+    cache_creation = usage.get('cache_creation_input_tokens', 0)
+    cache_read = usage.get('cache_read_input_tokens', 0)
+    prompt_details = usage.get('prompt_tokens_details', {})
+    if isinstance(prompt_details, dict) and 'cached_tokens' in prompt_details:
+        cache_read = prompt_details.get('cached_tokens', 0)
+    return cache_creation or 0, cache_read or 0
 
 
 # ============ AI Config ============
@@ -29,12 +42,21 @@ def get_configs():
 @ai_bp.route('/active-models', methods=['GET'])
 @login_required
 def get_active_models():
-    """Get all enabled AI models (accessible to all logged-in users for @mention)"""
-    configs = AiConfig.query.filter_by(is_active=True).order_by(AiConfig.name).all()
-    return jsonify({'success': True, 'data': [
-        {'id': c.id, 'name': c.name, 'model_name': c.model_name, 'provider': c.provider, 'enable_thinking': c.enable_thinking or False, 'enable_streaming': c.enable_streaming if c.enable_streaming is not None else True}
-        for c in configs
-    ]})
+    """Get enabled AI models filtered by user permissions, plus switching permission info"""
+    current_user = get_current_user()
+    allowed_models = current_user.get_allowed_models()
+    can_switch = current_user.can_switch_model()
+    return jsonify({
+        'success': True,
+        'data': [
+            {'id': c.id, 'name': c.name, 'model_name': c.model_name, 'provider': c.provider,
+             'enable_thinking': c.enable_thinking or False,
+             'enable_streaming': c.enable_streaming if c.enable_streaming is not None else True,
+             'is_default': c.is_default or False}
+            for c in allowed_models
+        ],
+        'can_switch_model': can_switch,
+    })
 
 
 @ai_bp.route('/configs', methods=['POST'])
@@ -206,6 +228,7 @@ def create_skill():
             content=json.dumps(data.get('content', {}), ensure_ascii=False) if isinstance(data.get('content'), dict) else data.get('content', ''),
             trigger_conditions=json.dumps(data.get('trigger_conditions', {}), ensure_ascii=False) if isinstance(data.get('trigger_conditions'), dict) else data.get('trigger_conditions', ''),
             user_id=current_user.id if not current_user.is_admin() else data.get('user_id'),
+            agent_id=data.get('agent_id'),
             source=data.get('source', 'manual'),
         )
         db.session.add(skill)
@@ -320,7 +343,7 @@ def track_behavior():
     current_user = get_current_user()
     try:
         from app.utils.behavior_tracker import track_behavior as _track
-        _track(current_user.id, data['action'], data.get('target_type'), data.get('target_id'), data.get('detail'))
+        _track(current_user.id, data['action'], data.get('target_type'), data.get('target_id'), data.get('detail'), agent_id=data.get('agent_id'))
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 400
@@ -359,9 +382,17 @@ def create_chat():
     current_user = get_current_user()
     data = request.get_json() or {}
     try:
+        # 获取agent_id，验证用户是否有权限使用该Agent
+        agent_id = data.get('agent_id')
+        if agent_id:
+            # 验证用户是否有权限使用该Agent
+            if not current_user.can_use_agent(int(agent_id)):
+                return jsonify({'success': False, 'message': '无权使用该Agent'}), 403
+        
         chat = AiChat(
             user_id=current_user.id,
             title=data.get('title', '新对话'),
+            agent_id=agent_id,
         )
         db.session.add(chat)
         db.session.commit()
@@ -648,8 +679,20 @@ def send_message(chat_id):
 
     start_time = time.time()
 
+    # 获取agent_id：优先从请求data获取，其次从chat获取，最后回退到默认Agent
+    agent_id = data.get('agent_id') or chat.agent_id
+    if not agent_id:
+        default_agent = AiAgent.query.filter_by(is_default=True, is_active=True).first()
+        if default_agent:
+            agent_id = default_agent.id
+    if agent_id:
+        # 验证用户是否有权限使用该Agent
+        if not current_user.can_use_agent(int(agent_id)):
+            return jsonify({'success': False, 'message': '无权使用该Agent'}), 403
+
     user_message = AiChatMessage(
         chat_id=chat_id,
+        agent_id=agent_id,
         role='user',
         content=data['content'],
     )
@@ -659,18 +702,41 @@ def send_message(chat_id):
     if not chat.title or chat.title == '新对话':
         chat.title = data['content'][:50]
 
+    # 更新chat的agent_id（如果请求中指定了新的agent_id）
+    if data.get('agent_id') and chat.agent_id != data.get('agent_id'):
+        chat.agent_id = data.get('agent_id')
+
     db.session.commit()
 
     # Get ordered AI configs from strategy (with failover support)
     from app.services.ai_service import AiService
 
+    # 获取用户可用的模型列表
+    allowed_models = current_user.get_allowed_models()
+    allowed_model_ids = [m.id for m in allowed_models]
+    default_config = AiConfig.query.filter_by(is_default=True, is_active=True).first()
+
     # Check if user specified a particular model via @mention
     specified_config_id = data.get('ai_config_id')
     specified_config = None
     if specified_config_id:
+        # 验证用户是否有权使用该模型
+        if int(specified_config_id) not in allowed_model_ids:
+            return jsonify({'success': False, 'message': '无权使用该模型'}), 403
         specified_config = AiConfig.query.filter_by(id=int(specified_config_id), is_active=True).first()
 
-    ordered_configs = AiService.get_ordered_configs()
+    # 根据用户权限决定模型选择策略
+    if current_user.can_switch_model():
+        # 有切换权限且有2+模型：使用系统策略，但只路由到授权模型
+        ordered_configs = AiService.get_ordered_configs()
+        # 过滤掉未授权的模型
+        ordered_configs = [c for c in ordered_configs if c.id in allowed_model_ids]
+        if not ordered_configs:
+            # 授权模型都不在策略中，回退到默认模型
+            ordered_configs = [default_config] if default_config else allowed_models[:1]
+    else:
+        # 无切换权限或只有1个模型：静默使用默认模型
+        ordered_configs = [default_config] if default_config else (allowed_models[:1] if allowed_models else [])
 
     # Use specified config if provided via @mention, otherwise use strategy
     if specified_config:
@@ -683,6 +749,7 @@ def send_message(chat_id):
     else:
         assistant_message = AiChatMessage(
             chat_id=chat_id,
+            agent_id=agent_id,
             role='assistant',
             content='AI服务未配置，请先在系统配置中添加AI模型配置。',
         )
@@ -695,41 +762,58 @@ def send_message(chat_id):
 
     # Build context with skills and behaviors
     try:
-        context = AiService.build_chat_context(current_user.id, chat_id)
+        context = AiService.build_chat_context(current_user.id, chat_id, agent_id=agent_id)
 
         # Get chat history
-        history = AiChatMessage.query.filter_by(chat_id=chat_id)\
+        history = AiChatMessage.query.filter_by(chat_id=chat_id, agent_id=agent_id)\
             .order_by(AiChatMessage.created_at.asc()).all()
         messages = []
-        if ai_config.system_prompt:
+        
+        # 获取系统提示词：优先使用Agent的提示词，其次使用AI配置的system_prompt，最后使用默认提示词
+        agent = None
+        if agent_id:
+            agent = AiAgent.query.filter_by(id=int(agent_id), is_active=True).first()
+        
+        if agent and agent.system_prompt:
+            # 使用Agent的系统提示词，并附加上下文
+            sys_prompt = context + '\n\n' + agent.system_prompt
+            messages.append({'role': 'system', 'content': sys_prompt})
+        elif ai_config.system_prompt:
             messages.append({'role': 'system', 'content': ai_config.system_prompt})
         else:
-            sys_prompt = context + '\n\n## 重要规则\n' \
-                '- 系统中有四种不同类型的任务，必须严格区分：\n' \
-                '  1. 导出任务（export）：从数据库导出数据到Excel，调用 list_export_options / request_export\n' \
-                '  2. 查询任务（query）：根据Excel文件中的主键数据去数据库批量查询匹配信息，需要上传Excel文件，调用 list_query_options / request_query\n' \
-                '  3. 系统任务（system_task）：后台运维类操作（如数据清理、缓存刷新、终端解绑等），调用 list_system_tasks / request_system_task\n' \
-                '  4. 信息查询（lookup）：根据用户提供的参数值快速查询数据库返回结果（如查询SN绑定状态、商户是否激活、订单是否出款等），结果直接在对话中展示，调用 list_lookup_options / request_lookup\n' \
-                '- 当用户表达需要导出数据的意图时，调用 request_export 工具\n' \
-                '- 当用户表达需要批量查询（上传Excel文件）的意图时，调用 request_query 工具\n' \
-                '- 当用户表达需要执行系统任务的意图时，调用 request_system_task 工具\n' \
-                '- 当用户询问某个实体的状态、信息、详情时（如"这个SN的绑定状态"、"这个商户是否激活"），调用 request_lookup 工具\n' \
-                '- 重要：当用户的查询涉及多个不同维度的信息时（如"查一下SN123的绑定状态和交易信息"），应在同一次回复中同时调用多个 request_lookup 工具，分别查询不同维度的信息，然后将所有查询结果归总后统一回答用户\n' \
-                '- 重要：当用户的意图是条件性的（如"查一下这个SN的绑定状态，如果已绑定就解绑"、"查商户是否激活，未激活则激活"），必须先调用 request_lookup 查询状态，拿到结果后根据条件判断是否需要调用 request_system_task，在二次回复中完成条件判断和后续操作\n' \
-                '- 调用 request_export 时，务必从用户描述中提取所有参数值（如商户号、日期、渠道等）填入 params 对象\n' \
-                '- 调用 request_system_task 时，务必从用户描述中提取所有参数值填入 params 对象，params的键名必须使用list_system_tasks返回的参数配置中的name字段值\n' \
-                '- 重要：API类型的系统任务参数齐全时会自动执行并返回结果（包含mapping_summary映射摘要），请直接根据映射摘要用自然语言告诉用户执行结果\n' \
-                '- 重要：如果用户同时要求对多个对象执行同样的API系统任务（如"解绑SN001、SN002、SN003"），请在同一次回复中同时调用多个 request_system_task，每个调用对应一个对象，系统会自动并行执行，你只需汇总所有结果用列表形式反馈给用户\n' \
-                '- 调用 request_lookup 时，务必从用户描述中提取所有参数值填入 params 对象，params的键名必须使用list_lookup_options返回的参数配置中的name字段值\n' \
-                '- 重要：调用 list_lookup_options 时，如果用户提供了具体的参数值（如SN号、商户号等），务必同时传入 params 参数，这样当匹配到唯一查询时系统可以自动执行，大幅加快响应速度\n' \
-                '- 如果用户没有指定具体的导出选项名称，先调用 list_export_options 列出相关选项让用户选择\n' \
-                '- 如果用户没有指定具体的查询选项名称，先调用 list_query_options 列出相关选项让用户选择\n' \
-                '- 如果用户没有指定具体的系统任务名称，先调用 list_system_tasks 列出相关任务让用户选择\n' \
-                '- 如果用户没有指定具体的信息查询名称，先调用 list_lookup_options 列出相关查询让用户选择\n' \
-                '- 如果用户提供了参数值，务必在调用工具时传入正确的参数\n' \
-                '- 如果缺少必填参数，在回复中向用户询问\n' \
-                '- 当用户上传文件时，消息中会包含文件信息（行数和列名），根据列名自动匹配最合适的查询或导出选项\n'
-            messages.append({'role': 'system', 'content': sys_prompt})
+            # 使用默认Agent的提示词
+            default_agent = AiAgent.query.filter_by(is_default=True, is_active=True).first()
+            if default_agent and default_agent.system_prompt:
+                sys_prompt = context + '\n\n' + default_agent.system_prompt
+                messages.append({'role': 'system', 'content': sys_prompt})
+            else:
+                # 最后的fallback：硬编码的默认提示词
+                sys_prompt = context + '\n\n## 重要规则\n' \
+                    '- 系统中有四种不同类型的任务，必须严格区分：\n' \
+                    '  1. 导出任务（export）：从数据库导出数据到Excel，调用 list_export_options / request_export\n' \
+                    '  2. 查询任务（query）：根据Excel文件中的主键数据去数据库批量查询匹配信息，需要上传Excel文件，调用 list_query_options / request_query\n' \
+                    '  3. 系统任务（system_task）：后台运维类操作（如数据清理、缓存刷新、终端解绑、执行本地脚本等），支持SQL、API和本地脚本三种类型，调用 list_system_tasks / request_system_task\n' \
+                    '  4. 信息查询（lookup）：根据用户提供的参数值快速查询数据库返回结果（如查询SN绑定状态、商户是否激活、订单是否出款等），结果直接在对话中展示，调用 list_lookup_options / request_lookup\n' \
+                    '- 当用户表达需要导出数据的意图时，调用 request_export 工具\n' \
+                    '- 当用户表达需要批量查询（上传Excel文件）的意图时，调用 request_query 工具\n' \
+                    '- 当用户表达需要执行系统任务的意图时，调用 request_system_task 工具\n' \
+                    '- 当用户询问某个实体的状态、信息、详情时（如"这个SN的绑定状态"、"这个商户是否激活"），调用 request_lookup 工具\n' \
+                    '- 重要：当用户的查询涉及多个不同维度的信息时（如"查一下SN123的绑定状态和交易信息"），应在同一次回复中同时调用多个 request_lookup 工具，分别查询不同维度的信息，然后将所有查询结果归总后统一回答用户\n' \
+                    '- 重要：当用户的意图是条件性的（如"查一下这个SN的绑定状态，如果已绑定就解绑"、"查商户是否激活，未激活则激活"），必须先调用 request_lookup 查询状态，拿到结果后根据条件判断是否需要调用 request_system_task，在二次回复中完成条件判断和后续操作\n' \
+                    '- 调用 request_export 时，务必从用户描述中提取所有参数值（如商户号、日期、渠道等）填入 params 对象\n' \
+                    '- 调用 request_system_task 时，务必从用户描述中提取所有参数值填入 params 对象，params的键名必须使用list_system_tasks返回的参数配置中的name字段值\n' \
+                    '- 重要：API类型的系统任务参数齐全时会自动执行并返回结果（包含mapping_summary映射摘要），请直接根据映射摘要用自然语言告诉用户执行结果\n' \
+                    '- 重要：如果用户同时要求对多个对象执行同样的API系统任务（如"解绑SN001、SN002、SN003"），请在同一次回复中同时调用多个 request_system_task，每个调用对应一个对象，系统会自动并行执行，你只需汇总所有结果用列表形式反馈给用户\n' \
+                    '- 调用 request_lookup 时，务必从用户描述中提取所有参数值填入 params 对象，params的键名必须使用list_lookup_options返回的参数配置中的name字段值\n' \
+                    '- 重要：调用 list_lookup_options 时，如果用户提供了具体的参数值（如SN号、商户号等），务必同时传入 params 参数，这样当匹配到唯一查询时系统可以自动执行，大幅加快响应速度\n' \
+                    '- 如果用户没有指定具体的导出选项名称，先调用 list_export_options 列出相关选项让用户选择\n' \
+                    '- 如果用户没有指定具体的查询选项名称，先调用 list_query_options 列出相关选项让用户选择\n' \
+                    '- 如果用户没有指定具体的系统任务名称，先调用 list_system_tasks 列出相关任务让用户选择\n' \
+                    '- 如果用户没有指定具体的信息查询名称，先调用 list_lookup_options 列出相关查询让用户选择\n' \
+                    '- 如果用户提供了参数值，务必在调用工具时传入正确的参数\n' \
+                    '- 如果缺少必填参数，在回复中向用户询问\n' \
+                    '- 当用户上传文件时，消息中会包含文件信息（行数和列名），根据列名自动匹配最合适的查询或导出选项\n'
+                messages.append({'role': 'system', 'content': sys_prompt})
 
         for msg in history:
             messages.append({'role': msg.role, 'content': msg.content})
@@ -742,6 +826,8 @@ def send_message(chat_id):
         tokens = ai_response['tokens']
         prompt_tokens = ai_response.get('prompt_tokens', 0)
         completion_tokens = ai_response.get('completion_tokens', 0)
+        cache_creation_tokens = ai_response.get('cache_creation_tokens', 0) if isinstance(ai_response, dict) else 0
+        cache_read_tokens = ai_response.get('cache_read_tokens', 0) if isinstance(ai_response, dict) else 0
 
         # If AI wants to call tools, execute them
         tool_results = []
@@ -941,6 +1027,8 @@ def send_message(chat_id):
                     tokens = ai_response2['tokens']
                     prompt_tokens += ai_response2.get('prompt_tokens', 0)
                     completion_tokens += ai_response2.get('completion_tokens', 0)
+                    cache_creation_tokens += ai_response2.get('cache_creation_tokens', 0) if isinstance(ai_response2, dict) else 0
+                    cache_read_tokens += ai_response2.get('cache_read_tokens', 0) if isinstance(ai_response2, dict) else 0
                     logger.info(f'普通路由-AI二次回复完成: response_text长度={len(response_text or "")}, second_tool_calls={len(second_tool_calls or [])}')
 
                     # 如果AI在二次回复中调用了工具，执行它们
@@ -1004,7 +1092,7 @@ def send_message(chat_id):
 
                             final_payload2 = {
                                 'model': ai_config.model_name or 'gpt-3.5-turbo',
-                                'messages': messages,
+                                'messages': _apply_cache_control(messages, ai_config.provider or 'openai', ai_config.api_base or 'https://api.openai.com/v1'),
                                 'max_tokens': ai_config.max_tokens or 4096,
                                 'temperature': ai_config.temperature if ai_config.temperature is not None else 0.7,
                             }
@@ -1023,6 +1111,9 @@ def send_message(chat_id):
                             tokens = usage3.get('total_tokens', tokens)
                             prompt_tokens += usage3.get('prompt_tokens', 0)
                             completion_tokens += usage3.get('completion_tokens', 0)
+                            _cc, _cr = _extract_cache_tokens(usage3)
+                            cache_creation_tokens += _cc
+                            cache_read_tokens += _cr
                 except Exception as e:
                     logger.error(f'AI二次回复失败: {e}', exc_info=True)
                     response_text = '处理失败，请稍后重试'
@@ -1040,11 +1131,14 @@ def send_message(chat_id):
                 elapsed = 0.01
             assistant_message = AiChatMessage(
                 chat_id=chat_id,
+                agent_id=agent_id,
                 role='assistant',
                 content=response_text,
                 tokens_used=tokens,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
+                cache_creation_tokens=cache_creation_tokens,
+                cache_read_tokens=cache_read_tokens,
                 elapsed=elapsed,
             )
             db.session.add(assistant_message)
@@ -1068,6 +1162,7 @@ def send_message(chat_id):
                         lookup_meta['_error_msg'] = result['error']
                     tool_msg = AiChatMessage(
                         chat_id=chat_id,
+                        agent_id=agent_id,
                         role='assistant',
                         content='',
                         msg_metadata=json.dumps(lookup_meta, ensure_ascii=False),
@@ -1088,6 +1183,7 @@ def send_message(chat_id):
                     else:
                         tool_msg = AiChatMessage(
                             chat_id=chat_id,
+                            agent_id=agent_id,
                             role='assistant',
                             content='',
                             msg_metadata=json.dumps({
@@ -1118,6 +1214,7 @@ def send_message(chat_id):
                         action_type = 'export'
                     tool_msg = AiChatMessage(
                         chat_id=chat_id,
+                        agent_id=agent_id,
                         role='assistant',
                         content=result.get('message', ''),
                         msg_metadata=json.dumps({
@@ -1154,19 +1251,21 @@ def send_message(chat_id):
                                 intent=desc[:200],
                                 tool_name=tr['name'],
                                 tool_args={'name': result.get('script_name') or result.get('task_name', '')},
+                                agent_id=agent_id,
                             )
                     except Exception as mem_err:
                         logger.warning(f'记录工具记忆失败: {mem_err}')
 
         # Track behavior
         from app.utils.behavior_tracker import track_behavior as _track
-        _track(current_user.id, 'chat', 'ai_chat', chat_id, {'tokens': tokens})
+        _track(current_user.id, 'chat', 'ai_chat', chat_id, {'tokens': tokens}, agent_id=agent_id)
 
         return jsonify({'success': True, 'data': response_payload})
     except Exception as e:
         logger.error(f'AI对话失败: {e}', exc_info=True)
         assistant_message = AiChatMessage(
             chat_id=chat_id,
+            agent_id=agent_id,
             role='assistant',
             content='AI服务调用失败，请稍后重试',
         )
@@ -1191,23 +1290,58 @@ def send_message_stream(chat_id):
     if not data or not data.get('content'):
         return jsonify({'success': False, 'message': '消息内容不能为空'}), 400
 
+    # 获取agent_id：优先从请求data获取，其次从chat获取，最后回退到默认Agent
+    agent_id = data.get('agent_id') or chat.agent_id
+    if not agent_id:
+        default_agent = AiAgent.query.filter_by(is_default=True, is_active=True).first()
+        if default_agent:
+            agent_id = default_agent.id
+    if agent_id:
+        # 验证用户是否有权限使用该Agent
+        if not current_user.can_use_agent(int(agent_id)):
+            return jsonify({'success': False, 'message': '无权使用该Agent'}), 403
+
     user_message = AiChatMessage(
         chat_id=chat_id,
+        agent_id=agent_id,
         role='user',
         content=data['content'],
     )
     db.session.add(user_message)
+
+    # 更新chat的agent_id（如果请求中指定了新的agent_id）
+    if data.get('agent_id') and chat.agent_id != data.get('agent_id'):
+        chat.agent_id = data.get('agent_id')
 
     if not chat.title or chat.title == '新对话':
         chat.title = data['content'][:50]
 
     specified_config_id = data.get('ai_config_id')
     specified_config = None
+
+    # 获取用户可用的模型列表
+    allowed_models = current_user.get_allowed_models()
+    allowed_model_ids = [m.id for m in allowed_models]
+    default_config = AiConfig.query.filter_by(is_default=True, is_active=True).first()
+
     if specified_config_id:
+        # 验证用户是否有权使用该模型
+        if int(specified_config_id) not in allowed_model_ids:
+            return jsonify({'success': False, 'message': '无权使用该模型'}), 403
         specified_config = AiConfig.query.filter_by(id=int(specified_config_id), is_active=True).first()
 
     from app.services.ai_service import AiService
-    ordered_configs = AiService.get_ordered_configs()
+
+    # 根据用户权限决定模型选择策略
+    if current_user.can_switch_model():
+        # 有切换权限且有2+模型：使用系统策略，但只路由到授权模型
+        ordered_configs = AiService.get_ordered_configs()
+        ordered_configs = [c for c in ordered_configs if c.id in allowed_model_ids]
+        if not ordered_configs:
+            ordered_configs = [default_config] if default_config else allowed_models[:1]
+    else:
+        # 无切换权限或只有1个模型：静默使用默认模型
+        ordered_configs = [default_config] if default_config else (allowed_models[:1] if allowed_models else [])
 
     if specified_config:
         ai_config = specified_config
@@ -1225,25 +1359,47 @@ def send_message_stream(chat_id):
 
     # 构建上下文
     try:
-        context = AiService.build_chat_context(current_user.id, chat_id)
+        context = AiService.build_chat_context(current_user.id, chat_id, agent_id=agent_id)
         history = AiChatMessage.query.filter_by(chat_id=chat_id)\
             .order_by(AiChatMessage.created_at.asc()).all()
         messages = []
-        if ai_config.system_prompt:
+        
+        # 获取系统提示词：优先使用Agent的提示词，其次使用AI配置的system_prompt，最后使用默认提示词
+        agent_id = data.get('agent_id')
+        agent = None
+        if agent_id:
+            agent = AiAgent.query.filter_by(id=int(agent_id), is_active=True).first()
+            # 检查用户是否有权限使用该Agent
+            if agent and not current_user.can_use_agent(agent.id):
+                agent = None
+                logger.warning(f'用户 {current_user.id} 无权使用Agent {agent_id}')
+        
+        if agent and agent.system_prompt:
+            # 使用Agent的系统提示词，并附加上下文
+            sys_prompt = context + '\n\n' + agent.system_prompt
+            messages.append({'role': 'system', 'content': sys_prompt})
+        elif ai_config.system_prompt:
             messages.append({'role': 'system', 'content': ai_config.system_prompt})
         else:
-            sys_prompt = context + '\n\n## 重要规则\n' \
-                '- 系统中有四种不同类型的任务，必须严格区分：\n' \
-                '  1. 导出任务（export）：从数据库导出数据到Excel\n' \
-                '  2. 查询任务（query）：根据Excel文件中的主键数据去数据库批量查询匹配信息\n' \
-                '  3. 系统任务（system_task）：后台运维类操作\n' \
-                '  4. 信息查询（lookup）：根据参数值快速查询数据库返回结果\n' \
-                '- 重要：当用户的查询涉及多个不同维度的信息时（如"查一下SN123的绑定状态和交易信息"），应在同一次回复中同时调用多个 request_lookup 工具，分别查询不同维度的信息，然后将所有查询结果归总后统一回答用户\n' \
-                '- 重要：当用户的意图是条件性的（如"查一下这个SN的绑定状态，如果已绑定就解绑"、"查商户是否激活，未激活则激活"），必须先调用 request_lookup 查询状态，拿到结果后根据条件判断是否需要调用 request_system_task，在二次回复中完成条件判断和后续操作\n' \
-                '- 重要：API类型的系统任务参数齐全时会自动执行并返回结果（包含mapping_summary映射摘要），请直接根据映射摘要用自然语言告诉用户执行结果\n' \
-                '- 重要：如果用户同时要求对多个对象执行同样的API系统任务（如"解绑SN001、SN002、SN003"），请在同一次回复中同时调用多个 request_system_task，每个调用对应一个对象，系统会自动并行执行，你只需汇总所有结果用列表形式反馈给用户\n' \
-                '- 重要：调用 list_lookup_options 时，如果用户提供了具体的参数值（如SN号、商户号等），务必同时传入 params 参数，这样当匹配到唯一查询时系统可以自动执行，大幅加快响应速度\n'
-            messages.append({'role': 'system', 'content': sys_prompt})
+            # 使用默认Agent的提示词
+            default_agent = AiAgent.query.filter_by(is_default=True, is_active=True).first()
+            if default_agent and default_agent.system_prompt:
+                sys_prompt = context + '\n\n' + default_agent.system_prompt
+                messages.append({'role': 'system', 'content': sys_prompt})
+            else:
+                # 最后的fallback：硬编码的默认提示词
+                sys_prompt = context + '\n\n## 重要规则\n' \
+                    '- 系统中有四种不同类型的任务，必须严格区分：\n' \
+                    '  1. 导出任务（export）：从数据库导出数据到Excel\n' \
+                    '  2. 查询任务（query）：根据Excel文件中的主键数据去数据库批量查询匹配信息\n' \
+                    '  3. 系统任务（system_task）：后台运维类操作（支持SQL、API和本地脚本三种类型）\n' \
+                    '  4. 信息查询（lookup）：根据参数值快速查询数据库返回结果\n' \
+                    '- 重要：当用户的查询涉及多个不同维度的信息时（如"查一下SN123的绑定状态和交易信息"），应在同一次回复中同时调用多个 request_lookup 工具，分别查询不同维度的信息，然后将所有查询结果归总后统一回答用户\n' \
+                    '- 重要：当用户的意图是条件性的（如"查一下这个SN的绑定状态，如果已绑定就解绑"、"查商户是否激活，未激活则激活"），必须先调用 request_lookup 查询状态，拿到结果后根据条件判断是否需要调用 request_system_task，在二次回复中完成条件判断和后续操作\n' \
+                    '- 重要：API类型的系统任务参数齐全时会自动执行并返回结果（包含mapping_summary映射摘要），请直接根据映射摘要用自然语言告诉用户执行结果\n' \
+                    '- 重要：如果用户同时要求对多个对象执行同样的API系统任务（如"解绑SN001、SN002、SN003"），请在同一次回复中同时调用多个 request_system_task，每个调用对应一个对象，系统会自动并行执行，你只需汇总所有结果用列表形式反馈给用户\n' \
+                    '- 重要：调用 list_lookup_options 时，如果用户提供了具体的参数值（如SN号、商户号等），务必同时传入 params 参数，这样当匹配到唯一查询时系统可以自动执行，大幅加快响应速度\n'
+                messages.append({'role': 'system', 'content': sys_prompt})
 
         for msg in history:
             messages.append({'role': msg.role, 'content': msg.content})
@@ -1260,8 +1416,10 @@ def send_message_stream(chat_id):
     # 在请求上下文内保存需要的变量，避免在 generate() 闭包中访问过期的 SQLAlchemy session
     user_id = current_user.id
     user_message_content = data['content']
+    stream_agent_id = agent_id  # 保存agent_id供闭包使用
     config_api_key = ai_config.get_api_key()
     config_api_base = ai_config.api_base or 'https://api.openai.com/v1'
+    config_provider = ai_config.provider or 'openai'
     config_model_name = ai_config.model_name or 'gpt-3.5-turbo'
     config_max_tokens = ai_config.max_tokens or 4096
     config_temperature = ai_config.temperature if ai_config.temperature is not None else 0.7
@@ -1273,6 +1431,8 @@ def send_message_stream(chat_id):
         tokens_used = 0
         prompt_tokens_used = 0
         completion_tokens_used = 0
+        cache_creation_tokens_used = 0
+        cache_read_tokens_used = 0
         accumulated_tool_calls = {}  # {index: {id, function: {name, arguments}}}
 
         # 注册活跃流
@@ -1293,9 +1453,13 @@ def send_message_stream(chat_id):
                 'Content-Type': 'application/json',
             }
 
+            # 应用缓存控制
+            from app.services.ai_service import _apply_cache_control
+            cached_messages = _apply_cache_control(messages, config_provider, api_base)
+
             payload = {
                 'model': config_model_name,
-                'messages': messages,
+                'messages': cached_messages,
                 'max_tokens': config_max_tokens,
                 'temperature': config_temperature,
                 'stream': config_enable_streaming,
@@ -1371,6 +1535,9 @@ def send_message_stream(chat_id):
                                 tokens_used = chunk['usage'].get('total_tokens', 0)
                                 prompt_tokens_used = chunk['usage'].get('prompt_tokens', 0)
                                 completion_tokens_used = chunk['usage'].get('completion_tokens', 0)
+                                _cc, _cr = _extract_cache_tokens(chunk['usage'])
+                                cache_creation_tokens_used = _cc
+                                cache_read_tokens_used = _cr
                         except json.JSONDecodeError:
                             continue
 
@@ -1410,6 +1577,9 @@ def send_message_stream(chat_id):
                     tokens_used = result['usage'].get('total_tokens', 0)
                     prompt_tokens_used = result['usage'].get('prompt_tokens', 0)
                     completion_tokens_used = result['usage'].get('completion_tokens', 0)
+                    _cc, _cr = _extract_cache_tokens(result['usage'])
+                    cache_creation_tokens_used = _cc
+                    cache_read_tokens_used = _cr
 
             # 处理工具调用
             tool_results_list = []
@@ -1485,7 +1655,7 @@ def send_message_stream(chat_id):
                             if result.get('error'):
                                 lookup_meta['_error_msg'] = result['error']
                             tool_msg = AiChatMessage(
-                                chat_id=chat_id, role='assistant', content='',
+                                chat_id=chat_id, agent_id=stream_agent_id, role='assistant', content='',
                                 msg_metadata=json.dumps(lookup_meta, ensure_ascii=False),
                             )
                             db.session.add(tool_msg)
@@ -1503,7 +1673,7 @@ def send_message_stream(chat_id):
                                 saved_tool_messages.append(tr)
                             else:
                                 tool_msg = AiChatMessage(
-                                    chat_id=chat_id, role='assistant', content='',
+                                    chat_id=chat_id, agent_id=stream_agent_id, role='assistant', content='',
                                     msg_metadata=json.dumps({
                                         '_type': 'tool', 'tool_data': result,
                                     }, ensure_ascii=False),
@@ -1529,7 +1699,7 @@ def send_message_stream(chat_id):
                             else:
                                 action_type = 'export'
                             tool_msg = AiChatMessage(
-                                chat_id=chat_id, role='assistant',
+                                chat_id=chat_id, agent_id=stream_agent_id, role='assistant',
                                 content=result.get('message', ''),
                                 msg_metadata=json.dumps({
                                     '_type': 'select_options',
@@ -1645,7 +1815,7 @@ def send_message_stream(chat_id):
 
                     payload2 = {
                         'model': config_model_name,
-                        'messages': messages,
+                        'messages': _apply_cache_control(messages, config_provider, api_base),
                         'max_tokens': config_max_tokens,
                         'temperature': config_temperature,
                         'stream': config_enable_streaming,
@@ -1706,6 +1876,9 @@ def send_message_stream(chat_id):
                                             tokens_used = chunk2['usage'].get('total_tokens', 0)
                                             prompt_tokens_used += chunk2['usage'].get('prompt_tokens', 0)
                                             completion_tokens_used += chunk2['usage'].get('completion_tokens', 0)
+                                            _cc2, _cr2 = _extract_cache_tokens(chunk2['usage'])
+                                            cache_creation_tokens_used += _cc2
+                                            cache_read_tokens_used += _cr2
                                 except json.JSONDecodeError:
                                     continue
                     else:
@@ -1738,6 +1911,9 @@ def send_message_stream(chat_id):
                             tokens_used = result2['usage'].get('total_tokens', 0)
                             prompt_tokens_used += result2['usage'].get('prompt_tokens', 0)
                             completion_tokens_used += result2['usage'].get('completion_tokens', 0)
+                            _cc2, _cr2 = _extract_cache_tokens(result2['usage'])
+                            cache_creation_tokens_used += _cc2
+                            cache_read_tokens_used += _cr2
 
                     # 处理二次回复中的工具调用
                     if second_accumulated_tool_calls:
@@ -1768,7 +1944,7 @@ def send_message_stream(chat_id):
                                     if result2.get('error'):
                                         lookup_meta2['_error_msg'] = result2['error']
                                     tool_msg2 = AiChatMessage(
-                                        chat_id=chat_id, role='assistant', content='',
+                                        chat_id=chat_id, agent_id=stream_agent_id, role='assistant', content='',
                                         msg_metadata=json.dumps(lookup_meta2, ensure_ascii=False),
                                     )
                                     db.session.add(tool_msg2)
@@ -1788,7 +1964,7 @@ def send_message_stream(chat_id):
                                         second_saved_tool_messages.append(tr2)
                                     else:
                                         tool_msg2 = AiChatMessage(
-                                            chat_id=chat_id, role='assistant', content='',
+                                            chat_id=chat_id, agent_id=stream_agent_id, role='assistant', content='',
                                             msg_metadata=json.dumps({
                                                 '_type': 'tool', 'tool_data': result2,
                                             }, ensure_ascii=False),
@@ -1813,7 +1989,7 @@ def send_message_stream(chat_id):
                                     else:
                                         action_type2 = 'export'
                                     tool_msg2 = AiChatMessage(
-                                        chat_id=chat_id, role='assistant',
+                                        chat_id=chat_id, agent_id=stream_agent_id, role='assistant',
                                         content=result2.get('message', ''),
                                         msg_metadata=json.dumps({
                                             '_type': 'select_options',
@@ -1872,7 +2048,7 @@ def send_message_stream(chat_id):
                                     messages.extend(tool_messages2)
                                     payload3 = {
                                         'model': config_model_name,
-                                        'messages': messages,
+                                        'messages': _apply_cache_control(messages, config_provider, api_base),
                                         'max_tokens': config_max_tokens,
                                         'temperature': config_temperature,
                                     }
@@ -1887,6 +2063,9 @@ def send_message_stream(chat_id):
                                         tokens_used = result3['usage'].get('total_tokens', 0)
                                         prompt_tokens_used += result3['usage'].get('prompt_tokens', 0)
                                         completion_tokens_used += result3['usage'].get('completion_tokens', 0)
+                                        _cc3, _cr3 = _extract_cache_tokens(result3['usage'])
+                                        cache_creation_tokens_used += _cc3
+                                        cache_read_tokens_used += _cr3
                                 except Exception as e3:
                                     logger.error(f'流式AI三次回复失败: {e3}', exc_info=True)
                             elif second_full_content:
@@ -1910,7 +2089,7 @@ def send_message_stream(chat_id):
                                     messages.extend(tool_messages2)
                                     payload3 = {
                                         'model': config_model_name,
-                                        'messages': messages,
+                                        'messages': _apply_cache_control(messages, config_provider, api_base),
                                         'max_tokens': config_max_tokens,
                                         'temperature': config_temperature,
                                     }
@@ -1925,6 +2104,9 @@ def send_message_stream(chat_id):
                                         tokens_used = result3['usage'].get('total_tokens', 0)
                                         prompt_tokens_used += result3['usage'].get('prompt_tokens', 0)
                                         completion_tokens_used += result3['usage'].get('completion_tokens', 0)
+                                        _cc3, _cr3 = _extract_cache_tokens(result3['usage'])
+                                        cache_creation_tokens_used += _cc3
+                                        cache_read_tokens_used += _cr3
                                 except Exception as e3:
                                     logger.error(f'流式AI三次回复失败: {e3}', exc_info=True)
 
@@ -1935,11 +2117,14 @@ def send_message_stream(chat_id):
                     elapsed = 0.01
                 assistant_message = AiChatMessage(
                     chat_id=chat_id,
+                    agent_id=stream_agent_id,
                     role='assistant',
                     content=full_content,
                     tokens_used=tokens_used,
                     prompt_tokens=prompt_tokens_used,
                     completion_tokens=completion_tokens_used,
+                    cache_creation_tokens=cache_creation_tokens_used,
+                    cache_read_tokens=cache_read_tokens_used,
                     elapsed=elapsed,
                 )
                 if thinking_content:
@@ -1963,6 +2148,7 @@ def send_message_stream(chat_id):
                                         intent=desc[:200],
                                         tool_name=tr['name'],
                                         tool_args={'name': result.get('script_name') or result.get('task_name', '')},
+                                        agent_id=stream_agent_id,
                                     )
                             except Exception as mem_err:
                                 logger.warning(f'记录工具记忆失败: {mem_err}')
@@ -1978,7 +2164,7 @@ def send_message_stream(chat_id):
             _active_streams.pop(chat_id, None)
 
             # 发送完成信号
-            yield f"data: {json.dumps({'type': 'done', 'message_id': msg_id, 'tokens': tokens_used, 'prompt_tokens': prompt_tokens_used, 'completion_tokens': completion_tokens_used, 'elapsed': elapsed}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'message_id': msg_id, 'tokens': tokens_used, 'prompt_tokens': prompt_tokens_used, 'completion_tokens': completion_tokens_used, 'cache_creation_tokens': cache_creation_tokens_used, 'cache_read_tokens': cache_read_tokens_used, 'elapsed': elapsed}, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             logger.error(f'流式响应异常: {e}', exc_info=True)
@@ -1987,6 +2173,7 @@ def send_message_stream(chat_id):
                 if full_content:
                     assistant_message = AiChatMessage(
                         chat_id=chat_id,
+                        agent_id=stream_agent_id,
                         role='assistant',
                         content=full_content,
                     )
@@ -2038,6 +2225,8 @@ def abort_chat_request(chat_id):
 @login_required
 def update_message(chat_id, msg_id):
     current_user = get_current_user()
+    if not current_user:
+        return jsonify({'success': False, 'message': '未登录'}), 401
     chat = AiChat.query.filter_by(id=chat_id, user_id=current_user.id).first()
     if not chat:
         return jsonify({'success': False, 'message': '对话不存在'}), 404
@@ -2081,6 +2270,7 @@ def create_message(chat_id):
 
     msg = AiChatMessage(
         chat_id=chat_id,
+        agent_id=chat.agent_id,
         role='assistant',
         content=data['content'],
     )
@@ -2145,3 +2335,7 @@ def restore_all_chats():
     count = AiChat.query.filter_by(is_deleted=True).update({'is_deleted': False})
     db.session.commit()
     return jsonify({'success': True, 'message': f'成功恢复 {count} 个对话', 'restored_count': count})
+
+
+# 导入缓存管理路由（注册到ai_bp蓝图，必须在蓝图注册到app之前完成）
+import app.routes.cache_routes  # noqa: F401

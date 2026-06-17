@@ -8,11 +8,24 @@ from app.models.ai_skill import AiSkill
 logger = logging.getLogger(__name__)
 
 
-def track_behavior(user_id, action, target_type=None, target_id=None, detail=None):
+def _get_default_agent_id():
+    """获取默认Agent的ID"""
+    from app.models.ai_agent import AiAgent
+    default_agent = AiAgent.query.filter_by(is_default=True, is_active=True).first()
+    return default_agent.id if default_agent else None
+
+
+def track_behavior(user_id, action, target_type=None, target_id=None, detail=None, agent_id=None):
     """
     记录用户行为，并在满足条件时触发自动学习
+    - chat类型行为：关联用户所选的agent_id
+    - 其他类型行为：默认关联系统默认Agent的id
     """
     try:
+        # 非chat类型行为，默认关联系统默认Agent
+        if action != 'chat' and not agent_id:
+            agent_id = _get_default_agent_id()
+
         detail_str = None
         if detail:
             detail_str = json.dumps(detail, ensure_ascii=False) if isinstance(detail, dict) else str(detail)
@@ -23,6 +36,7 @@ def track_behavior(user_id, action, target_type=None, target_id=None, detail=Non
             target_type=target_type,
             target_id=target_id,
             detail=detail_str,
+            agent_id=agent_id,
         )
         db.session.add(behavior)
         db.session.commit()
@@ -37,17 +51,17 @@ def track_behavior(user_id, action, target_type=None, target_id=None, detail=Non
         logger.warning(f'行为追踪失败: {e}')
 
 
-def track_behavior_async(user_id, action, target_type=None, target_id=None, detail=None):
+def track_behavior_async(user_id, action, target_type=None, target_id=None, detail=None, agent_id=None):
     """异步记录用户行为（不阻塞主流程）"""
     thread = threading.Thread(
         target=_async_track,
-        args=(user_id, action, target_type, target_id, detail),
+        args=(user_id, action, target_type, target_id, detail, agent_id),
         daemon=True,
     )
     thread.start()
 
 
-def _async_track(user_id, action, target_type=None, target_id=None, detail=None):
+def _async_track(user_id, action, target_type=None, target_id=None, detail=None, agent_id=None):
     """在独立线程中记录行为"""
     try:
         from app import create_app
@@ -57,7 +71,7 @@ def _async_track(user_id, action, target_type=None, target_id=None, detail=None)
         app = current_app._get_current_object()
 
     with app.app_context():
-        track_behavior(user_id, action, target_type, target_id, detail)
+        track_behavior(user_id, action, target_type, target_id, detail, agent_id=agent_id)
 
 
 def _trigger_auto_learn(user_id):

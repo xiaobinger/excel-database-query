@@ -8,6 +8,7 @@ class UserBehavior(db.Model):
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, comment='用户ID')
+    agent_id = db.Column(db.Integer, comment='关联Agent ID')
     action = db.Column(db.String(100), nullable=False, comment='行为类型: query/export/view/create/edit/delete/chat')
     target_type = db.Column(db.String(50), comment='目标类型: script/task/database/export_script/auto_task')
     target_id = db.Column(db.Integer, comment='目标ID')
@@ -25,6 +26,7 @@ class UserBehavior(db.Model):
         return {
             'id': self.id,
             'user_id': self.user_id,
+            'agent_id': self.agent_id,
             'action': self.action,
             'target_type': self.target_type,
             'target_id': self.target_id,

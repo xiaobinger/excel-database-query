@@ -66,6 +66,23 @@
             <span v-else style="color: #c0c4cc">-</span>
           </template>
         </el-table-column>
+        <el-table-column label="Agent权限" min-width="160" show-overflow-tooltip>
+          <template #default="{ row }">
+            <template v-if="row.agent_permissions && row.agent_permissions.length > 0">
+              <el-tag
+                v-for="perm in row.agent_permissions"
+                :key="perm"
+                size="small"
+                type="success"
+                effect="plain"
+                style="margin: 2px 4px 2px 0"
+              >
+                {{ perm === 'all' ? '全部Agent' : (agentPermLabels[perm] || perm) }}
+              </el-tag>
+            </template>
+            <span v-else style="color: #c0c4cc">-</span>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="180" align="center" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="primary" text @click="openDialog(row)">
@@ -140,6 +157,48 @@
               </div>
             </div>
           </el-form-item>
+          <el-form-item label="Agent权限">
+            <div class="agent-perm-config">
+              <el-checkbox v-model="form.agent_all" @change="handleAgentAllChange">
+                全部Agent（不限制）
+              </el-checkbox>
+              <div v-if="!form.agent_all" class="agent-select-area">
+                <el-checkbox-group v-model="form.agent_permissions">
+                  <el-checkbox
+                    v-for="agent in availableAgents"
+                    :key="agent.id"
+                    :label="String(agent.id)"
+                  >
+                    {{ agent.name }}
+                    <span v-if="agent.is_default" style="color: #e6a23c; font-size: 12px; margin-left: 4px">(默认)</span>
+                  </el-checkbox>
+                </el-checkbox-group>
+              </div>
+            </div>
+          </el-form-item>
+          <el-form-item label="Agent切换权限">
+            <el-switch v-model="form.can_switch_agent" active-text="允许" inactive-text="禁止" />
+            <span style="color: #909399; font-size: 12px; margin-left: 8px">允许用户在对话中切换Agent</span>
+          </el-form-item>
+          <el-form-item label="模型切换权限">
+            <el-switch v-model="form.can_switch_model" active-text="允许" inactive-text="禁止" />
+            <span style="color: #909399; font-size: 12px; margin-left: 8px">允许用户在对话中切换AI模型</span>
+          </el-form-item>
+          <el-form-item label="模型授权">
+            <div class="model-perm-config">
+              <el-checkbox-group v-model="form.model_permissions">
+                <el-checkbox
+                  v-for="model in availableModels"
+                  :key="model.id"
+                  :label="String(model.id)"
+                >
+                  {{ model.name }}
+                  <span style="color: #909399; font-size: 12px; margin-left: 4px">({{ model.model_name }})</span>
+                </el-checkbox>
+              </el-checkbox-group>
+              <div v-if="availableModels.length === 0" style="color: #c0c4cc; font-size: 13px">暂无可用的AI模型配置</div>
+            </div>
+          </el-form-item>
         </template>
       </el-form>
       <template #footer>
@@ -179,6 +238,8 @@ const menuPermLabels = {
   ai_chat: 'AI助手',
   ai_sessions: 'AI会话管理',
   skills: 'Skills',
+  agent_manager: 'Agent管理',
+  cache_stats: '缓存统计',
   business_systems: '业务系统',
   system_tasks: '系统任务'
 }
@@ -213,6 +274,9 @@ const buttonPermLabels = {
   'ai:config': 'AI模型配置',
   'ai:chat': 'AI对话',
   'ai:skill': 'AI技能管理',
+  'agent:create': '新建Agent',
+  'agent:edit': '编辑Agent',
+  'agent:delete': '删除Agent',
   'system_task:create': '新建系统任务',
   'system_task:edit': '编辑系统任务',
   'system_task:delete': '删除系统任务',
@@ -220,6 +284,10 @@ const buttonPermLabels = {
   'system_task:view_log': '查看执行记录',
   'system_task:delete_log': '删除执行记录'
 }
+
+const availableAgents = ref([])
+const agentPermLabels = ref({})
+const availableModels = ref([])
 
 const menuOptions = [
   { value: 'dashboard', label: '仪表盘' },
@@ -236,6 +304,8 @@ const menuOptions = [
   { value: 'ai_chat', label: 'AI助手' },
   { value: 'ai_sessions', label: 'AI会话管理' },
   { value: 'skills', label: 'Skills' },
+  { value: 'agent_manager', label: 'Agent管理' },
+  { value: 'cache_stats', label: '缓存统计' },
   { value: 'business_systems', label: '业务系统' }
 ]
 
@@ -323,6 +393,14 @@ const buttonPermGroups = [
       { value: 'ai:chat', label: 'AI对话' },
       { value: 'ai:skill', label: 'AI技能管理' }
     ]
+  },
+  {
+    label: 'Agent管理',
+    items: [
+      { value: 'agent:create', label: '新建' },
+      { value: 'agent:edit', label: '编辑' },
+      { value: 'agent:delete', label: '删除' }
+    ]
   }
 ]
 
@@ -331,7 +409,12 @@ const defaultForm = {
   description: '',
   is_admin: false,
   menu_permissions: [],
-  button_permissions: []
+  button_permissions: [],
+  agent_permissions: [],
+  agent_all: false,
+  can_switch_agent: false,
+  can_switch_model: false,
+  model_permissions: []
 }
 
 const form = reactive({ ...defaultForm })
@@ -340,6 +423,11 @@ watch(() => form.is_admin, (val) => {
   if (val) {
     form.menu_permissions = []
     form.button_permissions = []
+    form.agent_permissions = []
+    form.agent_all = false
+    form.can_switch_agent = false
+    form.can_switch_model = false
+    form.model_permissions = []
   }
 })
 
@@ -359,16 +447,59 @@ async function fetchRoles() {
   }
 }
 
+async function fetchAgents() {
+  try {
+    const res = await api.agent.getAll()
+    const agents = res.data || []
+    availableAgents.value = agents
+    // 更新agentPermLabels
+    const labels = {}
+    agents.forEach(a => {
+      labels[String(a.id)] = a.name
+    })
+    agentPermLabels.value = labels
+  } catch {
+    availableAgents.value = []
+  }
+}
+
+// 获取所有AI模型配置列表
+async function fetchModels() {
+  try {
+    const res = await api.ai.getConfigs()
+    const configs = res.data || []
+    // 只保留活跃的模型配置
+    availableModels.value = configs.filter(c => c.is_active !== false)
+  } catch {
+    availableModels.value = []
+  }
+}
+
+function handleAgentAllChange(val) {
+  if (val) {
+    form.agent_permissions = ['all']
+  } else {
+    form.agent_permissions = []
+  }
+}
+
 function openDialog(row) {
   if (row) {
     isEdit.value = true
     editId.value = row.id
+    const agentPerms = row.agent_permissions || []
+    const hasAll = agentPerms.includes('all')
     Object.assign(form, {
       name: row.name,
       description: row.description || '',
       is_admin: row.is_admin || false,
       menu_permissions: row.menu_permissions || [],
-      button_permissions: row.button_permissions || []
+      button_permissions: row.button_permissions || [],
+      agent_permissions: hasAll ? [] : agentPerms.map(p => String(p)),
+      agent_all: hasAll,
+      can_switch_agent: row.can_switch_agent || false,
+      can_switch_model: row.can_switch_model || false,
+      model_permissions: (row.model_permissions || []).map(p => String(p))
     })
   } else {
     isEdit.value = false
@@ -383,7 +514,17 @@ async function handleSubmit() {
   await formRef.value.validate()
   submitting.value = true
   try {
-    const payload = { ...form }
+    const payload = {
+      name: form.name,
+      description: form.description,
+      is_admin: form.is_admin,
+      menu_permissions: form.is_admin ? null : form.menu_permissions,
+      button_permissions: form.is_admin ? null : form.button_permissions,
+      agent_permissions: form.is_admin ? null : (form.agent_all ? ['all'] : form.agent_permissions.map(p => parseInt(p))),
+      can_switch_agent: form.is_admin ? null : form.can_switch_agent,
+      can_switch_model: form.is_admin ? null : form.can_switch_model,
+      model_permissions: form.is_admin ? null : form.model_permissions.map(p => parseInt(p))
+    }
     if (isEdit.value) {
       await api.roles.update(editId.value, payload)
       ElMessage.success('更新成功')
@@ -443,7 +584,11 @@ async function handleDelete(id) {
   }
 }
 
-onMounted(fetchRoles)
+onMounted(() => {
+  fetchRoles()
+  fetchAgents()
+  fetchModels()
+})
 </script>
 
 <style scoped>
@@ -490,5 +635,25 @@ onMounted(fetchRoles)
   margin-bottom: 8px;
   padding-bottom: 6px;
   border-bottom: 1px solid #ebeef5;
+}
+
+.agent-perm-config {
+  background: #f8fafc;
+  border: 1px solid #eef2f7;
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+
+.agent-select-area {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #ebeef5;
+}
+
+.model-perm-config {
+  background: #f8fafc;
+  border: 1px solid #eef2f7;
+  border-radius: 8px;
+  padding: 12px 16px;
 }
 </style>

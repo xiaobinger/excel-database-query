@@ -14,8 +14,13 @@ CREATE TABLE IF NOT EXISTS roles (
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(50) NOT NULL UNIQUE COMMENT '角色名称',
     description VARCHAR(500) COMMENT '角色描述',
+    is_admin BOOLEAN DEFAULT FALSE COMMENT '是否超级管理员',
     menu_permissions TEXT COMMENT '菜单权限(JSON数组)',
     button_permissions TEXT COMMENT '按钮权限(JSON数组)',
+    agent_permissions TEXT COMMENT 'Agent权限(JSON数组，存储可用的AgentID)',
+    can_switch_agent BOOLEAN DEFAULT FALSE COMMENT '是否允许切换Agent',
+    can_switch_model BOOLEAN DEFAULT FALSE COMMENT '是否允许切换模型',
+    model_permissions TEXT COMMENT '模型权限(JSON数组，存储可用的AI配置ID)',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_name (name)
@@ -224,18 +229,39 @@ CREATE TABLE IF NOT EXISTS ai_configs (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI模型配置表';
 
 -- ----------------------------
+-- AI Agent表
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS ai_agents (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL COMMENT 'Agent名称',
+    description VARCHAR(500) COMMENT 'Agent描述',
+    system_prompt TEXT NOT NULL COMMENT '系统提示词',
+    is_default BOOLEAN DEFAULT FALSE COMMENT '是否默认Agent',
+    is_active BOOLEAN DEFAULT TRUE COMMENT '是否启用',
+    created_by INT COMMENT '创建者ID',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_name (name),
+    INDEX idx_is_default (is_default),
+    INDEX idx_is_active (is_active)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI Agent表';
+
+-- ----------------------------
 -- AI对话表
 -- ----------------------------
 CREATE TABLE IF NOT EXISTS ai_chats (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NOT NULL COMMENT '用户ID',
     title VARCHAR(200) COMMENT '对话标题',
+    agent_id INT COMMENT '关联Agent ID',
     is_archived BOOLEAN DEFAULT FALSE COMMENT '是否归档',
     is_deleted BOOLEAN DEFAULT FALSE COMMENT '是否软删除',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_user_id (user_id),
-    FOREIGN KEY (user_id) REFERENCES users(id)
+    INDEX idx_agent_id (agent_id),
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (agent_id) REFERENCES ai_agents(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI对话表';
 
 -- ----------------------------
@@ -244,6 +270,7 @@ CREATE TABLE IF NOT EXISTS ai_chats (
 CREATE TABLE IF NOT EXISTS ai_chat_messages (
     id INT AUTO_INCREMENT PRIMARY KEY,
     chat_id INT NOT NULL COMMENT '对话ID',
+    agent_id INT COMMENT '关联Agent ID',
     role VARCHAR(20) NOT NULL COMMENT '角色: user/assistant/system',
     content TEXT COMMENT '消息内容',
     tokens_used INT DEFAULT 0 COMMENT '消耗token数',
@@ -254,7 +281,9 @@ CREATE TABLE IF NOT EXISTS ai_chat_messages (
     metadata TEXT COMMENT '消息元数据(JSON)，用于存储工具调用状态等',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_chat_id (chat_id),
-    FOREIGN KEY (chat_id) REFERENCES ai_chats(id)
+    INDEX idx_agent_id (agent_id),
+    FOREIGN KEY (chat_id) REFERENCES ai_chats(id),
+    FOREIGN KEY (agent_id) REFERENCES ai_agents(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI对话消息表';
 
 -- ----------------------------
@@ -269,6 +298,7 @@ CREATE TABLE IF NOT EXISTS ai_skills (
     content TEXT COMMENT '技能内容JSON',
     trigger_conditions TEXT COMMENT '触发条件JSON',
     user_id INT COMMENT '所属用户ID(system类型为空)',
+    agent_id INT COMMENT '关联Agent ID',
     is_active BOOLEAN DEFAULT TRUE COMMENT '是否启用',
     version INT DEFAULT 1 COMMENT '版本号',
     usage_count INT DEFAULT 0 COMMENT '使用次数',
@@ -278,7 +308,9 @@ CREATE TABLE IF NOT EXISTS ai_skills (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_skill_type (skill_type),
     INDEX idx_user_id (user_id),
+    INDEX idx_agent_id (agent_id),
     FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (agent_id) REFERENCES ai_agents(id),
     FOREIGN KEY (parent_id) REFERENCES ai_skills(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI技能表';
 
@@ -291,13 +323,36 @@ CREATE TABLE IF NOT EXISTS user_behaviors (
     action VARCHAR(100) NOT NULL COMMENT '行为类型: query/export/view/create/edit/delete/chat',
     target_type VARCHAR(50) COMMENT '目标类型: script/task/database/export_script/auto_task',
     target_id INT COMMENT '目标ID',
+    agent_id INT COMMENT '关联Agent ID',
     detail TEXT COMMENT '行为详情JSON',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_user_id (user_id),
     INDEX idx_action (action),
     INDEX idx_created_at (created_at),
-    FOREIGN KEY (user_id) REFERENCES users(id)
+    INDEX idx_agent_id (agent_id),
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (agent_id) REFERENCES ai_agents(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户行为记录表';
+
+-- ----------------------------
+-- 工具调用记忆表
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS tool_memories (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL COMMENT '用户ID',
+    agent_id INT COMMENT '关联Agent ID',
+    intent VARCHAR(200) NOT NULL COMMENT '用户意图关键词',
+    tool_name VARCHAR(100) NOT NULL COMMENT '工具名称',
+    tool_args TEXT COMMENT '工具参数JSON',
+    success_count INT DEFAULT 1 COMMENT '成功次数',
+    last_used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后使用时间',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_user_id (user_id),
+    INDEX idx_agent_id (agent_id),
+    INDEX idx_intent (intent),
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (agent_id) REFERENCES ai_agents(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工具调用记忆表';
 
 -- ----------------------------
 -- 业务系统表
@@ -331,9 +386,33 @@ SET FOREIGN_KEY_CHECKS = 1;
 -- ----------------------------
 -- 初始数据
 -- ----------------------------
+-- 默认Agent：Excel数据处理助手
+INSERT INTO ai_agents (name, description, system_prompt, is_default, is_active) VALUES
+('Excel数据处理助手', '系统默认Agent，专注于Excel数据处理、数据库查询导出和系统运维任务', '你是一个专业的Excel数据处理助手，帮助用户完成数据库查询、数据导出和系统运维任务。
+
+## 系统功能
+系统中有四种不同类型的任务，必须严格区分：
+1. 导出任务（export）：从数据库导出数据到Excel，调用 list_export_options / request_export
+2. 查询任务（query）：根据Excel文件中的主键数据去数据库批量查询匹配信息，需要上传Excel文件，调用 list_query_options / request_query
+3. 系统任务（system_task）：后台运维类操作（如数据清理、缓存刷新、终端解绑、执行本地脚本等），支持SQL、API和本地脚本三种类型，调用 list_system_tasks / request_system_task
+4. 信息查询（lookup）：根据用户提供的参数值快速查询数据库返回结果（如查询SN绑定状态、商户是否激活、订单是否出款等），调用 list_lookup_options / request_lookup
+
+## 重要规则
+- 当用户表达需要导出数据的意图时，调用 request_export 工具
+- 当用户表达需要批量查询（上传Excel文件）的意图时，调用 request_query 工具
+- 当用户表达需要执行系统任务的意图时，调用 request_system_task 工具
+- 当用户询问某个实体的状态、信息、详情时，调用 request_lookup 工具
+- 重要：当用户的查询涉及多个不同维度的信息时，应在同一次回复中同时调用多个 request_lookup 工具，分别查询不同维度的信息
+- 重要：当用户的意图是条件性的（如"查一下这个SN的绑定状态，如果已绑定就解绑"），必须先调用 request_lookup 查询状态，拿到结果后根据条件判断是否需要调用 request_system_task
+- 重要：API类型的系统任务参数齐全时会自动执行并返回结果，请直接根据映射摘要用自然语言告诉用户执行结果
+- 调用 request_export / request_system_task 时，务必从用户描述中提取所有参数值填入 params 对象
+- 调用 request_lookup 时，务必从用户描述中提取所有参数值填入 params 对象，params的键名必须使用list_lookup_options返回的参数配置中的name字段值
+- 如果用户没有指定具体的导出/查询/系统任务名称，先调用对应的 list_* 工具列出相关选项让用户选择
+- 当用户上传文件时，消息中会包含文件信息（行数和列名），根据列名自动匹配最合适的查询或导出选项', TRUE, TRUE);
+
 -- 默认角色：超级管理员
-INSERT INTO roles (name, description, menu_permissions, button_permissions) VALUES
-('admin', '超级管理员', '["dashboard","query","export","history","scripts","export_options","databases","auto_export","system_config","ai_config","ai_chat","skills","business_systems","system_tasks","user_manager","role_manager"]', '["query:execute","query:download","export:execute","export:download","script:create","script:edit","script:delete","database:create","database:edit","database:delete","database:test","ssh:create","ssh:edit","ssh:delete","auto_task:create","auto_task:edit","auto_task:delete","auto_task:execute","business:create","business:edit","business:delete","business:sso","ai:config","ai:chat","ai:skill","user:create","user:edit","user:delete","role:create","role:edit","role:delete"]');
+INSERT INTO roles (name, description, is_admin, menu_permissions, button_permissions, agent_permissions, can_switch_agent, can_switch_model, model_permissions) VALUES
+('admin', '超级管理员', TRUE, '["dashboard","query","export","history","scripts","export_options","databases","auto_export","system_config","ai_config","ai_chat","skills","business_systems","system_tasks","user_manager","role_manager","agent_manager"]', '["query:execute","query:download","export:execute","export:download","script:create","script:edit","script:delete","database:create","database:edit","database:delete","database:test","ssh:create","ssh:edit","ssh:delete","auto_task:create","auto_task:edit","auto_task:delete","auto_task:execute","business:create","business:edit","business:delete","business:sso","ai:config","ai:chat","ai:skill","user:create","user:edit","user:delete","role:create","role:edit","role:delete","agent:create","agent:edit","agent:delete"]', '["all"]', TRUE, TRUE, '["all"]');
 
 -- 默认管理员用户（密码: admin123）
 -- 注意: 实际部署时应通过应用注册接口创建，此处密码哈希由Werkzeug生成

@@ -67,6 +67,14 @@
           <i class="fas fa-brain"></i>
           <template #title>Skills</template>
         </el-menu-item>
+        <el-menu-item v-if="store.hasMenuPermission('agent_manager')" index="/agents">
+          <i class="fas fa-robot"></i>
+          <template #title>Agent 管理</template>
+        </el-menu-item>
+        <el-menu-item v-if="store.hasMenuPermission('cache_stats')" index="/cache-stats">
+          <i class="fas fa-bolt"></i>
+          <template #title>缓存统计</template>
+        </el-menu-item>
         <el-menu-item v-if="store.hasMenuPermission('business_systems')" index="/business">
           <i class="fas fa-th-large"></i>
           <template #title>业务系统</template>
@@ -189,6 +197,8 @@ const titleMap = {
   '/ai-chat': 'AI 助手',
   '/ai-sessions': 'AI会话管理',
   '/skills': 'Skills',
+  '/agents': 'Agent 管理',
+  '/cache-stats': '缓存统计',
   '/business': '业务系统',
   '/system-tasks': '系统任务'
 }

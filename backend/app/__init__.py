@@ -41,6 +41,7 @@ def create_app(config_name='default'):
         from app.models.system_task import SystemTask, SystemTaskExecution
         from app.models.ai_strategy import AiStrategy
         from app.models.tool_memory import ToolMemory
+        from app.models.ai_agent import AiAgent
         db.create_all()
         _auto_migrate(app)
         _init_default_admin(app)
@@ -165,6 +166,7 @@ def _register_blueprints(app):
     from app.routes.system_task_routes import system_task_bp
     from app.routes.ai_strategy_routes import ai_strategy_bp
     from app.routes.lookup_routes import lookup_bp
+    from app.routes.agent_routes import agent_bp
 
     app.register_blueprint(ssh_bp)
     app.register_blueprint(database_bp)
@@ -182,6 +184,7 @@ def _register_blueprints(app):
     app.register_blueprint(system_task_bp)
     app.register_blueprint(ai_strategy_bp)
     app.register_blueprint(lookup_bp)
+    app.register_blueprint(agent_bp)
 
 
 def _register_error_handlers(app):
@@ -300,7 +303,7 @@ def _init_default_admin(app):
         # 确保管理员角色包含新菜单权限
         try:
             menus = json.loads(admin_role.menu_permissions) if admin_role.menu_permissions else []
-            new_menus = ['ai_chat', 'skills', 'business_systems', 'system_tasks']
+            new_menus = ['ai_chat', 'ai_sessions', 'skills', 'agent_manager', 'cache_stats', 'business_systems', 'system_tasks']
             updated = False
             for m in new_menus:
                 if m not in menus:
@@ -311,6 +314,34 @@ def _init_default_admin(app):
                 db.session.commit()
         except Exception:
             pass
+        # 确保管理员角色拥有Agent和模型切换权限
+        try:
+            if not admin_role.can_switch_agent:
+                admin_role.can_switch_agent = True
+            if not admin_role.can_switch_model:
+                admin_role.can_switch_model = True
+            if not admin_role.agent_permissions:
+                admin_role.set_agent_permissions(['all'])
+            if not admin_role.model_permissions:
+                admin_role.set_model_permissions(['all'])
+            db.session.commit()
+        except Exception:
+            pass
+
+    # 确保存在默认Agent
+    from app.models.ai_agent import AiAgent
+    default_agent = AiAgent.query.filter_by(is_default=True).first()
+    if not default_agent:
+        default_agent = AiAgent(
+            name='Excel数据处理助手',
+            description='系统默认Agent，专注于Excel数据处理、数据库查询导出和系统运维任务',
+            system_prompt='你是一个专业的Excel数据处理助手，帮助用户完成数据库查询、数据导出和系统运维任务。\n\n你可以帮助用户：\n1. 根据自然语言需求生成SQL查询语句\n2. 创建查询选项和导出选项\n3. 配置自动导出任务\n4. 优化SQL语句\n5. 分析数据并提供洞察\n6. 解答系统使用问题\n\n## 系统功能\n系统中有四种不同类型的任务，必须严格区分：\n1. 导出任务（export）：从数据库导出数据到Excel，调用 list_export_options / request_export\n2. 查询任务（query）：根据Excel文件中的主键数据去数据库批量查询匹配信息，需要上传Excel文件，调用 list_query_options / request_query\n3. 系统任务（system_task）：后台运维类操作（如数据清理、缓存刷新、终端解绑、执行本地脚本等），支持SQL、API和本地脚本三种类型，调用 list_system_tasks / request_system_task\n4. 信息查询（lookup）：根据用户提供的参数值快速查询数据库返回结果（如查询SN绑定状态、商户是否激活、订单是否出款等），调用 list_lookup_options / request_lookup\n\n## 重要规则\n- 当用户表达需要导出数据的意图时，调用 request_export 工具\n- 当用户表达需要批量查询（上传Excel文件）的意图时，调用 request_query 工具\n- 当用户表达需要执行系统任务的意图时，调用 request_system_task 工具\n- 当用户询问某个实体的状态、信息、详情时，调用 request_lookup 工具\n- 重要：当用户的查询涉及多个不同维度的信息时，应在同一次回复中同时调用多个 request_lookup 工具，分别查询不同维度的信息\n- 重要：当用户的意图是条件性的（如"查一下这个SN的绑定状态，如果已绑定就解绑"），必须先调用 request_lookup 查询状态，拿到结果后根据条件判断是否需要调用 request_system_task\n- 重要：API类型的系统任务参数齐全时会自动执行并返回结果，请直接根据映射摘要用自然语言告诉用户执行结果\n- 调用 request_export / request_system_task 时，务必从用户描述中提取所有参数值填入 params 对象\n- 调用 request_lookup 时，务必从用户描述中提取所有参数值填入 params 对象，params的键名必须使用list_lookup_options返回的参数配置中的name字段值\n- 如果用户没有指定具体的导出/查询/系统任务名称，先调用对应的 list_* 工具列出相关选项让用户选择\n- 当用户上传文件时，消息中会包含文件信息（行数和列名），根据列名自动匹配最合适的查询或导出选项',
+            is_default=True,
+            is_active=True,
+        )
+        db.session.add(default_agent)
+        db.session.commit()
+
     admin_user = User.query.filter_by(username='admin').first()
     if not admin_user:
         admin_user = User(

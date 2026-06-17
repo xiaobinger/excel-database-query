@@ -11,7 +11,7 @@ class SystemTask(db.Model):
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     name = db.Column(db.String(100), nullable=False, comment='任务名称')
     description = db.Column(db.String(500), comment='描述')
-    task_type = db.Column(db.String(20), default='sql', comment='任务类型: sql/api')
+    task_type = db.Column(db.String(20), default='sql', comment='任务类型: sql/api/script')
 
     # SQL related
     script_id = db.Column(db.Integer, db.ForeignKey('scripts.id'), comment='关联脚本')
@@ -24,6 +24,12 @@ class SystemTask(db.Model):
     api_headers = db.Column(db.Text, comment='请求头(JSON)')
     api_body = db.Column(db.Text, comment='请求体模板(JSON或字符串)')
     api_timeout = db.Column(db.Integer, default=30, comment='API超时时间(秒)')
+
+    # Local script related
+    script_type = db.Column(db.String(20), comment='本地脚本类型: python/shell/bat/powershell等')
+    script_path = db.Column(db.String(500), comment='本地脚本路径')
+    script_timeout = db.Column(db.Integer, default=60, comment='脚本执行超时时间(秒)')
+    script_env = db.Column(db.Text, comment='脚本环境变量(JSON)')
 
     # Common params config (placeholder definitions)
     params_config = db.Column(db.Text, comment='参数配置(JSON)')
@@ -89,6 +95,17 @@ class SystemTask(db.Model):
     def set_response_mapping(self, mapping: list):
         self.response_mapping = json.dumps(mapping, ensure_ascii=False) if mapping else None
 
+    def get_script_env(self) -> dict:
+        if self.script_env:
+            try:
+                return json.loads(self.script_env)
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return {}
+
+    def set_script_env(self, env: dict):
+        self.script_env = json.dumps(env, ensure_ascii=False) if env else None
+
     def to_dict(self) -> dict:
         return {
             'id': self.id,
@@ -103,6 +120,10 @@ class SystemTask(db.Model):
             'api_headers': self.get_api_headers(),
             'api_body': self.api_body,
             'api_timeout': self.api_timeout,
+            'script_type': self.script_type,
+            'script_path': self.script_path,
+            'script_timeout': self.script_timeout,
+            'script_env': self.get_script_env(),
             'params_config': self.get_params_config(),
             'response_mapping': self.get_response_mapping(),
             'sign_enabled': self.sign_enabled,

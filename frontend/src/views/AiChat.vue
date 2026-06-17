@@ -301,6 +301,9 @@
                 <div v-if="!msg._streaming && (msg._tokens > 0 || msg._elapsed > 0) && msg.role === 'assistant'" class="message-meta">
                   <span v-if="msg._elapsed > 0"><i class="fas fa-clock"></i> {{ msg._elapsed }}s</span>
                   <span v-if="msg._tokens > 0"><i class="fas fa-coins"></i> {{ msg._tokens }} = ↑{{ msg._prompt_tokens || 0 }} + ↓{{ msg._completion_tokens || 0 }}</span>
+                  <span v-if="(msg.cache_creation_tokens > 0 || msg.cache_read_tokens > 0)" class="cache-info">
+                    <i class="fas fa-bolt"></i> 缓存: 写入{{ msg.cache_creation_tokens || 0 }} / 命中{{ msg.cache_read_tokens || 0 }}
+                  </span>
                 </div>
                 <!-- 重试按钮：仅AI文本消息且非流式中、非卡片类型 -->
                 <div v-if="msg.role === 'assistant' && !msg._streaming && !msg._type && msg.content.trim()" class="message-retry">
@@ -492,7 +495,7 @@
                 v-model="inputText"
                 type="textarea"
                 :autosize="{ minRows: 3, maxRows: 8 }"
-                placeholder="输入消息，@ 选择模型，按 Enter 发送，Shift+Enter 换行..."
+                :placeholder="canSwitchModel ? '输入消息，@ 选择模型，按 Enter 发送，Shift+Enter 换行...' : '输入消息，按 Enter 发送，Shift+Enter 换行...'"
                 resize="none"
                 @keydown="handleKeydown"
                 @input="handleInputChange"
@@ -522,7 +525,24 @@
               </div>
             </div>
             <div class="input-bottom-bar">
-              <el-dropdown trigger="click" @command="selectDropdownModel" class="model-dropdown">
+              <el-dropdown v-if="canSwitchAgent" trigger="click" @command="selectDropdownAgent" class="agent-dropdown">
+                <div class="agent-dropdown-trigger" :class="{ 'agent-selected': selectedAgent && !selectedAgent.is_default }">
+                  <i class="fas fa-user-tie"></i>
+                  <span class="agent-dropdown-label">{{ selectedAgent ? selectedAgent.name : '默认' }}</span>
+                  <i class="fas fa-chevron-down agent-dropdown-arrow"></i>
+                </div>
+                <template #dropdown>
+                  <el-dropdown-menu class="agent-dropdown-menu">
+                    <el-dropdown-item v-for="agent in availableAgents" :key="agent.id" :command="agent.id" :class="{ 'is-active': selectedAgent?.id === agent.id }">
+                      <div class="agent-option" :title="agent.description || ''">
+                        <i class="fas fa-user-tie"></i>
+                        <span class="agent-option-name">{{ agent.name }}</span>
+                      </div>
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+              <el-dropdown v-if="canSwitchModel" trigger="click" @command="selectDropdownModel" class="model-dropdown">
                 <div class="model-dropdown-trigger" :class="{ 'model-selected': selectedModel }">
                   <i class="fas fa-robot"></i>
                   <span class="model-dropdown-label">{{ selectedModel ? selectedModel.name : 'Auto' }}</span>
@@ -1189,6 +1209,12 @@ const selectedModel = ref(null)  // { id, name, model_name, provider }
 const mentionTriggerIndex = ref(-1)  // position of @ in inputText
 const inputRef = ref(null)  // ref for the textarea element
 
+// Agent selection
+const availableAgents = ref([])
+const selectedAgent = ref(null)  // { id, name, description, is_default }
+const canSwitchAgent = ref(false)  // 是否有切换Agent权限
+const canSwitchModel = ref(false)  // 是否有切换模型权限
+
 // 语音输入
 const isRecording = ref(false)
 const speechSupported = ref(false)
@@ -1377,7 +1403,9 @@ async function fetchChats() {
 
 async function createNewChat() {
   try {
-    const res = await api.ai.createChat({ title: '新对话' })
+    // 非默认Agent才需要传agent_id，默认Agent后端自动关联
+    const agentId = selectedAgent.value && !selectedAgent.value.is_default ? selectedAgent.value.id : null
+    const res = await api.ai.createChat({ title: '新对话', agent_id: agentId })
     if (res.data) {
       chats.value.unshift(res.data)
       selectChat(res.data.id)
@@ -1392,7 +1420,7 @@ async function selectChat(chatId) {
     const res = await api.ai.getMessages(chatId)
     const msgs = res.data || []
     messages.value = msgs.map(m => {
-      const base = { ...m, _dismissed: false, _tokens: m.tokens_used || 0, _prompt_tokens: m.prompt_tokens || 0, _completion_tokens: m.completion_tokens || 0, _elapsed: m.elapsed || 0 }
+      const base = { ...m, _dismissed: false, _tokens: m.tokens_used || 0, _prompt_tokens: m.prompt_tokens || 0, _completion_tokens: m.completion_tokens || 0, _elapsed: m.elapsed || 0, cache_creation_tokens: m.cache_creation_tokens || 0, cache_read_tokens: m.cache_read_tokens || 0 }
       // 恢复工具卡片状态
       if (m._metadata) {
         const meta = m._metadata
@@ -1806,6 +1834,7 @@ async function sendMessage() {
 
   const currentModelId = selectedModel.value?.id || null
   const currentModel = selectedModel.value
+  const currentAgentId = selectedAgent.value?.id && !selectedAgent.value.is_default ? selectedAgent.value.id : null
   inputText.value = ''
   loading.value = true
 
@@ -1853,10 +1882,10 @@ async function sendMessage() {
   try {
     if (useStreaming) {
       // 流式响应
-      await sendStreamMessage(content, currentModelId)
+      await sendStreamMessage(content, currentModelId, currentAgentId)
     } else {
       // 普通响应
-      const res = await api.ai.sendMessage(currentChatId.value, { content: content, ai_config_id: currentModelId })
+      const res = await api.ai.sendMessage(currentChatId.value, { content: content, ai_config_id: currentModelId, agent_id: currentAgentId })
 
       // Add AI text reply
       if (res.data?.assistant_message) {
@@ -1872,7 +1901,7 @@ async function sendMessage() {
     await nextTick()
     scrollToBottom()
 
-    api.ai.trackBehavior({ action: 'chat', target_type: 'ai_chat', target_id: currentChatId.value }).catch(() => {})
+    api.ai.trackBehavior({ action: 'chat', target_type: 'ai_chat', target_id: currentChatId.value, agent_id: selectedAgent.value?.id }).catch(() => {})
   } catch (e) {
     ElMessage.error('发送失败')
   } finally {
@@ -2025,7 +2054,7 @@ async function handleToolResults(toolResults) {
 }
 
 // 流式发送消息
-async function sendStreamMessage(content, modelId) {
+async function sendStreamMessage(content, modelId, agentId) {
   // 创建AI助手消息占位
   const streamMsg = reactive({
     id: Date.now(),
@@ -2044,7 +2073,7 @@ async function sendStreamMessage(content, modelId) {
   await nextTick()
   scrollToBottom()
 
-  const url = api.ai.sendMessageStream(currentChatId.value, { content, ai_config_id: modelId })
+  const url = api.ai.sendMessageStream(currentChatId.value, { content, ai_config_id: modelId, agent_id: agentId })
   const token = localStorage.getItem('token')
 
   // 创建AbortController
@@ -2061,7 +2090,7 @@ async function sendStreamMessage(content, modelId) {
         'Accept': 'text/event-stream',
         'Cache-Control': 'no-cache',
       },
-      body: JSON.stringify({ content, ai_config_id: modelId }),
+      body: JSON.stringify({ content, ai_config_id: modelId, agent_id: agentId }),
       signal: controller.signal,
     })
 
@@ -2074,7 +2103,7 @@ async function sendStreamMessage(content, modelId) {
       const idx = messages.value.findIndex(m => m.id === streamMsg.id)
       if (idx > -1) messages.value.splice(idx, 1)
       try {
-        const res = await api.ai.sendMessage(currentChatId.value, { content, ai_config_id: modelId })
+        const res = await api.ai.sendMessage(currentChatId.value, { content, ai_config_id: modelId, agent_id: agentId })
         if (res.data?.assistant_message) {
           messages.value.push(res.data.assistant_message)
         }
@@ -2094,7 +2123,7 @@ async function sendStreamMessage(content, modelId) {
       const idx = messages.value.findIndex(m => m.id === streamMsg.id)
       if (idx > -1) messages.value.splice(idx, 1)
       try {
-        const res = await api.ai.sendMessage(currentChatId.value, { content, ai_config_id: modelId })
+        const res = await api.ai.sendMessage(currentChatId.value, { content, ai_config_id: modelId, agent_id: agentId })
         if (res.data?.assistant_message) {
           messages.value.push(res.data.assistant_message)
         }
@@ -2164,6 +2193,8 @@ async function sendStreamMessage(content, modelId) {
               streamMsg._tokens = event.tokens || 0
               streamMsg._prompt_tokens = event.prompt_tokens || 0
               streamMsg._completion_tokens = event.completion_tokens || 0
+              streamMsg.cache_creation_tokens = event.cache_creation_tokens || 0
+              streamMsg.cache_read_tokens = event.cache_read_tokens || 0
               streamMsg._elapsed = event.elapsed || 0
             } else if (event.type === 'error') {
               streamMsg._streaming = false
@@ -3563,8 +3594,34 @@ async function fetchActiveModels() {
   try {
     const res = await api.ai.getActiveModels()
     activeModels.value = res.data || res || []
+    canSwitchModel.value = res.can_switch_model || false
   } catch {
     activeModels.value = []
+    canSwitchModel.value = false
+  }
+}
+
+async function fetchAgents() {
+  try {
+    const res = await api.agent.list()
+    const agents = res.data || []
+    canSwitchAgent.value = res.can_switch_agent || false
+    availableAgents.value = agents  // 包含所有Agent（含默认）
+    // 设置默认Agent
+    const defaultAgent = agents.find(a => a.is_default)
+    if (defaultAgent) {
+      selectedAgent.value = defaultAgent
+    }
+  } catch {
+    availableAgents.value = []
+    canSwitchAgent.value = false
+  }
+}
+
+function selectDropdownAgent(command) {
+  const agent = availableAgents.value.find(a => a.id === command)
+  if (agent) {
+    selectedAgent.value = agent
   }
 }
 
@@ -3588,7 +3645,7 @@ function handleInputChange(val) {
     if (!afterAt.includes(' ') && !afterAt.includes('\n')) {
       mentionSearch.value = afterAt
       mentionTriggerIndex.value = lastAt
-      mentionPopupVisible.value = true
+      mentionPopupVisible.value = canSwitchModel.value  // 只有有模型切换权限时才显示@mention
       return
     }
   }
@@ -3647,6 +3704,7 @@ function handleMentionKeydown(e) {
 onMounted(() => {
   fetchChats()
   fetchActiveModels()
+  fetchAgents()
 })
 </script>
 
@@ -3842,6 +3900,10 @@ onMounted(() => {
 .message-meta i {
   margin-right: 3px;
   font-size: 10px;
+}
+
+.cache-info {
+  color: #67c23a;
 }
 
 .message-retry {
@@ -4719,7 +4781,7 @@ onMounted(() => {
 .input-bottom-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   padding: 0 2px;
 }
 
@@ -4795,6 +4857,95 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   line-height: 1;
+}
+
+/* Agent dropdown styles */
+.agent-dropdown-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px 3px 6px;
+  background: transparent;
+  border: none;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  height: 28px;
+  box-sizing: border-box;
+  font-size: 12px;
+  color: #a0a4ad;
+  user-select: none;
+}
+
+.agent-dropdown-trigger:hover {
+  background: rgba(144, 147, 153, 0.06);
+  color: #909399;
+}
+
+.agent-dropdown-trigger.agent-selected {
+  background: rgba(230, 162, 60, 0.06);
+  color: #e6a23c;
+}
+
+.agent-dropdown-trigger.agent-selected:hover {
+  background: rgba(230, 162, 60, 0.12);
+  color: #cf9236;
+}
+
+.agent-dropdown-trigger .fa-user-tie {
+  font-size: 12px;
+  transition: color 0.2s;
+}
+
+.agent-dropdown-trigger.agent-selected .fa-user-tie {
+  color: #e6a23c;
+}
+
+.agent-dropdown-label {
+  font-size: 11px;
+  font-weight: 500;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1;
+}
+
+.agent-dropdown-arrow {
+  font-size: 10px;
+  transition: transform 0.2s;
+}
+
+.agent-dropdown-trigger:hover .agent-dropdown-arrow {
+  transform: translateY(1px);
+}
+
+.agent-dropdown-menu {
+  padding: 4px 0;
+  min-width: 180px;
+}
+
+.agent-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.agent-option .fa-user-tie {
+  color: #909399;
+  font-size: 14px;
+}
+
+.agent-option-name {
+  font-weight: 500;
+  color: #303133;
+}
+
+.agent-option-desc {
+  color: #909399;
+  font-size: 12px;
+  margin-left: 4px;
 }
 
 .model-dropdown-trigger.model-selected .model-dropdown-label {
@@ -4892,6 +5043,7 @@ onMounted(() => {
   display: flex;
   gap: 4px;
   align-items: center;
+  margin-left: auto;
 }
 
 .input-buttons .el-button {

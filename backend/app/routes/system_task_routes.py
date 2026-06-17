@@ -88,6 +88,9 @@ def create_system_task():
         api_url=data.get('api_url', ''),
         api_body=data.get('api_body', ''),
         api_timeout=data.get('api_timeout', 30),
+        script_type=data.get('script_type', 'python'),
+        script_path=data.get('script_path', ''),
+        script_timeout=data.get('script_timeout', 60),
         sign_enabled=data.get('sign_enabled', False),
         sign_key=data.get('sign_key', ''),
         sign_method=data.get('sign_method', 'md5'),
@@ -104,6 +107,8 @@ def create_system_task():
         task.set_params_config(data['params_config'])
     if data.get('response_mapping'):
         task.set_response_mapping(data['response_mapping'])
+    if data.get('script_env'):
+        task.set_script_env(data['script_env'])
 
     db.session.add(task)
     db.session.commit()
@@ -143,6 +148,7 @@ def update_system_task(task_id):
     simple_fields = [
         'name', 'description', 'task_type', 'script_id', 'database_connection_id',
         'api_method', 'api_url', 'api_body', 'api_timeout',
+        'script_type', 'script_path', 'script_timeout',
         'sign_enabled', 'sign_key', 'sign_method', 'sign_param_name', 'sign_append_type',
         'is_enabled'
     ]

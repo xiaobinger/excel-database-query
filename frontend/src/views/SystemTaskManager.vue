@@ -30,8 +30,8 @@
             <el-table-column prop="name" label="任务名称" min-width="140" show-overflow-tooltip />
             <el-table-column label="任务类型" width="100" align="center">
               <template #default="{ row }">
-                <el-tag size="small" :type="row.task_type === 'sql' ? 'primary' : 'success'">
-                  {{ row.task_type === 'sql' ? 'SQL' : 'API' }}
+                <el-tag size="small" :type="row.task_type === 'sql' ? 'primary' : row.task_type === 'api' ? 'success' : 'warning'">
+                  {{ row.task_type === 'sql' ? 'SQL' : row.task_type === 'api' ? 'API' : '本地脚本' }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -40,11 +40,14 @@
                 <span v-if="row.task_type === 'sql'">
                   脚本: {{ row.script_name || '-' }}
                 </span>
-                <span v-else>
+                <span v-else-if="row.task_type === 'api'">
                   {{ row.api_method }} {{ row.api_url || '-' }}
                   <div v-if="row.api_body" style="color: #909399; font-size: 12px; margin-top: 2px">
                     Body: {{ row.api_body.length > 50 ? row.api_body.substring(0, 50) + '...' : row.api_body }}
                   </div>
+                </span>
+                <span v-else-if="row.task_type === 'script'">
+                  {{ row.script_type || 'python' }}: {{ row.script_path || '-' }}
                 </span>
               </template>
             </el-table-column>
@@ -97,8 +100,8 @@
             <el-table-column prop="system_task_name" label="任务名称" min-width="140" show-overflow-tooltip />
             <el-table-column label="类型" width="80" align="center">
               <template #default="{ row }">
-                <el-tag size="small" :type="row.system_task_type === 'sql' ? 'primary' : 'success'">
-                  {{ row.system_task_type === 'sql' ? 'SQL' : 'API' }}
+                <el-tag size="small" :type="row.system_task_type === 'sql' ? 'primary' : row.system_task_type === 'api' ? 'success' : 'warning'">
+                  {{ row.system_task_type === 'sql' ? 'SQL' : row.system_task_type === 'api' ? 'API' : '本地脚本' }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -162,6 +165,7 @@
           <el-radio-group v-model="form.task_type">
             <el-radio value="sql">SQL脚本</el-radio>
             <el-radio value="api">API接口</el-radio>
+            <el-radio value="script">本地脚本</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="是否启用">
@@ -216,8 +220,29 @@
           </el-form-item>
         </template>
 
-        <!-- Params Config (only for API tasks) -->
-        <template v-if="form.task_type === 'api'">
+        <!-- Script Config -->
+        <template v-if="form.task_type === 'script'">
+          <el-form-item label="脚本类型" prop="script_type">
+            <el-select v-model="form.script_type" placeholder="请选择脚本类型" style="width: 200px">
+              <el-option value="python" label="Python" />
+              <el-option value="shell" label="Shell/Bash" />
+              <el-option value="bat" label="Batch (Windows)" />
+              <el-option value="powershell" label="PowerShell" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="脚本路径" prop="script_path">
+            <el-input v-model="form.script_path" placeholder="/path/to/script.py" />
+          </el-form-item>
+          <el-form-item label="超时时间(秒)">
+            <el-input-number v-model="form.script_timeout" :min="1" :max="3600" />
+          </el-form-item>
+          <el-form-item label="环境变量">
+            <el-input v-model="scriptEnvText" type="textarea" :rows="3" placeholder='{"KEY": "value"}' />
+          </el-form-item>
+        </template>
+
+        <!-- Params Config (for API and Script tasks) -->
+        <template v-if="form.task_type === 'api' || form.task_type === 'script'">
           <el-form-item label="参数配置">
             <div v-for="(param, idx) in form.params_config" :key="idx" class="param-row">
               <el-input v-model="param.name" placeholder="参数名" style="width: 140px" />
@@ -500,7 +525,7 @@ const allParamsFilled = computed(() => {
   if (!currentTask.value) return false
   const params = currentTaskParamsConfig.value
   if (params.length === 0) return true
-  if (currentTask.value.task_type === 'sql') {
+  if (currentTask.value.task_type === 'sql' || currentTask.value.task_type === 'script') {
     return params.every(p => {
       const v = executeParams[p.name]
       return v !== undefined && v !== null && v !== ''
@@ -547,6 +572,10 @@ const defaultForm = {
   sign_param_name: 'sign',
   sign_append_type: 'query',
   is_enabled: true,
+  script_type: 'python',
+  script_path: '',
+  script_timeout: 60,
+  script_env: {},
 }
 
 const form = reactive({ ...defaultForm })
@@ -564,11 +593,25 @@ const apiHeadersText = computed({
   }
 })
 
+const scriptEnvText = computed({
+  get() {
+    return form.script_env ? JSON.stringify(form.script_env, null, 2) : ''
+  },
+  set(val) {
+    try {
+      form.script_env = val ? JSON.parse(val) : {}
+    } catch {
+      form.script_env = {}
+    }
+  }
+})
+
 const rules = {
   name: [{ required: true, message: '请输入任务名称', trigger: 'blur' }],
   task_type: [{ required: true, message: '请选择任务类型', trigger: 'change' }],
   script_id: [{ required: true, message: '请选择脚本', trigger: 'change', type: 'number' }],
   api_url: [{ required: true, message: '请输入API地址', trigger: 'blur' }],
+  script_path: [{ required: true, message: '请输入脚本路径', trigger: 'blur' }],
 }
 
 function statusType(status) {
@@ -696,6 +739,10 @@ function openDialog(row) {
       sign_param_name: row.sign_param_name || 'sign',
       sign_append_type: row.sign_append_type || 'query',
       is_enabled: row.is_enabled !== false,
+      script_type: row.script_type || 'python',
+      script_path: row.script_path || '',
+      script_timeout: row.script_timeout || 60,
+      script_env: row.script_env || {},
     })
   } else {
     isEdit.value = false
@@ -726,9 +773,14 @@ async function handleSubmit() {
       sign_param_name: form.sign_param_name,
       sign_append_type: form.sign_append_type,
       is_enabled: form.is_enabled,
+      script_type: form.script_type,
+      script_path: form.script_path,
+      script_timeout: form.script_timeout,
+    }
+    if (form.task_type === 'api' || form.task_type === 'script') {
+      payload.params_config = form.params_config || []
     }
     if (form.task_type === 'api') {
-      payload.params_config = form.params_config || []
       // 转换response_mapping：将mappingEntries转为mapping对象
       payload.response_mapping = (form.response_mapping || [])
         .filter(m => m.field)
@@ -741,6 +793,9 @@ async function handleSubmit() {
     }
     if (form.api_headers && Object.keys(form.api_headers).length > 0) {
       payload.api_headers = form.api_headers
+    }
+    if (form.task_type === 'script' && form.script_env && Object.keys(form.script_env).length > 0) {
+      payload.script_env = form.script_env
     }
 
     if (isEdit.value) {
@@ -823,6 +878,9 @@ function getTaskParamsConfig(row) {
     if (script && script.params_config && script.params_config.length > 0) {
       return script.params_config
     }
+  }
+  if (row.task_type === 'script') {
+    return row.params_config || []
   }
   return row.params_config || []
 }

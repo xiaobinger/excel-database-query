@@ -25,6 +25,8 @@ const routes = [
       { path: 'ai-chat', name: 'AiChat', component: () => import('../views/AiChat.vue'), meta: { menu: 'ai_chat' } },
       { path: 'ai-sessions', name: 'AiSessionManager', component: () => import('../views/AiSessionManager.vue'), meta: { menu: 'ai_sessions' } },
       { path: 'skills', name: 'Skills', component: () => import('../views/SkillManager.vue'), meta: { menu: 'skills' } },
+      { path: 'agents', name: 'Agents', component: () => import('../views/AgentManager.vue'), meta: { menu: 'agent_manager' } },
+      { path: 'cache-stats', name: 'CacheStats', component: () => import('../views/CacheManager.vue'), meta: { menu: 'cache_stats' } },
       { path: 'business', name: 'BusinessSystems', component: () => import('../views/BusinessSystems.vue'), meta: { menu: 'business_systems' } },
       { path: 'system-tasks', name: 'SystemTasks', component: () => import('../views/SystemTaskManager.vue'), meta: { menu: 'system_tasks' } }
     ]
@@ -50,6 +52,8 @@ const menuRouteMap = {
   '/ai-chat': 'ai_chat',
   '/ai-sessions': 'ai_sessions',
   '/skills': 'skills',
+  '/agents': 'agent_manager',
+  '/cache-stats': 'cache_stats',
   '/business': 'business_systems',
   '/system-tasks': 'system_tasks'
 }
@@ -68,6 +72,8 @@ const menuRoutes = [
   { path: '/ai-chat', menu: 'ai_chat' },
   { path: '/ai-sessions', menu: 'ai_sessions' },
   { path: '/skills', menu: 'skills' },
+  { path: '/agents', menu: 'agent_manager' },
+  { path: '/cache-stats', menu: 'cache_stats' },
   { path: '/business', menu: 'business_systems' },
   { path: '/system-tasks', menu: 'system_tasks' }
 ]

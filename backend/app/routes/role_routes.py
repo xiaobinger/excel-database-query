@@ -44,6 +44,14 @@ def create_role():
             role.set_menu_permissions(data['menu_permissions'])
         if 'button_permissions' in data:
             role.set_button_permissions(data['button_permissions'])
+        if 'agent_permissions' in data:
+            role.set_agent_permissions(data['agent_permissions'])
+        if 'can_switch_agent' in data:
+            role.can_switch_agent = data['can_switch_agent']
+        if 'can_switch_model' in data:
+            role.can_switch_model = data['can_switch_model']
+        if 'model_permissions' in data:
+            role.set_model_permissions(data['model_permissions'])
 
         db.session.add(role)
         db.session.commit()
@@ -84,6 +92,18 @@ def update_role(role_id):
 
         if 'button_permissions' in data:
             role.set_button_permissions(data['button_permissions'])
+
+        if 'agent_permissions' in data:
+            role.set_agent_permissions(data['agent_permissions'])
+
+        if 'can_switch_agent' in data:
+            role.can_switch_agent = data['can_switch_agent']
+
+        if 'can_switch_model' in data:
+            role.can_switch_model = data['can_switch_model']
+
+        if 'model_permissions' in data:
+            role.set_model_permissions(data['model_permissions'])
 
         db.session.commit()
 
