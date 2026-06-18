@@ -498,12 +498,29 @@ class AiService:
             for skill in skills:
                 scope = '[Agent专属]' if skill.agent_id else '[通用]'
                 line = f'- {scope} {skill.name}({skill.category}): {skill.description or ""}'
-                # 只注入content的前200字符摘要，避免过长
+                # 注入content：dict保留所有key但value精简，纯文本保留关键信息
                 if skill.content:
-                    content_str = skill.content if isinstance(skill.content, str) else json.dumps(skill.content, ensure_ascii=False)
-                    if len(content_str) > 200:
-                        content_str = content_str[:200] + '...'
-                    line += f'\n    {content_str}'
+                    try:
+                        c = json.loads(skill.content) if isinstance(skill.content, str) else skill.content
+                    except Exception:
+                        c = skill.content
+                    if isinstance(c, dict):
+                        # dict类型：保留所有key，value截断60字，确保结构不失真
+                        detail_lines = []
+                        for k, v in c.items():
+                            v_str = str(v)
+                            if len(v_str) > 60:
+                                v_str = v_str[:60] + '...'
+                            detail_lines.append(f'    · {k}: {v_str}')
+                        detail = '\n'.join(detail_lines)
+                        if detail:
+                            line += '\n' + detail
+                    elif c:
+                        # 纯文本：保留前300字，尽量保留关键信息
+                        text = str(c)
+                        if len(text) > 300:
+                            text = text[:300] + '...'
+                        line += f'\n    {text}'
                 context_parts.append(line)
 
         # Add recent behavior summary (精简：只取最近10条，按动作类型聚合)
@@ -1484,8 +1501,8 @@ class AiService:
         lines = ['\n## 用户特别要求（必须遵守）']
         for m in memories:
             type_label = {'rule': '规则', 'preference': '偏好', 'fact': '事实'}.get(m.memory_type, '规则')
-            # 内容截断100字符
-            content_short = (m.content[:100] + '...') if len(m.content) > 100 else m.content
+            # 内容截断200字符，保留关键信息不失真
+            content_short = (m.content[:200] + '...') if len(m.content) > 200 else m.content
             lines.append(f'- [{type_label}] {content_short}')
         return '\n'.join(lines)
 
