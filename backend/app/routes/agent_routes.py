@@ -2,6 +2,7 @@ import logging
 from flask import Blueprint, request, jsonify
 from app import db
 from app.models.ai_agent import AiAgent
+from app.models.agent_memory import AgentMemory
 from app.utils.auth import login_required, admin_required, get_current_user, permission_required
 
 logger = logging.getLogger(__name__)
@@ -206,3 +207,101 @@ def set_default_agent(agent_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 400
+
+
+# ============ Agent 记忆管理 ============
+
+@agent_bp.route('/<int:agent_id>/memories', methods=['GET'])
+@login_required
+def get_agent_memories(agent_id):
+    """获取指定Agent的记忆列表（当前用户的）"""
+    current_user = get_current_user()
+    agent = AiAgent.query.get(agent_id)
+    if not agent:
+        return jsonify({'success': False, 'message': 'Agent不存在'}), 404
+
+    # 普通用户只能查看自己被授权的Agent的记忆
+    if not current_user.is_admin() and not current_user.can_use_agent(agent_id):
+        return jsonify({'success': False, 'message': '无权访问该Agent'}), 403
+
+    memory_type = request.args.get('type', '')
+    query = AgentMemory.query.filter_by(user_id=current_user.id, agent_id=agent_id, is_active=True)
+    if memory_type:
+        query = query.filter_by(memory_type=memory_type)
+    memories = query.order_by(AgentMemory.created_at.desc()).all()
+
+    return jsonify({'success': True, 'data': [m.to_dict() for m in memories]})
+
+
+@agent_bp.route('/<int:agent_id>/memories', methods=['POST'])
+@login_required
+def add_agent_memory(agent_id):
+    """手动添加Agent记忆"""
+    current_user = get_current_user()
+    agent = AiAgent.query.get(agent_id)
+    if not agent:
+        return jsonify({'success': False, 'message': 'Agent不存在'}), 404
+
+    if not current_user.is_admin() and not current_user.can_use_agent(agent_id):
+        return jsonify({'success': False, 'message': '无权操作该Agent'}), 403
+
+    data = request.get_json()
+    if not data or not data.get('content'):
+        return jsonify({'success': False, 'message': '记忆内容不能为空'}), 400
+
+    try:
+        memory = AgentMemory(
+            user_id=current_user.id,
+            agent_id=agent_id,
+            memory_type=data.get('memory_type', 'rule'),
+            content=data['content'].strip(),
+            source='manual',
+        )
+        db.session.add(memory)
+        db.session.commit()
+        return jsonify({'success': True, 'data': memory.to_dict()}), 201
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'添加Agent记忆失败: {e}')
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
+@agent_bp.route('/<int:agent_id>/memories/<int:memory_id>', methods=['PUT'])
+@login_required
+def update_agent_memory(agent_id, memory_id):
+    """更新Agent记忆"""
+    current_user = get_current_user()
+    memory = AgentMemory.query.filter_by(id=memory_id, user_id=current_user.id, agent_id=agent_id).first()
+    if not memory:
+        return jsonify({'success': False, 'message': '记忆不存在'}), 404
+
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': '请求数据为空'}), 400
+
+    try:
+        if 'content' in data:
+            memory.content = data['content'].strip()
+        if 'memory_type' in data:
+            memory.memory_type = data['memory_type']
+        if 'is_active' in data:
+            memory.is_active = data['is_active']
+        db.session.commit()
+        return jsonify({'success': True, 'data': memory.to_dict()})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
+@agent_bp.route('/<int:agent_id>/memories/<int:memory_id>', methods=['DELETE'])
+@login_required
+def delete_agent_memory(agent_id, memory_id):
+    """删除Agent记忆"""
+    current_user = get_current_user()
+    memory = AgentMemory.query.filter_by(id=memory_id, user_id=current_user.id, agent_id=agent_id).first()
+    if not memory:
+        return jsonify({'success': False, 'message': '记忆不存在'}), 404
+
+    db.session.delete(memory)
+    db.session.commit()
+    return jsonify({'success': True, 'message': '删除成功'})

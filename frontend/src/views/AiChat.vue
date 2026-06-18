@@ -529,6 +529,9 @@
                 <div class="agent-dropdown-trigger" :class="{ 'agent-selected': selectedAgent && !selectedAgent.is_default }">
                   <i class="fas fa-user-tie"></i>
                   <span class="agent-dropdown-label">{{ selectedAgent ? selectedAgent.name : '默认' }}</span>
+                  <el-tooltip v-if="agentMemoryCount > 0" :content="`该Agent有 ${agentMemoryCount} 条记忆/规则`" placement="top">
+                    <span class="agent-memory-badge"><i class="fas fa-brain"></i> {{ agentMemoryCount }}</span>
+                  </el-tooltip>
                   <i class="fas fa-chevron-down agent-dropdown-arrow"></i>
                 </div>
                 <template #dropdown>
@@ -1213,6 +1216,7 @@ const inputRef = ref(null)  // ref for the textarea element
 const availableAgents = ref([])
 const selectedAgent = ref(null)  // { id, name, description, is_default }
 const canSwitchAgent = ref(false)  // 是否有切换Agent权限
+const agentMemoryCount = ref(0)  // 当前选中Agent的记忆数量
 const canSwitchModel = ref(false)  // 是否有切换模型权限
 
 // 语音输入
@@ -1429,9 +1433,11 @@ async function selectChat(chatId) {
   if (chat?.agent_id && canSwitchAgent.value) {
     const agent = availableAgents.value.find(a => a.id === chat.agent_id)
     selectedAgent.value = agent || availableAgents.value.find(a => a.is_default) || null
+    fetchAgentMemoryCount(selectedAgent.value?.id)
   } else if (canSwitchAgent.value) {
     const defaultAgent = availableAgents.value.find(a => a.is_default)
     selectedAgent.value = defaultAgent || null
+    fetchAgentMemoryCount(defaultAgent?.id)
   }
   // 恢复model
   if (chat?.model_id && canSwitchModel.value) {
@@ -3791,6 +3797,19 @@ async function fetchActiveModels() {
   }
 }
 
+async function fetchAgentMemoryCount(agentId) {
+  if (!agentId) {
+    agentMemoryCount.value = 0
+    return
+  }
+  try {
+    const res = await api.agent.getMemories(agentId)
+    agentMemoryCount.value = (res.data || []).length
+  } catch {
+    agentMemoryCount.value = 0
+  }
+}
+
 async function fetchAgents() {
   try {
     const res = await api.agent.list()
@@ -3801,10 +3820,12 @@ async function fetchAgents() {
     const defaultAgent = agents.find(a => a.is_default)
     if (defaultAgent) {
       selectedAgent.value = defaultAgent
+      fetchAgentMemoryCount(defaultAgent.id)
     }
   } catch {
     availableAgents.value = []
     canSwitchAgent.value = false
+    agentMemoryCount.value = 0
   }
 }
 
@@ -3812,6 +3833,7 @@ function selectDropdownAgent(command) {
   const agent = availableAgents.value.find(a => a.id === command)
   if (agent) {
     selectedAgent.value = agent
+    fetchAgentMemoryCount(agent.id)
     // 更新当前会话的agent_id关联
     if (currentChatId.value) {
       const chat = chats.value.find(c => c.id === currentChatId.value)
@@ -5123,6 +5145,24 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   line-height: 1;
+}
+
+.agent-memory-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #9b59b6;
+  background: rgba(155, 89, 182, 0.1);
+  padding: 1px 5px;
+  border-radius: 8px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.agent-memory-badge .fa-brain {
+  font-size: 9px;
 }
 
 .agent-dropdown-arrow {

@@ -216,6 +216,11 @@ const agent = {
   batchDelete: (ids) => http.post('/agents/batch-delete', { ids }),
   deleteAll: () => http.delete('/agents/all'),
   setDefault: (id) => http.post(`/agents/${id}/set-default`),
+  // Agent记忆管理
+  getMemories: (agentId, params) => http.get(`/agents/${agentId}/memories`, { params }),
+  addMemory: (agentId, data) => http.post(`/agents/${agentId}/memories`, data),
+  updateMemory: (agentId, memoryId, data) => http.put(`/agents/${agentId}/memories/${memoryId}`, data),
+  deleteMemory: (agentId, memoryId) => http.delete(`/agents/${agentId}/memories/${memoryId}`),
 }
 
 const business = {

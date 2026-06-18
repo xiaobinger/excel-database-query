@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 
 _execution_progress = {}
 _execution_lock = threading.Lock()
+_execution_threads = {}  # execution_id -> thread reference
+_execution_cancel_events = {}  # execution_id -> threading.Event
 
 
 def update_execution_progress(execution_id: str, progress: int, log_message: str = None, level: str = 'info'):
@@ -62,15 +64,18 @@ class SystemTaskService:
 
     @staticmethod
     def execute_async(execution_id: str, system_task_id: int, params_values: Dict[str, Any], database_id: int = None):
+        cancel_event = threading.Event()
+        _execution_cancel_events[execution_id] = cancel_event
         thread = threading.Thread(
             target=SystemTaskService._execute_background,
-            args=(execution_id, system_task_id, params_values, database_id),
+            args=(execution_id, system_task_id, params_values, database_id, cancel_event),
             daemon=True
         )
+        _execution_threads[execution_id] = thread
         thread.start()
 
     @staticmethod
-    def _execute_background(execution_id: str, system_task_id: int, params_values: Dict[str, Any], database_id: int = None):
+    def _execute_background(execution_id: str, system_task_id: int, params_values: Dict[str, Any], database_id: int = None, cancel_event: threading.Event = None):
         try:
             from app import create_app
             app = create_app()
@@ -102,8 +107,12 @@ class SystemTaskService:
                 db.session.commit()
                 update_execution_progress(execution_id, 5, '开始执行系统任务')
 
+                # 检查是否已被取消
+                if cancel_event and cancel_event.is_set():
+                    raise RuntimeError('任务已被手动终止')
+
                 if system_task.task_type == 'sql':
-                    SystemTaskService._execute_sql(execution, system_task, params_values, database_id)
+                    SystemTaskService._execute_sql(execution, system_task, params_values, database_id, cancel_event)
                 elif system_task.task_type == 'api':
                     SystemTaskService._execute_api(execution, system_task, params_values)
                 elif system_task.task_type == 'script':
@@ -166,7 +175,7 @@ class SystemTaskService:
 
     @staticmethod
     def _execute_sql(execution: SystemTaskExecution, system_task: SystemTask,
-                     params_values: Dict[str, Any], database_id: int = None):
+                     params_values: Dict[str, Any], database_id: int = None, cancel_event: threading.Event = None):
         execution_id = execution.execution_id
         execution.progress = 10
         execution.add_log('执行SQL类型系统任务')
@@ -230,6 +239,10 @@ class SystemTaskService:
         total_dbs = len(db_ids)
 
         for idx, conn_id in enumerate(db_ids):
+            # 检查是否已被取消
+            if cancel_event and cancel_event.is_set():
+                raise RuntimeError('任务已被手动终止')
+
             conn_model = DatabaseConnection.query.get(conn_id)
             if not conn_model:
                 execution.add_log(f'数据库连接不存在: {conn_id}', 'warning')
@@ -976,10 +989,29 @@ class SystemTaskService:
         if not execution:
             return False
         if execution.status in ('pending', 'running'):
-            execution.status = 'cancelled'
+            # 设置取消标志
+            cancel_event = _execution_cancel_events.get(execution_id)
+            if cancel_event:
+                cancel_event.set()
+
+            # 尝试终止线程
+            thread = _execution_threads.get(execution_id)
+            if thread and thread.is_alive():
+                try:
+                    import ctypes
+                    tid = ctypes.c_long(thread.ident)
+                    ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, ctypes.py_object(SystemExit))
+                except Exception as e:
+                    logger.warning(f'终止系统任务线程失败: {e}')
+
+            execution.status = 'manual_cancelled'
             execution.completed_at = datetime.utcnow()
-            execution.add_log('任务已取消', 'warning')
+            execution.add_log('任务已被手动终止', 'warning')
             db.session.commit()
-            update_execution_progress(execution_id, 100, '任务已取消', 'warning')
+            update_execution_progress(execution_id, 100, '任务已被手动终止', 'warning')
+
+            # 清理线程引用
+            _execution_threads.pop(execution_id, None)
+            _execution_cancel_events.pop(execution_id, None)
             return True
         return False

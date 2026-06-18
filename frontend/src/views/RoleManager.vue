@@ -363,7 +363,8 @@ const buttonPermGroups = [
   {
     label: '任务管理',
     items: [
-      { value: 'task:delete', label: '删除任务' }
+      { value: 'task:delete', label: '删除任务' },
+      { value: 'task:terminate', label: '终止任务' }
     ]
   },
   {

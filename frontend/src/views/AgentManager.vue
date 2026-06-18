@@ -42,10 +42,13 @@
           </template>
         </el-table-column>
         <el-table-column prop="created_at" label="创建时间" width="160" align="center" />
-        <el-table-column label="操作" width="200" align="center" fixed="right">
+        <el-table-column label="操作" width="260" align="center" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="primary" text @click="openDialog(row)">
               <i class="fas fa-edit"></i> 编辑
+            </el-button>
+            <el-button size="small" type="warning" text @click="openMemoryDialog(row)">
+              <i class="fas fa-brain"></i> 记忆
             </el-button>
             <el-popconfirm v-if="!row.is_default" title="确定删除此Agent？" @confirm="handleDelete(row.id)">
               <template #reference>
@@ -96,6 +99,68 @@
         <el-button type="primary" :loading="submitting" @click="handleSubmit">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 记忆管理对话框 -->
+    <el-dialog v-model="memoryDialogVisible" :title="`记忆管理 - ${memoryAgentName}`" width="750px" destroy-on-close>
+      <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+        <div>
+          <el-tag type="info" size="small">记忆会在AI对话中自动注入，让Agent记住你的特别要求</el-tag>
+        </div>
+        <el-button type="primary" size="small" @click="openMemoryForm()">
+          <i class="fas fa-plus"></i> 添加记忆
+        </el-button>
+      </div>
+
+      <!-- 添加/编辑记忆表单 -->
+      <el-card v-if="memoryFormVisible" shadow="never" style="margin-bottom: 12px; background: #f5f7fa;">
+        <el-form :model="memoryForm" label-width="80px" size="small">
+          <el-form-item label="类型">
+            <el-select v-model="memoryForm.memory_type" style="width: 150px;">
+              <el-option label="规则" value="rule" />
+              <el-option label="偏好" value="preference" />
+              <el-option label="事实" value="fact" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="内容">
+            <el-input v-model="memoryForm.content" type="textarea" :rows="3" placeholder="输入记忆内容，例如：回答时不要加多余的解释" />
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" @click="handleSaveMemory">保存</el-button>
+            <el-button @click="memoryFormVisible = false">取消</el-button>
+          </el-form-item>
+        </el-form>
+      </el-card>
+
+      <el-table :data="memories" stripe v-loading="memoriesLoading" size="small" style="width: 100%">
+        <el-table-column prop="memory_type" label="类型" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag :type="memoryTypeTag[row.memory_type] || 'info'" size="small">{{ memoryTypeLabel[row.memory_type] || row.memory_type }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="content" label="内容" min-width="300" show-overflow-tooltip />
+        <el-table-column prop="source" label="来源" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.source === 'auto' ? 'info' : 'success'" size="small">{{ row.source === 'auto' ? '自动' : '手动' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="created_at" label="创建时间" width="150" align="center" />
+        <el-table-column label="操作" width="120" align="center">
+          <template #default="{ row }">
+            <el-button size="small" type="primary" text @click="openMemoryForm(row)">
+              <i class="fas fa-edit"></i>
+            </el-button>
+            <el-popconfirm title="确定删除此记忆？" @confirm="handleDeleteMemory(row.id)">
+              <template #reference>
+                <el-button size="small" type="danger" text>
+                  <i class="fas fa-trash"></i>
+                </el-button>
+              </template>
+            </el-popconfirm>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-if="!memoriesLoading && memories.length === 0" description="暂无记忆，Agent会在对话中自动学习你的偏好" :image-size="60" />
+    </el-dialog>
   </div>
 </template>
 
@@ -116,6 +181,18 @@ const agents = ref([])
 const selectedRows = ref([])
 const tableRef = ref(null)
 const useAllTools = ref(true)
+
+// 记忆管理相关
+const memoryDialogVisible = ref(false)
+const memoryAgentId = ref(null)
+const memoryAgentName = ref('')
+const memories = ref([])
+const memoriesLoading = ref(false)
+const memoryFormVisible = ref(false)
+const memoryEditId = ref(null)
+const memoryForm = reactive({ memory_type: 'rule', content: '' })
+const memoryTypeLabel = { rule: '规则', preference: '偏好', fact: '事实' }
+const memoryTypeTag = { rule: 'danger', preference: 'warning', fact: 'info' }
 
 // 可选工具列表（名称与后端AI_TOOLS定义一致）
 const toolOptions = [
@@ -275,6 +352,78 @@ async function setDefault(id) {
     fetchAgents()
   } catch (err) {
     ElMessage.error(err.response?.data?.message || '设置失败')
+  }
+}
+
+// ============ 记忆管理 ============
+
+async function openMemoryDialog(row) {
+  memoryAgentId.value = row.id
+  memoryAgentName.value = row.name
+  memoryDialogVisible.value = true
+  memoryFormVisible.value = false
+  await fetchMemories()
+}
+
+async function fetchMemories() {
+  if (!memoryAgentId.value) return
+  memoriesLoading.value = true
+  try {
+    const res = await api.agent.getMemories(memoryAgentId.value)
+    memories.value = res.data || []
+  } catch {
+    memories.value = []
+  } finally {
+    memoriesLoading.value = false
+  }
+}
+
+function openMemoryForm(row) {
+  if (row) {
+    memoryEditId.value = row.id
+    memoryForm.memory_type = row.memory_type
+    memoryForm.content = row.content
+  } else {
+    memoryEditId.value = null
+    memoryForm.memory_type = 'rule'
+    memoryForm.content = ''
+  }
+  memoryFormVisible.value = true
+}
+
+async function handleSaveMemory() {
+  if (!memoryForm.content.trim()) {
+    ElMessage.warning('请输入记忆内容')
+    return
+  }
+  try {
+    if (memoryEditId.value) {
+      await api.agent.updateMemory(memoryAgentId.value, memoryEditId.value, {
+        memory_type: memoryForm.memory_type,
+        content: memoryForm.content.trim(),
+      })
+      ElMessage.success('更新成功')
+    } else {
+      await api.agent.addMemory(memoryAgentId.value, {
+        memory_type: memoryForm.memory_type,
+        content: memoryForm.content.trim(),
+      })
+      ElMessage.success('添加成功')
+    }
+    memoryFormVisible.value = false
+    await fetchMemories()
+  } catch (err) {
+    ElMessage.error(err.response?.data?.message || '操作失败')
+  }
+}
+
+async function handleDeleteMemory(memoryId) {
+  try {
+    await api.agent.deleteMemory(memoryAgentId.value, memoryId)
+    ElMessage.success('删除成功')
+    await fetchMemories()
+  } catch (err) {
+    ElMessage.error(err.response?.data?.message || '删除失败')
   }
 }
 

@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 
 _task_progress = {}
 _task_lock = threading.Lock()
+_task_threads = {}  # task_id -> thread reference
+_task_cancel_events = {}  # task_id -> threading.Event
 
 
 def update_export_progress(task_id: str, progress: int, log_message: str = None, level: str = 'info'):
@@ -76,18 +78,21 @@ class ExportService:
                              params_values: Dict[str, Any], output_dir: str,
                              output_format: str = 'sheets', all_checked: Dict[str, Any] = None,
                              on_complete=None):
+        cancel_event = threading.Event()
+        _task_cancel_events[task_id] = cancel_event
         thread = threading.Thread(
             target=ExportService._execute_export_background,
-            args=(task_id, script_ids, params_values, output_dir, output_format, all_checked, on_complete),
+            args=(task_id, script_ids, params_values, output_dir, output_format, all_checked, on_complete, cancel_event),
             daemon=True
         )
+        _task_threads[task_id] = thread
         thread.start()
 
     @staticmethod
     def _execute_export_background(task_id: str, script_ids: List[int],
                                    params_values: Dict[str, Any], output_dir: str,
                                    output_format: str = 'sheets', all_checked: Dict[str, Any] = None,
-                                   on_complete=None):
+                                   on_complete=None, cancel_event: threading.Event = None):
         try:
             from app import create_app
             app = create_app()
@@ -112,6 +117,10 @@ class ExportService:
                 total_scripts = len(script_ids)
 
                 for script_idx, sid in enumerate(script_ids):
+                    # 检查是否已被取消
+                    if cancel_event and cancel_event.is_set():
+                        raise RuntimeError('任务已被手动终止')
+
                     script = Script.query.get(sid)
                     if not script:
                         task.add_log(f'导出选项不存在: {sid}', 'warning')

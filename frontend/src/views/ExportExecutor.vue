@@ -465,7 +465,7 @@
               <i class="fas fa-play"></i> 开始执行
             </el-button>
             <el-button v-if="executing && store.hasButtonPermission('export:cancel')" type="danger" size="large" @click="cancelExport">
-              <i class="fas fa-stop"></i> 取消执行
+              <i class="fas fa-stop"></i> 终止任务
             </el-button>
           </div>
 
@@ -502,7 +502,7 @@
               </div>
             </div>
 
-            <div v-if="(taskStatus.status === 'failed' || taskStatus.status === 'cancelled') && store.hasButtonPermission('export:retry')" class="retry-area">
+            <div v-if="(taskStatus.status === 'failed' || taskStatus.status === 'cancelled' || taskStatus.status === 'manual_cancelled') && store.hasButtonPermission('export:retry')" class="retry-area">
               <el-button type="warning" size="large" :loading="retrying" @click="handleRetry">
                 <i class="fas fa-redo"></i> 重新执行
               </el-button>
@@ -647,12 +647,12 @@ const progressStatus = computed(() => {
 })
 
 const statusType = computed(() => {
-  const map = { pending: 'info', running: 'warning', completed: 'success', failed: 'danger', cancelled: 'info' }
+  const map = { pending: 'info', running: 'warning', completed: 'success', failed: 'danger', cancelled: 'info', manual_cancelled: 'info' }
   return map[taskStatus.value.status] || 'info'
 })
 
 const statusLabel = computed(() => {
-  const map = { pending: '等待中', running: '执行中', completed: '已完成', failed: '失败', cancelled: '已取消' }
+  const map = { pending: '等待中', running: '执行中', completed: '已完成', failed: '失败', cancelled: '已取消', manual_cancelled: '手动终止' }
   return map[taskStatus.value.status] || '-'
 })
 
@@ -899,7 +899,7 @@ function startSSE(tid) {
           }
         })
       }
-      if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled') {
+      if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled' || data.status === 'manual_cancelled') {
         executing.value = false
         eventSource.close()
         eventSource = null
@@ -943,13 +943,13 @@ async function fetchStatus(tid) {
 async function cancelExport() {
   if (!taskId.value) return
   try {
-    await ElMessageBox.confirm('确定要取消当前导出任务吗？', '提示', {
-      confirmButtonText: '确定',
+    await ElMessageBox.confirm('确定要终止当前导出任务吗？终止后将立即杀死任务线程，释放占用的资源。', '终止任务', {
+      confirmButtonText: '确定终止',
       cancelButtonText: '取消',
       type: 'warning'
     })
     await api.export.cancel(taskId.value)
-    ElMessage.success('已发送取消请求')
+    ElMessage.success('任务已终止')
   } catch {
   }
 }

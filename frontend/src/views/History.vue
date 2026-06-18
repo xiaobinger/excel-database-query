@@ -23,6 +23,7 @@
               <el-option label="已完成" value="completed" />
               <el-option label="失败" value="failed" />
               <el-option label="已取消" value="cancelled" />
+              <el-option label="手动终止" value="manual_cancelled" />
             </el-select>
             <el-button type="primary" @click="fetchTasks" style="margin-left: 12px">
               <i class="fas fa-sync-alt"></i> 刷新
@@ -96,11 +97,24 @@
           </template>
         </el-table-column>
         <el-table-column prop="created_at" label="创建时间" width="180" show-overflow-tooltip />
-        <el-table-column label="操作" width="220" align="center" fixed="right">
+        <el-table-column label="操作" width="280" align="center" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="primary" text @click.stop="openDetail(row)">
               <i class="fas fa-eye"></i> 详情
             </el-button>
+            <el-popconfirm
+              v-if="(row.status === 'pending' || row.status === 'running') && store.hasButtonPermission('task:terminate')"
+              title="确定要终止此任务吗？终止后将立即杀死任务线程，释放占用的资源。"
+              confirm-button-text="确定终止"
+              cancel-button-text="取消"
+              @confirm="handleTerminate(row)"
+            >
+              <template #reference>
+                <el-button size="small" type="danger" text @click.stop>
+                  <i class="fas fa-stop"></i> 终止
+                </el-button>
+              </template>
+            </el-popconfirm>
             <el-button
               v-if="row.status === 'completed' && (row.type === 'export' ? store.hasButtonPermission('export:download') : store.hasButtonPermission('query:download'))"
               size="small"
@@ -245,7 +259,14 @@
           <span v-else></span>
           <div>
             <el-button
-              v-if="(detailData.status === 'failed' || detailData.status === 'cancelled') && (detailData.type === 'export' ? store.hasButtonPermission('export:retry') : store.hasButtonPermission('query:retry'))"
+              v-if="(detailData.status === 'pending' || detailData.status === 'running') && store.hasButtonPermission('task:terminate')"
+              type="danger"
+              @click="handleTerminateFromDetail"
+            >
+              <i class="fas fa-stop"></i> 终止任务
+            </el-button>
+            <el-button
+              v-if="(detailData.status === 'failed' || detailData.status === 'cancelled' || detailData.status === 'manual_cancelled') && (detailData.type === 'export' ? store.hasButtonPermission('export:retry') : store.hasButtonPermission('query:retry'))"
               type="warning"
               :loading="retrying"
               @click="handleRetry(detailData)"
@@ -295,7 +316,8 @@ const statusMap = {
   running: { label: '执行中', type: 'warning' },
   completed: { label: '已完成', type: 'success' },
   failed: { label: '失败', type: 'danger' },
-  cancelled: { label: '已取消', type: 'info' }
+  cancelled: { label: '已取消', type: 'info' },
+  manual_cancelled: { label: '手动终止', type: 'info' }
 }
 
 function statusType(status) {
@@ -309,6 +331,7 @@ function statusLabel(status) {
 function progressStatus(status) {
   if (status === 'completed') return 'success'
   if (status === 'failed') return 'exception'
+  if (status === 'manual_cancelled') return 'exception'
   return undefined
 }
 
@@ -394,6 +417,46 @@ async function handleDelete(row) {
       await api.query.deleteTask(id)
     }
     ElMessage.success('删除成功')
+    fetchTasks()
+  } catch {
+  }
+}
+
+async function handleTerminate(row) {
+  try {
+    const id = row.task_id || row.id
+    const isExport = row.type === 'export'
+    if (isExport) {
+      await api.export.cancel(id)
+    } else {
+      await api.query.cancel(id)
+    }
+    ElMessage.success('任务已终止')
+    fetchTasks()
+  } catch {
+  }
+}
+
+async function handleTerminateFromDetail() {
+  try {
+    await ElMessageBox.confirm('确定要终止此任务吗？终止后将立即杀死任务线程，释放占用的资源。', '终止任务', {
+      confirmButtonText: '确定终止',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+  } catch {
+    return
+  }
+  try {
+    const id = detailData.value.task_id || detailData.value.id
+    const isExport = detailData.value.type === 'export'
+    if (isExport) {
+      await api.export.cancel(id)
+    } else {
+      await api.query.cancel(id)
+    }
+    ElMessage.success('任务已终止')
+    detailVisible.value = false
     fetchTasks()
   } catch {
   }

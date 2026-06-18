@@ -1306,6 +1306,14 @@ def send_message(chat_id):
         from app.utils.behavior_tracker import track_behavior as _track
         _track(current_user.id, 'chat', 'ai_chat', chat_id, {'tokens': tokens}, agent_id=agent_id)
 
+        # 异步提取Agent记忆（在后台线程中执行，不阻塞响应）
+        if agent_id:
+            threading.Thread(
+                target=AiService.extract_and_save_memory,
+                args=(current_user.id, agent_id, data['content'], ai_content, chat_id),
+                daemon=True
+            ).start()
+
         return jsonify({'success': True, 'data': response_payload})
     except Exception as e:
         logger.error(f'AI对话失败: {e}', exc_info=True)
@@ -2205,6 +2213,18 @@ def send_message_stream(chat_id):
                 db.session.commit()
                 msg_id = assistant_message.id
                 msg_saved = True
+
+                # 异步提取Agent记忆（在后台线程中执行，不阻塞响应）
+                if stream_agent_id:
+                    try:
+                        import threading
+                        threading.Thread(
+                            target=AiService.extract_and_save_memory,
+                            args=(user_id, stream_agent_id, user_message_content, full_content, chat_id),
+                            daemon=True
+                        ).start()
+                    except Exception as mem_err:
+                        logger.warning(f'启动Agent记忆提取失败: {mem_err}')
 
                 # 记录成功的工具调用记忆
                 if tool_results_list:

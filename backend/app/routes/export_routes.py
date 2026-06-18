@@ -167,12 +167,32 @@ def cancel_export(task_id):
     if not task:
         return jsonify({'success': False, 'message': '任务不存在'}), 404
     if task.status in ('pending', 'running'):
-        task.status = 'cancelled'
+        # 设置取消标志并终止线程
+        from app.services.export_service import _task_cancel_events, _task_threads
+        cancel_event = _task_cancel_events.get(task_id)
+        if cancel_event:
+            cancel_event.set()
+
+        thread = _task_threads.get(task_id)
+        if thread and thread.is_alive():
+            try:
+                import ctypes
+                tid = ctypes.c_long(thread.ident)
+                ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, ctypes.py_object(SystemExit))
+            except Exception:
+                pass
+
+        task.status = 'manual_cancelled'
         task.completed_at = datetime.utcnow()
-        task.add_log('任务已取消', 'warning')
+        task.add_log('任务已被手动终止', 'warning')
         db.session.commit()
-        return jsonify({'success': True, 'message': '任务已取消'})
-    return jsonify({'success': False, 'message': '无法取消任务'}), 400
+
+        # 清理线程引用
+        _task_threads.pop(task_id, None)
+        _task_cancel_events.pop(task_id, None)
+
+        return jsonify({'success': True, 'message': '任务已终止'})
+    return jsonify({'success': False, 'message': '无法终止任务'}), 400
 
 
 @export_bp.route('/tasks', methods=['GET'])

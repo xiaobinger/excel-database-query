@@ -119,11 +119,24 @@
             </el-table-column>
             <el-table-column prop="started_at" label="开始时间" width="170" />
             <el-table-column prop="completed_at" label="完成时间" width="170" />
-            <el-table-column label="操作" width="180" align="center" fixed="right">
+            <el-table-column label="操作" width="240" align="center" fixed="right">
               <template #default="{ row }">
                 <el-button v-if="store.hasButtonPermission('system_task:view_log')" size="small" type="primary" text @click="openExecutionDetail(row)">
                   <i class="fas fa-eye"></i> 详情
                 </el-button>
+                <el-popconfirm
+                  v-if="(row.status === 'pending' || row.status === 'running') && store.hasButtonPermission('system_task:execute')"
+                  title="确定要终止此任务吗？终止后将立即杀死任务线程，释放占用的资源。"
+                  confirm-button-text="确定终止"
+                  cancel-button-text="取消"
+                  @confirm="handleCancelExecution(row.execution_id)"
+                >
+                  <template #reference>
+                    <el-button size="small" type="danger" text>
+                      <i class="fas fa-stop"></i> 终止
+                    </el-button>
+                  </template>
+                </el-popconfirm>
                 <el-popconfirm
                   v-if="store.hasButtonPermission('system_task:delete_log')"
                   title="确定要删除此记录吗？"
@@ -615,12 +628,12 @@ const rules = {
 }
 
 function statusType(status) {
-  const map = { completed: 'success', failed: 'danger', running: 'warning', pending: 'info', cancelled: 'info' }
+  const map = { completed: 'success', failed: 'danger', running: 'warning', pending: 'info', cancelled: 'info', manual_cancelled: 'info' }
   return map[status] || 'info'
 }
 
 function statusLabel(status) {
-  const map = { completed: '成功', failed: '失败', running: '执行中', pending: '等待中', cancelled: '已取消' }
+  const map = { completed: '成功', failed: '失败', running: '执行中', pending: '等待中', cancelled: '已取消', manual_cancelled: '手动终止' }
   return map[status] || status
 }
 
@@ -989,6 +1002,15 @@ async function handleDeleteExecution(executionId) {
   try {
     await api.systemTask.deleteExecution(executionId)
     ElMessage.success('删除成功')
+    fetchExecutions()
+  } catch {
+  }
+}
+
+async function handleCancelExecution(executionId) {
+  try {
+    await api.systemTask.cancelExecution(executionId)
+    ElMessage.success('任务已终止')
     fetchExecutions()
   } catch {
   }

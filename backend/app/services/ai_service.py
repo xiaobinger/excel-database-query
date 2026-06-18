@@ -534,6 +534,12 @@ class AiService:
         if memory_context:
             context_parts.append(memory_context)
 
+        # Add agent memories (用户特别要求和偏好)
+        if agent_id:
+            agent_memory_context = AiService.build_agent_memory_context(user_id, agent_id)
+            if agent_memory_context:
+                context_parts.append(agent_memory_context)
+
         return '\n'.join(context_parts)
 
     @staticmethod
@@ -1455,6 +1461,146 @@ class AiService:
             args_str = m.tool_args or '{}'
             lines.append(f'- 意图"{m.intent}" → 调用 {m.tool_name}({args_str}) [成功{m.success_count}次]')
         return '\n'.join(lines)
+
+    @staticmethod
+    def _get_default_config():
+        """获取默认AI配置，用于内部调用"""
+        from app.models.ai_config import AiConfig
+        config = AiConfig.query.filter_by(is_default=True, is_active=True).first()
+        if not config:
+            config = AiConfig.query.filter_by(is_active=True).first()
+        return config
+
+    @staticmethod
+    def build_agent_memory_context(user_id: int, agent_id: int) -> str:
+        """构建Agent记忆上下文，注入到系统提示词中"""
+        from app.models.agent_memory import AgentMemory
+
+        memories = AgentMemory.query.filter_by(
+            user_id=user_id, agent_id=agent_id, is_active=True
+        ).order_by(AgentMemory.created_at.desc()).all()
+
+        if not memories:
+            return ''
+
+        lines = ['\n## 用户特别要求和偏好（你必须严格遵守以下规则，不要违反用户的这些要求）']
+        for m in memories:
+            type_label = {'rule': '规则', 'preference': '偏好', 'fact': '事实'}.get(m.memory_type, '规则')
+            lines.append(f'- [{type_label}] {m.content}')
+        return '\n'.join(lines)
+
+    @staticmethod
+    def extract_and_save_memory(user_id: int, agent_id: int, user_message: str, ai_response: str, chat_id: int = None):
+        """从对话中提取用户特别要求和偏好，保存为Agent记忆"""
+        from app.models.agent_memory import AgentMemory
+        from app import db
+
+        if not agent_id or not user_message:
+            return
+
+        # 只分析用户消息较长的对话（短消息不太可能包含规则）
+        if len(user_message) < 10:
+            return
+
+        # 检查是否包含规则性语言
+        rule_indicators = [
+            '不要', '别', '必须', '一定', '每次', '总是', '永远', '记住', '记得',
+            '以后', '以后都', '下次', '以后请', '请务必', '千万', '务必',
+            '不要再用', '不要再', '别再', '不要每次', '不要总是',
+            '我喜欢', '我不喜欢', '我希望', '我习惯', '我偏好', '我更',
+            '默认', '一般', '通常', '按照', '按我', '用我',
+            '格式', '输出格式', '回答方式', '回复方式', '用中文', '用英文',
+            '不要解释', '直接给', '只给', '简洁', '详细',
+        ]
+
+        has_rule_intent = any(indicator in user_message for indicator in rule_indicators)
+        if not has_rule_intent:
+            return
+
+        try:
+            # 获取已有记忆，避免重复
+            existing_memories = AgentMemory.query.filter_by(
+                user_id=user_id, agent_id=agent_id, is_active=True
+            ).all()
+            existing_contents = [m.content for m in existing_memories]
+
+            # 用AI提取规则
+            config = AiService._get_default_config()
+            if not config:
+                return
+
+            existing_context = ''
+            if existing_contents:
+                existing_context = '\n已有记忆（避免重复提取）：\n' + '\n'.join(f'- {c}' for c in existing_contents)
+
+            extract_prompt = f"""分析以下用户消息，提取用户表达的特别要求、偏好或规则。
+只提取明确的、可持久化的要求，不要提取一次性指令或与当前具体任务相关的临时指令。
+{existing_context}
+
+用户消息：{user_message}
+AI回复：{ai_response[:500] if ai_response else ''}
+
+请以JSON格式返回提取结果，格式为：
+{{"memories": [{{"type": "rule/preference/fact", "content": "简明的规则描述"}}]}}
+
+如果没有可提取的规则，返回：{{"memories": []}}
+只返回JSON，不要其他内容。"""
+
+            messages = [
+                {'role': 'system', 'content': '你是一个规则提取助手，从用户消息中提取持久化的偏好和规则。只返回JSON。'},
+                {'role': 'user', 'content': extract_prompt}
+            ]
+
+            result, _, _, _, _, _ = AiService.chat(config, messages)
+            if not result:
+                return
+
+            # 解析结果
+            result = result.strip()
+            if result.startswith('```'):
+                result = re.sub(r'^```\w*\n?', '', result)
+                result = re.sub(r'\n?```$', '', result)
+
+            data = json.loads(result)
+            memories = data.get('memories', [])
+
+            for mem in memories:
+                content = mem.get('content', '').strip()
+                mem_type = mem.get('type', 'rule')
+
+                if not content or len(content) < 5:
+                    continue
+
+                # 检查是否与已有记忆重复（简单相似度检查）
+                is_duplicate = False
+                for existing in existing_contents:
+                    # 如果新内容和已有内容有高度重叠，跳过
+                    overlap = sum(1 for w in content if w in existing)
+                    if overlap / max(len(content), 1) > 0.7:
+                        is_duplicate = True
+                        break
+
+                if not is_duplicate:
+                    memory = AgentMemory(
+                        user_id=user_id,
+                        agent_id=agent_id,
+                        memory_type=mem_type,
+                        content=content,
+                        source='auto',
+                        chat_id=chat_id,
+                    )
+                    db.session.add(memory)
+                    existing_contents.append(content)
+
+            db.session.commit()
+            logger.info(f'为用户{user_id}的Agent{agent_id}提取了{len(memories)}条记忆')
+
+        except Exception as e:
+            logger.warning(f'提取Agent记忆失败: {e}')
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
 
     @staticmethod
     def _tool_fetch_url(args: dict) -> dict:

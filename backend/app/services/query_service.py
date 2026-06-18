@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 _task_progress = {}
 _task_lock = threading.Lock()
+_task_threads = {}  # task_id -> thread reference
+_task_cancel_events = {}  # task_id -> threading.Event
 
 
 def update_task_progress(task_id: str, progress: int, log_message: str = None, level: str = 'info'):
@@ -61,12 +63,15 @@ class QueryService:
                             param_column: str = None, merge_strategy: str = 'concat',
                             new_sheet: bool = True, column_mapping: dict = None,
                             primary_key: str = ''):
+        cancel_event = threading.Event()
+        _task_cancel_events[task_id] = cancel_event
         thread = threading.Thread(
             target=QueryService._execute_query_background,
             args=(task_id, script_id, script_ids, db_connection_ids, input_file, output_dir,
-                  param_column, merge_strategy, new_sheet, column_mapping, primary_key),
+                  param_column, merge_strategy, new_sheet, column_mapping, primary_key, cancel_event),
             daemon=True
         )
+        _task_threads[task_id] = thread
         thread.start()
 
     @staticmethod
@@ -74,7 +79,7 @@ class QueryService:
                                   db_connection_ids: List[int], input_file: str, output_dir: str,
                                   param_column: str = None, merge_strategy: str = 'concat',
                                   new_sheet: bool = True, column_mapping: dict = None,
-                                  primary_key: str = ''):
+                                  primary_key: str = '', cancel_event: threading.Event = None):
         try:
             from app import create_app
             app = create_app()
@@ -94,6 +99,10 @@ class QueryService:
                 task.progress = 5
                 db.session.commit()
                 update_task_progress(task_id, 5, '开始执行查询任务')
+
+                # 检查是否已被取消
+                if cancel_event and cancel_event.is_set():
+                    raise RuntimeError('任务已被手动终止')
 
                 all_results = {}
                 total_scripts = len(script_ids)
@@ -117,6 +126,10 @@ class QueryService:
                 update_task_progress(task_id, 10, f'读取到{len(params_list)}条参数')
 
                 for script_idx, sid in enumerate(script_ids):
+                    # 检查是否已被取消
+                    if cancel_event and cancel_event.is_set():
+                        raise RuntimeError('任务已被手动终止')
+
                     script = Script.query.get(sid)
                     if not script:
                         task.add_log(f'脚本不存在: {sid}', 'warning')
@@ -761,11 +774,30 @@ class QueryService:
         if not task:
             return False
         if task.status in ('pending', 'running'):
-            task.status = 'cancelled'
+            # 设置取消标志
+            cancel_event = _task_cancel_events.get(task_id)
+            if cancel_event:
+                cancel_event.set()
+
+            # 尝试终止线程
+            thread = _task_threads.get(task_id)
+            if thread and thread.is_alive():
+                try:
+                    import ctypes
+                    tid = ctypes.c_long(thread.ident)
+                    ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, ctypes.py_object(SystemExit))
+                except Exception as e:
+                    logger.warning(f'终止查询任务线程失败: {e}')
+
+            task.status = 'manual_cancelled'
             task.completed_at = datetime.utcnow()
-            task.add_log('任务已取消', 'warning')
+            task.add_log('任务已被手动终止', 'warning')
             db.session.commit()
-            update_task_progress(task_id, 100, '任务已取消', 'warning')
+            update_task_progress(task_id, 100, '任务已被手动终止', 'warning')
+
+            # 清理线程引用
+            _task_threads.pop(task_id, None)
+            _task_cancel_events.pop(task_id, None)
             return True
         return False
 
