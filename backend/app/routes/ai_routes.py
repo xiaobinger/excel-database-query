@@ -15,8 +15,10 @@ import requests
 logger = logging.getLogger(__name__)
 ai_bp = Blueprint('ai', __name__, url_prefix='/api/ai')
 
-# 活跃流式请求跟踪：{chat_id: {'aborted': bool, 'request_id': str}}
+# 活跃流式请求跟踪：{chat_id: {'aborted': bool, 'request_id': str, 'content': str, ...}}
 _active_streams = {}
+# 已完成流式请求缓存（供断线重连读取最终状态）：{chat_id: (stream_info, finished_time)}
+_finished_streams = {}
 
 
 def _extract_cache_tokens(usage):
@@ -198,6 +200,7 @@ def get_skills():
     current_user = get_current_user()
     category = request.args.get('category')
     skill_type = request.args.get('skill_type')
+    agent_id = request.args.get('agent_id', type=int)
 
     query = AiSkill.query
     if not current_user.is_admin():
@@ -206,6 +209,9 @@ def get_skills():
         query = query.filter_by(category=category)
     if skill_type:
         query = query.filter_by(skill_type=skill_type)
+    if agent_id:
+        # 指定Agent专属技能 + 通用技能（agent_id 为空）
+        query = query.filter((AiSkill.agent_id == agent_id) | (AiSkill.agent_id == None))
 
     skills = query.filter_by(is_active=True).order_by(AiSkill.updated_at.desc()).all()
     return jsonify({'success': True, 'data': [s.to_dict() for s in skills]})
@@ -393,6 +399,7 @@ def create_chat():
             user_id=current_user.id,
             title=data.get('title', '新对话'),
             agent_id=agent_id,
+            model_id=data.get('model_id'),
         )
         db.session.add(chat)
         db.session.commit()
@@ -400,6 +407,34 @@ def create_chat():
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 400
+
+
+@ai_bp.route('/chats/<int:chat_id>', methods=['PUT'])
+@login_required
+def update_chat(chat_id):
+    """更新对话的agent_id和model_id"""
+    current_user = get_current_user()
+    chat = AiChat.query.filter_by(id=chat_id, user_id=current_user.id).first()
+    if not chat:
+        return jsonify({'success': False, 'message': '对话不存在'}), 404
+
+    data = request.get_json() or {}
+    if 'agent_id' in data:
+        agent_id = data['agent_id']
+        if agent_id and not current_user.can_use_agent(int(agent_id)):
+            return jsonify({'success': False, 'message': '无权使用该Agent'}), 403
+        chat.agent_id = agent_id
+    if 'model_id' in data:
+        model_id = data['model_id']
+        if model_id:
+            allowed_models = current_user.get_allowed_models()
+            allowed_model_ids = [m.id for m in allowed_models]
+            if int(model_id) not in allowed_model_ids:
+                return jsonify({'success': False, 'message': '无权使用该模型'}), 403
+        chat.model_id = model_id
+
+    db.session.commit()
+    return jsonify({'success': True, 'data': chat.to_dict()})
 
 
 # ============ Delete Chat (Soft Delete) ============
@@ -705,6 +740,12 @@ def send_message(chat_id):
     # 更新chat的agent_id（如果请求中指定了新的agent_id）
     if data.get('agent_id') and chat.agent_id != data.get('agent_id'):
         chat.agent_id = data.get('agent_id')
+    # 如果chat没有关联agent_id，用当前解析出的agent_id补上
+    if not chat.agent_id and agent_id:
+        chat.agent_id = agent_id
+    # 更新chat的model_id
+    if data.get('ai_config_id') and chat.model_id != data.get('ai_config_id'):
+        chat.model_id = data.get('ai_config_id')
 
     db.session.commit()
 
@@ -819,8 +860,13 @@ def send_message(chat_id):
             messages.append({'role': msg.role, 'content': msg.content})
 
         # Call AI with failover support (use override if @mention)
+        # 根据Agent的enabled_tools过滤工具列表
+        from app.services.ai_service import filter_tools
+        nonstream_enabled_tools = agent.get_enabled_tools() if agent else None
+        nonstream_filtered_tools = filter_tools(nonstream_enabled_tools)
         ai_response = AiService.chat_with_failover(messages, use_tools=True,
-            override_configs=ordered_configs if specified_config else None)
+            override_configs=ordered_configs if specified_config else None,
+            tools=nonstream_filtered_tools)
         response_text = ai_response['content']
         tool_calls = ai_response['tool_calls']
         tokens = ai_response['tokens']
@@ -1312,6 +1358,12 @@ def send_message_stream(chat_id):
     # 更新chat的agent_id（如果请求中指定了新的agent_id）
     if data.get('agent_id') and chat.agent_id != data.get('agent_id'):
         chat.agent_id = data.get('agent_id')
+    # 如果chat没有关联agent_id，用当前解析出的agent_id补上
+    if not chat.agent_id and agent_id:
+        chat.agent_id = agent_id
+    # 更新chat的model_id
+    if data.get('ai_config_id') and chat.model_id != data.get('ai_config_id'):
+        chat.model_id = data.get('ai_config_id')
 
     if not chat.title or chat.title == '新对话':
         chat.title = data['content'][:50]
@@ -1417,6 +1469,10 @@ def send_message_stream(chat_id):
     user_id = current_user.id
     user_message_content = data['content']
     stream_agent_id = agent_id  # 保存agent_id供闭包使用
+    # 根据Agent的enabled_tools过滤工具列表
+    from app.services.ai_service import filter_tools
+    stream_enabled_tools = agent.get_enabled_tools() if agent else None
+    stream_filtered_tools = filter_tools(stream_enabled_tools)
     config_api_key = ai_config.get_api_key()
     config_api_base = ai_config.api_base or 'https://api.openai.com/v1'
     config_provider = ai_config.provider or 'openai'
@@ -1435,10 +1491,21 @@ def send_message_stream(chat_id):
         cache_read_tokens_used = 0
         accumulated_tool_calls = {}  # {index: {id, function: {name, arguments}}}
 
-        # 注册活跃流
+        # 注册活跃流（保存实时内容供断线重连恢复）
         request_id = str(uuid.uuid4())
-        _active_streams[chat_id] = {'aborted': False, 'request_id': request_id}
+        _active_streams[chat_id] = {
+            'aborted': False,
+            'request_id': request_id,
+            'user_id': current_user.id,
+            'agent_id': stream_agent_id,
+            'content': '',
+            'thinking': '',
+            'tool_calls': {},
+            'status': 'streaming',  # streaming / tool_calling / done / error
+            'started_at': time.time(),
+        }
         start_time = time.time()
+        msg_saved = False  # 标记消息是否已保存，用于finally中判断是否需要补存
 
         # 先发送一个心跳事件，确认SSE连接已建立
         yield f"data: {json.dumps({'type': 'heartbeat'}, ensure_ascii=False)}\n\n"
@@ -1465,9 +1532,8 @@ def send_message_stream(chat_id):
                 'stream': config_enable_streaming,
             }
 
-            # 添加工具定义
-            from app.services.ai_service import AI_TOOLS
-            payload['tools'] = AI_TOOLS
+            # 添加工具定义（根据Agent的enabled_tools过滤）
+            payload['tools'] = stream_filtered_tools
             payload['tool_choice'] = 'auto'
 
             if config_enable_streaming:
@@ -1501,6 +1567,7 @@ def send_message_stream(chat_id):
                                 reasoning = delta.get('reasoning_content') or delta.get('thinking') or ''
                                 if reasoning:
                                     thinking_content += reasoning
+                                    _active_streams[chat_id]['thinking'] = thinking_content
                                     chunk_count += 1
                                     if config_enable_thinking:
                                         yield f"data: {json.dumps({'type': 'thinking', 'content': reasoning}, ensure_ascii=False)}\n\n"
@@ -1508,6 +1575,7 @@ def send_message_stream(chat_id):
                                 content_delta = delta.get('content', '') or ''
                                 if content_delta:
                                     full_content += content_delta
+                                    _active_streams[chat_id]['content'] = full_content
                                     chunk_count += 1
                                     yield f"data: {json.dumps({'type': 'content', 'content': content_delta}, ensure_ascii=False)}\n\n"
                                 # 累积工具调用
@@ -1530,6 +1598,7 @@ def send_message_stream(chat_id):
                                             accumulated_tool_calls[idx]['function']['name'] = fn['name']
                                         if fn.get('arguments'):
                                             accumulated_tool_calls[idx]['function']['arguments'] += fn['arguments']
+                                    _active_streams[chat_id]['tool_calls'] = {k: v for k, v in accumulated_tool_calls.items()}
                             # token 统计
                             if chunk.get('usage'):
                                 tokens_used = chunk['usage'].get('total_tokens', 0)
@@ -1588,6 +1657,7 @@ def send_message_stream(chat_id):
                 logger.info(f'工具调用前检测到终止: chat_id={chat_id}')
                 yield f"data: {json.dumps({'type': 'aborted', 'content': '任务已被用户手动终止'}, ensure_ascii=False)}\n\n"
             elif accumulated_tool_calls:
+                _active_streams[chat_id]['status'] = 'tool_calling'
                 from app.services.ai_service import AiService
                 for idx in sorted(accumulated_tool_calls.keys()):
                     tc = accumulated_tool_calls[idx]
@@ -1819,7 +1889,7 @@ def send_message_stream(chat_id):
                         'max_tokens': config_max_tokens,
                         'temperature': config_temperature,
                         'stream': config_enable_streaming,
-                        'tools': AI_TOOLS,
+                        'tools': stream_filtered_tools,
                         'tool_choice': 'auto',
                     }
 
@@ -2134,6 +2204,7 @@ def send_message_stream(chat_id):
                 db.session.add(assistant_message)
                 db.session.commit()
                 msg_id = assistant_message.id
+                msg_saved = True
 
                 # 记录成功的工具调用记忆
                 if tool_results_list:
@@ -2161,7 +2232,13 @@ def send_message_stream(chat_id):
                 msg_id = None
 
             # 清理活跃流
-            _active_streams.pop(chat_id, None)
+            stream_info = _active_streams.pop(chat_id, None)
+            if stream_info:
+                stream_info['status'] = 'done'
+                stream_info['content'] = full_content
+                stream_info['message_id'] = msg_id
+                # 保留5秒供断线重连读取最终状态
+                _finished_streams[chat_id] = (stream_info, time.time())
 
             # 发送完成信号
             yield f"data: {json.dumps({'type': 'done', 'message_id': msg_id, 'tokens': tokens_used, 'prompt_tokens': prompt_tokens_used, 'completion_tokens': completion_tokens_used, 'cache_creation_tokens': cache_creation_tokens_used, 'cache_read_tokens': cache_read_tokens_used, 'elapsed': elapsed}, ensure_ascii=False)}\n\n"
@@ -2189,7 +2266,42 @@ def send_message_stream(chat_id):
 
         finally:
             # 确保清理活跃流
-            _active_streams.pop(chat_id, None)
+            stream_info = _active_streams.pop(chat_id, None)
+            if stream_info:
+                stream_info['status'] = 'done'
+                stream_info['content'] = full_content
+                _finished_streams[chat_id] = (stream_info, time.time())
+            # 客户端断开（GeneratorExit）时，如果AI已生成内容但未保存，补存部分内容
+            if not msg_saved and full_content.strip():
+                try:
+                    elapsed = round(time.time() - start_time, 2)
+                    if elapsed < 0.01:
+                        elapsed = 0.01
+                    partial_message = AiChatMessage(
+                        chat_id=chat_id,
+                        agent_id=stream_agent_id,
+                        role='assistant',
+                        content=full_content + '\n\n*（回复因连接中断已截断）*',
+                        tokens_used=tokens_used,
+                        prompt_tokens=prompt_tokens_used,
+                        completion_tokens=completion_tokens_used,
+                        cache_creation_tokens=cache_creation_tokens_used,
+                        cache_read_tokens=cache_read_tokens_used,
+                        elapsed=elapsed,
+                    )
+                    if thinking_content:
+                        partial_message.msg_metadata = json.dumps({
+                            'thinking_content': thinking_content,
+                        }, ensure_ascii=False)
+                    db.session.add(partial_message)
+                    db.session.commit()
+                    logger.info(f'客户端断开，已补存部分AI消息: chat_id={chat_id}, content_len={len(full_content)}')
+                except Exception as save_err:
+                    logger.error(f'补存部分AI消息失败: {save_err}', exc_info=True)
+                    try:
+                        db.session.rollback()
+                    except:
+                        pass
 
     return Response(
         stream_with_context(generate()),
@@ -2218,6 +2330,135 @@ def abort_chat_request(chat_id):
         logger.info(f'用户终止AI请求: chat_id={chat_id}, request_id={stream_info.get("request_id")}')
         return jsonify({'success': True, 'message': '请求已终止'})
     return jsonify({'success': True, 'message': '无活跃请求'})
+
+
+# ============ Resume Stream (断线重连) ============
+@ai_bp.route('/chats/<int:chat_id>/stream-status', methods=['GET'])
+@login_required
+def get_stream_status(chat_id):
+    """获取对话的流式状态，用于断线重连。
+    返回：active=是否有活跃流，content=已生成内容，thinking=思考内容，status=状态"""
+    current_user = get_current_user()
+    chat = AiChat.query.filter_by(id=chat_id, user_id=current_user.id).first()
+    if not chat:
+        return jsonify({'success': False, 'message': '对话不存在'}), 404
+
+    # 清理过期的已完成流缓存（超过10秒）
+    now = time.time()
+    expired = [k for k, (_, t) in _finished_streams.items() if now - t > 10]
+    for k in expired:
+        _finished_streams.pop(k, None)
+
+    stream_info = _active_streams.get(chat_id)
+    if stream_info:
+        return jsonify({
+            'success': True,
+            'active': True,
+            'status': stream_info.get('status', 'streaming'),
+            'content': stream_info.get('content', ''),
+            'thinking': stream_info.get('thinking', ''),
+            'tool_calls': list(stream_info.get('tool_calls', {}).values()),
+        })
+
+    # 检查刚完成的流（5秒内）
+    finished = _finished_streams.get(chat_id)
+    if finished:
+        info, _ = finished
+        return jsonify({
+            'success': True,
+            'active': False,
+            'status': 'done',
+            'content': info.get('content', ''),
+            'thinking': info.get('thinking', ''),
+            'message_id': info.get('message_id'),
+        })
+
+    return jsonify({'success': True, 'active': False, 'status': 'idle'})
+
+
+@ai_bp.route('/chats/<int:chat_id>/resume-stream', methods=['GET'])
+@login_required
+def resume_stream(chat_id):
+    """断线重连：恢复接收正在进行的流式响应。
+    先推送已有内容（snapshot），然后持续推送增量更新直到流结束。"""
+    current_user = get_current_user()
+    chat = AiChat.query.filter_by(id=chat_id, user_id=current_user.id).first()
+    if not chat:
+        return jsonify({'success': False, 'message': '对话不存在'}), 404
+
+    def generate():
+        last_content = ''
+        last_thinking = ''
+        last_status = None
+        start_poll = time.time()
+
+        while True:
+            # 超时保护（最多等待5分钟）
+            if time.time() - start_poll > 300:
+                yield f"data: {json.dumps({'type': 'error', 'content': '恢复流式超时'}, ensure_ascii=False)}\n\n"
+                break
+
+            stream_info = _active_streams.get(chat_id)
+            if stream_info:
+                current_content = stream_info.get('content', '')
+                current_thinking = stream_info.get('thinking', '')
+                current_status = stream_info.get('status', 'streaming')
+
+                # 推送思考内容增量
+                if current_thinking and current_thinking != last_thinking:
+                    new_thinking = current_thinking[len(last_thinking):]
+                    if new_thinking:
+                        yield f"data: {json.dumps({'type': 'thinking', 'content': new_thinking}, ensure_ascii=False)}\n\n"
+                    last_thinking = current_thinking
+
+                # 推送正文内容增量
+                if current_content and current_content != last_content:
+                    new_content = current_content[len(last_content):]
+                    if new_content:
+                        yield f"data: {json.dumps({'type': 'content', 'content': new_content}, ensure_ascii=False)}\n\n"
+                    last_content = current_content
+
+                last_status = current_status
+                time.sleep(0.3)
+                continue
+
+            # 流已结束，检查已完成缓存
+            finished = _finished_streams.pop(chat_id, None)
+            if finished:
+                info, _ = finished
+                final_content = info.get('content', '')
+                final_thinking = info.get('thinking', '')
+                msg_id = info.get('message_id')
+
+                # 推送剩余内容
+                if final_thinking and final_thinking != last_thinking:
+                    new_thinking = final_thinking[len(last_thinking):]
+                    if new_thinking:
+                        yield f"data: {json.dumps({'type': 'thinking', 'content': new_thinking}, ensure_ascii=False)}\n\n"
+                if final_content and final_content != last_content:
+                    new_content = final_content[len(last_content):]
+                    if new_content:
+                        yield f"data: {json.dumps({'type': 'content', 'content': new_content}, ensure_ascii=False)}\n\n"
+
+                yield f"data: {json.dumps({'type': 'done', 'message_id': msg_id}, ensure_ascii=False)}\n\n"
+                break
+
+            # 既无活跃流也无已完成缓存，可能已被清理或从未开始
+            if last_status is None:
+                yield f"data: {json.dumps({'type': 'idle'}, ensure_ascii=False)}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+            break
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive',
+        }
+    )
 
 
 # ============ Update Message Metadata ============
@@ -2268,9 +2509,19 @@ def create_message(chat_id):
     if not data or not data.get('content'):
         return jsonify({'success': False, 'message': '消息内容不能为空'}), 400
 
+    # 获取agent_id：优先从请求data获取，其次从chat获取，最后回退到默认Agent
+    agent_id = data.get('agent_id') or chat.agent_id
+    if not agent_id:
+        default_agent = AiAgent.query.filter_by(is_default=True, is_active=True).first()
+        if default_agent:
+            agent_id = default_agent.id
+            # 补存到chat上，避免后续消息丢失关联
+            if not chat.agent_id:
+                chat.agent_id = agent_id
+
     msg = AiChatMessage(
         chat_id=chat_id,
-        agent_id=chat.agent_id,
+        agent_id=agent_id,
         role='assistant',
         content=data['content'],
     )

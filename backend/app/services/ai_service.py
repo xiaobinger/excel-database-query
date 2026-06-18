@@ -40,6 +40,16 @@ def _apply_cache_control(messages: list, provider: str, api_base: str) -> list:
 
     return result
 
+
+def filter_tools(enabled_tools: list) -> list:
+    """根据启用的工具名称列表过滤AI_TOOLS，返回过滤后的工具列表。
+    enabled_tools为None时返回全部工具。"""
+    if not enabled_tools:
+        return AI_TOOLS
+    enabled_set = set(enabled_tools)
+    return [t for t in AI_TOOLS if t.get('function', {}).get('name') in enabled_set]
+
+
 # ============ Tool Definitions ============
 AI_TOOLS = [
     {
@@ -247,6 +257,42 @@ AI_TOOLS = [
                 "required": ["lookup_name", "description"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_url",
+            "description": "调用外部URL获取数据。支持GET和POST请求，可自定义请求头和请求体。适用于调用第三方API获取实时数据（如天气、新闻、彩票开奖、汇率等）。返回HTTP状态码和响应内容（JSON格式或纯文本）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "要请求的完整URL地址"
+                    },
+                    "method": {
+                        "type": "string",
+                        "enum": ["GET", "POST"],
+                        "description": "HTTP请求方法，默认GET"
+                    },
+                    "headers": {
+                        "type": "object",
+                        "description": "自定义请求头，键值对形式",
+                        "additionalProperties": {"type": "string"}
+                    },
+                    "body": {
+                        "type": "object",
+                        "description": "POST请求的请求体（JSON格式）",
+                        "additionalProperties": {}
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "请求超时时间（秒），默认15秒"
+                    }
+                },
+                "required": ["url"]
+            }
+        }
     }
 ]
 
@@ -329,8 +375,9 @@ class AiService:
         return configs
 
     @staticmethod
-    def chat_with_failover(messages: list, use_tools: bool = False, override_configs: list = None) -> Tuple:
-        """支持故障转移的AI调用，自动尝试多个模型。如果提供 override_configs 则使用指定模型"""
+    def chat_with_failover(messages: list, use_tools: bool = False, override_configs: list = None, tools: list = None) -> Tuple:
+        """支持故障转移的AI调用，自动尝试多个模型。如果提供 override_configs 则使用指定模型。
+        tools: 可选，指定工具列表（用于Agent工具过滤），为None时使用默认AI_TOOLS。"""
         from app.models.ai_strategy import AiStrategy
         from app import db
 
@@ -353,7 +400,7 @@ class AiService:
             try:
                 logger.info(f"尝试使用模型: {config.name} ({config.model_name})")
                 if use_tools:
-                    result = AiService.chat_with_tools(config, messages)
+                    result = AiService.chat_with_tools(config, messages, tools=tools)
                     # 记录token消耗
                     if strategy and result.get('tokens'):
                         strategy.record_token_usage(config.id, result['tokens'])
@@ -433,21 +480,36 @@ class AiService:
 
         context_parts = []
 
-        # Add user skills (筛选当前Agent的技能 + 无Agent关联的技能)
+        # Add user skills (当前Agent专属技能 + 无Agent关联的通用技能)
         skill_query = AiSkill.query.filter(
             (AiSkill.skill_type == 'system') | (AiSkill.user_id == user_id),
             AiSkill.is_active == True
         )
         if agent_id:
+            # 含当前Agent专属技能 + agent_id 为空的通用技能
             skill_query = skill_query.filter(
-                (AiSkill.agent_id == agent_id)
+                (AiSkill.agent_id == agent_id) | (AiSkill.agent_id == None)
             )
-        skills = skill_query.all()
+        skills = skill_query.order_by(AiSkill.category).all()
 
         if skills:
-            context_parts.append('\n## 用户技能库')
+            context_parts.append('\n## 你已掌握的领域知识/技能')
             for skill in skills:
-                context_parts.append(f'- {skill.name}({skill.category}): {skill.description}')
+                scope = '[Agent专属]' if skill.agent_id else '[通用]'
+                line = f'- {scope} {skill.name}({skill.category}): {skill.description or ""}'
+                # 注入完整 content（领域知识正文），兼容 dict / JSON字符串 / 纯文本
+                if skill.content:
+                    try:
+                        c = json.loads(skill.content) if isinstance(skill.content, str) else skill.content
+                    except Exception:
+                        c = skill.content
+                    if isinstance(c, dict):
+                        detail = '\n'.join(f'    · {k}: {v}' for k, v in c.items())
+                        if detail:
+                            line += '\n' + detail
+                    elif c:
+                        line += f'\n    {c}'
+                context_parts.append(line)
 
         # Add recent behavior summary (筛选当前Agent的行为)
         behavior_query = UserBehavior.query.filter_by(user_id=user_id)
@@ -525,8 +587,9 @@ class AiService:
         return new_skills
 
     @staticmethod
-    def chat_with_tools(config, messages: list) -> dict:
-        """调用AI对话，支持 Function Calling"""
+    def chat_with_tools(config, messages: list, tools: list = None) -> dict:
+        """调用AI对话，支持 Function Calling。
+        tools: 可选，指定工具列表（用于Agent工具过滤），为None时使用默认AI_TOOLS。"""
         api_key = config.get_api_key()
         if not api_key:
             raise ValueError('API密钥未配置')
@@ -547,7 +610,7 @@ class AiService:
             'messages': messages,
             'max_tokens': config.max_tokens or 4096,
             'temperature': config.temperature if config.temperature is not None else 0.7,
-            'tools': AI_TOOLS,
+            'tools': tools if tools is not None else AI_TOOLS,
             'tool_choice': 'auto',
         }
 
@@ -613,6 +676,8 @@ class AiService:
             return AiService._tool_list_lookup_options(args, user_id)
         elif tool_name == 'request_lookup':
             return AiService._tool_request_lookup(args, user_id)
+        elif tool_name == 'fetch_url':
+            return AiService._tool_fetch_url(args)
         else:
             return {'error': f'未知工具: {tool_name}'}
 
@@ -1390,3 +1455,60 @@ class AiService:
             args_str = m.tool_args or '{}'
             lines.append(f'- 意图"{m.intent}" → 调用 {m.tool_name}({args_str}) [成功{m.success_count}次]')
         return '\n'.join(lines)
+
+    @staticmethod
+    def _tool_fetch_url(args: dict) -> dict:
+        """调用外部URL获取数据"""
+        url = args.get('url', '')
+        if not url:
+            return {'error': 'URL不能为空'}
+
+        # 安全检查：只允许HTTP/HTTPS协议
+        if not url.startswith(('http://', 'https://')):
+            return {'error': '只支持HTTP/HTTPS协议的URL'}
+
+        method = args.get('method', 'GET').upper()
+        headers = args.get('headers', {})
+        body = args.get('body')
+        timeout = min(args.get('timeout', 15), 30)  # 最大30秒
+
+        try:
+            req_headers = {'Accept': 'application/json, text/plain, */*'}
+            if headers and isinstance(headers, dict):
+                req_headers.update(headers)
+
+            if method == 'POST':
+                resp = requests.post(url, headers=req_headers, json=body, timeout=timeout)
+            else:
+                resp = requests.get(url, headers=req_headers, timeout=timeout)
+
+            resp.raise_for_status()
+
+            # 尝试解析JSON
+            content_type = resp.headers.get('Content-Type', '')
+            if 'json' in content_type or 'javascript' in content_type:
+                try:
+                    data = resp.json()
+                    # 限制返回数据大小，避免过大
+                    data_str = json.dumps(data, ensure_ascii=False)
+                    if len(data_str) > 50000:
+                        data_str = data_str[:50000] + '\n... (数据已截断)'
+                        data = json.loads(data_str) if data_str.endswith('}]\n... (数据已截断)') else {'_truncated': True, 'preview': data_str[:5000]}
+                    return {'status_code': resp.status_code, 'data': data}
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+            # 非JSON响应
+            text = resp.text
+            if len(text) > 50000:
+                text = text[:50000] + '... (数据已截断)'
+            return {'status_code': resp.status_code, 'content': text}
+
+        except requests.Timeout:
+            return {'error': f'请求超时（{timeout}秒）'}
+        except requests.ConnectionError:
+            return {'error': '连接失败，请检查URL是否正确'}
+        except requests.HTTPError as e:
+            return {'error': f'HTTP错误: {e.response.status_code}', 'status_code': e.response.status_code}
+        except Exception as e:
+            return {'error': f'请求失败: {str(e)}'}

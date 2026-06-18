@@ -10,6 +10,7 @@ class AiChat(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, comment='用户ID')
     title = db.Column(db.String(200), comment='对话标题')
     agent_id = db.Column(db.Integer, comment='关联Agent ID')
+    model_id = db.Column(db.Integer, comment='关联模型ID(AiConfig)')
     is_archived = db.Column(db.Boolean, default=False, comment='是否归档')
     is_deleted = db.Column(db.Boolean, default=False, comment='是否软删除')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -21,6 +22,7 @@ class AiChat(db.Model):
             'user_id': self.user_id,
             'title': self.title,
             'agent_id': self.agent_id,
+            'model_id': self.model_id,
             'is_archived': self.is_archived,
             'is_deleted': self.is_deleted,
             'created_at': beijing_isoformat(self.created_at),

@@ -265,7 +265,7 @@ const store = useAppStore()
 
 const visibleScripts = computed(() => {
   const scriptIds = store.getUserScriptIds()
-  const base = store.scripts.filter((s) => s.type !== 'export')
+  const base = store.scripts.filter((s) => s.type === 'query')
   if (scriptIds.length === 0) return base
   return base.filter((s) => scriptIds.includes(s.id))
 })

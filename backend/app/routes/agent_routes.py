@@ -76,6 +76,9 @@ def create_agent():
             is_active=data.get('is_active', True),
             created_by=current_user.id,
         )
+        # 设置启用的工具列表
+        if 'enabled_tools' in data:
+            agent.set_enabled_tools(data['enabled_tools'])
         
         if agent.is_default:
             # 取消其他Agent的默认状态
@@ -111,6 +114,8 @@ def update_agent(agent_id):
             agent.system_prompt = data['system_prompt']
         if 'is_active' in data:
             agent.is_active = data['is_active']
+        if 'enabled_tools' in data:
+            agent.set_enabled_tools(data['enabled_tools'])
         
         if data.get('is_default'):
             # 取消其他Agent的默认状态

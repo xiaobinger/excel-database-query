@@ -305,8 +305,8 @@
                     <i class="fas fa-bolt"></i> 缓存: 写入{{ msg.cache_creation_tokens || 0 }} / 命中{{ msg.cache_read_tokens || 0 }}
                   </span>
                 </div>
-                <!-- 重试按钮：仅AI文本消息且非流式中、非卡片类型 -->
-                <div v-if="msg.role === 'assistant' && !msg._streaming && !msg._type && msg.content.trim()" class="message-retry">
+                <!-- 重试按钮：仅AI文本消息且非流式中、非卡片类型、非临时错误消息 -->
+                <div v-if="msg.role === 'assistant' && !msg._streaming && !msg._type && msg.content.trim() && !msg._no_retry" class="message-retry">
                   <el-button text size="small" class="retry-btn" @click="retryAiMessage(msg)" :loading="msg._retrying">
                     <i class="fas fa-redo"></i> 重新回答
                   </el-button>
@@ -1297,6 +1297,14 @@ function selectDropdownModel(command) {
       selectedModel.value = model
     }
   }
+  // 更新当前会话的model_id关联
+  if (currentChatId.value) {
+    const chat = chats.value.find(c => c.id === currentChatId.value)
+    if (chat) {
+      chat.model_id = selectedModel.value?.id || null
+    }
+    api.ai.updateChat(currentChatId.value, { model_id: selectedModel.value?.id || null }).catch(() => {})
+  }
 }
 
 const filteredModels = computed(() => {
@@ -1403,9 +1411,9 @@ async function fetchChats() {
 
 async function createNewChat() {
   try {
-    // 非默认Agent才需要传agent_id，默认Agent后端自动关联
-    const agentId = selectedAgent.value && !selectedAgent.value.is_default ? selectedAgent.value.id : null
-    const res = await api.ai.createChat({ title: '新对话', agent_id: agentId })
+    const agentId = selectedAgent.value?.id || null
+    const modelId = selectedModel.value?.id || null
+    const res = await api.ai.createChat({ title: '新对话', agent_id: agentId, model_id: modelId })
     if (res.data) {
       chats.value.unshift(res.data)
       selectChat(res.data.id)
@@ -1415,7 +1423,23 @@ async function createNewChat() {
 
 async function selectChat(chatId) {
   currentChatId.value = chatId
-  selectedModel.value = null  // 切换对话时重置模型选择为Auto
+  // 根据当前会话的关联数据恢复agent和model选择
+  const chat = chats.value.find(c => c.id === chatId)
+  // 恢复agent
+  if (chat?.agent_id && canSwitchAgent.value) {
+    const agent = availableAgents.value.find(a => a.id === chat.agent_id)
+    selectedAgent.value = agent || availableAgents.value.find(a => a.is_default) || null
+  } else if (canSwitchAgent.value) {
+    const defaultAgent = availableAgents.value.find(a => a.is_default)
+    selectedAgent.value = defaultAgent || null
+  }
+  // 恢复model
+  if (chat?.model_id && canSwitchModel.value) {
+    const model = activeModels.value.find(m => m.id === chat.model_id)
+    selectedModel.value = model || null
+  } else {
+    selectedModel.value = null
+  }
   try {
     const res = await api.ai.getMessages(chatId)
     const msgs = res.data || []
@@ -1469,6 +1493,165 @@ async function selectChat(chatId) {
         if (meta._download_url) base._download_url = meta._download_url
         if (meta._error_msg) base._error_msg = meta._error_msg
         if (meta._ai_suggestion) base._ai_suggestion = meta._ai_suggestion
+      }
+      return base
+    })
+    await nextTick()
+    scrollToBottom()
+
+    // 检测是否有未完成的流式响应，如有则恢复接收
+    await checkAndResumeStream(chatId)
+  } catch {}
+}
+
+async function checkAndResumeStream(chatId) {
+  try {
+    const status = await api.ai.getStreamStatus(chatId)
+    if (!status.active) {
+      // 流刚完成（5秒内），但消息可能还没加载到列表中，重新拉取
+      if (status.status === 'done' && status.content) {
+        // 检查最后一条消息是否已包含此内容
+        const lastMsg = messages.value[messages.value.length - 1]
+        if (!lastMsg || lastMsg.role !== 'assistant' || lastMsg.content !== status.content) {
+          await refreshMessages(chatId)
+        }
+      }
+      return
+    }
+
+    // 有活跃流，移除最后一条可能的临时AI消息（避免重复），然后恢复流式接收
+    const lastMsg = messages.value[messages.value.length - 1]
+    if (lastMsg && lastMsg.role === 'assistant' && lastMsg._streaming) {
+      messages.value.pop()
+    }
+
+    // 创建流式消息占位，预填已有内容
+    const streamMsg = reactive({
+      id: Date.now(),
+      role: 'assistant',
+      content: status.content || '',
+      _streaming: true,
+      _thinking: status.thinking || '',
+      _thinking_done: false,
+      _show_thinking: !!(status.thinking),
+      _thinking_collapsed: false,
+      _tokens: 0,
+      _prompt_tokens: 0,
+      _completion_tokens: 0,
+      cache_creation_tokens: 0,
+      cache_read_tokens: 0,
+      _elapsed: 0,
+    })
+    messages.value.push(streamMsg)
+    loading.value = true
+    await nextTick()
+    scrollToBottom()
+
+    // 通过resume-stream接口继续接收增量内容
+    const url = api.ai.resumeStreamUrl(chatId)
+    const token = localStorage.getItem('token')
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'text/event-stream',
+      },
+    })
+
+    if (!response.ok || !response.body) {
+      streamMsg._streaming = false
+      loading.value = false
+      await refreshMessages(chatId)
+      return
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        const dataStr = line.slice(6).trim()
+        if (!dataStr) continue
+        try {
+          const event = JSON.parse(dataStr)
+          if (event.type === 'thinking') {
+            streamMsg._thinking += event.content
+            streamMsg._show_thinking = true
+          } else if (event.type === 'content') {
+            streamMsg.content += event.content
+          } else if (event.type === 'done') {
+            streamMsg._streaming = false
+            streamMsg._thinking_done = true
+            if (event.message_id) {
+              streamMsg.id = event.message_id
+            }
+          } else if (event.type === 'error') {
+            streamMsg._streaming = false
+            streamMsg.content = event.content || 'AI服务调用失败'
+            streamMsg._no_retry = true
+          } else if (event.type === 'idle') {
+            // 无活跃流，移除占位消息
+            const idx = messages.value.findIndex(m => m.id === streamMsg.id)
+            if (idx > -1) messages.value.splice(idx, 1)
+          }
+        } catch {}
+      }
+      await nextTick()
+      scrollToBottom()
+    }
+
+    // 处理buffer剩余数据
+    if (buffer.trim()) {
+      const lines = buffer.split('\n')
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        const dataStr = line.slice(6).trim()
+        if (!dataStr) continue
+        try {
+          const event = JSON.parse(dataStr)
+          if (event.type === 'content') {
+            streamMsg.content += event.content
+          } else if (event.type === 'done') {
+            streamMsg._streaming = false
+            if (event.message_id) {
+              streamMsg.id = event.message_id
+            }
+          }
+        } catch {}
+      }
+    }
+
+    // 恢复完成后重新拉取消息列表，确保数据一致
+    await refreshMessages(chatId)
+  } catch {
+    loading.value = false
+  } finally {
+    loading.value = false
+  }
+}
+
+async function refreshMessages(chatId) {
+  try {
+    const res = await api.ai.getMessages(chatId)
+    const msgs = res.data || []
+    messages.value = msgs.map(m => {
+      const base = { ...m, _dismissed: false, _tokens: m.tokens_used || 0, _prompt_tokens: m.prompt_tokens || 0, _completion_tokens: m.completion_tokens || 0, _elapsed: m.elapsed || 0, cache_creation_tokens: m.cache_creation_tokens || 0, cache_read_tokens: m.cache_read_tokens || 0 }
+      if (m._metadata) {
+        const meta = m._metadata
+        if (meta._thinking) {
+          base._thinking = meta._thinking
+          base._thinking_done = meta._thinking_done || false
+          base._show_thinking = true
+          base._thinking_collapsed = true
+        }
       }
       return base
     })
@@ -1599,14 +1782,16 @@ async function retryAiMessage(msg) {
     if (res.data?.user_content) {
       // 不删除任何消息，直接重新发送用户问题
       loading.value = true
+      // 使用原消息的agent_id，确保关联正确
+      const retryAgentId = msg.agent_id || selectedAgent.value?.id || null
       try {
         // 根据模型配置决定是否使用流式输出
         const modelConfig = activeModels.value[0] || null
         const useStreaming = modelConfig ? modelConfig.enable_streaming !== false : true
         if (useStreaming) {
-          await sendStreamMessage(res.data.user_content, null)
+          await sendStreamMessage(res.data.user_content, null, retryAgentId)
         } else {
-          const sendRes = await api.ai.sendMessage(currentChatId.value, { content: res.data.user_content })
+          const sendRes = await api.ai.sendMessage(currentChatId.value, { content: res.data.user_content, agent_id: retryAgentId })
           if (sendRes.data?.assistant_message) {
             messages.value.push(sendRes.data.assistant_message)
           }
@@ -1834,7 +2019,7 @@ async function sendMessage() {
 
   const currentModelId = selectedModel.value?.id || null
   const currentModel = selectedModel.value
-  const currentAgentId = selectedAgent.value?.id && !selectedAgent.value.is_default ? selectedAgent.value.id : null
+  const currentAgentId = selectedAgent.value?.id || null
   inputText.value = ''
   loading.value = true
 
@@ -2111,7 +2296,7 @@ async function sendStreamMessage(content, modelId, agentId) {
           await handleToolResults(res.data.tool_results)
         }
       } catch {
-        messages.value.push({ id: Date.now(), role: 'assistant', content: '请求失败，请稍后重试' })
+        messages.value.push({ id: Date.now(), role: 'assistant', content: '请求失败，请稍后重试', _no_retry: true })
       }
       return
     }
@@ -2131,7 +2316,7 @@ async function sendStreamMessage(content, modelId, agentId) {
           await handleToolResults(res.data.tool_results)
         }
       } catch {
-        messages.value.push({ id: Date.now(), role: 'assistant', content: '请求失败，请稍后重试' })
+        messages.value.push({ id: Date.now(), role: 'assistant', content: '请求失败，请稍后重试', _no_retry: true })
       }
       return
     }
@@ -2199,10 +2384,12 @@ async function sendStreamMessage(content, modelId, agentId) {
             } else if (event.type === 'error') {
               streamMsg._streaming = false
               streamMsg.content = event.content || 'AI服务调用失败'
+              streamMsg._no_retry = true
             } else if (event.type === 'aborted') {
               streamMsg._streaming = false
               if (!streamMsg.content.trim()) {
                 streamMsg.content = '任务已被用户手动终止'
+                streamMsg._no_retry = true
               } else {
                 streamMsg.content += '\n\n*任务已被用户手动终止*'
               }
@@ -2239,6 +2426,7 @@ async function sendStreamMessage(content, modelId, agentId) {
           } else if (event.type === 'error') {
             streamMsg._streaming = false
             streamMsg.content = event.content || 'AI服务调用失败'
+            streamMsg._no_retry = true
           }
         } catch (parseErr) {
           console.warn('[SSE] buffer剩余数据JSON解析失败:', dataStr, parseErr)
@@ -2251,11 +2439,13 @@ async function sendStreamMessage(content, modelId, agentId) {
       // 用户主动终止
       if (!streamMsg.content.trim()) {
         streamMsg.content = '任务已被用户手动终止'
+        streamMsg._no_retry = true
       } else {
         streamMsg.content += '\n\n*任务已被用户手动终止*'
       }
     } else {
       streamMsg.content += '\n\n[连接中断]'
+      streamMsg._no_retry = true
     }
   } finally {
     abortController.value = null
@@ -3622,6 +3812,14 @@ function selectDropdownAgent(command) {
   const agent = availableAgents.value.find(a => a.id === command)
   if (agent) {
     selectedAgent.value = agent
+    // 更新当前会话的agent_id关联
+    if (currentChatId.value) {
+      const chat = chats.value.find(c => c.id === currentChatId.value)
+      if (chat) {
+        chat.agent_id = agent.id
+      }
+      api.ai.updateChat(currentChatId.value, { agent_id: agent.id }).catch(() => {})
+    }
   }
 }
 
@@ -3665,6 +3863,14 @@ function handleInputBlur() {
 
 function selectMentionModel(model) {
   selectedModel.value = model
+  // 更新当前会话的model_id关联
+  if (currentChatId.value) {
+    const chat = chats.value.find(c => c.id === currentChatId.value)
+    if (chat) {
+      chat.model_id = model?.id || null
+    }
+    api.ai.updateChat(currentChatId.value, { model_id: model?.id || null }).catch(() => {})
+  }
   // Remove @... from input text and don't add model name to text
   // The model is shown as a tag above the input instead
   if (mentionTriggerIndex.value >= 0) {
@@ -3688,6 +3894,14 @@ function selectMentionModel(model) {
 
 function removeSelectedModel() {
   selectedModel.value = null
+  // 更新当前会话的model_id关联
+  if (currentChatId.value) {
+    const chat = chats.value.find(c => c.id === currentChatId.value)
+    if (chat) {
+      chat.model_id = null
+    }
+    api.ai.updateChat(currentChatId.value, { model_id: null }).catch(() => {})
+  }
 }
 
 function handleMentionKeydown(e) {

@@ -22,6 +22,12 @@
         <el-table-column type="selection" width="50" align="center" />
         <el-table-column prop="name" label="名称" min-width="140" show-overflow-tooltip />
         <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
+        <el-table-column label="启用工具" width="120" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="!row.enabled_tools" type="info" size="small">全部</el-tag>
+            <el-tag v-else size="small">{{ row.enabled_tools.length }}个</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="is_default" label="默认" width="80" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.is_default" type="success" size="small">默认</el-tag>
@@ -66,6 +72,16 @@
         <el-form-item label="系统提示词" prop="system_prompt">
           <el-input v-model="form.system_prompt" type="textarea" :rows="12" placeholder="Agent的系统提示词，定义Agent的行为规则和能力范围" />
         </el-form-item>
+        <el-form-item label="启用工具">
+          <div style="width: 100%">
+            <div style="margin-bottom: 8px">
+              <el-checkbox v-model="useAllTools" @change="onUseAllToolsChange">全部启用（不限制）</el-checkbox>
+            </div>
+            <el-checkbox-group v-model="form.enabled_tools" :disabled="useAllTools" style="display: flex; flex-wrap: wrap; gap: 8px">
+              <el-checkbox v-for="t in toolOptions" :key="t.name" :label="t.name">{{ t.label }}</el-checkbox>
+            </el-checkbox-group>
+          </div>
+        </el-form-item>
         <div style="display: flex; gap: 12px">
           <el-form-item label="是否默认" style="flex: 1">
             <el-switch v-model="form.is_default" />
@@ -99,11 +115,27 @@ const formRef = ref(null)
 const agents = ref([])
 const selectedRows = ref([])
 const tableRef = ref(null)
+const useAllTools = ref(true)
+
+// 可选工具列表（名称与后端AI_TOOLS定义一致）
+const toolOptions = [
+  { name: 'list_export_options', label: '列出导出选项' },
+  { name: 'request_export', label: '执行导出' },
+  { name: 'parse_uploaded_file', label: '解析上传文件' },
+  { name: 'list_query_options', label: '列出查询选项' },
+  { name: 'request_query', label: '执行查询' },
+  { name: 'list_system_tasks', label: '列出系统任务' },
+  { name: 'request_system_task', label: '执行系统任务' },
+  { name: 'list_lookup_options', label: '列出信息查询' },
+  { name: 'request_lookup', label: '执行信息查询' },
+  { name: 'fetch_url', label: '请求外部URL' },
+]
 
 const defaultForm = {
   name: '',
   description: '',
   system_prompt: '',
+  enabled_tools: null,
   is_default: false,
   is_active: true,
 }
@@ -134,15 +166,27 @@ function openDialog(row) {
       name: row.name,
       description: row.description || '',
       system_prompt: row.system_prompt || '',
+      enabled_tools: row.enabled_tools ? [...row.enabled_tools] : null,
       is_default: row.is_default,
       is_active: row.is_active,
     })
+    useAllTools.value = !row.enabled_tools
   } else {
     isEdit.value = false
     editId.value = null
     Object.assign(form, { ...defaultForm })
+    useAllTools.value = true
   }
   dialogVisible.value = true
+}
+
+function onUseAllToolsChange(val) {
+  if (val) {
+    form.enabled_tools = null
+  } else if (!form.enabled_tools) {
+    // 默认不勾选任何工具，让用户自己选
+    form.enabled_tools = []
+  }
 }
 
 async function handleSubmit() {
@@ -155,11 +199,16 @@ async function handleSubmit() {
 
   submitting.value = true
   try {
+    // 全部启用时传null
+    const payload = { ...form }
+    if (useAllTools.value) {
+      payload.enabled_tools = null
+    }
     if (isEdit.value) {
-      await api.agent.update(editId.value, form)
+      await api.agent.update(editId.value, payload)
       ElMessage.success('更新成功')
     } else {
-      await api.agent.create(form)
+      await api.agent.create(payload)
       ElMessage.success('创建成功')
     }
     dialogVisible.value = false

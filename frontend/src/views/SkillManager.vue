@@ -17,6 +17,9 @@
               <el-option label="用户" value="user" />
               <el-option label="自动" value="auto" />
             </el-select>
+            <el-select v-model="filterAgent" placeholder="Agent筛选" clearable filterable style="width: 160px; margin-right: 12px" @change="fetchSkills">
+              <el-option v-for="a in agents" :key="a.id" :label="a.name" :value="a.id" />
+            </el-select>
             <el-button v-hasPermi="['skill:delete']" type="danger" size="small" :disabled="selectedRows.length === 0" @click="handleBatchDelete">
               <i class="fas fa-trash-alt"></i> 批量删除{{ selectedRows.length > 0 ? `(${selectedRows.length})` : '' }}
             </el-button>
@@ -46,6 +49,13 @@
         <el-table-column prop="source" label="来源" width="100" align="center">
           <template #default="{ row }">
             <el-tag size="small" type="info">{{ sourceLabel(row.source) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="归属 Agent" width="140" align="center">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.agent_id ? 'warning' : 'info'">
+              {{ row.agent_id ? (agents.find(a => a.id === row.agent_id)?.name || `#${row.agent_id}`) : '通用' }}
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="version" label="版本" width="80" align="center" />
@@ -101,7 +111,12 @@
           <el-input v-model="form.description" type="textarea" :rows="2" placeholder="描述此技能" />
         </el-form-item>
         <el-form-item label="技能内容">
-          <el-input v-model="form.content" type="textarea" :rows="6" placeholder="JSON格式的技能内容" />
+          <el-input v-model="form.content" type="textarea" :rows="6" placeholder="JSON格式的技能内容，作为领域知识注入Agent上下文" />
+        </el-form-item>
+        <el-form-item label="关联 Agent">
+          <el-select v-model="form.agent_id" clearable placeholder="不选则为所有Agent通用" style="width: 100%">
+            <el-option v-for="a in agents" :key="a.id" :label="a.name + (a.is_default ? '（默认）' : '')" :value="a.id" />
+          </el-select>
         </el-form-item>
         <el-form-item label="触发条件">
           <el-input v-model="form.trigger_conditions" type="textarea" :rows="3" placeholder="JSON格式的触发条件（可选）" />
@@ -129,8 +144,10 @@ const isEdit = ref(false)
 const editId = ref(null)
 const formRef = ref(null)
 const skills = ref([])
+const agents = ref([])
 const filterCategory = ref('')
 const filterType = ref('')
+const filterAgent = ref(null)
 const selectedRows = ref([])
 const tableRef = ref(null)
 
@@ -140,6 +157,7 @@ const defaultForm = {
   category: 'workflow',
   description: '',
   content: '',
+  agent_id: null,
   trigger_conditions: '',
 }
 
@@ -169,6 +187,7 @@ async function fetchSkills() {
     const params = {}
     if (filterCategory.value) params.category = filterCategory.value
     if (filterType.value) params.skill_type = filterType.value
+    if (filterAgent.value) params.agent_id = filterAgent.value
     const res = await api.ai.getSkills(params)
     skills.value = res.data || []
   } catch {
@@ -188,6 +207,7 @@ function openDialog(row) {
       category: row.category,
       description: row.description || '',
       content: typeof row.content === 'object' ? JSON.stringify(row.content, null, 2) : (row.content || ''),
+      agent_id: row.agent_id || null,
       trigger_conditions: typeof row.trigger_conditions === 'object' ? JSON.stringify(row.trigger_conditions, null, 2) : (row.trigger_conditions || ''),
     })
   } else {
@@ -265,8 +285,18 @@ async function handleDeleteAll() {
   } catch {}
 }
 
+async function fetchAgents() {
+  try {
+    const res = await api.agent.getAll()
+    agents.value = res.data || []
+  } catch {
+    agents.value = []
+  }
+}
+
 onMounted(() => {
   fetchSkills()
+  fetchAgents()
 })
 </script>
 
