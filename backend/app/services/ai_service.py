@@ -474,50 +474,45 @@ class AiService:
 
     @staticmethod
     def build_chat_context(user_id: int, chat_id: int = None, agent_id: int = None) -> str:
-        """构建AI对话上下文，包含用户Skills和行为摘要，按agent_id筛选"""
+        """构建AI对话上下文，包含用户Skills和行为摘要，按agent_id筛选。
+        注意：上下文会消耗token，需控制总量，避免每轮对话成本过高。"""
         from app.models.ai_skill import AiSkill
         from app.models.user_behavior import UserBehavior
 
         context_parts = []
 
         # Add user skills (当前Agent专属技能 + 无Agent关联的通用技能)
+        # 只注入名称和描述，不注入content正文（正文可能很长，应通过RAG按需检索）
         skill_query = AiSkill.query.filter(
             (AiSkill.skill_type == 'system') | (AiSkill.user_id == user_id),
             AiSkill.is_active == True
         )
         if agent_id:
-            # 含当前Agent专属技能 + agent_id 为空的通用技能
             skill_query = skill_query.filter(
                 (AiSkill.agent_id == agent_id) | (AiSkill.agent_id == None)
             )
-        skills = skill_query.order_by(AiSkill.category).all()
+        skills = skill_query.order_by(AiSkill.category).limit(10).all()
 
         if skills:
             context_parts.append('\n## 你已掌握的领域知识/技能')
             for skill in skills:
                 scope = '[Agent专属]' if skill.agent_id else '[通用]'
                 line = f'- {scope} {skill.name}({skill.category}): {skill.description or ""}'
-                # 注入完整 content（领域知识正文），兼容 dict / JSON字符串 / 纯文本
+                # 只注入content的前200字符摘要，避免过长
                 if skill.content:
-                    try:
-                        c = json.loads(skill.content) if isinstance(skill.content, str) else skill.content
-                    except Exception:
-                        c = skill.content
-                    if isinstance(c, dict):
-                        detail = '\n'.join(f'    · {k}: {v}' for k, v in c.items())
-                        if detail:
-                            line += '\n' + detail
-                    elif c:
-                        line += f'\n    {c}'
+                    content_str = skill.content if isinstance(skill.content, str) else json.dumps(skill.content, ensure_ascii=False)
+                    if len(content_str) > 200:
+                        content_str = content_str[:200] + '...'
+                    line += f'\n    {content_str}'
                 context_parts.append(line)
 
-        # Add recent behavior summary (筛选当前Agent的行为)
+        # Add recent behavior summary (精简：只取最近10条，按动作类型聚合)
         behavior_query = UserBehavior.query.filter_by(user_id=user_id)
         if agent_id:
             behavior_query = behavior_query.filter(
                 (UserBehavior.agent_id == agent_id)
             )
-        recent_behaviors = behavior_query.order_by(UserBehavior.created_at.desc()).limit(20).all()
+        recent_behaviors = behavior_query.order_by(UserBehavior.created_at.desc()).limit(10).all()
 
         if recent_behaviors:
             action_counts = {}
@@ -526,15 +521,15 @@ class AiService:
                 action_counts[key] = action_counts.get(key, 0) + 1
 
             context_parts.append('\n## 用户近期行为摘要')
-            for key, count in sorted(action_counts.items(), key=lambda x: -x[1]):
+            for key, count in sorted(action_counts.items(), key=lambda x: -x[1])[:5]:
                 context_parts.append(f'- {key}: {count}次')
 
-        # Add tool call memories (筛选当前Agent的记忆)
+        # Add tool call memories (限制5条，精简格式)
         memory_context = AiService.build_memory_context(user_id, agent_id=agent_id)
         if memory_context:
             context_parts.append(memory_context)
 
-        # Add agent memories (用户特别要求和偏好)
+        # Add agent memories (用户特别要求和偏好，限制10条)
         if agent_id:
             agent_memory_context = AiService.build_agent_memory_context(user_id, agent_id)
             if agent_memory_context:
@@ -1451,15 +1446,18 @@ class AiService:
 
     @staticmethod
     def build_memory_context(user_id: int, agent_id: int = None) -> str:
-        """构建工具调用记忆上下文，注入到系统提示词中，按agent_id筛选"""
-        memories = AiService.get_tool_memories(user_id, limit=20, agent_id=agent_id)
+        """构建工具调用记忆上下文，注入到系统提示词中，按agent_id筛选。限制5条避免token膨胀。"""
+        memories = AiService.get_tool_memories(user_id, limit=5, agent_id=agent_id)
         if not memories:
             return ''
 
-        lines = ['\n## 用户操作记忆（以下是你之前成功执行过的操作模式，当用户表达类似意图时，请直接参考这些模式调用对应工具，不要重新分析）']
+        lines = ['\n## 用户操作记忆（参考这些模式调用工具）']
         for m in memories:
             args_str = m.tool_args or '{}'
-            lines.append(f'- 意图"{m.intent}" → 调用 {m.tool_name}({args_str}) [成功{m.success_count}次]')
+            # 精简：意图截断50字符，参数截断80字符
+            intent_short = (m.intent[:50] + '...') if len(m.intent) > 50 else m.intent
+            args_short = (args_str[:80] + '...') if len(args_str) > 80 else args_str
+            lines.append(f'- "{intent_short}" → {m.tool_name}({args_short}) [×{m.success_count}]')
         return '\n'.join(lines)
 
     @staticmethod
@@ -1473,20 +1471,22 @@ class AiService:
 
     @staticmethod
     def build_agent_memory_context(user_id: int, agent_id: int) -> str:
-        """构建Agent记忆上下文，注入到系统提示词中"""
+        """构建Agent记忆上下文，注入到系统提示词中。限制10条避免token膨胀。"""
         from app.models.agent_memory import AgentMemory
 
         memories = AgentMemory.query.filter_by(
             user_id=user_id, agent_id=agent_id, is_active=True
-        ).order_by(AgentMemory.created_at.desc()).all()
+        ).order_by(AgentMemory.created_at.desc()).limit(10).all()
 
         if not memories:
             return ''
 
-        lines = ['\n## 用户特别要求和偏好（你必须严格遵守以下规则，不要违反用户的这些要求）']
+        lines = ['\n## 用户特别要求（必须遵守）']
         for m in memories:
             type_label = {'rule': '规则', 'preference': '偏好', 'fact': '事实'}.get(m.memory_type, '规则')
-            lines.append(f'- [{type_label}] {m.content}')
+            # 内容截断100字符
+            content_short = (m.content[:100] + '...') if len(m.content) > 100 else m.content
+            lines.append(f'- [{type_label}] {content_short}')
         return '\n'.join(lines)
 
     @staticmethod

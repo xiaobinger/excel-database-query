@@ -856,6 +856,11 @@ def send_message(chat_id):
                     '- 当用户上传文件时，消息中会包含文件信息（行数和列名），根据列名自动匹配最合适的查询或导出选项\n'
                 messages.append({'role': 'system', 'content': sys_prompt})
 
+        # 截断历史消息：只保留最近50条，避免token膨胀
+        MAX_HISTORY = 50
+        if len(history) > MAX_HISTORY:
+            history = history[-MAX_HISTORY:]
+
         for msg in history:
             messages.append({'role': msg.role, 'content': msg.content})
 
@@ -1460,6 +1465,11 @@ def send_message_stream(chat_id):
                     '- 重要：如果用户同时要求对多个对象执行同样的API系统任务（如"解绑SN001、SN002、SN003"），请在同一次回复中同时调用多个 request_system_task，每个调用对应一个对象，系统会自动并行执行，你只需汇总所有结果用列表形式反馈给用户\n' \
                     '- 重要：调用 list_lookup_options 时，如果用户提供了具体的参数值（如SN号、商户号等），务必同时传入 params 参数，这样当匹配到唯一查询时系统可以自动执行，大幅加快响应速度\n'
                 messages.append({'role': 'system', 'content': sys_prompt})
+
+        # 截断历史消息：只保留最近50条，避免token膨胀
+        MAX_HISTORY = 50
+        if len(history) > MAX_HISTORY:
+            history = history[-MAX_HISTORY:]
 
         for msg in history:
             messages.append({'role': msg.role, 'content': msg.content})

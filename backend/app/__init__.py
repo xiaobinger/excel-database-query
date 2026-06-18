@@ -42,7 +42,7 @@ def create_app(config_name='default'):
         from app.models.ai_strategy import AiStrategy
         from app.models.tool_memory import ToolMemory
         from app.models.ai_agent import AiAgent
-    from app.models.agent_memory import AgentMemory
+        from app.models.agent_memory import AgentMemory
         db.create_all()
         _auto_migrate(app)
         _init_default_admin(app)
