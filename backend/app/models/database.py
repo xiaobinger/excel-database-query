@@ -47,6 +47,7 @@ class DatabaseConnection(db.Model):
 
     def to_config_dict(self) -> dict:
         config = {
+            'conn_id': self.id,
             'type': self.db_type,
             'host': self.host,
             'port': self.port,

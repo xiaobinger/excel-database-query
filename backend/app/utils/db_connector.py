@@ -243,6 +243,58 @@ class DatabaseConnector:
         finally:
             connection.close()
     
+    def _is_connection_error(self, error: Exception) -> bool:
+        """判断是否为连接类错误（需要重建连接）"""
+        error_str = str(error).lower()
+        connection_keywords = [
+            'lost connection', 'connection', 'connect', 'timed out', 'timeout',
+            'broken pipe', 'gone away', 'no connection', 'not connected',
+            'connection pool', 'pool exhausted', 'cannot connect',
+            'refused', 'unreachable', 'reset by peer', 'network',
+            'ssh tunnel', 'tunnel', '2006',  # MySQL server has gone away
+            '2003',  # Can't connect to MySQL server
+            '2013',  # Lost connection during query
+            '08001',  # SQL Server connection error
+            '08003',  # SQL Server connection not open
+            '08004',  # SQL Server connection rejected
+            '08006',  # SQL Server connection failure
+            '08007',  # SQL Server transaction state unknown
+        ]
+        return any(kw in error_str for kw in connection_keywords)
+    
+    def _reconnect(self):
+        """重建数据库引擎和SSH隧道，并同步更新连接池缓存"""
+        logger.warning(f'数据库连接器: 正在重建连接 [{self.config.get("host")}:{self.config.get("port")}]...')
+        try:
+            if self.engine:
+                self.engine.dispose()
+                self.engine = None
+        except Exception:
+            pass
+        
+        try:
+            if self.ssh_tunnel:
+                self._close_ssh_tunnel()
+        except Exception:
+            pass
+        
+        # 重建engine和SSH隧道
+        self._initialize_engine()
+        logger.info('数据库连接器: 连接重建完成')
+        
+        # 同步更新连接池缓存中的connector引用
+        try:
+            from app.utils.connection_pool import ConnectionPoolManager
+            pool = ConnectionPoolManager.get_instance()
+            # 从config中获取conn_id（如果有的话）
+            conn_id = self.config.get('conn_id')
+            if conn_id:
+                with pool._connector_lock:
+                    pool._connectors[conn_id] = self
+                logger.info(f'数据库连接器: 已同步更新连接池缓存 [ID={conn_id}]')
+        except Exception as sync_err:
+            logger.warning(f'数据库连接器: 同步连接池缓存失败: {sync_err}')
+    
     def execute_query(self, sql: str, params: Dict[str, Any], 
                    timeout: int = 30, max_rows: int = 0, chunk_size: int = 5000) -> List[Tuple]:
         if not self.engine:
@@ -278,28 +330,76 @@ class DatabaseConnector:
                     complete_sql = complete_sql.replace(f':{key}', f"'{value}'" if isinstance(value, str) else str(value))
                 
                 logger.info(f"查询执行成功，返回 {len(all_rows)} 行，耗时 {execution_time:.3f} 秒")
-                logger.info(f"完整 SQL: {complete_sql}")
-                logger.info(f"查询参数: {params}")
                 return all_rows
                 
         except SQLAlchemyError as e:
+            # 连接类错误：重建连接后重试一次
+            if self._is_connection_error(e):
+                logger.warning(f'查询遇到连接错误: {e}，正在重建连接重试...')
+                try:
+                    self._reconnect()
+                    with self.get_connection() as conn:
+                        result = conn.execute(text(sql), params)
+                        all_rows = []
+                        while True:
+                            if max_rows > 0:
+                                remaining = max_rows - len(all_rows)
+                                if remaining <= 0:
+                                    break
+                                batch = result.fetchmany(min(chunk_size, remaining))
+                            else:
+                                batch = result.fetchmany(chunk_size)
+                            if not batch:
+                                break
+                            all_rows.extend(batch)
+                            if max_rows > 0 and len(all_rows) >= max_rows:
+                                break
+                        logger.info(f"重建连接后查询成功，返回 {len(all_rows)} 行")
+                        return all_rows
+                except Exception as retry_err:
+                    logger.error(f"重建连接后重试仍然失败: {retry_err}")
+                    raise retry_err
+            
             execution_time = time.time() - start_time
             complete_sql = sql
             for key, value in params.items():
                 complete_sql = complete_sql.replace(f':{key}', f"'{value}'" if isinstance(value, str) else str(value))
             logger.error(f"查询执行失败: {str(e)}，耗时 {execution_time:.3f} 秒")
-            logger.error(f"完整 SQL: {complete_sql}")
-            logger.error(f"查询参数: {params}")
             raise
         
         except Exception as e:
+            # 连接类错误：重建连接后重试一次
+            if self._is_connection_error(e):
+                logger.warning(f'查询遇到连接错误: {e}，正在重建连接重试...')
+                try:
+                    self._reconnect()
+                    with self.get_connection() as conn:
+                        result = conn.execute(text(sql), params)
+                        all_rows = []
+                        while True:
+                            if max_rows > 0:
+                                remaining = max_rows - len(all_rows)
+                                if remaining <= 0:
+                                    break
+                                batch = result.fetchmany(min(chunk_size, remaining))
+                            else:
+                                batch = result.fetchmany(chunk_size)
+                            if not batch:
+                                break
+                            all_rows.extend(batch)
+                            if max_rows > 0 and len(all_rows) >= max_rows:
+                                break
+                        logger.info(f"重建连接后查询成功，返回 {len(all_rows)} 行")
+                        return all_rows
+                except Exception as retry_err:
+                    logger.error(f"重建连接后重试仍然失败: {retry_err}")
+                    raise retry_err
+            
             execution_time = time.time() - start_time
             complete_sql = sql
             for key, value in params.items():
                 complete_sql = complete_sql.replace(f':{key}', f"'{value}'" if isinstance(value, str) else str(value))
             logger.error(f"未知错误: {str(e)}，耗时 {execution_time:.3f} 秒")
-            logger.error(f"完整 SQL: {complete_sql}")
-            logger.error(f"查询参数: {params}")
             raise
     
     def execute_batch_queries(self, sql: str, params_list: List[Dict[str, Any]],
@@ -377,74 +477,91 @@ class DatabaseConnector:
         start_time = time.time()
         
         try:
-            with self.get_connection() as conn:
-                import re
-                bind_matches = re.findall(r':(\w+)', sql)
-                bind_param = bind_matches[0] if bind_matches else 'value'
-                
-                param_values = []
-                for params in params_list:
-                    for v in params.values():
-                        param_values.append(str(v))
-                        break
-                
-                in_chunk_size = 500
-                all_rows = []
-                total_param_count = len(param_values)
-                
-                for chunk_start in range(0, total_param_count, in_chunk_size):
-                    chunk_values = param_values[chunk_start:chunk_start + in_chunk_size]
-                    escaped_values = [v.replace("'", "''") for v in chunk_values]
-                    in_clause = f"({', '.join([f"'{v}'" for v in escaped_values])})"
-                    
-                    modified_sql = re.sub(rf':{bind_param}\b', in_clause, sql, flags=re.IGNORECASE)
-                    
-                    logger.info(f"IN 查询分片 {chunk_start // in_chunk_size + 1}/{(total_param_count + in_chunk_size - 1) // in_chunk_size}，参数数: {len(chunk_values)}")
-                    
-                    result = conn.execute(text(modified_sql))
-                    
-                    while True:
-                        if max_rows > 0:
-                            remaining = max_rows - len(all_rows)
-                            if remaining <= 0:
-                                break
-                            batch = result.fetchmany(min(chunk_size, remaining))
-                        else:
-                            batch = result.fetchmany(chunk_size)
-                        
-                        if not batch:
-                            break
-                        all_rows.extend(batch)
-                        
-                        if max_rows > 0 and len(all_rows) >= max_rows:
-                            break
-                    
-                    if max_rows > 0 and len(all_rows) >= max_rows:
-                        break
-                
-                execution_time = time.time() - start_time
-                
-                logger.info(f"IN 查询执行成功，返回 {len(all_rows)} 行，耗时 {execution_time:.3f} 秒")
-                
-                return {
-                    'results': [{
-                        'params': {bind_param: param_values},
-                        'result': all_rows,
-                        'success': True
-                    }],
-                    'success': 1,
-                    'failure': 0,
-                    'errors': []
-                }
+            result = self._do_execute_in_query(sql, params_list, max_rows, chunk_size)
+            execution_time = time.time() - start_time
+            logger.info(f"IN 查询执行成功，耗时 {execution_time:.3f} 秒")
+            return result
                 
         except SQLAlchemyError as e:
+            # 连接类错误：重建连接后重试一次
+            if self._is_connection_error(e):
+                logger.warning(f'IN查询遇到连接错误: {e}，正在重建连接重试...')
+                try:
+                    self._reconnect()
+                    return self._do_execute_in_query(sql, params_list, max_rows, chunk_size)
+                except Exception as retry_err:
+                    logger.error(f"重建连接后重试仍然失败: {retry_err}")
+                    raise retry_err
             execution_time = time.time() - start_time
             logger.error(f"IN 查询执行失败: {str(e)}，耗时 {execution_time:.3f} 秒")
             raise
         except Exception as e:
+            if self._is_connection_error(e):
+                logger.warning(f'IN查询遇到连接错误: {e}，正在重建连接重试...')
+                try:
+                    self._reconnect()
+                    return self._do_execute_in_query(sql, params_list, max_rows, chunk_size)
+                except Exception as retry_err:
+                    logger.error(f"重建连接后重试仍然失败: {retry_err}")
+                    raise retry_err
             execution_time = time.time() - start_time
             logger.error(f"IN 查询未知错误: {str(e)}，耗时 {execution_time:.3f} 秒")
             raise
+    
+    def _do_execute_in_query(self, sql: str, params_list: List[Dict[str, Any]],
+                       max_rows: int = 0, chunk_size: int = 5000) -> Dict[str, Any]:
+        """IN查询的实际执行逻辑（供重试调用）"""
+        import re
+        bind_matches = re.findall(r':(\w+)', sql)
+        bind_param = bind_matches[0] if bind_matches else 'value'
+        
+        param_values = []
+        for params in params_list:
+            for v in params.values():
+                param_values.append(str(v))
+                break
+        
+        in_chunk_size = 500
+        all_rows = []
+        total_param_count = len(param_values)
+        
+        with self.get_connection() as conn:
+            for chunk_start in range(0, total_param_count, in_chunk_size):
+                chunk_values = param_values[chunk_start:chunk_start + in_chunk_size]
+                escaped_values = [v.replace("'", "''") for v in chunk_values]
+                in_clause = f"({', '.join([f"'{v}'" for v in escaped_values])})"
+                
+                modified_sql = re.sub(rf':{bind_param}\b', in_clause, sql, flags=re.IGNORECASE)
+                result = conn.execute(text(modified_sql))
+                
+                while True:
+                    if max_rows > 0:
+                        remaining = max_rows - len(all_rows)
+                        if remaining <= 0:
+                            break
+                        batch = result.fetchmany(min(chunk_size, remaining))
+                    else:
+                        batch = result.fetchmany(chunk_size)
+                    if not batch:
+                        break
+                    all_rows.extend(batch)
+                    if max_rows > 0 and len(all_rows) >= max_rows:
+                        break
+                
+                if max_rows > 0 and len(all_rows) >= max_rows:
+                    break
+        
+        logger.info(f"IN 查询执行成功，返回 {len(all_rows)} 行")
+        return {
+            'results': [{
+                'params': {bind_param: param_values},
+                'result': all_rows,
+                'success': True
+            }],
+            'success': 1,
+            'failure': 0,
+            'errors': []
+        }
     
     def test_connection(self) -> bool:
         """测试数据库连接"""

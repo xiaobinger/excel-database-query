@@ -76,7 +76,7 @@ class ConnectionPoolManager:
             return connector
 
     def get_connector(self, conn_id: int) -> Optional[DatabaseConnector]:
-        """获取数据库连接，如果缓存中没有则创建新连接"""
+        """获取数据库连接，如果缓存中没有或连接不健康则创建新连接"""
         with self._connector_lock:
             connector = self._connectors.get(conn_id)
 
@@ -100,6 +100,27 @@ class ConnectionPoolManager:
         except Exception as e:
             logger.error(f'连接池管理器: 创建连接 [{conn_model.name}] 失败: {e}')
             return None
+
+    def get_connector_with_health_check(self, conn_id: int) -> Optional[DatabaseConnector]:
+        """获取数据库连接，带健康检查。不健康时自动重建连接。"""
+        connector = self.get_connector(conn_id)
+        if not connector:
+            return None
+
+        # 快速检查：engine是否存活
+        if not connector.engine:
+            logger.warning(f'连接池管理器: 连接 [ID={conn_id}] engine不存在，正在重建...')
+            self.reload_connector(conn_id)
+            connector = self.get_connector(conn_id)
+            return connector
+
+        # 健康检查：执行SELECT 1
+        if not self._check_connector_health(connector):
+            logger.warning(f'连接池管理器: 连接 [ID={conn_id}] 健康检查失败，正在重建...')
+            self.reload_connector(conn_id)
+            connector = self.get_connector(conn_id)
+
+        return connector
 
     def _check_connector_health(self, connector: DatabaseConnector) -> bool:
         """检查连接是否健康"""
