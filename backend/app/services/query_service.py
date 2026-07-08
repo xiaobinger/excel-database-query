@@ -268,16 +268,11 @@ class QueryService:
                     params_processed += len(params_list)
                     task.add_log(f'工作表 [{sheet_label}] 处理完成')
 
-                task.total_rows = total_params
-                task.progress = 85
-                task.add_log('开始处理查询结果并写入Excel')
-                db.session.commit()
-                update_task_progress(task_id, 85, '处理查询结果')
-
+                # ============ 所有sheet查询完成，按sheet分批处理并写入 ============
+                # 先提取列头（用于所有sheet共用）
                 first_script = Script.query.get(script_ids[0]) if script_ids else None
                 column_headers = []
                 if first_script:
-                    # 模板模式下从渲染后的SQL提取列名
                     if first_script.is_template and first_script.sql_template:
                         try:
                             template_config = first_script.get_template_config()
@@ -288,16 +283,63 @@ class QueryService:
                     else:
                         column_headers = SQLValidator().extract_column_names(first_script.sql_text)
 
-                processed_results = QueryService._process_all_results(
-                    all_results, column_headers, param_name,
-                    first_script.query_mode if first_script else 'batch'
-                )
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                output_filename = f"result_{timestamp}.xlsx"
+                output_path = os.path.join(output_dir, output_filename)
 
-                total_success = sum(r.get('success_count', 0) for r in all_results.values())
-                total_failure = sum(r.get('failure_count', 0) for r in all_results.values())
+                total_success = 0
+                total_failure = 0
 
-                # 查询成功但未查询到数据，不生成结果文件
-                if len(processed_results) == 0:
+                # 按sheet逐个处理+写入（原子操作）
+                for sheet_idx, current_sheet in enumerate(sheets_to_process):
+                    sheet_label = current_sheet or '默认工作表'
+
+                    # 提取当前sheet的查询结果
+                    suffix = f"_sheet{sheet_idx}"
+                    sheet_results = {k: v for k, v in all_results.items() if k.endswith(suffix)}
+                    if not sheet_results:
+                        task.add_log(f'工作表 [{sheet_label}] 无查询结果，跳过', 'warning')
+                        continue
+
+                    processed_results = QueryService._process_all_results(
+                        sheet_results, column_headers, param_name,
+                        first_script.query_mode if first_script else 'batch'
+                    )
+
+                    sheet_success = sum(r.get('success_count', 0) for r in sheet_results.values())
+                    sheet_failure = sum(r.get('failure_count', 0) for r in sheet_results.values())
+                    total_success += sheet_success
+                    total_failure += sheet_failure
+
+                    if len(processed_results) == 0:
+                        task.add_log(f'工作表 [{sheet_label}] 未查询到数据，不写入', 'warning')
+                        continue
+
+                    # 写入Excel
+                    result_sheet_name = (first_script.result_sheet_name if first_script else '查询结果')
+                    if selected_sheets and len(selected_sheets) > 1:
+                        # 多sheet时，在结果sheet名后追加sheet标识
+                        result_sheet_name = f"{result_sheet_name}_{sheet_label}"
+
+                    if new_sheet:
+                        QueryService._write_new_sheet_for_batch(
+                            output_path, input_file, processed_results,
+                            column_headers, column_mapping or {},
+                            result_sheet_name, merge_strategy,
+                            sheet_results, {}, is_first=(sheet_idx == 0)
+                        )
+                    else:
+                        QueryService._write_existing_sheet_with_mapping(
+                            output_path, input_file, processed_results,
+                            param_name, column_mapping or {}, primary_key,
+                            target_sheet_name=current_sheet  # 回写到对应的原sheet
+                        )
+
+                    task.add_log(f'工作表 [{sheet_label}] 结果已写入: {len(processed_results)}行数据')
+
+                # 最终状态更新
+                task.total_rows = total_params
+                if total_success == 0:
                     task.status = 'completed'
                     task.completed_at = datetime.utcnow()
                     task.total_rows = 0
@@ -311,30 +353,13 @@ class QueryService:
                     update_task_progress(task_id, 100, '查询执行完成（无数据）')
                     return
 
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                output_filename = f"result_{timestamp}.xlsx"
-                output_path = os.path.join(output_dir, output_filename)
-
-                if new_sheet:
-                    QueryService._write_new_sheet(
-                        output_path, input_file, processed_results,
-                        column_headers, column_mapping or {},
-                        first_script.result_sheet_name if first_script else '查询结果',
-                        merge_strategy, all_results, {}
-                    )
-                else:
-                    QueryService._write_existing_sheet_with_mapping(
-                        output_path, input_file, processed_results,
-                        param_name, column_mapping or {}, primary_key
-                    )
-
                 task.status = 'completed'
                 task.completed_at = datetime.utcnow()
                 task.output_file = output_path
                 task.success_count = total_success
                 task.failure_count = total_failure
                 task.progress = 100
-                task.add_log(f'查询执行完成，结果已写入: {output_filename}')
+                task.add_log(f'全部完成，结果已写入: {output_filename}')
                 db.session.commit()
                 update_task_progress(task_id, 100, '查询执行完成')
 
@@ -423,6 +448,44 @@ class QueryService:
         shutil.copy2(input_file, output_path)
         writer = ExcelWriter(output_path)
 
+        try:
+            if not writer.load_existing():
+                writer.create_new()
+
+            if merge_strategy == 'separate':
+                for conn_id, db_result in all_results.items():
+                    if not db_result.get('success') or not db_result.get('results'):
+                        continue
+                    db_name = db_result.get('db_name', f'db_{conn_id}')
+                    db_sheet_name = f"{sheet_name}_{db_name}"
+                    db_results = [r for r in results if r.get('_db_name') == db_name]
+                    if db_results:
+                        QueryService._write_results_to_sheet(writer, db_sheet_name, db_results, column_headers, column_mapping)
+            else:
+                display_results = []
+                for r in results:
+                    r_copy = {k: v for k, v in r.items() if k != '_db_name'}
+                    display_results.append(r_copy)
+                QueryService._write_results_to_sheet(writer, sheet_name, display_results, column_headers, column_mapping)
+
+            writer.save()
+        finally:
+            writer.close()
+
+    @staticmethod
+    def _write_new_sheet_for_batch(output_path: str, input_file: str, results: List[Dict],
+                                   column_headers: List[str], column_mapping: dict,
+                                   sheet_name: str, merge_strategy: str,
+                                   all_results: Dict, connectors: Dict,
+                                   is_first: bool = True):
+        """分批写入新sheet：第一个sheet时复制原文件并打开，后续追加sheet"""
+        import shutil
+        from app.utils.excel_writer import ExcelWriter
+
+        if is_first:
+            shutil.copy2(input_file, output_path)
+
+        writer = ExcelWriter(output_path)
         try:
             if not writer.load_existing():
                 writer.create_new()
@@ -677,15 +740,23 @@ class QueryService:
     @staticmethod
     def _write_existing_sheet_with_mapping(output_path: str, input_file: str, results: List[Dict],
                                            param_column_name: str, column_mapping: dict,
-                                           primary_key: str = ''):
+                                           primary_key: str = '', target_sheet_name: str = None):
         import shutil
         import openpyxl
 
-        shutil.copy2(input_file, output_path)
+        # 如果输出文件已存在（非首个sheet的分批写入），直接打开追加；否则复制输入文件
+        if os.path.exists(output_path):
+            wb = openpyxl.load_workbook(output_path)
+        else:
+            shutil.copy2(input_file, output_path)
+            wb = openpyxl.load_workbook(output_path)
 
         try:
-            wb = openpyxl.load_workbook(output_path)
-            ws = wb.active
+            # 如果指定了目标sheet，切换到该sheet
+            if target_sheet_name and target_sheet_name in wb.sheetnames:
+                ws = wb[target_sheet_name]
+            else:
+                ws = wb.active
 
             excel_headers = []
             for cell in next(ws.iter_rows(min_row=1, max_row=1)):
