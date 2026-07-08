@@ -43,6 +43,14 @@ class ExcelReader:
             logger.error(f"加载 Excel 文件失败: {str(e)}")
             return False
     
+    def set_worksheet(self, sheet_name: str):
+        """切换到指定的工作表"""
+        if not self.workbook:
+            raise RuntimeError("工作簿未加载")
+        if sheet_name not in self.workbook.sheetnames:
+            raise ValueError(f"工作表不存在: {sheet_name}")
+        self.worksheet = self.workbook[sheet_name]
+    
     def get_column_data(self, column: str = 'A', 
                       start_row: int = 2,
                       end_row: Optional[int] = None) -> List[Any]:
@@ -254,6 +262,44 @@ class ExcelReader:
         except Exception as e:
             logger.error(f"获取文件信息失败: {str(e)}")
             return {}
+    
+    def get_all_sheets_info(self) -> List[Dict[str, Any]]:
+        """获取所有工作表的信息（名称、行数、列名），用于让用户选择要执行的sheet"""
+        if not self.workbook:
+            return []
+        
+        try:
+            sheets_info = []
+            for sheet_name in self.workbook.sheetnames:
+                ws = self.workbook[sheet_name]
+                try:
+                    max_row = ws.max_row or 0
+                    max_col = ws.max_column or 0
+                    data_rows = max(0, max_row - 1)  # 减去表头行
+                    
+                    # 读取列名（第一行）
+                    col_names = []
+                    if max_row > 0 and max_col > 0:
+                        for cell in next(ws.iter_rows(min_row=1, max_row=1, max_col=max_col)):
+                            col_names.append(str(cell.value) if cell.value is not None else '')
+                    
+                    # 只有有数据行的sheet才返回
+                    if data_rows > 0:
+                        sheets_info.append({
+                            'sheet_name': sheet_name,
+                            'total_rows': max_row,
+                            'data_rows': data_rows,
+                            'total_columns': max_col,
+                            'column_names': [c for c in col_names if c.strip()],  # 过滤空列名
+                        })
+                except Exception as e:
+                    logger.warning(f"读取工作表 {sheet_name} 信息失败: {e}")
+                    continue
+            
+            return sheets_info
+        except Exception as e:
+            logger.error(f"获取所有工作表信息失败: {e}")
+            return []
     
     def close(self):
         """关闭工作簿"""

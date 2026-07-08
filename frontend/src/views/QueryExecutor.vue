@@ -39,7 +39,30 @@
               <el-descriptions-item label="文件名">{{ uploadedFileInfo.name }}</el-descriptions-item>
               <el-descriptions-item label="大小">{{ formatSize(uploadedFileInfo.size) }}</el-descriptions-item>
             </el-descriptions>
-            <div v-if="detectedColumns.length > 0" style="margin-top: 12px">
+
+            <!-- Sheet选择 -->
+            <div v-if="sheetsInfo.length > 0" style="margin-top: 12px">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                <span style="font-size: 13px; font-weight: 600; color: #303133;">工作表</span>
+                <div>
+                  <el-button size="small" @click="selectAllSheets" text type="primary">全选</el-button>
+                  <el-button size="small" @click="deselectAllSheets" text>取消全选</el-button>
+                </div>
+              </div>
+              <el-table :data="sheetsInfo" border size="small" @selection-change="onSheetSelectionChange" ref="sheetTableRef" style="width: 100%">
+                <el-table-column type="selection" width="45" align="center" />
+                <el-table-column prop="sheet_name" label="工作表名称" min-width="140" />
+                <el-table-column prop="data_rows" label="数据行数" width="90" align="center" />
+                <el-table-column label="列名" min-width="260">
+                  <template #default="{ row }">
+                    <el-tag v-for="col in (row.column_names || []).slice(0, 8)" :key="col" size="small" type="primary" style="margin: 1px 3px">{{ col }}</el-tag>
+                    <el-tag v-if="(row.column_names || []).length > 8" size="small" type="info" style="margin: 1px 3px">+{{ row.column_names.length - 8 }}</el-tag>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+
+            <div v-if="detectedColumns.length > 0 && sheetsInfo.length === 0" style="margin-top: 12px">
               <span style="font-size: 13px; color: #909399; margin-right: 8px">检测到的列:</span>
               <el-tag v-for="col in detectedColumns" :key="col" size="small" type="primary" style="margin: 2px 4px">{{ col }}</el-tag>
             </div>
@@ -276,6 +299,9 @@ const uploadedFileInfo = ref(null)
 const detectedColumns = ref([])
 const uploadRef = ref(null)
 const fileList = ref([])
+const sheetsInfo = ref([])
+const selectedSheets = ref([])
+const sheetTableRef = ref(null)
 const submitting = ref(false)
 const executing = ref(false)
 const taskId = ref(null)
@@ -386,6 +412,8 @@ function onFileChange(file) {
   uploadedFileInfo.value = { name: file.name, size: file.size }
   fileList.value = [file]
   detectedColumns.value = []
+  sheetsInfo.value = []
+  selectedSheets.value = []
   // 文件上传完成后自动触发智能匹配
   autoSmartMatch(file.name)
 }
@@ -395,6 +423,26 @@ function onFileRemove() {
   uploadedFileInfo.value = null
   fileList.value = []
   detectedColumns.value = []
+  sheetsInfo.value = []
+  selectedSheets.value = []
+}
+
+function onSheetSelectionChange(selection) {
+  selectedSheets.value = selection
+}
+
+function selectAllSheets() {
+  if (sheetTableRef.value) {
+    sheetsInfo.value.forEach(row => {
+      sheetTableRef.value.toggleRowSelection(row, true)
+    })
+  }
+}
+
+function deselectAllSheets() {
+  if (sheetTableRef.value) {
+    sheetTableRef.value.clearSelection()
+  }
 }
 
 function formatSize(bytes) {
@@ -582,8 +630,18 @@ async function fetchUploadInfo() {
     } else if (res.data && res.data.columns && Array.isArray(res.data.columns)) {
       detectedColumns.value = res.data.columns
     }
+    // 存储sheet信息
+    if (res.sheets && Array.isArray(res.sheets) && res.sheets.length > 0) {
+      sheetsInfo.value = res.sheets
+      // 自动全选所有sheet
+      await nextTick()
+      selectAllSheets()
+    } else {
+      sheetsInfo.value = []
+    }
   } catch {
     detectedColumns.value = []
+    sheetsInfo.value = []
   }
 }
 
@@ -689,6 +747,12 @@ async function executeQuery() {
     formData.append('file', uploadedFile.value)
     formData.append('param_column', options.param_column)
     formData.append('new_sheet', options.new_sheet)
+
+    // 传入选中的sheet列表
+    if (selectedSheets.value.length > 0) {
+      const sheetNames = selectedSheets.value.map(s => s.sheet_name)
+      formData.append('selected_sheets', JSON.stringify(sheetNames))
+    }
 
     if (!options.new_sheet) {
       const mapping = buildColumnMappingPayload()
@@ -878,6 +942,8 @@ function resetAll() {
   uploadedFileInfo.value = null
   detectedColumns.value = []
   fileList.value = []
+  sheetsInfo.value = []
+  selectedSheets.value = []
   taskId.value = null
   executing.value = false
   progress.value = 0

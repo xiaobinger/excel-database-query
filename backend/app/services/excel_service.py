@@ -10,12 +10,16 @@ logger = logging.getLogger(__name__)
 class ExcelService:
 
     @staticmethod
-    def read_params(file_path: str, param_column: str = None, start_row: int = 2) -> Dict[str, Any]:
+    def read_params(file_path: str, param_column: str = None, start_row: int = 2, sheet_name: str = None) -> Dict[str, Any]:
         reader = ExcelReader(file_path)
         if not reader.load():
             raise ValueError(f"无法加载Excel文件: {file_path}")
 
         try:
+            # 如果指定了sheet_name，切换到该sheet
+            if sheet_name:
+                reader.set_worksheet(sheet_name)
+
             file_info = reader.get_file_info()
             column_names = reader.get_column_names()
 
@@ -112,5 +116,15 @@ class ExcelService:
             return []
         try:
             return reader.get_column_names()
+        finally:
+            reader.close()
+
+    @staticmethod
+    def get_all_sheets_info(file_path: str) -> list:
+        reader = ExcelReader(file_path)
+        if not reader.load():
+            return []
+        try:
+            return reader.get_all_sheets_info()
         finally:
             reader.close()

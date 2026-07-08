@@ -27,11 +27,22 @@ def execute_query():
     new_sheet = request.form.get('new_sheet', 'true')
     column_mapping_str = request.form.get('column_mapping', '{}')
     primary_key = request.form.get('primary_key', '')
+    selected_sheets_str = request.form.get('selected_sheets', '')  # JSON数组或逗号分隔的sheet名称
 
     try:
         column_mapping = json.loads(column_mapping_str) if column_mapping_str else {}
     except (json.JSONDecodeError, TypeError):
         column_mapping = {}
+
+    # 解析选中的sheet列表
+    selected_sheets = []
+    if selected_sheets_str:
+        try:
+            selected_sheets = json.loads(selected_sheets_str)
+            if not isinstance(selected_sheets, list):
+                selected_sheets = [str(selected_sheets)]
+        except (json.JSONDecodeError, TypeError):
+            selected_sheets = [s.strip() for s in selected_sheets_str.split(',') if s.strip()]
 
     if script_ids_str:
         try:
@@ -115,6 +126,7 @@ def execute_query():
             new_sheet=new_sheet_bool,
             column_mapping=column_mapping,
             primary_key=primary_key,
+            selected_sheets=selected_sheets,
         )
 
         # 记录用户行为
@@ -415,11 +427,15 @@ def get_upload_info():
         info = ExcelService.get_file_info(input_path)
         columns = info.get('column_names', [])
 
+        # 获取所有sheet信息
+        all_sheets = ExcelService.get_all_sheets_info(input_path)
+
         return jsonify({
             'success': True,
             'data': info,
             'file_path': input_path,
-            'columns': columns
+            'columns': columns,
+            'sheets': all_sheets
         })
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 400

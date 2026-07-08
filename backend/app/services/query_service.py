@@ -62,13 +62,14 @@ class QueryService:
                             db_connection_ids: List[int], input_file: str, output_dir: str,
                             param_column: str = None, merge_strategy: str = 'concat',
                             new_sheet: bool = True, column_mapping: dict = None,
-                            primary_key: str = ''):
+                            primary_key: str = '', selected_sheets: List[str] = None):
         cancel_event = threading.Event()
         _task_cancel_events[task_id] = cancel_event
         thread = threading.Thread(
             target=QueryService._execute_query_background,
             args=(task_id, script_id, script_ids, db_connection_ids, input_file, output_dir,
-                  param_column, merge_strategy, new_sheet, column_mapping, primary_key, cancel_event),
+                  param_column, merge_strategy, new_sheet, column_mapping, primary_key,
+                  cancel_event, selected_sheets),
             daemon=True
         )
         _task_threads[task_id] = thread
@@ -79,7 +80,8 @@ class QueryService:
                                   db_connection_ids: List[int], input_file: str, output_dir: str,
                                   param_column: str = None, merge_strategy: str = 'concat',
                                   new_sheet: bool = True, column_mapping: dict = None,
-                                  primary_key: str = '', cancel_event: threading.Event = None):
+                                  primary_key: str = '', cancel_event: threading.Event = None,
+                                  selected_sheets: List[str] = None):
         try:
             from app import create_app
             app = create_app()
@@ -108,132 +110,165 @@ class QueryService:
                 total_scripts = len(script_ids)
                 param_name = param_column
 
-                excel_data = ExcelService.read_params(input_file, param_column=param_name)
-                params_data = excel_data['data']
-                column_names = excel_data['column_names']
+                # 如果指定了sheet列表，按sheet分批执行；否则只读默认sheet
+                sheets_to_process = selected_sheets if selected_sheets else [None]
+                total_sheets = len(sheets_to_process)
 
-                if not param_name and column_names:
-                    param_name = column_names[0]
+                # 先统计总参数数（用于进度计算）
+                total_params = 0
+                sheet_param_counts = {}
+                for sheet in sheets_to_process:
+                    try:
+                        excel_data = ExcelService.read_params(input_file, param_column=param_name, sheet_name=sheet)
+                        count = len(excel_data.get('data', []))
+                        sheet_param_counts[sheet or '__default__'] = count
+                        total_params += count
+                    except Exception:
+                        sheet_param_counts[sheet or '__default__'] = 0
 
-                if not params_data:
+                if total_params == 0:
                     raise ValueError("Excel文件中没有数据")
 
-                params_list = [{param_name: str(val)} for val in params_data]
-                task.total_rows = len(params_list)
-                task.add_log(f'从Excel读取到 {len(params_list)} 条参数，参数列: {param_name}')
-                task.progress = 10
+                task.add_log(f'共 {total_sheets} 个工作表，合计 {total_params} 条参数')
+                task.progress = 5
                 db.session.commit()
-                update_task_progress(task_id, 10, f'读取到{len(params_list)}条参数')
+                update_task_progress(task_id, 5, f'共{total_sheets}个sheet，{total_params}条参数')
 
-                for script_idx, sid in enumerate(script_ids):
+                params_processed = 0
+
+                for sheet_idx, current_sheet in enumerate(sheets_to_process):
                     # 检查是否已被取消
                     if cancel_event and cancel_event.is_set():
                         raise RuntimeError('任务已被手动终止')
 
-                    script = Script.query.get(sid)
-                    if not script:
-                        task.add_log(f'脚本不存在: {sid}', 'warning')
+                    sheet_label = current_sheet or '默认工作表'
+                    task.add_log(f'开始处理工作表: {sheet_label} ({sheet_idx+1}/{total_sheets})')
+
+                    excel_data = ExcelService.read_params(input_file, param_column=param_name, sheet_name=current_sheet)
+                    params_data = excel_data['data']
+                    column_names = excel_data['column_names']
+
+                    if not param_name and column_names:
+                        param_name = column_names[0]
+
+                    if not params_data:
+                        task.add_log(f'工作表 [{sheet_label}] 没有数据，跳过', 'warning')
                         continue
 
-                    validator = SQLValidator()
-                    validation = validator.validate(script.sql_text)
-                    if not validation.is_valid:
-                        task.add_log(f'SQL验证失败 [{script.name}]: {validation.message}', 'error')
-                        continue
+                    params_list = [{param_name: str(val)} for val in params_data]
 
-                    task.add_log(f'执行查询选项 [{script.name}]，模式: {script.query_mode}')
+                    for script_idx, sid in enumerate(script_ids):
+                        # 检查是否已被取消
+                        if cancel_event and cancel_event.is_set():
+                            raise RuntimeError('任务已被手动终止')
 
-                    # 如果启用了SQL模板，先渲染模板生成实际SQL
-                    sql_to_execute = script.sql_text
-                    if script.is_template and script.sql_template:
-                        try:
-                            template_config = script.get_template_config()
-                            sql_to_execute = render_sql_template(script.sql_template, template_config)
-                            task.add_log(f'查询选项 [{script.name}] SQL模板渲染完成')
-                        except Exception as e:
-                            task.add_log(f'查询选项 [{script.name}] SQL模板渲染失败: {str(e)}', 'error')
+                        script = Script.query.get(sid)
+                        if not script:
+                            task.add_log(f'脚本不存在: {sid}', 'warning')
                             continue
-                    else:
+
+                        validator = SQLValidator()
+                        validation = validator.validate(script.sql_text)
+                        if not validation.is_valid:
+                            task.add_log(f'SQL验证失败 [{script.name}]: {validation.message}', 'error')
+                            continue
+
+                        task.add_log(f'[Sheet:{sheet_label}] 执行查询选项 [{script.name}]，模式: {script.query_mode}')
+
+                        # 如果启用了SQL模板，先渲染模板生成实际SQL
                         sql_to_execute = script.sql_text
-
-                    script_db_ids = script.get_database_ids()
-                    if not script_db_ids:
-                        script_db_ids = db_connection_ids
-
-                    connectors = {}
-                    for conn_id in script_db_ids:
-                        conn_model = DatabaseConnection.query.get(conn_id)
-                        if not conn_model:
-                            continue
-                        try:
-                            from app.utils.connection_pool import ConnectionPoolManager
-                            pool = ConnectionPoolManager.get_instance()
-                            connector = pool.get_connector_with_health_check(conn_id)
-                            if connector:
-                                connectors[conn_id] = {
-                                    'connector': connector,
-                                    'name': conn_model.name,
-                                    'model': conn_model
-                                }
-                                task.add_log(f'数据库连接就绪: {conn_model.name}')
-                            else:
-                                task.add_log(f'数据库连接失败: {conn_model.name}', 'warning')
-                        except Exception as e:
-                            task.add_log(f'数据库连接失败 {conn_model.name}: {str(e)}', 'error')
-
-                    if not connectors:
-                        task.add_log(f'查询选项 [{script.name}] 没有可用的数据库连接', 'error')
-                        continue
-
-                    progress_base = 10 + int(70 * script_idx / total_scripts)
-                    progress_range = int(70 / total_scripts)
-
-                    with ThreadPoolExecutor(max_workers=min(len(connectors), 8)) as executor:
-                        futures = {}
-                        for conn_id, conn_info in connectors.items():
-                            future = executor.submit(
-                                QueryService._execute_on_database,
-                                conn_id, conn_info['connector'], conn_info['name'],
-                                sql_to_execute, params_list, script.query_mode,
-                                script.timeout, script.batch_size
-                            )
-                            futures[future] = conn_id
-
-                        completed = 0
-                        for future in as_completed(futures):
-                            conn_id = futures[future]
+                        if script.is_template and script.sql_template:
                             try:
-                                result = future.result()
-                                result_key = f"{sid}_{conn_id}"
-                                all_results[result_key] = result
-                                completed += 1
-                                progress = progress_base + int(progress_range * completed / len(connectors))
-                                task.progress = min(progress, 85)
-                                total_result_rows = sum(
-                                    len(item.get('result', []))
-                                    for r in all_results.values()
-                                    for item in r.get('results', []) if r.get('success')
-                                )
-                                task.add_log(f'[{script.name}] 数据库 {result["db_name"]} 查询完成: 成功{result["success_count"]}, 失败{result["failure_count"]}, 结果行{total_result_rows}')
-                                db.session.commit()
-                                update_task_progress(task_id, task.progress, f'数据库 {result["db_name"]} 查询完成')
+                                template_config = script.get_template_config()
+                                sql_to_execute = render_sql_template(script.sql_template, template_config)
+                                task.add_log(f'查询选项 [{script.name}] SQL模板渲染完成')
                             except Exception as e:
-                                completed += 1
-                                conn_info = connectors[conn_id]
-                                result_key = f"{sid}_{conn_id}"
-                                all_results[result_key] = {
-                                    'db_name': conn_info['name'],
-                                    'success': False,
-                                    'results': [],
-                                    'errors': [{'error': str(e)}],
-                                    'success_count': 0,
-                                    'failure_count': len(params_list)
-                                }
-                                task.add_log(f'数据库查询失败: {str(e)}', 'error')
-                                db.session.commit()
+                                task.add_log(f'查询选项 [{script.name}] SQL模板渲染失败: {str(e)}', 'error')
+                                continue
+                        else:
+                            sql_to_execute = script.sql_text
 
-                    # 连接由连接池管理，不再手动关闭
+                        script_db_ids = script.get_database_ids()
+                        if not script_db_ids:
+                            script_db_ids = db_connection_ids
 
+                        connectors = {}
+                        for conn_id in script_db_ids:
+                            conn_model = DatabaseConnection.query.get(conn_id)
+                            if not conn_model:
+                                continue
+                            try:
+                                from app.utils.connection_pool import ConnectionPoolManager
+                                pool = ConnectionPoolManager.get_instance()
+                                connector = pool.get_connector_with_health_check(conn_id)
+                                if connector:
+                                    connectors[conn_id] = {
+                                        'connector': connector,
+                                        'name': conn_model.name,
+                                        'model': conn_model
+                                    }
+                                    task.add_log(f'数据库连接就绪: {conn_model.name}')
+                                else:
+                                    task.add_log(f'数据库连接失败: {conn_model.name}', 'warning')
+                            except Exception as e:
+                                task.add_log(f'数据库连接失败 {conn_model.name}: {str(e)}', 'error')
+
+                        if not connectors:
+                            task.add_log(f'查询选项 [{script.name}] 没有可用的数据库连接', 'error')
+                            continue
+
+                        # 进度计算：基于已处理的参数数
+                        progress_base = 5 + int(80 * params_processed / total_params)
+                        progress_range = int(80 * len(params_list) / total_params)
+
+                        with ThreadPoolExecutor(max_workers=min(len(connectors), 8)) as executor:
+                            futures = {}
+                            for conn_id, conn_info in connectors.items():
+                                future = executor.submit(
+                                    QueryService._execute_on_database,
+                                    conn_id, conn_info['connector'], conn_info['name'],
+                                    sql_to_execute, params_list, script.query_mode,
+                                    script.timeout, script.batch_size
+                                )
+                                futures[future] = conn_id
+
+                            completed = 0
+                            for future in as_completed(futures):
+                                conn_id = futures[future]
+                                try:
+                                    result = future.result()
+                                    result_key = f"{sid}_{conn_id}_sheet{sheet_idx}"
+                                    all_results[result_key] = result
+                                    completed += 1
+                                    progress = progress_base + int(progress_range * completed / len(connectors))
+                                    task.progress = min(progress, 85)
+                                    total_result_rows = sum(
+                                        len(item.get('result', []))
+                                        for r in all_results.values()
+                                        for item in r.get('results', []) if r.get('success')
+                                    )
+                                    task.add_log(f'[Sheet:{sheet_label}][{script.name}] 数据库 {result["db_name"]} 查询完成: 成功{result["success_count"]}, 失败{result["failure_count"]}, 结果行{total_result_rows}')
+                                    db.session.commit()
+                                    update_task_progress(task_id, task.progress, f'Sheet:{sheet_label} 数据库 {result["db_name"]} 查询完成')
+                                except Exception as e:
+                                    completed += 1
+                                    conn_info = connectors[conn_id]
+                                    result_key = f"{sid}_{conn_id}_sheet{sheet_idx}"
+                                    all_results[result_key] = {
+                                        'db_name': conn_info['name'],
+                                        'success': False,
+                                        'results': [],
+                                        'errors': [{'error': str(e)}],
+                                        'success_count': 0,
+                                        'failure_count': len(params_list)
+                                    }
+                                    task.add_log(f'数据库查询失败: {str(e)}', 'error')
+                                    db.session.commit()
+
+                    params_processed += len(params_list)
+                    task.add_log(f'工作表 [{sheet_label}] 处理完成')
+
+                task.total_rows = total_params
                 task.progress = 85
                 task.add_log('开始处理查询结果并写入Excel')
                 db.session.commit()
