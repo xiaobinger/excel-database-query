@@ -251,7 +251,7 @@ class SystemTaskService:
             try:
                 from app.utils.connection_pool import ConnectionPoolManager
                 pool = ConnectionPoolManager.get_instance()
-                connector = pool.get_connector(conn_id)
+                connector = pool.get_connector_with_health_check(conn_id)
                 if not connector:
                     execution.add_log(f'数据库连接失败: {conn_model.name}', 'warning')
                     continue

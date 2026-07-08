@@ -168,7 +168,7 @@ class QueryService:
                         try:
                             from app.utils.connection_pool import ConnectionPoolManager
                             pool = ConnectionPoolManager.get_instance()
-                            connector = pool.get_connector(conn_id)
+                            connector = pool.get_connector_with_health_check(conn_id)
                             if connector:
                                 connectors[conn_id] = {
                                     'connector': connector,

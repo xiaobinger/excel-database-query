@@ -206,7 +206,7 @@ class LookupService:
                 try:
                     from app.utils.connection_pool import ConnectionPoolManager
                     pool = ConnectionPoolManager.get_instance()
-                    connector = pool.get_connector(conn_id)
+                    connector = pool.get_connector_with_health_check(conn_id)
                     if not connector:
                         logger.warning(f'数据库连接失败: {conn_model.name}')
                         continue

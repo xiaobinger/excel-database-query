@@ -14,6 +14,9 @@ logging.getLogger('sshtunnel').setLevel(logging.ERROR)
 
 logger = logging.getLogger(__name__)
 
+# 最大重试次数
+MAX_RECONNECT_RETRIES = 2
+
 
 class DatabaseConnector:
     """数据库连接器，支持多种数据库类型和SSH隧道连接"""
@@ -45,9 +48,6 @@ class DatabaseConnector:
             logger.info(f"数据库连接配置: type={db_type}, host={self.config.get('host')}, port={self.config.get('port')}, database={self.config.get('database')}")
             
             if db_type == 'mysql':
-                # 使用creator直接创建pymysql连接
-                # 注意：ShardingSphere-Proxy等代理在握手阶段不接受database参数
-                # 策略：先不传database连接，连接成功后USE切换
                 import pymysql as _pymysql
                 _cfg = dict(self.config)
                 _db_name = _cfg.get('database', '')
@@ -58,17 +58,18 @@ class DatabaseConnector:
                         port=int(_cfg.get('port', 3306)),
                         user=_cfg['username'],
                         password=_cfg.get('password', ''),
-                        charset='utf8mb4'
+                        charset='utf8mb4',
+                        # 保活参数：防止长时间空闲被服务端断开
+                        read_timeout=60,
+                        write_timeout=60,
                     )
-                    # 不传database参数，避免ShardingSphere-Proxy握手阶段报错
                     conn = _pymysql.connect(**kwargs)
-                    # 连接成功后USE切换数据库
                     if _db_name:
                         try:
                             with conn.cursor() as cur:
                                 cur.execute('USE `%s`' % _db_name)
                         except Exception:
-                            pass  # 切换失败不影响，后续SQL会报错
+                            pass
                     return conn
                 
                 self.engine = create_engine(
@@ -77,7 +78,7 @@ class DatabaseConnector:
                     pool_size=self.connection_pool_size,
                     max_overflow=self.max_overflow,
                     pool_pre_ping=True,
-                    pool_recycle=3600,
+                    pool_recycle=1800,  # 30分钟回收，防止MySQL wait_timeout断连
                     echo=False
                 )
             else:
@@ -97,7 +98,7 @@ class DatabaseConnector:
                     pool_size=self.connection_pool_size,
                     max_overflow=self.max_overflow,
                     pool_pre_ping=True,
-                    pool_recycle=3600,
+                    pool_recycle=1800,
                     echo=False
                 )
             
@@ -235,13 +236,30 @@ class DatabaseConnector:
     
     @contextmanager
     def get_connection(self):
+        """获取数据库连接，自动重试连接失败的情况"""
         if not self.engine:
             raise RuntimeError("数据库引擎未初始化")
-        connection = self.engine.connect()
-        try:
-            yield connection
-        finally:
-            connection.close()
+        
+        last_error = None
+        for attempt in range(MAX_RECONNECT_RETRIES + 1):
+            try:
+                connection = self.engine.connect()
+                try:
+                    yield connection
+                    return
+                finally:
+                    connection.close()
+            except Exception as e:
+                last_error = e
+                if self._is_connection_error(e) and attempt < MAX_RECONNECT_RETRIES:
+                    logger.warning(f'获取连接失败(第{attempt+1}次): {e}，正在重建连接...')
+                    try:
+                        self._reconnect()
+                    except Exception as reconnect_err:
+                        logger.error(f'重建连接失败: {reconnect_err}')
+                else:
+                    raise
+        raise last_error
     
     def _is_connection_error(self, error: Exception) -> bool:
         """判断是否为连接类错误（需要重建连接）"""
@@ -297,6 +315,7 @@ class DatabaseConnector:
     
     def execute_query(self, sql: str, params: Dict[str, Any], 
                    timeout: int = 30, max_rows: int = 0, chunk_size: int = 5000) -> List[Tuple]:
+        """执行查询，流式获取结果避免内存暴涨，连接失败自动重建重试"""
         if not self.engine:
             raise RuntimeError("数据库引擎未初始化")
         
@@ -304,7 +323,8 @@ class DatabaseConnector:
         
         try:
             with self.get_connection() as conn:
-                result = conn.execute(text(sql), params)
+                # 使用流式结果集（server-side cursor），避免大数据量一次性加载到内存
+                result = conn.execution_options(stream_results=True).execute(text(sql), params)
                 
                 all_rows = []
                 while True:
@@ -324,86 +344,47 @@ class DatabaseConnector:
                         break
                 
                 execution_time = time.time() - start_time
-                
-                complete_sql = sql
-                for key, value in params.items():
-                    complete_sql = complete_sql.replace(f':{key}', f"'{value}'" if isinstance(value, str) else str(value))
-                
                 logger.info(f"查询执行成功，返回 {len(all_rows)} 行，耗时 {execution_time:.3f} 秒")
                 return all_rows
                 
         except SQLAlchemyError as e:
-            # 连接类错误：重建连接后重试一次
-            if self._is_connection_error(e):
-                logger.warning(f'查询遇到连接错误: {e}，正在重建连接重试...')
-                try:
-                    self._reconnect()
-                    with self.get_connection() as conn:
-                        result = conn.execute(text(sql), params)
-                        all_rows = []
-                        while True:
-                            if max_rows > 0:
-                                remaining = max_rows - len(all_rows)
-                                if remaining <= 0:
-                                    break
-                                batch = result.fetchmany(min(chunk_size, remaining))
-                            else:
-                                batch = result.fetchmany(chunk_size)
-                            if not batch:
-                                break
-                            all_rows.extend(batch)
-                            if max_rows > 0 and len(all_rows) >= max_rows:
-                                break
-                        logger.info(f"重建连接后查询成功，返回 {len(all_rows)} 行")
-                        return all_rows
-                except Exception as retry_err:
-                    logger.error(f"重建连接后重试仍然失败: {retry_err}")
-                    raise retry_err
-            
             execution_time = time.time() - start_time
-            complete_sql = sql
-            for key, value in params.items():
-                complete_sql = complete_sql.replace(f':{key}', f"'{value}'" if isinstance(value, str) else str(value))
             logger.error(f"查询执行失败: {str(e)}，耗时 {execution_time:.3f} 秒")
             raise
-        
         except Exception as e:
-            # 连接类错误：重建连接后重试一次
-            if self._is_connection_error(e):
-                logger.warning(f'查询遇到连接错误: {e}，正在重建连接重试...')
-                try:
-                    self._reconnect()
-                    with self.get_connection() as conn:
-                        result = conn.execute(text(sql), params)
-                        all_rows = []
-                        while True:
-                            if max_rows > 0:
-                                remaining = max_rows - len(all_rows)
-                                if remaining <= 0:
-                                    break
-                                batch = result.fetchmany(min(chunk_size, remaining))
-                            else:
-                                batch = result.fetchmany(chunk_size)
-                            if not batch:
-                                break
-                            all_rows.extend(batch)
-                            if max_rows > 0 and len(all_rows) >= max_rows:
-                                break
-                        logger.info(f"重建连接后查询成功，返回 {len(all_rows)} 行")
-                        return all_rows
-                except Exception as retry_err:
-                    logger.error(f"重建连接后重试仍然失败: {retry_err}")
-                    raise retry_err
-            
             execution_time = time.time() - start_time
-            complete_sql = sql
-            for key, value in params.items():
-                complete_sql = complete_sql.replace(f':{key}', f"'{value}'" if isinstance(value, str) else str(value))
-            logger.error(f"未知错误: {str(e)}，耗时 {execution_time:.3f} 秒")
+            logger.error(f"查询错误: {str(e)}，耗时 {execution_time:.3f} 秒")
             raise
     
     def execute_batch_queries(self, sql: str, params_list: List[Dict[str, Any]],
                           timeout: int = 30, batch_size: int = 100, max_rows: int = 0) -> Dict[str, Any]:
+        """批量查询优化：优先转为IN查询模式（单次SQL合并所有参数），大幅提升大数据量查询性能。
+        如果SQL只有一个绑定参数，自动转为IN模式；否则回退到逐条查询。"""
+        import re
+        
+        if not params_list:
+            return {'total': 0, 'success': 0, 'failure': 0, 'results': [], 'errors': []}
+        
+        # 检测SQL中的绑定参数
+        bind_matches = re.findall(r':(\w+)', sql)
+        
+        # 单参数SQL：自动转为IN查询模式，性能提升数十倍
+        if len(bind_matches) == 1 and len(params_list) > 1:
+            try:
+                logger.info(f"批量查询自动转IN模式，{len(params_list)}条参数合并")
+                in_result = self._do_execute_in_query(sql, params_list, max_rows, 5000)
+                return {
+                    'total': len(params_list),
+                    'success': in_result.get('success', 0),
+                    'failure': in_result.get('failure', 0),
+                    'results': in_result.get('results', []),
+                    'errors': in_result.get('errors', [])
+                }
+            except Exception as e:
+                logger.warning(f"IN模式执行失败，回退逐条模式: {e}")
+                # 回退到逐条模式
+        
+        # 多参数或IN模式失败：逐条查询
         total_queries = len(params_list)
         success_count = 0
         failure_count = 0
@@ -411,44 +392,40 @@ class DatabaseConnector:
         errors = []
         total_rows_fetched = 0
         
-        logger.info(f"开始批量查询，共 {total_queries} 条，批大小 {batch_size}")
+        logger.info(f"逐条批量查询，共 {total_queries} 条")
         
-        for i in range(0, total_queries, batch_size):
-            batch = params_list[i:i + batch_size]
-            batch_num = (i // batch_size) + 1
-            total_batches = (total_queries + batch_size - 1) // batch_size
+        for i, params in enumerate(params_list):
+            try:
+                remaining = max_rows - total_rows_fetched if max_rows > 0 else 0
+                if max_rows > 0 and remaining <= 0:
+                    break
+                
+                result = self.execute_query(sql, params, timeout, max_rows=remaining if max_rows > 0 else 0)
+                all_results.append({
+                    'params': params,
+                    'result': result,
+                    'success': True
+                })
+                success_count += 1
+                total_rows_fetched += len(result)
+                
+            except Exception as e:
+                error_info = {
+                    'params': params,
+                    'error': str(e),
+                    'success': False
+                }
+                all_results.append(error_info)
+                errors.append(error_info)
+                failure_count += 1
+                logger.error(f"查询失败: {params} - {str(e)}")
             
-            logger.info(f"处理批次 {batch_num}/{total_batches}，包含 {len(batch)} 条查询")
-            
-            for params in batch:
-                try:
-                    remaining = max_rows - total_rows_fetched if max_rows > 0 else 0
-                    if max_rows > 0 and remaining <= 0:
-                        break
-                    
-                    result = self.execute_query(sql, params, timeout, max_rows=remaining if max_rows > 0 else 0)
-                    all_results.append({
-                        'params': params,
-                        'result': result,
-                        'success': True
-                    })
-                    success_count += 1
-                    total_rows_fetched += len(result)
-                    
-                except Exception as e:
-                    error_info = {
-                        'params': params,
-                        'error': str(e),
-                        'success': False
-                    }
-                    all_results.append(error_info)
-                    errors.append(error_info)
-                    failure_count += 1
-                    logger.error(f"查询失败: {params} - {str(e)}")
-            
-            if max_rows > 0 and total_rows_fetched >= max_rows:
-                logger.info(f"已达到最大行数限制 {max_rows}，停止查询")
-                break
+            # 每处理100条报告一次进度
+            if (i + 1) % 100 == 0:
+                logger.info(f"批量查询进度: {i+1}/{total_queries}, 成功{success_count}, 失败{failure_count}")
+        
+        if max_rows > 0 and total_rows_fetched >= max_rows:
+            logger.info(f"已达到最大行数限制 {max_rows}，停止查询")
         
         summary = {
             'total': total_queries,
@@ -463,54 +440,27 @@ class DatabaseConnector:
     
     def execute_in_query(self, sql: str, params_list: List[Dict[str, Any]],
                        timeout: int = 30, max_rows: int = 0, chunk_size: int = 5000) -> Dict[str, Any]:
+        """IN查询：将参数列表合并到IN子句中批量查询，性能远优于逐条查询"""
         if not self.engine:
             raise RuntimeError("数据库引擎未初始化")
         
         if not params_list:
-            return {
-                'results': [],
-                'success': 0,
-                'failure': 0,
-                'errors': []
-            }
+            return {'results': [], 'success': 0, 'failure': 0, 'errors': []}
         
         start_time = time.time()
-        
         try:
             result = self._do_execute_in_query(sql, params_list, max_rows, chunk_size)
             execution_time = time.time() - start_time
             logger.info(f"IN 查询执行成功，耗时 {execution_time:.3f} 秒")
             return result
-                
-        except SQLAlchemyError as e:
-            # 连接类错误：重建连接后重试一次
-            if self._is_connection_error(e):
-                logger.warning(f'IN查询遇到连接错误: {e}，正在重建连接重试...')
-                try:
-                    self._reconnect()
-                    return self._do_execute_in_query(sql, params_list, max_rows, chunk_size)
-                except Exception as retry_err:
-                    logger.error(f"重建连接后重试仍然失败: {retry_err}")
-                    raise retry_err
+        except Exception as e:
             execution_time = time.time() - start_time
             logger.error(f"IN 查询执行失败: {str(e)}，耗时 {execution_time:.3f} 秒")
-            raise
-        except Exception as e:
-            if self._is_connection_error(e):
-                logger.warning(f'IN查询遇到连接错误: {e}，正在重建连接重试...')
-                try:
-                    self._reconnect()
-                    return self._do_execute_in_query(sql, params_list, max_rows, chunk_size)
-                except Exception as retry_err:
-                    logger.error(f"重建连接后重试仍然失败: {retry_err}")
-                    raise retry_err
-            execution_time = time.time() - start_time
-            logger.error(f"IN 查询未知错误: {str(e)}，耗时 {execution_time:.3f} 秒")
             raise
     
     def _do_execute_in_query(self, sql: str, params_list: List[Dict[str, Any]],
                        max_rows: int = 0, chunk_size: int = 5000) -> Dict[str, Any]:
-        """IN查询的实际执行逻辑（供重试调用）"""
+        """IN查询的实际执行逻辑（供重试和batch_queries调用）"""
         import re
         bind_matches = re.findall(r':(\w+)', sql)
         bind_param = bind_matches[0] if bind_matches else 'value'
@@ -532,7 +482,8 @@ class DatabaseConnector:
                 in_clause = f"({', '.join([f"'{v}'" for v in escaped_values])})"
                 
                 modified_sql = re.sub(rf':{bind_param}\b', in_clause, sql, flags=re.IGNORECASE)
-                result = conn.execute(text(modified_sql))
+                # 流式获取结果
+                result = conn.execution_options(stream_results=True).execute(text(modified_sql))
                 
                 while True:
                     if max_rows > 0:
