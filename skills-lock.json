@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "linkly-ai": {
+      "source": "LinklyAI/linkly-ai-skills",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "64098d31b57a7be810311d5d05dedc2a48b54eaa70237990956273bc064700c2"
+    }
+  }
+}

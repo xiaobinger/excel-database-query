@@ -61,4 +61,5 @@ frontend/.output/
 *.cache
 
 # Trae
-.trae/
+.trae/*
+!.trae/skills/

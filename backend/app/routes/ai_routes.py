@@ -2228,6 +2228,7 @@ def send_message_stream(chat_id):
                 if stream_agent_id:
                     try:
                         import threading
+                        from app.services.ai_service import AiService
                         threading.Thread(
                             target=AiService.extract_and_save_memory,
                             args=(user_id, stream_agent_id, user_message_content, full_content, chat_id),
