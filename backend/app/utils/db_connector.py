@@ -5,8 +5,14 @@ from sqlalchemy.engine import Engine, URL
 from sqlalchemy.exc import SQLAlchemyError
 import time
 from contextlib import contextmanager
-from sshtunnel import SSHTunnelForwarder
 import random
+
+# 兼容 paramiko 4.0+：DSSKey 已移除（DSA密钥不安全），sshtunnel 仍引用它
+import paramiko
+if not hasattr(paramiko, 'DSSKey'):
+    paramiko.DSSKey = type('DSSKey', (), {})
+
+from sshtunnel import SSHTunnelForwarder
 
 # 忽略 Paramiko 的警告日志
 logging.getLogger('paramiko').setLevel(logging.ERROR)
