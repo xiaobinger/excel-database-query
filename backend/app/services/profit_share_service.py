@@ -41,20 +41,22 @@ _task_cancel_events = {}
 SQL_AGENT_RATE_CONFIG = """
 SELECT
     ac.agent_no       AS 代理商编号,
-    a.agent_name      AS 代理商名称,
+    IFNULL(IFNULL(a.agent_name, ai.agent_value_code), a.login_phone) AS 代理商名称,
     a.rank            AS 代理商等级,
     a.login_phone     AS 代理手机号码,
     a.parent_agent_no AS 上级代理商编号,
     p.agent_name      AS 所属上级,
     r.agent_name      AS 所属一级,
     ac.device_type    AS 终端类型,
-    ac.rate_type      AS 费率类型,
+    CASE WHEN ac.rate_type = 0 THEN '代理费率成本' WHEN ac.rate_type = 2 THEN '代理T0成本' END AS 费率类型,
     ac.product_id     AS 产品ID,
     ac.rate_info      AS 成本内容
 FROM pro_isp_db.tbl_agent_rate_config ac
 LEFT JOIN pro_isp_db.tbl_agent a  ON ac.agent_no = a.agent_no
 LEFT JOIN pro_isp_db.tbl_agent p  ON a.parent_agent_no = p.agent_no
 LEFT JOIN pro_isp_db.tbl_agent r  ON a.root_agent_no = r.agent_no
+LEFT JOIN posp_business.org_migrate_mapping om ON om.old_org_code = r.agent_no
+LEFT JOIN pro_isp_db.tbl_agent_item ai ON ai.agent_no = a.agent_no AND ai.agent_key_code = 'legalPersonName'
 WHERE ac.product_type = 1
   AND ac.rate_type != 1
   AND ac.`status` = 0
@@ -242,29 +244,44 @@ def _build_agent_configs(rows: List[dict], org_no: str) -> Dict[Tuple, Dict[str,
             )
             configs[key][agent_no] = node
 
-        # 合并费率/T0成本信息
+        # 合并费率/T0成本信息（费率类型可能是数字 0/2 或字符串 '代理费率成本'/'代理T0成本'）
         parsed = _parse_rate_info(rate_info_str)
-        if rate_type == 0:  # 代理费率成本
+        if rate_type in (0, '代理费率成本'):
             node.rate_cost_info = parsed
-        elif rate_type == 2:  # 代理T0成本
+        elif rate_type in (2, '代理T0成本'):
             node.t0_cost_info = parsed
 
     return dict(configs)
 
 
-def _get_ancestor_chain(node: AgentNode, agents: Dict[str, AgentNode]) -> List[str]:
-    """获取节点的所有上级名称链（从根到直接上级）"""
+def _get_ancestor_chain(node: AgentNode, agents: Dict[str, AgentNode], order: dict = None) -> List[str]:
+    """获取节点的上级名称链（从根到当前代理，含当前代理自己）
+
+    处理一级代理不在 agents 中的情况：用 order 中的"所属一级"名称补全。
+    """
     chain = []
     current = node
     visited = set()
 
-    while current and current.parent_agent_no and current.parent_agent_no in agents and current.parent_agent_no not in visited:
+    org_agent_no = str(order.get('一级代理商编号', '')).strip() if order and order.get('一级代理商编号') else ''
+
+    while current and current.parent_agent_no and current.parent_agent_no not in visited:
         visited.add(current.parent_agent_no)
-        parent = agents[current.parent_agent_no]
-        chain.append(parent.agent_name or parent.agent_no)
-        current = parent
+        parent_no = current.parent_agent_no
+        parent = agents.get(parent_no)
+        if parent:
+            chain.append(parent.agent_name or parent_no)
+            current = parent
+        elif order and parent_no == org_agent_no:
+            # 一级代理不在 agents 中，用订单中的"所属一级"名称
+            chain.append(order.get('所属一级', '') or parent_no)
+            break
+        else:
+            break
 
     chain.reverse()
+    # 末尾加上当前代理自己
+    chain.append(node.agent_name or node.agent_no)
     return chain
 
 
@@ -278,7 +295,7 @@ def _calculate_order_shares(
 
     1. 直属代理分润 = 交易金额*(交易费率-直属代理费率) + (交易T0费-直属T0成本)
     2. 上级分润 = 交易金额*(上级费率成本-下级费率成本) + (上级T0成本-下级T0成本)
-    3. 逐级往上直到顶级
+    3. 逐级往上直到顶级（一级代理不在 agents 中时，用订单中的一级代理费率成本/T0成本）
     4. 总分润池 = 交易金额*(交易费率-服务商费率成本) + (交易T0费-服务商T0成本)
     5. 所有代理分润总和不超过总分润池
 
@@ -292,10 +309,15 @@ def _calculate_order_shares(
     trade_type = order.get('交易类型', '')
     card_type = order.get('卡类型', '')
 
+    # 一级代理商编号及费率成本（订单自带，用于一级代理不在 agents 中的情况）
+    org_agent_no = str(order.get('一级代理商编号', '')).strip() if order.get('一级代理商编号') else ''
+    org_rate = _to_float(order.get('一级代理费率成本'))
+    org_t0 = _to_float(order.get('一级代理T0成本'))
+
     # 直属代理编号，为空则取一级代理商编号
     direct_agent_no = str(order.get('所属代理编号', '')).strip() if order.get('所属代理编号') else ''
     if not direct_agent_no:
-        direct_agent_no = str(order.get('一级代理商编号', '')).strip() if order.get('一级代理商编号') else ''
+        direct_agent_no = org_agent_no
 
     if not direct_agent_no:
         return {}
@@ -344,13 +366,18 @@ def _calculate_order_shares(
             break
 
         parent_node = agents.get(parent_no)
-        if not parent_node:
+
+        if parent_node:
+            parent_rate = _extract_rate(parent_node.rate_cost_info, rate_key)
+            parent_t0 = _extract_rate(parent_node.t0_cost_info, t0_key)
+        elif parent_no == org_agent_no:
+            # 一级代理不在 agents 中，使用订单中的一级代理费率成本和T0成本
+            parent_rate = org_rate
+            parent_t0 = org_t0
+        else:
             break
 
         visited.add(parent_no)
-
-        parent_rate = _extract_rate(parent_node.rate_cost_info, rate_key)
-        parent_t0 = _extract_rate(parent_node.t0_cost_info, t0_key)
 
         # 上级分润 = 交易金额*(上级费率成本-下级费率成本) + (上级T0成本-下级T0成本)
         share = trade_amount * (parent_rate - current_rate) + (parent_t0 - current_t0)
@@ -365,6 +392,10 @@ def _calculate_order_shares(
             else:
                 shares[parent_no] = share
                 cumulative += share
+
+        # 一级代理不在 agents 中，到此为止（已到顶级）
+        if not parent_node:
+            break
 
         # 继续往上
         current_node = parent_node
@@ -690,8 +721,22 @@ class ProfitShareService:
                             node = agents.get(agent_no)
                             if node:
                                 agent_info_map[agent_no] = node
-                                chain = _get_ancestor_chain(node, agents)
+                                chain = _get_ancestor_chain(node, agents, order)
                                 agent_ancestor_chain[agent_no] = '-'.join(chain)
+                            else:
+                                # 一级代理不在 agents 中，创建虚拟节点
+                                root_name = order.get('所属一级', '') or agent_no
+                                virtual_node = AgentNode(
+                                    agent_no=agent_no,
+                                    agent_name=root_name,
+                                    rank=1,
+                                    login_phone='',
+                                    parent_agent_no=None,
+                                    parent_name='',
+                                    root_name=root_name,
+                                )
+                                agent_info_map[agent_no] = virtual_node
+                                agent_ancestor_chain[agent_no] = root_name
 
                     if has_positive_share:
                         month_stats[month_str]['shared'] += 1
