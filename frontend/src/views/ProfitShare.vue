@@ -38,6 +38,28 @@
             value-format="YYYY-MM-DD HH:mm:ss"
             style="width: 100%; max-width: 480px"
           />
+          <div class="month-shortcut">
+            <span class="shortcut-label">按月份快捷选择:</span>
+            <el-date-picker
+              v-model="monthRange.start"
+              type="month"
+              placeholder="起始月"
+              value-format="YYYY-MM"
+              style="width: 140px"
+              :clearable="false"
+            />
+            <span class="range-sep">至</span>
+            <el-date-picker
+              v-model="monthRange.end"
+              type="month"
+              placeholder="结束月"
+              value-format="YYYY-MM"
+              style="width: 140px"
+              :clearable="false"
+            />
+            <el-button type="primary" plain size="small" @click="applyMonthRange">应用</el-button>
+            <span v-if="monthShortcutTip" class="shortcut-tip">{{ monthShortcutTip }}</span>
+          </div>
         </el-form-item>
 
         <el-form-item label="数据库连接">
@@ -139,6 +161,50 @@ const form = reactive({
   time_range: [],
   database_connection_id: null,
 })
+
+// 按月份快捷选择
+const monthRange = reactive({
+  start: '',
+  end: '',
+})
+const monthShortcutTip = ref('')
+
+// 将 YYYY-MM 转为 月初 00:00:00
+function monthToStart(monthStr) {
+  if (!monthStr) return ''
+  return `${monthStr}-01 00:00:00`
+}
+
+// 将 YYYY-MM 转为 月末 23:59:59（下个月1号减1秒，自动处理闰年/大小月）
+function monthToEnd(monthStr) {
+  if (!monthStr) return ''
+  const [year, month] = monthStr.split('-').map(Number)
+  const nextMonth = new Date(year, month, 1) // month 是 1-12，传 month 即下个月1号
+  nextMonth.setSeconds(nextMonth.getSeconds() - 1)
+  const y = nextMonth.getFullYear()
+  const m = String(nextMonth.getMonth() + 1).padStart(2, '0')
+  const d = String(nextMonth.getDate()).padStart(2, '0')
+  const h = String(nextMonth.getHours()).padStart(2, '0')
+  const mi = String(nextMonth.getMinutes()).padStart(2, '0')
+  const s = String(nextMonth.getSeconds()).padStart(2, '0')
+  return `${y}-${m}-${d} ${h}:${mi}:${s}`
+}
+
+function applyMonthRange() {
+  if (!monthRange.start || !monthRange.end) {
+    ElMessage.warning('请选择起始月份和结束月份')
+    return
+  }
+  if (monthRange.start > monthRange.end) {
+    ElMessage.warning('起始月份不能晚于结束月份')
+    return
+  }
+  const startTime = monthToStart(monthRange.start)
+  const endTime = monthToEnd(monthRange.end)
+  form.time_range = [startTime, endTime]
+  monthShortcutTip.value = `已应用: ${startTime} ~ ${endTime}`
+  ElMessage.success('时间范围已设置')
+}
 
 const rules = {
   org_no: [{ required: true, message: '请输入代理商编号', trigger: 'blur' }],
@@ -367,6 +433,30 @@ onUnmounted(() => {
 
 .params-form {
   margin-top: 10px;
+}
+
+.month-shortcut {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.shortcut-label {
+  font-size: 13px;
+  color: #606266;
+}
+
+.range-sep {
+  color: #909399;
+  font-size: 13px;
+}
+
+.shortcut-tip {
+  font-size: 12px;
+  color: #67c23a;
+  margin-left: 4px;
 }
 
 .execute-area {
