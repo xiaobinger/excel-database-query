@@ -379,8 +379,8 @@ def _calculate_order_shares(
 
         visited.add(parent_no)
 
-        # 上级分润 = 交易金额*(上级费率成本-下级费率成本) + (上级T0成本-下级T0成本)
-        share = trade_amount * (parent_rate - current_rate) + (parent_t0 - current_t0)
+        # 上级分润 = 交易金额*(下级费率成本-上级费率成本) + (下级T0成本-上级T0成本)
+        share = trade_amount * (current_rate - parent_rate) + (current_t0 - parent_t0)
 
         if share > 0:
             if cumulative + share > total_pool:
@@ -404,7 +404,7 @@ def _calculate_order_shares(
 
     # 兜底：如果一级代理还没被计算分润，且还有剩余分润池，直接计算一级代理分润
     if cumulative < total_pool and org_agent_no and org_agent_no not in shares and org_agent_no not in visited:
-        share = trade_amount * (org_rate - current_rate) + (org_t0 - current_t0)
+        share = trade_amount * (current_rate - org_rate) + (current_t0 - org_t0)
         if share > 0:
             if cumulative + share > total_pool:
                 remaining = total_pool - cumulative
