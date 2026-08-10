@@ -298,7 +298,7 @@ def _get_ancestor_chain(node: AgentNode, agents: Dict[str, AgentNode], order: di
 def _calculate_order_shares(
     order: dict,
     agents: Dict[str, AgentNode],
-) -> Dict[str, float]:
+) -> Tuple[Dict[str, float], str]:
     """计算单笔订单各代理的分润金额（从直属代理往上逐级计算）
 
     1. 直属代理分润 = 交易金额*(交易费率-直属代理费率) + (交易T0费-直属T0成本)
@@ -307,7 +307,8 @@ def _calculate_order_shares(
     4. 总分润池 = 交易金额*(交易费率-服务商费率成本) + (交易T0费-服务商T0成本)
     5. 所有代理分润总和不超过总分润池
 
-    返回: {agent_no: share_amount}
+    返回: (shares: {agent_no: share_amount}, skip_reason: str)
+        skip_reason 为空表示正常计算有结果；非空则表示跳过原因
     """
     trade_amount = _to_float(order.get('交易金额'))
     trade_rate = _to_float(order.get('交易费率'))
@@ -328,7 +329,7 @@ def _calculate_order_shares(
         direct_agent_no = org_agent_no
 
     if not direct_agent_no:
-        return {}
+        return {}, '无直属代理编号且无一级代理商编号'
 
     rate_key, t0_key = _get_rate_keys(trade_type, card_type, trade_amount)
 
@@ -336,12 +337,14 @@ def _calculate_order_shares(
     total_pool = trade_amount * (trade_rate - channel_rate) + (trade_t0_fee - channel_t0)
 
     if total_pool <= 0:
-        return {}
+        return {}, (f'总分润池<=0 (pool={total_pool:.4f}, 交易金额={trade_amount:.2f}, '
+                    f'交易费率={trade_rate}, 服务商费率成本={channel_rate}, '
+                    f'交易T0费={trade_t0_fee:.2f}, 服务商T0成本={channel_t0:.2f})')
 
     # 找到直属代理节点
     direct_node = agents.get(direct_agent_no)
     if not direct_node:
-        return {}
+        return {}, f'直属代理未找到配置 (直属代理编号={direct_agent_no})'
 
     shares: Dict[str, float] = {}
     cumulative = 0.0
@@ -423,7 +426,11 @@ def _calculate_order_shares(
                 shares[org_agent_no] = share
                 cumulative += share
 
-    return shares
+    if not shares:
+        return {}, (f'各级分润均<=0 (直属代理={direct_agent_no}, 直属费率={direct_rate}, '
+                    f'直属T0={direct_t0}, 总分润池={total_pool:.4f})')
+
+    return shares, ''
 
 
 # ── Excel 生成 ───────────────────────────────────────────
@@ -697,6 +704,11 @@ class ProfitShareService:
                 month_stats: Dict[str, Dict[str, int]] = defaultdict(lambda: {'total': 0, 'skipped': 0, 'shared': 0})
                 # 记录匹配不到配置的 (代理商编号, 终端类型, 产品类型) 组合，去重
                 missed_config_keys = set()
+                # 记录无分润结果的跳过原因统计: {reason: count}
+                no_share_reasons: Dict[str, int] = defaultdict(int)
+                # 记录无分润结果的订单明细（最多保留 20 条用于日志展示）
+                no_share_samples: List[str] = []
+                NO_SHARE_SAMPLE_LIMIT = 20
 
                 for order in order_dicts:
                     device_type = str(order.get('终端类型', '')).strip()
@@ -726,7 +738,7 @@ class ProfitShareService:
                         continue
 
                     # 计算分润（从直属代理往上逐级计算）
-                    shares = _calculate_order_shares(order, agents)
+                    shares, skip_reason = _calculate_order_shares(order, agents)
 
                     if not shares:
                         skipped_no_share += 1
@@ -734,6 +746,23 @@ class ProfitShareService:
                         # 直属代理在该配置组中找不到节点
                         if direct_agent_no and direct_agent_no not in agents:
                             missed_config_keys.add((direct_agent_no, device_type, product_type_str))
+                        # 收集跳过原因
+                        if skip_reason:
+                            no_share_reasons[skip_reason] += 1
+                            if len(no_share_samples) < NO_SHARE_SAMPLE_LIMIT:
+                                trade_time_str = ''
+                                if trade_time:
+                                    if isinstance(trade_time, datetime):
+                                        trade_time_str = trade_time.strftime('%Y-%m-%d %H:%M:%S')
+                                    else:
+                                        trade_time_str = str(trade_time)
+                                trade_amt = _to_float(order.get('交易金额'))
+                                sample = (f'  交易时间={trade_time_str} | 直属代理={direct_agent_no} | '
+                                          f'一级代理={order.get("一级代理商编号", "")} | '
+                                          f'终端类型={device_type} | 产品类型={product_type_str} | '
+                                          f'交易类型={order.get("交易类型", "")} | 卡类型={order.get("卡类型", "")} | '
+                                          f'交易金额={trade_amt:.2f} | 原因: {skip_reason}')
+                                no_share_samples.append(sample)
                         processed += 1
                         continue
 
@@ -795,6 +824,23 @@ class ProfitShareService:
                         line = f'    {agent_no} | {dev_type} | {prod_type}'
                         task.add_log(line, 'warning')
                         logger.warning(line)
+
+                # 输出无分润结果的跳过原因统计 + 样本明细
+                if no_share_reasons:
+                    task.add_log(f'  无分润结果原因统计({skipped_no_share}笔):', 'warning')
+                    logger.warning(f'任务 {task_id} 无分润结果原因统计({skipped_no_share}笔):')
+                    # 按出现次数降序
+                    for reason, cnt in sorted(no_share_reasons.items(), key=lambda x: -x[1]):
+                        line = f'    [{cnt}笔] {reason}'
+                        task.add_log(line, 'warning')
+                        logger.warning(line)
+                    # 输出样本订单明细（最多20条）
+                    if no_share_samples:
+                        task.add_log(f'  无分润结果订单样本(前{len(no_share_samples)}条):', 'warning')
+                        logger.warning(f'任务 {task_id} 无分润结果订单样本(前{len(no_share_samples)}条):')
+                        for sample in no_share_samples:
+                            task.add_log(sample, 'warning')
+                            logger.warning(sample)
                 task.progress = 90
                 db.session.commit()
                 _update_progress(task_id, 90, '生成导出文件...')
