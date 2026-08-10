@@ -695,12 +695,15 @@ class ProfitShareService:
                 skipped_no_share = 0
                 # 按月份统计: {month: {'total': n, 'skipped': n, 'shared': n}}
                 month_stats: Dict[str, Dict[str, int]] = defaultdict(lambda: {'total': 0, 'skipped': 0, 'shared': 0})
+                # 记录匹配不到配置的 (代理商编号, 终端类型, 产品类型) 组合，去重
+                missed_config_keys = set()
 
                 for order in order_dicts:
                     device_type = str(order.get('终端类型', '')).strip()
                     product_type = order.get('产品类型')
                     product_type_str = str(product_type).strip() if product_type is not None else ''
                     config_key = (device_type, product_type_str)
+                    direct_agent_no = str(order.get('所属代理编号', '')).strip() if order.get('所属代理编号') else ''
 
                     # 提取月份
                     trade_time = order.get('交易时间')
@@ -718,6 +721,7 @@ class ProfitShareService:
                     if not agents:
                         skipped_no_config += 1
                         month_stats[month_str]['skipped'] += 1
+                        missed_config_keys.add((direct_agent_no, device_type, product_type_str))
                         processed += 1
                         continue
 
@@ -727,6 +731,9 @@ class ProfitShareService:
                     if not shares:
                         skipped_no_share += 1
                         month_stats[month_str]['skipped'] += 1
+                        # 直属代理在该配置组中找不到节点
+                        if direct_agent_no and direct_agent_no not in agents:
+                            missed_config_keys.add((direct_agent_no, device_type, product_type_str))
                         processed += 1
                         continue
 
@@ -779,6 +786,15 @@ class ProfitShareService:
                 for month_key in sorted(month_stats.keys()):
                     s = month_stats[month_key]
                     task.add_log(f'  月份 {month_key}: 总计 {s["total"]} 笔, 跳过 {s["skipped"]} 笔, 有分润 {s["shared"]} 笔')
+
+                # 输出匹配不到配置的 代理商编号-终端类型-产品类型 清单
+                if missed_config_keys:
+                    task.add_log(f'  匹配不到配置的组合({len(missed_config_keys)}个, 格式: 代理商编号 | 终端类型 | 产品类型):', 'warning')
+                    logger.warning(f'任务 {task_id} 匹配不到配置的组合({len(missed_config_keys)}个):')
+                    for agent_no, dev_type, prod_type in sorted(missed_config_keys):
+                        line = f'    {agent_no} | {dev_type} | {prod_type}'
+                        task.add_log(line, 'warning')
+                        logger.warning(line)
                 task.progress = 90
                 db.session.commit()
                 _update_progress(task_id, 90, '生成导出文件...')
