@@ -5,7 +5,7 @@
   脚本2: 查询交易订单（含直属代理编号、一级代理商编号）
 
 计算逻辑（从直属代理往上逐级计算）：
-  1. 根据订单的 终端类型、产品ID 找到代理配置组
+  1. 根据订单的 终端类型、产品类型 找到代理配置组
   2. 通过订单的直属代理编号（为空则取一级代理商编号）匹配成本配置
   3. 直属代理分润 = 交易金额*(交易费率-直属代理费率) + (交易T0费-直属T0成本)
   4. 上级分润 = 交易金额*(上级费率成本-下级费率成本) + (上级T0成本-下级T0成本)
@@ -48,6 +48,7 @@ SELECT
     p.agent_name      AS 所属上级,
     r.agent_name      AS 所属一级,
     ac.device_type    AS 终端类型,
+    ac.product_type   AS 产品类型,
     CASE WHEN ac.rate_type = 0 THEN '代理费率成本' WHEN ac.rate_type = 2 THEN '代理T0成本' END AS 费率类型,
     ac.product_id     AS 产品ID,
     ac.rate_info      AS 成本内容
@@ -57,7 +58,7 @@ LEFT JOIN pro_isp_db.tbl_agent p  ON a.parent_agent_no = p.agent_no
 LEFT JOIN pro_isp_db.tbl_agent r  ON a.root_agent_no = r.agent_no
 LEFT JOIN posp_business.org_migrate_mapping om ON om.old_org_code = r.agent_no
 LEFT JOIN pro_isp_db.tbl_agent_item ai ON ai.agent_no = a.agent_no AND ai.agent_key_code = 'legalPersonName'
-WHERE ac.product_type = 1
+WHERE ac.product_type IN (1, 4, 8, 9)
   AND ac.rate_type != 1
   AND ac.`status` = 0
   AND ac.product_id IS NOT NULL
@@ -86,6 +87,11 @@ SELECT
     END                                       AS 交易类型,
     IF(o.card_type = 1, '借记卡', '贷记卡')     AS 卡类型,
     opm.old_product_id                        AS 产品ID,
+    CASE WHEN opm.old_product_type = 1 THEN 1
+         WHEN opm.old_product_type = 3 THEN 8
+         WHEN opm.old_product_type = 4 THEN 9
+         WHEN opm.old_product_type = 2 THEN 4
+    END                                       AS 产品类型,
     d.device_type                             AS 终端类型
 FROM posp_business.org_migrate_mapping om
 INNER JOIN posp_business.trade_order o
@@ -215,7 +221,7 @@ class AgentNode:
 def _build_agent_configs(rows: List[dict], org_no: str) -> Dict[Tuple, Dict[str, AgentNode]]:
     """构建代理配置字典
 
-    返回: {(device_type, product_id): {agent_no: AgentNode}}
+    返回: {(device_type, product_type): {agent_no: AgentNode}}
     """
     configs: Dict[Tuple, Dict[str, AgentNode]] = defaultdict(dict)
 
@@ -225,11 +231,13 @@ def _build_agent_configs(rows: List[dict], org_no: str) -> Dict[Tuple, Dict[str,
             continue
 
         device_type = str(row.get('终端类型', '')).strip()
-        product_id = str(row.get('产品ID', '')).strip()
+        product_type = row.get('产品类型')
+        # 产品类型统一转为字符串作为字典键
+        product_type_str = str(product_type).strip() if product_type is not None else ''
         rate_type = row.get('费率类型')
         rate_info_str = row.get('成本内容', '')
 
-        key = (device_type, product_id)
+        key = (device_type, product_type_str)
         node = configs[key].get(agent_no)
 
         if node is None:
@@ -607,7 +615,7 @@ class ProfitShareService:
                 agent_columns = [
                     '代理商编号', '代理商名称', '代理商等级', '代理手机号码',
                     '上级代理商编号', '所属上级', '所属一级', '终端类型',
-                    '费率类型', '产品ID', '成本内容'
+                    '产品类型', '费率类型', '产品ID', '成本内容'
                 ]
                 agent_dicts = []
                 for row in agent_rows:
@@ -640,7 +648,7 @@ class ProfitShareService:
                 order_columns = [
                     '交易时间', '所属代理编号', '一级代理商编号', '交易金额', '交易费率', '交易手续费', '交易T0服务费',
                     '服务商费率成本', '服务商T0成本', '一级代理费率成本', '一级代理T0成本',
-                    '交易类型', '卡类型', '产品ID', '终端类型'
+                    '交易类型', '卡类型', '产品ID', '产品类型', '终端类型'
                 ]
                 order_dicts = []
                 for row in order_rows:
@@ -666,7 +674,7 @@ class ProfitShareService:
                 db.session.commit()
 
                 agent_configs = _build_agent_configs(agent_dicts, org_no)
-                task.add_log(f'代理配置分组: {len(agent_configs)} 组 (设备类型+产品ID)')
+                task.add_log(f'代理配置分组: {len(agent_configs)} 组 (设备类型+产品类型)')
 
                 # 6. 逐笔订单计算分润
                 task.add_log('计算分润...')
@@ -690,8 +698,9 @@ class ProfitShareService:
 
                 for order in order_dicts:
                     device_type = str(order.get('终端类型', '')).strip()
-                    product_id = str(order.get('产品ID', '')).strip()
-                    config_key = (device_type, product_id)
+                    product_type = order.get('产品类型')
+                    product_type_str = str(product_type).strip() if product_type is not None else ''
+                    config_key = (device_type, product_type_str)
 
                     # 提取月份
                     trade_time = order.get('交易时间')
