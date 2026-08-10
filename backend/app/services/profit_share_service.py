@@ -646,31 +646,17 @@ class ProfitShareService:
 
                 total_orders = len(order_dicts)
                 processed = 0
-                skipped = 0
+                skipped_no_config = 0
+                skipped_no_root = 0
+                skipped_no_pool = 0
+                skipped_no_share = 0
+                # 按月份统计: {month: {'total': n, 'skipped': n, 'shared': n}}
+                month_stats: Dict[str, Dict[str, int]] = defaultdict(lambda: {'total': 0, 'skipped': 0, 'shared': 0})
 
                 for order in order_dicts:
                     device_type = str(order.get('终端类型', '')).strip()
                     product_id = str(order.get('产品ID', '')).strip()
                     config_key = (device_type, product_id)
-
-                    agents = agent_configs.get(config_key)
-                    if not agents:
-                        skipped += 1
-                        processed += 1
-                        continue
-
-                    # 从缓存获取层级树（同一设备+产品组合只构建一次）
-                    if config_key not in hierarchy_cache:
-                        hierarchy_cache[config_key] = _build_hierarchy(agents, org_no)
-                    root = hierarchy_cache[config_key]
-
-                    if root is None:
-                        skipped += 1
-                        processed += 1
-                        continue
-
-                    # 计算分润
-                    shares = _calculate_order_shares(order, root, agents, org_no)
 
                     # 提取月份
                     trade_time = order.get('交易时间')
@@ -682,12 +668,42 @@ class ProfitShareService:
                             month_str = trade_time[:7]  # YYYY-MM
                         else:
                             month_str = str(trade_time)[:7]
+                    month_stats[month_str]['total'] += 1
+
+                    agents = agent_configs.get(config_key)
+                    if not agents:
+                        skipped_no_config += 1
+                        month_stats[month_str]['skipped'] += 1
+                        processed += 1
+                        continue
+
+                    # 从缓存获取层级树（同一设备+产品组合只构建一次）
+                    if config_key not in hierarchy_cache:
+                        hierarchy_cache[config_key] = _build_hierarchy(agents, org_no)
+                    root = hierarchy_cache[config_key]
+
+                    if root is None:
+                        skipped_no_root += 1
+                        month_stats[month_str]['skipped'] += 1
+                        processed += 1
+                        continue
+
+                    # 计算分润
+                    shares = _calculate_order_shares(order, root, agents, org_no)
+
+                    if not shares:
+                        skipped_no_share += 1
+                        month_stats[month_str]['skipped'] += 1
+                        processed += 1
+                        continue
 
                     # 聚合
+                    has_positive_share = False
                     for agent_no, share in shares.items():
                         if share == 0:
                             continue
                         monthly_shares[(agent_no, month_str)] += share
+                        has_positive_share = True
 
                         # 记录代理信息
                         if agent_no not in agent_info_map:
@@ -697,13 +713,26 @@ class ProfitShareService:
                                 chain = _get_ancestor_chain(node, agents)
                                 agent_ancestor_chain[agent_no] = '-'.join(chain)
 
+                    if has_positive_share:
+                        month_stats[month_str]['shared'] += 1
+                    else:
+                        skipped_no_share += 1
+                        month_stats[month_str]['skipped'] += 1
+
                     processed += 1
                     if processed % 1000 == 0:
                         task.add_log(f'已处理 {processed}/{total_orders} 笔订单')
                         task.progress = min(60 + int(30 * processed / max(total_orders, 1)), 85)
                         db.session.commit()
 
-                task.add_log(f'分润计算完成: 处理 {processed} 笔订单, 跳过 {skipped} 笔 (无匹配代理配置)')
+                # 输出详细统计
+                task.add_log(f'分润计算完成: 处理 {processed} 笔订单')
+                task.add_log(f'  - 无匹配代理配置: {skipped_no_config} 笔')
+                task.add_log(f'  - 无根节点: {skipped_no_root} 笔')
+                task.add_log(f'  - 无分润结果(total_pool<=0或其他): {skipped_no_share} 笔')
+                for month_key in sorted(month_stats.keys()):
+                    s = month_stats[month_key]
+                    task.add_log(f'  月份 {month_key}: 总计 {s["total"]} 笔, 跳过 {s["skipped"]} 笔, 有分润 {s["shared"]} 笔')
                 task.progress = 90
                 db.session.commit()
                 _update_progress(task_id, 90, '生成导出文件...')
