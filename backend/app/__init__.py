@@ -168,6 +168,7 @@ def _register_blueprints(app):
     from app.routes.ai_strategy_routes import ai_strategy_bp
     from app.routes.lookup_routes import lookup_bp
     from app.routes.agent_routes import agent_bp
+    from app.routes.profit_share_routes import profit_share_bp
 
     app.register_blueprint(ssh_bp)
     app.register_blueprint(database_bp)
@@ -186,6 +187,7 @@ def _register_blueprints(app):
     app.register_blueprint(ai_strategy_bp)
     app.register_blueprint(lookup_bp)
     app.register_blueprint(agent_bp)
+    app.register_blueprint(profit_share_bp)
 
 
 def _register_error_handlers(app):
