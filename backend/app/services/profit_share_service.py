@@ -365,17 +365,17 @@ def _calculate_order_shares(
         if not parent_no or parent_no in visited:
             break
 
-        parent_node = agents.get(parent_no)
-
-        if parent_node:
-            parent_rate = _extract_rate(parent_node.rate_cost_info, rate_key)
-            parent_t0 = _extract_rate(parent_node.t0_cost_info, t0_key)
-        elif parent_no == org_agent_no:
-            # 一级代理不在 agents 中，使用订单中的一级代理费率成本和T0成本
+        # 一级代理：优先用订单中的费率成本（最准确），不论是否在 agents 中
+        if parent_no == org_agent_no:
             parent_rate = org_rate
             parent_t0 = org_t0
+            parent_node = None  # 标记为一级代理，不需要继续往上
         else:
-            break
+            parent_node = agents.get(parent_no)
+            if not parent_node:
+                break
+            parent_rate = _extract_rate(parent_node.rate_cost_info, rate_key)
+            parent_t0 = _extract_rate(parent_node.t0_cost_info, t0_key)
 
         visited.add(parent_no)
 
@@ -393,14 +393,27 @@ def _calculate_order_shares(
                 shares[parent_no] = share
                 cumulative += share
 
-        # 一级代理不在 agents 中，到此为止（已到顶级）
-        if not parent_node:
+        # 一级代理已到顶级，结束
+        if parent_node is None:
             break
 
         # 继续往上
         current_node = parent_node
         current_rate = parent_rate
         current_t0 = parent_t0
+
+    # 兜底：如果一级代理还没被计算分润，且还有剩余分润池，直接计算一级代理分润
+    if cumulative < total_pool and org_agent_no and org_agent_no not in shares and org_agent_no not in visited:
+        share = trade_amount * (org_rate - current_rate) + (org_t0 - current_t0)
+        if share > 0:
+            if cumulative + share > total_pool:
+                remaining = total_pool - cumulative
+                if remaining > 0:
+                    shares[org_agent_no] = remaining
+                    cumulative = total_pool
+            else:
+                shares[org_agent_no] = share
+                cumulative += share
 
     return shares
 
