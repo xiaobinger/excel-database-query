@@ -62,6 +62,7 @@ WHERE ac.product_type = 1
 SQL_TRADE_ORDERS = """
 SELECT
     o.trade_time                           AS 交易时间,
+    o.org_no                               AS 一级代理商编号,
     o.trade_amount / 100                   AS 交易金额,
     o.trade_rate / 100                     AS 交易费率,
     o.trade_fee_amount / 100               AS 交易手续费,
@@ -598,7 +599,7 @@ class ProfitShareService:
                 )
 
                 order_columns = [
-                    '交易时间', '交易金额', '交易费率', '交易手续费', '交易T0服务费',
+                    '交易时间', '一级代理商编号', '交易金额', '交易费率', '交易手续费', '交易T0服务费',
                     '服务商费率成本', '服务商T0成本', '一级代理费率成本', '一级代理T0成本',
                     '交易类型', '卡类型', '产品ID', '终端类型'
                 ]
