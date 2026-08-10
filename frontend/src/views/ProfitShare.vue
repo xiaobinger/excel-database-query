@@ -62,7 +62,7 @@
           </div>
         </el-form-item>
 
-        <el-form-item label="数据库连接">
+        <el-form-item v-if="store.isAdmin" label="数据库连接">
           <el-select
             v-model="form.database_connection_id"
             placeholder="不选则自动查找 融聚商户通(海科)"
@@ -144,6 +144,9 @@
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import api from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useAppStore } from '../stores'
+
+const store = useAppStore()
 
 const formRef = ref(null)
 const databases = ref([])
@@ -203,6 +206,8 @@ function applyMonthRange() {
   const endTime = monthToEnd(monthRange.end)
   form.time_range = [startTime, endTime]
   monthShortcutTip.value = `已应用: ${startTime} ~ ${endTime}`
+  // 清除"请选择交易时间范围"校验提示
+  formRef.value?.clearValidate('time_range')
   ElMessage.success('时间范围已设置')
 }
 
