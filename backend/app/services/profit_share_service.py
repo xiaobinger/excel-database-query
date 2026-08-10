@@ -2,14 +2,17 @@
 
 根据两个SQL脚本查询数据：
   脚本1: 查询代理关系及代理相关成本费率
-  脚本2: 查询交易订单
+  脚本2: 查询交易订单（含直属代理编号、一级代理商编号）
 
-计算逻辑：
-  1. 根据订单的 一级代理商、交易类型、卡类型、终端类型、产品ID 找到整个代理层级的成本
-  2. 总分润池 = 交易金额 * (交易费率 - 一级代理商费率成本) + 一级代理商T0成本
-  3. 逐级分钱: 每个上级分得 = 交易金额 * (下级费率成本 - 上级费率成本) + (下级T0成本 - 上级T0成本)
-  4. 累计分润若超出总分润池，则不再往下分，后续均为0
-  5. 特殊规则: 交易金额 > 1000 时，费率成本取刷卡贷记卡相关值
+计算逻辑（从直属代理往上逐级计算）：
+  1. 根据订单的 终端类型、产品ID 找到代理配置组
+  2. 通过订单的直属代理编号（为空则取一级代理商编号）匹配成本配置
+  3. 直属代理分润 = 交易金额*(交易费率-直属代理费率) + (交易T0费-直属T0成本)
+  4. 上级分润 = 交易金额*(上级费率成本-下级费率成本) + (上级T0成本-下级T0成本)
+  5. 逐级往上直到顶级
+  6. 总分润池 = 交易金额*(交易费率-服务商费率成本) + (交易T0费-服务商T0成本)
+  7. 所有代理分润总和不超过总分润池
+  8. 特殊规则: 交易金额 > 1000 时，费率成本取刷卡贷记卡相关值
 """
 
 import json
@@ -17,7 +20,7 @@ import logging
 import os
 import threading
 import uuid
-from collections import defaultdict, deque
+from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -62,7 +65,8 @@ WHERE ac.product_type = 1
 SQL_TRADE_ORDERS = """
 SELECT
     o.trade_time                           AS 交易时间,
-    o.org_no                               AS 一级代理商编号,
+    tm.agent_no                            AS 所属代理编号,
+    om.old_org_code                        AS 一级代理商编号,
     o.trade_amount / 100                   AS 交易金额,
     o.trade_rate / 100                     AS 交易费率,
     o.trade_fee_amount / 100               AS 交易手续费,
@@ -81,13 +85,18 @@ SELECT
     IF(o.card_type = 1, '借记卡', '贷记卡')  AS 卡类型,
     opm.old_product_id                     AS 产品ID,
     d.device_type                          AS 终端类型
-FROM posp_business.trade_order o
-LEFT JOIN posp_business.org_migrate_mapping om   ON o.org_no = om.new_org_code
-LEFT JOIN posp_business.device d                  ON o.device_sn = d.device_sn
-LEFT JOIN posp_business.org_product_migrate_mapping opm ON d.product_code = opm.new_product_id
+FROM posp_business.org_migrate_mapping om
+INNER JOIN posp_business.trade_order o
+    ON o.org_no = om.new_org_code
+    AND o.trade_status = 1
+    AND o.trade_time BETWEEN :start_time AND :end_time
+LEFT JOIN posp_business.device d
+    ON o.device_sn = d.device_sn
+LEFT JOIN posp_business.org_product_migrate_mapping opm
+    ON d.product_code = opm.new_product_id
+LEFT JOIN pro_mcht_db.tbl_mcht tm
+    ON o.merchant_no = tm.mcht_no
 WHERE om.old_org_code = :org_no
-  AND o.trade_status = 1
-  AND o.trade_time BETWEEN :start_time AND :end_time
 """
 
 # ── 费率键映射 ────────────────────────────────────────────
@@ -179,13 +188,13 @@ def _extract_rate(rate_info_dict: dict, rate_key: str) -> float:
     return _to_float(rate_info_dict.get(rate_key))
 
 
-# ── 代理层级构建 ──────────────────────────────────────────
+# ── 代理配置构建 ──────────────────────────────────────────
 
 class AgentNode:
-    """代理层级树节点"""
+    """代理节点"""
     __slots__ = ('agent_no', 'agent_name', 'rank', 'login_phone',
                  'parent_agent_no', 'parent_name', 'root_name',
-                 'rate_cost_info', 't0_cost_info', 'children')
+                 'rate_cost_info', 't0_cost_info')
 
     def __init__(self, agent_no, agent_name, rank, login_phone,
                  parent_agent_no, parent_name, root_name):
@@ -198,7 +207,6 @@ class AgentNode:
         self.root_name = root_name or ''
         self.rate_cost_info = {}   # 费率成本 JSON (rate_type=0)
         self.t0_cost_info = {}     # T0成本 JSON (rate_type=2)
-        self.children: List['AgentNode'] = []
 
 
 def _build_agent_configs(rows: List[dict], org_no: str) -> Dict[Tuple, Dict[str, AgentNode]]:
@@ -243,51 +251,6 @@ def _build_agent_configs(rows: List[dict], org_no: str) -> Dict[Tuple, Dict[str,
     return dict(configs)
 
 
-def _build_hierarchy(agents: Dict[str, AgentNode], org_no: str) -> Optional[AgentNode]:
-    """构建代理层级树，返回根节点（一级代理商）
-
-    注意: 每次调用前会清空所有节点的 children，避免重复构建导致子节点累积。
-    """
-    if not agents:
-        return None
-
-    # 清空已有 children（避免重复构建导致累积）
-    for node in agents.values():
-        node.children = []
-
-    # 构建父子映射
-    children_map: Dict[str, List[AgentNode]] = defaultdict(list)
-    root = None
-
-    for agent_no, node in agents.items():
-        if agent_no == org_no or (node.rank is not None and _to_float(node.rank) == 1):
-            root = node
-        if node.parent_agent_no and node.parent_agent_no in agents and node.parent_agent_no != agent_no:
-            children_map[node.parent_agent_no].append(node)
-
-    # 如果没有通过 org_no 找到根，尝试找 rank 最小的
-    if root is None:
-        ranked = sorted(agents.values(), key=lambda n: _to_float(n.rank, 999))
-        if ranked:
-            root = ranked[0]
-
-    if root is None:
-        return None
-
-    # 递归构建子节点（BFS 防止循环引用）
-    visited = {root.agent_no}
-    queue = deque([root])
-    while queue:
-        current = queue.popleft()
-        for child in children_map.get(current.agent_no, []):
-            if child.agent_no not in visited:
-                visited.add(child.agent_no)
-                current.children.append(child)
-                queue.append(child)
-
-    return root
-
-
 def _get_ancestor_chain(node: AgentNode, agents: Dict[str, AgentNode]) -> List[str]:
     """获取节点的所有上级名称链（从根到直接上级）"""
     chain = []
@@ -308,73 +271,104 @@ def _get_ancestor_chain(node: AgentNode, agents: Dict[str, AgentNode]) -> List[s
 
 def _calculate_order_shares(
     order: dict,
-    root: AgentNode,
     agents: Dict[str, AgentNode],
-    org_no: str
 ) -> Dict[str, float]:
-    """计算单笔订单各代理的分润金额
+    """计算单笔订单各代理的分润金额（从直属代理往上逐级计算）
+
+    1. 直属代理分润 = 交易金额*(交易费率-直属代理费率) + (交易T0费-直属T0成本)
+    2. 上级分润 = 交易金额*(上级费率成本-下级费率成本) + (上级T0成本-下级T0成本)
+    3. 逐级往上直到顶级
+    4. 总分润池 = 交易金额*(交易费率-服务商费率成本) + (交易T0费-服务商T0成本)
+    5. 所有代理分润总和不超过总分润池
 
     返回: {agent_no: share_amount}
     """
     trade_amount = _to_float(order.get('交易金额'))
     trade_rate = _to_float(order.get('交易费率'))
-    org_rate = _to_float(order.get('一级代理费率成本'))
-    org_t0 = _to_float(order.get('一级代理T0成本'))
+    trade_t0_fee = _to_float(order.get('交易T0服务费'))
+    channel_rate = _to_float(order.get('服务商费率成本'))
+    channel_t0 = _to_float(order.get('服务商T0成本'))
     trade_type = order.get('交易类型', '')
     card_type = order.get('卡类型', '')
-    trade_time = order.get('交易时间')
+
+    # 直属代理编号，为空则取一级代理商编号
+    direct_agent_no = str(order.get('所属代理编号', '')).strip() if order.get('所属代理编号') else ''
+    if not direct_agent_no:
+        direct_agent_no = str(order.get('一级代理商编号', '')).strip() if order.get('一级代理商编号') else ''
+
+    if not direct_agent_no:
+        return {}
 
     rate_key, t0_key = _get_rate_keys(trade_type, card_type, trade_amount)
 
-    # 总分润池
-    total_pool = trade_amount * (trade_rate - org_rate) + org_t0
+    # 总分润池 = 交易金额*(交易费率-服务商费率成本) + (交易T0费-服务商T0成本)
+    total_pool = trade_amount * (trade_rate - channel_rate) + (trade_t0_fee - channel_t0)
 
     if total_pool <= 0:
+        return {}
+
+    # 找到直属代理节点
+    direct_node = agents.get(direct_agent_no)
+    if not direct_node:
         return {}
 
     shares: Dict[str, float] = {}
     cumulative = 0.0
 
-    # BFS 逐级分钱
-    # 第一级: root 的子节点 → root 的分润
-    # 后续: 每个子节点的子节点 → 该子节点的分润
-    visited = {root.agent_no}
-    queue = deque([(root, org_rate, org_t0)])
+    # 直属代理分润 = 交易金额*(交易费率-直属代理费率) + (交易T0费-直属T0成本)
+    direct_rate = _extract_rate(direct_node.rate_cost_info, rate_key)
+    direct_t0 = _extract_rate(direct_node.t0_cost_info, t0_key)
 
-    while queue:
-        parent_node, parent_rate, parent_t0 = queue.popleft()
+    direct_share = trade_amount * (trade_rate - direct_rate) + (trade_t0_fee - direct_t0)
 
-        for child in parent_node.children:
-            if child.agent_no in visited:
-                continue
-            visited.add(child.agent_no)
+    if direct_share > 0:
+        if cumulative + direct_share > total_pool:
+            remaining = total_pool - cumulative
+            if remaining > 0:
+                shares[direct_agent_no] = remaining
+                cumulative = total_pool
+        else:
+            shares[direct_agent_no] = direct_share
+            cumulative += direct_share
 
-            child_rate = _extract_rate(child.rate_cost_info, rate_key)
-            child_t0 = _extract_rate(child.t0_cost_info, t0_key)
+    # 逐级往上算
+    current_rate = direct_rate
+    current_t0 = direct_t0
+    current_node = direct_node
+    visited = {direct_agent_no}
 
-            # 上级分润 = 交易金额 * (下级费率成本 - 上级费率成本) + (下级T0成本 - 上级T0成本)
-            share = trade_amount * (child_rate - parent_rate) + (child_t0 - parent_t0)
+    while cumulative < total_pool:
+        parent_no = current_node.parent_agent_no
+        if not parent_no or parent_no in visited:
+            break
 
-            # 分润为负或零时，上级无收益，但仍继续探索下级（下级可能有正分润）
-            if share <= 0:
-                queue.append((child, child_rate, child_t0))
-                continue
+        parent_node = agents.get(parent_no)
+        if not parent_node:
+            break
 
+        visited.add(parent_no)
+
+        parent_rate = _extract_rate(parent_node.rate_cost_info, rate_key)
+        parent_t0 = _extract_rate(parent_node.t0_cost_info, t0_key)
+
+        # 上级分润 = 交易金额*(上级费率成本-下级费率成本) + (上级T0成本-下级T0成本)
+        share = trade_amount * (parent_rate - current_rate) + (parent_t0 - current_t0)
+
+        if share > 0:
             if cumulative + share > total_pool:
-                # 超出总分润池，只分剩余部分
                 remaining = total_pool - cumulative
                 if remaining > 0:
-                    shares[parent_node.agent_no] = shares.get(parent_node.agent_no, 0.0) + remaining
+                    shares[parent_no] = remaining
                     cumulative = total_pool
-                # 后续都不再分
                 break
             else:
-                shares[parent_node.agent_no] = shares.get(parent_node.agent_no, 0.0) + share
+                shares[parent_no] = share
                 cumulative += share
-                queue.append((child, child_rate, child_t0))
 
-        if cumulative >= total_pool:
-            break
+        # 继续往上
+        current_node = parent_node
+        current_rate = parent_rate
+        current_t0 = parent_t0
 
     return shares
 
@@ -599,7 +593,7 @@ class ProfitShareService:
                 )
 
                 order_columns = [
-                    '交易时间', '一级代理商编号', '交易金额', '交易费率', '交易手续费', '交易T0服务费',
+                    '交易时间', '所属代理编号', '一级代理商编号', '交易金额', '交易费率', '交易手续费', '交易T0服务费',
                     '服务商费率成本', '服务商T0成本', '一级代理费率成本', '一级代理T0成本',
                     '交易类型', '卡类型', '产品ID', '终端类型'
                 ]
@@ -622,7 +616,7 @@ class ProfitShareService:
                     raise RuntimeError('任务已被手动终止')
 
                 # 5. 构建代理配置
-                task.add_log('构建代理层级关系...')
+                task.add_log('构建代理配置...')
                 task.progress = 55
                 db.session.commit()
 
@@ -641,14 +635,10 @@ class ProfitShareService:
                 agent_info_map: Dict[str, AgentNode] = {}
                 # 记录每个代理的上级关系
                 agent_ancestor_chain: Dict[str, str] = {}
-                # 层级树缓存: {config_key: root_node}（同一设备+产品组合只需构建一次）
-                hierarchy_cache: Dict[Tuple, Optional[AgentNode]] = {}
 
                 total_orders = len(order_dicts)
                 processed = 0
                 skipped_no_config = 0
-                skipped_no_root = 0
-                skipped_no_pool = 0
                 skipped_no_share = 0
                 # 按月份统计: {month: {'total': n, 'skipped': n, 'shared': n}}
                 month_stats: Dict[str, Dict[str, int]] = defaultdict(lambda: {'total': 0, 'skipped': 0, 'shared': 0})
@@ -677,19 +667,8 @@ class ProfitShareService:
                         processed += 1
                         continue
 
-                    # 从缓存获取层级树（同一设备+产品组合只构建一次）
-                    if config_key not in hierarchy_cache:
-                        hierarchy_cache[config_key] = _build_hierarchy(agents, org_no)
-                    root = hierarchy_cache[config_key]
-
-                    if root is None:
-                        skipped_no_root += 1
-                        month_stats[month_str]['skipped'] += 1
-                        processed += 1
-                        continue
-
-                    # 计算分润
-                    shares = _calculate_order_shares(order, root, agents, org_no)
+                    # 计算分润（从直属代理往上逐级计算）
+                    shares = _calculate_order_shares(order, agents)
 
                     if not shares:
                         skipped_no_share += 1
@@ -728,8 +707,7 @@ class ProfitShareService:
                 # 输出详细统计
                 task.add_log(f'分润计算完成: 处理 {processed} 笔订单')
                 task.add_log(f'  - 无匹配代理配置: {skipped_no_config} 笔')
-                task.add_log(f'  - 无根节点: {skipped_no_root} 笔')
-                task.add_log(f'  - 无分润结果(total_pool<=0或其他): {skipped_no_share} 笔')
+                task.add_log(f'  - 无分润结果(总分润池<=0或直属代理未找到): {skipped_no_share} 笔')
                 for month_key in sorted(month_stats.keys()):
                     s = month_stats[month_key]
                     task.add_log(f'  月份 {month_key}: 总计 {s["total"]} 笔, 跳过 {s["skipped"]} 笔, 有分润 {s["shared"]} 笔')
