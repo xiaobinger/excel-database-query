@@ -295,6 +295,7 @@ const menuOptions = [
   { value: 'scripts', label: '脚本管理' },
   { value: 'query', label: '查询执行' },
   { value: 'export_exec', label: '导出任务' },
+  { value: 'profit_share', label: '分润导出' },
   { value: 'auto_export', label: '自动导出' },
   { value: 'system', label: '系统配置' },
   { value: 'system_tasks', label: '系统任务' },

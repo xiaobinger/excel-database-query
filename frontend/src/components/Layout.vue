@@ -35,6 +35,10 @@
           <i class="fas fa-download"></i>
           <template #title>导出任务</template>
         </el-menu-item>
+        <el-menu-item v-if="store.hasMenuPermission('profit_share')" index="/profit-share">
+          <i class="fas fa-hand-holding-usd"></i>
+          <template #title>分润导出</template>
+        </el-menu-item>
         <el-menu-item v-if="store.hasMenuPermission('auto_export')" index="/auto-export">
           <i class="fas fa-clock"></i>
           <template #title>自动导出</template>

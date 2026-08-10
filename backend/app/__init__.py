@@ -306,7 +306,7 @@ def _init_default_admin(app):
         # 确保管理员角色包含新菜单权限
         try:
             menus = json.loads(admin_role.menu_permissions) if admin_role.menu_permissions else []
-            new_menus = ['ai_chat', 'ai_sessions', 'skills', 'agent_manager', 'cache_stats', 'business_systems', 'system_tasks']
+            new_menus = ['ai_chat', 'ai_sessions', 'skills', 'agent_manager', 'cache_stats', 'business_systems', 'system_tasks', 'profit_share']
             updated = False
             for m in new_menus:
                 if m not in menus:

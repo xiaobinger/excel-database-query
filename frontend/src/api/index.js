@@ -255,4 +255,12 @@ const lookup = {
   execute: (data) => http.post('/lookup/execute', data),
 }
 
-export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, ai, agent, business, systemTask, lookup }
+const profitShare = {
+  execute: (data) => http.post('/profit-share/export', data),
+  status: (taskId) => http.get(`/profit-share/status/${taskId}`),
+  streamStatus: (taskId) => `/api/profit-share/stream/${taskId}`,
+  cancel: (taskId) => http.post(`/profit-share/cancel/${taskId}`),
+  databases: () => http.get('/profit-share/databases'),
+}
+
+export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, ai, agent, business, systemTask, lookup, profitShare }
