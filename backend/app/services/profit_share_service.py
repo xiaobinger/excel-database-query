@@ -64,27 +64,27 @@ WHERE ac.product_type = 1
 
 SQL_TRADE_ORDERS = """
 SELECT
-    o.trade_time                           AS 交易时间,
-    tm.agent_no                            AS 所属代理编号,
-    om.old_org_code                        AS 一级代理商编号,
-    o.trade_amount / 100                   AS 交易金额,
-    o.trade_rate / 100                     AS 交易费率,
-    o.trade_fee_amount / 100               AS 交易手续费,
-    IFNULL(o.trade_t0_fee, 0) / 100        AS 交易T0服务费,
-    o.channel_rate                         AS 服务商费率成本,
-    IFNULL(o.channel_t0_fee, 0) / 100      AS 服务商T0成本,
-    o.org_rate                             AS 一级代理费率成本,
-    IFNULL(o.org_t0_fee, 0) / 100          AS 一级代理T0成本,
-    CASE
-        WHEN o.trade_type = 1 THEN '刷卡'
-        WHEN o.trade_type = 2 THEN '银二'
-        WHEN o.trade_type = 3 THEN '手机PAY'
-        WHEN o.trade_type = 4 THEN '支付宝'
-        WHEN o.trade_type = 5 THEN '微信'
-    END                                    AS 交易类型,
-    IF(o.card_type = 1, '借记卡', '贷记卡')  AS 卡类型,
-    opm.old_product_id                     AS 产品ID,
-    d.device_type                          AS 终端类型
+    o.trade_time                              AS 交易时间,
+    IFNULL(td.agent_no, om.old_org_code)      AS 所属代理编号,
+    om.old_org_code                           AS 一级代理商编号,
+    o.trade_amount / 100                      AS 交易金额,
+    o.trade_rate / 100                        AS 交易费率,
+    o.trade_fee_amount / 100                  AS 交易手续费,
+    IFNULL(o.trade_t0_fee, 0) / 100           AS 交易T0服务费,
+    IF(o.channel_rate > 0.1, o.channel_rate / 100, o.channel_rate) AS 服务商费率成本,
+    IFNULL(o.channel_t0_fee, 0) / 100         AS 服务商T0成本,
+    IF(o.org_rate > 0.1, o.org_rate / 100, o.org_rate) AS 一级代理费率成本,
+    IFNULL(o.org_t0_fee, 0) / 100             AS 一级代理T0成本,
+    CASE o.trade_type
+        WHEN 1 THEN '刷卡'
+        WHEN 2 THEN '银二'
+        WHEN 3 THEN '手机PAY'
+        WHEN 4 THEN '支付宝'
+        WHEN 5 THEN '微信'
+    END                                       AS 交易类型,
+    IF(o.card_type = 1, '借记卡', '贷记卡')     AS 卡类型,
+    opm.old_product_id                        AS 产品ID,
+    d.device_type                             AS 终端类型
 FROM posp_business.org_migrate_mapping om
 INNER JOIN posp_business.trade_order o
     ON o.org_no = om.new_org_code
@@ -94,8 +94,9 @@ LEFT JOIN posp_business.device d
     ON o.device_sn = d.device_sn
 LEFT JOIN posp_business.org_product_migrate_mapping opm
     ON d.product_code = opm.new_product_id
-LEFT JOIN pro_mcht_db.tbl_mcht tm
-    ON o.merchant_no = tm.mcht_no
+LEFT JOIN pro_mcht_db.tbl_device td
+    ON td.device_sn = d.device_sn
+    AND td.root_agent_no = :org_no
 WHERE om.old_org_code = :org_no
 """
 
