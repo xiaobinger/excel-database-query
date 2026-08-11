@@ -319,19 +319,25 @@ class DatabaseConnector:
         except Exception as sync_err:
             logger.warning(f'数据库连接器: 同步连接池缓存失败: {sync_err}')
     
-    def execute_query(self, sql: str, params: Dict[str, Any], 
+    def execute_query(self, sql: str, params: Dict[str, Any],
                    timeout: int = 30, max_rows: int = 0, chunk_size: int = 5000) -> List[Tuple]:
-        """执行查询，流式获取结果避免内存暴涨，连接失败自动重建重试"""
+        """执行查询，流式获取结果避免内存暴涨，连接失败自动重建重试
+
+        注意：使用 server-side cursor (stream_results=True)，必须在读取完毕后
+        显式关闭 result，否则未读完的游标会污染连接池中的连接，导致后续查询
+        报 'Packet sequence number wrong' 错误。
+        """
         if not self.engine:
             raise RuntimeError("数据库引擎未初始化")
-        
+
         start_time = time.time()
-        
+        result = None
+
         try:
             with self.get_connection() as conn:
                 # 使用流式结果集（server-side cursor），避免大数据量一次性加载到内存
                 result = conn.execution_options(stream_results=True).execute(text(sql), params)
-                
+
                 all_rows = []
                 while True:
                     if max_rows > 0:
@@ -341,18 +347,18 @@ class DatabaseConnector:
                         batch = result.fetchmany(min(chunk_size, remaining))
                     else:
                         batch = result.fetchmany(chunk_size)
-                    
+
                     if not batch:
                         break
                     all_rows.extend(batch)
-                    
+
                     if max_rows > 0 and len(all_rows) >= max_rows:
                         break
-                
+
                 execution_time = time.time() - start_time
                 logger.info(f"查询执行成功，返回 {len(all_rows)} 行，耗时 {execution_time:.3f} 秒")
                 return all_rows
-                
+
         except SQLAlchemyError as e:
             execution_time = time.time() - start_time
             logger.error(f"查询执行失败: {str(e)}，耗时 {execution_time:.3f} 秒")
@@ -361,6 +367,13 @@ class DatabaseConnector:
             execution_time = time.time() - start_time
             logger.error(f"查询错误: {str(e)}，耗时 {execution_time:.3f} 秒")
             raise
+        finally:
+            # 确保 server-side cursor 被关闭，避免污染连接池
+            if result is not None:
+                try:
+                    result.close()
+                except Exception:
+                    pass
     
     def execute_batch_queries(self, sql: str, params_list: List[Dict[str, Any]],
                           timeout: int = 30, batch_size: int = 100, max_rows: int = 0) -> Dict[str, Any]:
@@ -486,25 +499,31 @@ class DatabaseConnector:
                 chunk_values = param_values[chunk_start:chunk_start + in_chunk_size]
                 escaped_values = [v.replace("'", "''") for v in chunk_values]
                 in_clause = f"({', '.join([f"'{v}'" for v in escaped_values])})"
-                
+
                 modified_sql = re.sub(rf':{bind_param}\b', in_clause, sql, flags=re.IGNORECASE)
                 # 流式获取结果
                 result = conn.execution_options(stream_results=True).execute(text(modified_sql))
-                
-                while True:
-                    if max_rows > 0:
-                        remaining = max_rows - len(all_rows)
-                        if remaining <= 0:
+                try:
+                    while True:
+                        if max_rows > 0:
+                            remaining = max_rows - len(all_rows)
+                            if remaining <= 0:
+                                break
+                            batch = result.fetchmany(min(chunk_size, remaining))
+                        else:
+                            batch = result.fetchmany(chunk_size)
+                        if not batch:
                             break
-                        batch = result.fetchmany(min(chunk_size, remaining))
-                    else:
-                        batch = result.fetchmany(chunk_size)
-                    if not batch:
-                        break
-                    all_rows.extend(batch)
-                    if max_rows > 0 and len(all_rows) >= max_rows:
-                        break
-                
+                        all_rows.extend(batch)
+                        if max_rows > 0 and len(all_rows) >= max_rows:
+                            break
+                finally:
+                    # 每个 chunk 的 server-side cursor 必须关闭，避免污染连接
+                    try:
+                        result.close()
+                    except Exception:
+                        pass
+
                 if max_rows > 0 and len(all_rows) >= max_rows:
                     break
         
