@@ -7,10 +7,11 @@
 计算逻辑（从直属代理往上逐级计算）：
   1. 根据订单的 终端类型、产品类型 找到代理配置组
   2. 通过订单的直属代理编号（为空则取一级代理商编号）匹配成本配置
-  3. 总分润池 = 交易金额*(直属代理费率-一级代理费率成本) + (直属T0-一级代理T0成本)
-  4. 从直属代理开始逐级往上，每级分润 = 交易金额*(当前费率-上级费率) + (当前T0-上级T0)
-  5. 分润分配给当前代理（非上级），累计不超过总分润池
-  6. 特殊规则: 交易金额 > 1000 时，费率成本取刷卡贷记卡相关值
+  3. 总分润池 = 交易金额*(交易费率-一级代理费率成本) + (交易T0费-一级代理T0成本)
+  4. 直属代理分润 = 交易金额*(交易费率-直属代理费率成本) + (交易T0费-直属代理T0成本)
+  5. 往上逐级分润 = 交易金额*(下级费率成本-上级费率成本) + (下级T0成本-上级T0成本)，分配给上级
+  6. 所有代理分润总和不超过总分润池
+  7. 特殊规则: 交易金额 > 1000 时，费率成本取刷卡贷记卡相关值
 """
 
 import json
@@ -299,15 +300,18 @@ def _calculate_order_shares(
 ) -> Tuple[Dict[str, float], str]:
     """计算单笔订单各代理的分润金额（从直属代理往上逐级计算）
 
-    1. 总分润池 = 交易金额*(直属代理费率-一级代理费率成本) + (直属T0-一级代理T0成本)
-    2. 从直属代理开始逐级往上，每级分润 = 交易金额*(当前费率-上级费率) + (当前T0-上级T0)
-    3. 分润分配给当前代理（非上级），累计不超过总分润池
-    4. 一级代理费率成本/T0成本 优先用订单自带的值（最准确）
+    1. 总分润池 = 交易金额*(交易费率 - 一级代理费率成本) + (交易T0费 - 一级代理T0成本)
+    2. 直属代理分润 = 交易金额*(交易费率 - 直属代理费率成本) + (交易T0费 - 直属代理T0成本)
+    3. 往上逐级分润 = 交易金额*(下级代理费率成本 - 上级代理费率成本) + (下级T0成本 - 上级代理T0成本)
+    4. 分润分配给上级代理，累计不超过总分润池
+    5. 一级代理费率成本/T0成本 优先用订单自带的值（最准确）
 
     返回: (shares: {agent_no: share_amount}, skip_reason: str)
         skip_reason 为空表示正常计算有结果；非空则表示跳过原因
     """
     trade_amount = _to_float(order.get('交易金额'))
+    trade_rate = _to_float(order.get('交易费率'))
+    trade_t0_fee = _to_float(order.get('交易T0服务费'))
     trade_type = order.get('交易类型', '')
     card_type = order.get('卡类型', '')
 
@@ -326,6 +330,14 @@ def _calculate_order_shares(
 
     rate_key, t0_key = _get_rate_keys(trade_type, card_type, trade_amount)
 
+    # 总分润池 = 交易金额*(交易费率 - 一级代理费率成本) + (交易T0费 - 一级代理T0成本)
+    total_pool = trade_amount * (trade_rate - org_rate) + (trade_t0_fee - org_t0)
+
+    if total_pool <= 0:
+        return {}, (f'总分润池<=0 (pool={total_pool:.4f}, 交易金额={trade_amount:.2f}, '
+                    f'交易费率={trade_rate}, 一级代理费率成本={org_rate}, '
+                    f'交易T0费={trade_t0_fee:.2f}, 一级代理T0成本={org_t0})')
+
     # 找到直属代理节点
     direct_node = agents.get(direct_agent_no)
     if not direct_node:
@@ -334,36 +346,32 @@ def _calculate_order_shares(
     direct_rate = _extract_rate(direct_node.rate_cost_info, rate_key)
     direct_t0 = _extract_rate(direct_node.t0_cost_info, t0_key)
 
-    # 总分润池 = 交易金额*(直属代理费率-一级代理费率成本) + (直属T0-一级代理T0成本)
-    # 费率层级: 服务商费率 < 一级代理费率 < 中间代理费率 < 直属代理费率 < 交易费率
-    # 因此 direct_rate > org_rate，总分润池为正
-    total_pool = trade_amount * (direct_rate - org_rate) + (direct_t0 - org_t0)
-
-    if total_pool <= 0:
-        return {}, (f'总分润池<=0 (pool={total_pool:.4f}, 交易金额={trade_amount:.2f}, '
-                    f'直属代理费率={direct_rate}, 一级代理费率成本={org_rate}, '
-                    f'直属T0={direct_t0}, 一级代理T0成本={org_t0})')
-
     shares: Dict[str, float] = {}
     cumulative = 0.0
 
-    # 从直属代理开始逐级往上，每级分润 = 交易金额*(当前费率-上级费率) + (当前T0-上级T0)
-    # 分润分配给当前代理（current_no），累计不超过 total_pool
+    # 直属代理分润 = 交易金额*(交易费率 - 直属代理费率成本) + (交易T0费 - 直属代理T0成本)
+    direct_share = trade_amount * (trade_rate - direct_rate) + (trade_t0_fee - direct_t0)
+
+    if direct_share > 0:
+        if cumulative + direct_share > total_pool:
+            remaining = total_pool - cumulative
+            if remaining > 0:
+                shares[direct_agent_no] = remaining
+                cumulative = total_pool
+        else:
+            shares[direct_agent_no] = direct_share
+            cumulative += direct_share
+
+    # 逐级往上：上级分润 = 交易金额*(下级费率成本 - 上级费率成本) + (下级T0成本 - 上级T0成本)
+    # 分润分配给上级代理
     current_rate = direct_rate
     current_t0 = direct_t0
     current_node = direct_node
-    current_no = direct_agent_no
     visited = {direct_agent_no}
 
     while cumulative < total_pool:
         parent_no = current_node.parent_agent_no
         if not parent_no or parent_no in visited:
-            # 没有上级了，当前代理拿剩余分润
-            if cumulative < total_pool:
-                remaining = total_pool - cumulative
-                if remaining > 0:
-                    shares[current_no] = shares.get(current_no, 0) + remaining
-                    cumulative = total_pool
             break
 
         # 一级代理：优先用订单中的费率成本（最准确），不论是否在 agents 中
@@ -374,30 +382,24 @@ def _calculate_order_shares(
         else:
             parent_node = agents.get(parent_no)
             if not parent_node:
-                # 上级不在配置中，当前代理拿剩余分润
-                if cumulative < total_pool:
-                    remaining = total_pool - cumulative
-                    if remaining > 0:
-                        shares[current_no] = shares.get(current_no, 0) + remaining
-                        cumulative = total_pool
                 break
             parent_rate = _extract_rate(parent_node.rate_cost_info, rate_key)
             parent_t0 = _extract_rate(parent_node.t0_cost_info, t0_key)
 
         visited.add(parent_no)
 
-        # 当前代理分润 = 交易金额*(当前费率-上级费率) + (当前T0-上级T0)
+        # 上级分润 = 交易金额*(下级费率成本 - 上级费率成本) + (下级T0成本 - 上级T0成本)
         share = trade_amount * (current_rate - parent_rate) + (current_t0 - parent_t0)
 
         if share > 0:
             if cumulative + share > total_pool:
                 remaining = total_pool - cumulative
                 if remaining > 0:
-                    shares[current_no] = shares.get(current_no, 0) + remaining
+                    shares[parent_no] = remaining
                     cumulative = total_pool
                 break
             else:
-                shares[current_no] = shares.get(current_no, 0) + share
+                shares[parent_no] = share
                 cumulative += share
 
         # 一级代理已到顶级，结束
@@ -406,9 +408,21 @@ def _calculate_order_shares(
 
         # 继续往上
         current_node = parent_node
-        current_no = parent_no
         current_rate = parent_rate
         current_t0 = parent_t0
+
+    # 兜底：如果一级代理还没被计算分润，且还有剩余分润池，直接计算一级代理分润
+    if cumulative < total_pool and org_agent_no and org_agent_no not in shares and org_agent_no not in visited:
+        share = trade_amount * (current_rate - org_rate) + (current_t0 - org_t0)
+        if share > 0:
+            if cumulative + share > total_pool:
+                remaining = total_pool - cumulative
+                if remaining > 0:
+                    shares[org_agent_no] = remaining
+                    cumulative = total_pool
+            else:
+                shares[org_agent_no] = share
+                cumulative += share
 
     if not shares:
         return {}, (f'各级分润均<=0 (直属代理={direct_agent_no}, 直属费率={direct_rate}, '
