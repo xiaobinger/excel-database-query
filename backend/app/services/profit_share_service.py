@@ -66,6 +66,7 @@ WHERE ac.product_type IN (1, 4, 8, 9)
 
 SQL_TRADE_ORDERS = """
 SELECT
+    o.order_no                                AS 订单号,
     o.trade_time                              AS 交易时间,
     IFNULL(td.agent_no, om.old_org_code)      AS 所属代理编号,
     om.old_org_code                           AS 一级代理商编号,
@@ -433,8 +434,14 @@ def _calculate_order_shares(
 
 # ── Excel 生成 ───────────────────────────────────────────
 
-def _generate_excel(aggregated_data: List[dict], output_path: str):
-    """生成分润 Excel 文件"""
+def _generate_excel(aggregated_data: List[dict], output_path: str, order_details: List[dict] = None):
+    """生成分润 Excel 文件
+
+    Args:
+        aggregated_data: 代理分润聚合数据
+        output_path: 输出文件路径
+        order_details: 订单明细数据（含总分润池列），用于第二张工作表
+    """
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
@@ -450,8 +457,10 @@ def _generate_excel(aggregated_data: List[dict], output_path: str):
         left=Side(style='thin'), right=Side(style='thin'),
         top=Side(style='thin'), bottom=Side(style='thin')
     )
+    data_font = Font(size=10)
+    data_align = Alignment(horizontal='left', vertical='center')
 
-    # 写表头
+    # ── 工作表1: 代理分润明细 ──
     for col_idx, header in enumerate(EXPORT_HEADERS, 1):
         cell = ws.cell(row=1, column=col_idx)
         cell.value = header
@@ -459,10 +468,6 @@ def _generate_excel(aggregated_data: List[dict], output_path: str):
         cell.fill = header_fill
         cell.alignment = header_align
         cell.border = thin_border
-
-    # 写数据
-    data_font = Font(size=10)
-    data_align = Alignment(horizontal='left', vertical='center')
 
     for row_idx, row_data in enumerate(aggregated_data, 2):
         for col_idx, header in enumerate(EXPORT_HEADERS, 1):
@@ -472,7 +477,6 @@ def _generate_excel(aggregated_data: List[dict], output_path: str):
             cell.alignment = data_align
             cell.border = thin_border
 
-            # 分润金额保留两位小数
             if header == '分润金额' and isinstance(cell.value, (int, float)):
                 cell.number_format = '0.00'
 
@@ -490,8 +494,52 @@ def _generate_excel(aggregated_data: List[dict], output_path: str):
                 pass
         ws.column_dimensions[column_letter].width = min(max_length + 2, 50)
 
-    # 冻结首行
     ws.freeze_panes = 'A2'
+
+    # ── 工作表2: 订单明细（含总分润池） ──
+    if order_details:
+        ws2 = wb.create_sheet(title='订单明细')
+        order_headers = list(order_details[0].keys())
+
+        for col_idx, header in enumerate(order_headers, 1):
+            cell = ws2.cell(row=1, column=col_idx)
+            cell.value = header
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_align
+            cell.border = thin_border
+
+        # 金额/费率类列保留小数
+        decimal_headers = {'交易金额', '交易费率', '交易手续费', '交易T0服务费',
+                           '服务商费率成本', '服务商T0成本', '一级代理费率成本',
+                           '一级代理T0成本', '总分润池'}
+
+        for row_idx, row_data in enumerate(order_details, 2):
+            for col_idx, header in enumerate(order_headers, 1):
+                cell = ws2.cell(row=row_idx, column=col_idx)
+                cell.value = row_data.get(header, '')
+                cell.font = data_font
+                cell.alignment = data_align
+                cell.border = thin_border
+
+                if header in decimal_headers and isinstance(cell.value, (int, float)):
+                    cell.number_format = '0.0000' if header in ('交易费率', '服务商费率成本', '一级代理费率成本') else '0.00'
+
+        # 自动调整列宽
+        for column in ws2.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column[:min(100, len(order_details) + 1)]:
+                try:
+                    if cell.value is not None:
+                        cell_length = len(str(cell.value))
+                        if cell_length > max_length:
+                            max_length = cell_length
+                except Exception:
+                    pass
+            ws2.column_dimensions[column_letter].width = min(max_length + 2, 50)
+
+        ws2.freeze_panes = 'A2'
 
     wb.save(output_path)
 
@@ -651,7 +699,7 @@ class ProfitShareService:
                 )
 
                 order_columns = [
-                    '交易时间', '所属代理编号', '一级代理商编号', '交易金额', '交易费率', '交易手续费', '交易T0服务费',
+                    '订单号', '交易时间', '所属代理编号', '一级代理商编号', '交易金额', '交易费率', '交易手续费', '交易T0服务费',
                     '服务商费率成本', '服务商T0成本', '一级代理费率成本', '一级代理T0成本',
                     '交易类型', '卡类型', '产品ID', '产品类型', '终端类型'
                 ]
@@ -707,6 +755,8 @@ class ProfitShareService:
                 # 记录无分润结果的订单明细（最多保留 20 条用于日志展示）
                 no_share_samples: List[str] = []
                 NO_SHARE_SAMPLE_LIMIT = 20
+                # 收集所有订单明细用于第二张工作表（含总分润池列）
+                order_detail_rows: List[dict] = []
 
                 for order in order_dicts:
                     device_type = str(order.get('终端类型', '')).strip()
@@ -726,6 +776,19 @@ class ProfitShareService:
                         else:
                             month_str = str(trade_time)[:7]
                     month_stats[month_str]['total'] += 1
+
+                    # 计算该笔订单的总分润池 = 交易金额*(交易费率-一级代理费率成本) + (交易T0费-一级代理T0成本)
+                    _amt = _to_float(order.get('交易金额'))
+                    _rate = _to_float(order.get('交易费率'))
+                    _t0 = _to_float(order.get('交易T0服务费'))
+                    _org_rate = _to_float(order.get('一级代理费率成本'))
+                    _org_t0 = _to_float(order.get('一级代理T0成本'))
+                    order_total_pool = _amt * (_rate - _org_rate) + (_t0 - _org_t0)
+
+                    # 收集订单明细（用于第二张工作表）
+                    detail_row = {k: order.get(k) for k in order_columns}
+                    detail_row['总分润池'] = round(order_total_pool, 4) if order_total_pool > 0 else 0
+                    order_detail_rows.append(detail_row)
 
                     agents = agent_configs.get(config_key)
                     if not agents:
@@ -869,9 +932,9 @@ class ProfitShareService:
                 output_filename = f'profit_share_{org_no}_{timestamp}.xlsx'
                 output_path = os.path.join(output_dir, output_filename)
 
-                _generate_excel(export_rows, output_path)
+                _generate_excel(export_rows, output_path, order_detail_rows)
 
-                task.add_log(f'导出完成，共 {len(export_rows)} 行分润记录')
+                task.add_log(f'导出完成，共 {len(export_rows)} 行分润记录，{len(order_detail_rows)} 行订单明细')
                 task.status = 'completed'
                 task.completed_at = datetime.utcnow()
                 task.output_file = output_path
