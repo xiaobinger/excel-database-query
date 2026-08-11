@@ -757,8 +757,19 @@ class ProfitShareService:
                 NO_SHARE_SAMPLE_LIMIT = 20
                 # 收集所有订单明细用于第二张工作表（含总分润池列）
                 order_detail_rows: List[dict] = []
+                # 按订单号去重，避免重复计算分润
+                seen_order_nos: set = set()
+                duplicate_count = 0
 
                 for order in order_dicts:
+                    # 订单号去重：同一订单号只处理一次
+                    order_no = str(order.get('订单号', '')).strip() if order.get('订单号') else ''
+                    if order_no:
+                        if order_no in seen_order_nos:
+                            duplicate_count += 1
+                            continue
+                        seen_order_nos.add(order_no)
+
                     device_type = str(order.get('终端类型', '')).strip()
                     product_type = order.get('产品类型')
                     product_type_str = str(product_type).strip() if product_type is not None else ''
@@ -870,7 +881,7 @@ class ProfitShareService:
                         db.session.commit()
 
                 # 输出详细统计
-                task.add_log(f'分润计算完成: 处理 {processed} 笔订单')
+                task.add_log(f'分润计算完成: 查询 {total_orders} 笔, 去重 {duplicate_count} 笔, 实际处理 {processed} 笔订单')
                 task.add_log(f'  - 无匹配代理配置: {skipped_no_config} 笔')
                 task.add_log(f'  - 无分润结果(总分润池<=0或直属代理未找到): {skipped_no_share} 笔')
                 for month_key in sorted(month_stats.keys()):
