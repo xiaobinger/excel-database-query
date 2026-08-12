@@ -12,7 +12,7 @@
   5. 往上逐级分润 = 交易金额*(下级费率成本-上级费率成本) + (下级T0成本-上级T0成本)，分配给上级
   6. 所有代理分润总和不超过总分润池
   7. 特殊规则: 交易金额 > 1000 时，费率成本取刷卡贷记卡相关值
-  8. 借记卡封顶: 当 交易金额*交易费率 > 封顶值(分/100=元) 时，交易金额替换为 封顶值(元)/(交易费率-一级代理费率成本)
+  8. 借记卡封顶: 当 交易金额*交易费率 > 封顶值(分/100=元) 时，交易金额替换为 交易手续费/(交易费率-一级代理费率成本)
 """
 
 import json
@@ -315,6 +315,7 @@ def _calculate_order_shares(
     """
     trade_amount = _to_float(order.get('交易金额'))
     trade_rate = _to_float(order.get('交易费率'))
+    trade_fee_amount = _to_float(order.get('交易手续费'))
     trade_t0_fee = _to_float(order.get('交易T0服务费'))
     trade_type = order.get('交易类型', '')
     card_type = order.get('卡类型', '')
@@ -343,9 +344,8 @@ def _calculate_order_shares(
     direct_t0 = _extract_rate(direct_node.t0_cost_info, t0_key)
 
     # 借记卡封顶处理：当为借记卡交易且触发封顶时，替换交易金额
-    # 封顶值 debitPayMax 单位为分，需 /100 转为元
-    # 判断：交易金额*交易费率(元) > 封顶值(元)
-    # 触发后：交易金额替换为 封顶值(元) / (交易费率 - 一级代理费率成本)
+    # 判断：交易金额*交易费率(元) > 封顶值(分/100=元)
+    # 触发后：effective_amount = 交易手续费 / (交易费率 - 一级代理费率成本)
     effective_amount = trade_amount
     if card_type == '借记卡':
         debit_pay_max = _to_float(direct_node.rate_cost_info.get('debitPayMax'))
@@ -354,7 +354,7 @@ def _calculate_order_shares(
             if trade_amount * trade_rate > debit_pay_max_yuan:
                 rate_diff = trade_rate - org_rate
                 if rate_diff > 0:
-                    effective_amount = debit_pay_max_yuan / rate_diff
+                    effective_amount = trade_fee_amount / rate_diff
 
     # 总分润池 = 交易金额*(交易费率 - 一级代理费率成本) + (交易T0费 - 一级代理T0成本)
     total_pool = effective_amount * (trade_rate - org_rate) + (trade_t0_fee - org_t0)
