@@ -448,6 +448,13 @@ def _calculate_order_shares(
                 shares[org_agent_no] = share
                 cumulative += share
 
+    # 最终兜底：将剩余未分配的分润池差额补给直属代理，确保分润总额 = 总分润池
+    # 差额来源：某级代理share<=0被跳过、链路中断、封顶公式差异等
+    if cumulative < total_pool and direct_agent_no:
+        remaining = total_pool - cumulative
+        shares[direct_agent_no] = shares.get(direct_agent_no, 0) + remaining
+        cumulative = total_pool
+
     if not shares:
         return {}, (f'各级分润均<=0 (直属代理={direct_agent_no}, 直属费率={direct_rate}, '
                     f'直属T0={direct_t0}, 总分润池={total_pool:.4f})'), 0.0
