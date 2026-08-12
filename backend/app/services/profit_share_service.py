@@ -638,12 +638,12 @@ class ProfitShareService:
 
     @staticmethod
     def execute_async(task_id: str, org_no: str, start_time: str, end_time: str,
-                      database_connection_id: int, output_dir: str, on_complete=None):
+                      database_connection_id: int, output_dir: str, on_complete=None, is_admin: bool = False):
         cancel_event = threading.Event()
         _task_cancel_events[task_id] = cancel_event
         thread = threading.Thread(
             target=ProfitShareService._execute_background,
-            args=(task_id, org_no, start_time, end_time, database_connection_id, output_dir, on_complete, cancel_event),
+            args=(task_id, org_no, start_time, end_time, database_connection_id, output_dir, on_complete, cancel_event, is_admin),
             daemon=True
         )
         _task_threads[task_id] = thread
@@ -652,7 +652,7 @@ class ProfitShareService:
     @staticmethod
     def _execute_background(task_id: str, org_no: str, start_time: str, end_time: str,
                             database_connection_id: int, output_dir: str,
-                            on_complete=None, cancel_event: threading.Event = None):
+                            on_complete=None, cancel_event: threading.Event = None, is_admin: bool = False):
         try:
             from app import create_app
             app = create_app()
@@ -981,7 +981,7 @@ class ProfitShareService:
                 output_filename = f'profit_share_{org_no}_{timestamp}.xlsx'
                 output_path = os.path.join(output_dir, output_filename)
 
-                _generate_excel(export_rows, output_path, order_detail_rows)
+                _generate_excel(export_rows, output_path, order_detail_rows if is_admin else None)
 
                 task.add_log(f'导出完成，共 {len(export_rows)} 行分润记录，{len(order_detail_rows)} 行订单明细')
                 task.status = 'completed'

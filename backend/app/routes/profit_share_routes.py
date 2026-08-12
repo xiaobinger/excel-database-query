@@ -61,6 +61,7 @@ def execute_profit_share_export():
         os.makedirs(output_dir, exist_ok=True)
 
         current_user = get_current_user()
+        is_admin = current_user.is_admin() if current_user else False
         task = ProfitShareService.create_task(
             org_no=org_no,
             start_time=start_time,
@@ -76,6 +77,7 @@ def execute_profit_share_export():
             end_time=end_time,
             database_connection_id=database_connection_id,
             output_dir=output_dir,
+            is_admin=is_admin,
         )
 
         # 记录用户行为
