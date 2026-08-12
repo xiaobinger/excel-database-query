@@ -22,6 +22,7 @@ import threading
 import uuid
 from collections import defaultdict
 from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, List, Optional, Tuple
 
 from app import db
@@ -173,6 +174,17 @@ def _to_float(value, default=0.0) -> float:
         return float(value)
     except (ValueError, TypeError):
         return default
+
+
+def _round_half_up(value, ndigits=2) -> float:
+    """严格四舍五入（5一律进位，而非银行家舍入）"""
+    if value is None:
+        return 0.0
+    try:
+        quant = Decimal('0.1') ** ndigits
+        return float(Decimal(str(value)).quantize(quant, rounding=ROUND_HALF_UP))
+    except Exception:
+        return round(value, ndigits) if isinstance(value, (int, float)) else 0.0
 
 
 def _get_rate_keys(trade_type: str, card_type: str, trade_amount: float) -> Tuple[str, str]:
@@ -836,7 +848,7 @@ class ProfitShareService:
 
                     # 更新订单明细的总分润池（考虑借记卡封顶后的实际值）
                     if order_total_pool > 0:
-                        detail_row['总分润池'] = round(order_total_pool, 4)
+                        detail_row['总分润池'] = _round_half_up(order_total_pool, 4)
 
                     if not shares:
                         skipped_no_share += 1
@@ -951,7 +963,7 @@ class ProfitShareService:
                         export_rows.append({
                             '代理商编号': agent_no,
                             '代理商名称': node.agent_name,
-                            '分润金额': round(share, 2),
+                            '分润金额': _round_half_up(share, 2),
                             '月份': month,
                             '代理商电话': node.login_phone,
                             '代理商等级': node.rank,
