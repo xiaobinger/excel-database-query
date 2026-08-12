@@ -12,6 +12,7 @@
   5. 往上逐级分润 = 交易金额*(下级费率成本-上级费率成本) + (下级T0成本-上级T0成本)，分配给上级
   6. 所有代理分润总和不超过总分润池
   7. 特殊规则: 交易金额 > 1000 时，费率成本取刷卡贷记卡相关值
+  8. 借记卡封顶: 当 交易金额*交易费率 > 封顶值(分/100=元) 时，交易金额替换为 封顶值(元)/(交易费率-一级代理费率成本)
 """
 
 import json
@@ -298,7 +299,7 @@ def _get_ancestor_chain(node: AgentNode, agents: Dict[str, AgentNode], order: di
 def _calculate_order_shares(
     order: dict,
     agents: Dict[str, AgentNode],
-) -> Tuple[Dict[str, float], str]:
+) -> Tuple[Dict[str, float], str, float]:
     """计算单笔订单各代理的分润金额（从直属代理往上逐级计算）
 
     1. 总分润池 = 交易金额*(交易费率 - 一级代理费率成本) + (交易T0费 - 一级代理T0成本)
@@ -306,9 +307,11 @@ def _calculate_order_shares(
     3. 往上逐级分润 = 交易金额*(下级代理费率成本 - 上级代理费率成本) + (下级T0成本 - 上级代理T0成本)
     4. 分润分配给上级代理，累计不超过总分润池
     5. 一级代理费率成本/T0成本 优先用订单自带的值（最准确）
+    6. 借记卡封顶：当交易金额*交易费率 > 封顶值(分/100=元)时，交易金额替换为 封顶值(元)/(交易费率-一级代理费率成本)
 
-    返回: (shares: {agent_no: share_amount}, skip_reason: str)
+    返回: (shares: {agent_no: share_amount}, skip_reason: str, total_pool: float)
         skip_reason 为空表示正常计算有结果；非空则表示跳过原因
+        total_pool 为该笔订单的总分润池（用于订单明细展示）
     """
     trade_amount = _to_float(order.get('交易金额'))
     trade_rate = _to_float(order.get('交易费率'))
@@ -327,31 +330,45 @@ def _calculate_order_shares(
         direct_agent_no = org_agent_no
 
     if not direct_agent_no:
-        return {}, '无直属代理编号且无一级代理商编号'
+        return {}, '无直属代理编号且无一级代理商编号', 0.0
 
     rate_key, t0_key = _get_rate_keys(trade_type, card_type, trade_amount)
-
-    # 总分润池 = 交易金额*(交易费率 - 一级代理费率成本) + (交易T0费 - 一级代理T0成本)
-    total_pool = trade_amount * (trade_rate - org_rate) + (trade_t0_fee - org_t0)
-
-    if total_pool <= 0:
-        return {}, (f'总分润池<=0 (pool={total_pool:.4f}, 交易金额={trade_amount:.2f}, '
-                    f'交易费率={trade_rate}, 一级代理费率成本={org_rate}, '
-                    f'交易T0费={trade_t0_fee:.2f}, 一级代理T0成本={org_t0})')
 
     # 找到直属代理节点
     direct_node = agents.get(direct_agent_no)
     if not direct_node:
-        return {}, f'直属代理未找到配置 (直属代理编号={direct_agent_no})'
+        return {}, f'直属代理未找到配置 (直属代理编号={direct_agent_no})', 0.0
 
     direct_rate = _extract_rate(direct_node.rate_cost_info, rate_key)
     direct_t0 = _extract_rate(direct_node.t0_cost_info, t0_key)
+
+    # 借记卡封顶处理：当为借记卡交易且触发封顶时，替换交易金额
+    # 封顶值 debitPayMax 单位为分，需 /100 转为元
+    # 判断：交易金额*交易费率(元) > 封顶值(元)
+    # 触发后：交易金额替换为 封顶值(元) / (交易费率 - 一级代理费率成本)
+    effective_amount = trade_amount
+    if card_type == '借记卡':
+        debit_pay_max = _to_float(direct_node.rate_cost_info.get('debitPayMax'))
+        if debit_pay_max > 0:
+            debit_pay_max_yuan = debit_pay_max / 100
+            if trade_amount * trade_rate > debit_pay_max_yuan:
+                rate_diff = trade_rate - org_rate
+                if rate_diff > 0:
+                    effective_amount = debit_pay_max_yuan / rate_diff
+
+    # 总分润池 = 交易金额*(交易费率 - 一级代理费率成本) + (交易T0费 - 一级代理T0成本)
+    total_pool = effective_amount * (trade_rate - org_rate) + (trade_t0_fee - org_t0)
+
+    if total_pool <= 0:
+        return {}, (f'总分润池<=0 (pool={total_pool:.4f}, 交易金额={trade_amount:.2f}, '
+                    f'交易费率={trade_rate}, 一级代理费率成本={org_rate}, '
+                    f'交易T0费={trade_t0_fee:.2f}, 一级代理T0成本={org_t0})'), 0.0
 
     shares: Dict[str, float] = {}
     cumulative = 0.0
 
     # 直属代理分润 = 交易金额*(交易费率 - 直属代理费率成本) + (交易T0费 - 直属代理T0成本)
-    direct_share = trade_amount * (trade_rate - direct_rate) + (trade_t0_fee - direct_t0)
+    direct_share = effective_amount * (trade_rate - direct_rate) + (trade_t0_fee - direct_t0)
 
     if direct_share > 0:
         if cumulative + direct_share > total_pool:
@@ -390,7 +407,7 @@ def _calculate_order_shares(
         visited.add(parent_no)
 
         # 上级分润 = 交易金额*(下级费率成本 - 上级费率成本) + (下级T0成本 - 上级T0成本)
-        share = trade_amount * (current_rate - parent_rate) + (current_t0 - parent_t0)
+        share = effective_amount * (current_rate - parent_rate) + (current_t0 - parent_t0)
 
         if share > 0:
             if cumulative + share > total_pool:
@@ -414,7 +431,7 @@ def _calculate_order_shares(
 
     # 兜底：如果一级代理还没被计算分润，且还有剩余分润池，直接计算一级代理分润
     if cumulative < total_pool and org_agent_no and org_agent_no not in shares and org_agent_no not in visited:
-        share = trade_amount * (current_rate - org_rate) + (current_t0 - org_t0)
+        share = effective_amount * (current_rate - org_rate) + (current_t0 - org_t0)
         if share > 0:
             if cumulative + share > total_pool:
                 remaining = total_pool - cumulative
@@ -427,9 +444,9 @@ def _calculate_order_shares(
 
     if not shares:
         return {}, (f'各级分润均<=0 (直属代理={direct_agent_no}, 直属费率={direct_rate}, '
-                    f'直属T0={direct_t0}, 总分润池={total_pool:.4f})')
+                    f'直属T0={direct_t0}, 总分润池={total_pool:.4f})'), 0.0
 
-    return shares, ''
+    return shares, '', total_pool
 
 
 # ── Excel 生成 ───────────────────────────────────────────
@@ -788,17 +805,9 @@ class ProfitShareService:
                             month_str = str(trade_time)[:7]
                     month_stats[month_str]['total'] += 1
 
-                    # 计算该笔订单的总分润池 = 交易金额*(交易费率-一级代理费率成本) + (交易T0费-一级代理T0成本)
-                    _amt = _to_float(order.get('交易金额'))
-                    _rate = _to_float(order.get('交易费率'))
-                    _t0 = _to_float(order.get('交易T0服务费'))
-                    _org_rate = _to_float(order.get('一级代理费率成本'))
-                    _org_t0 = _to_float(order.get('一级代理T0成本'))
-                    order_total_pool = _amt * (_rate - _org_rate) + (_t0 - _org_t0)
-
-                    # 收集订单明细（用于第二张工作表）
+                    # 收集订单明细（用于第二张工作表，总分润池先置0，计算分润后更新）
                     detail_row = {k: order.get(k) for k in order_columns}
-                    detail_row['总分润池'] = round(order_total_pool, 4) if order_total_pool > 0 else 0
+                    detail_row['总分润池'] = 0
                     order_detail_rows.append(detail_row)
 
                     agents = agent_configs.get(config_key)
@@ -810,7 +819,11 @@ class ProfitShareService:
                         continue
 
                     # 计算分润（从直属代理往上逐级计算）
-                    shares, skip_reason = _calculate_order_shares(order, agents)
+                    shares, skip_reason, order_total_pool = _calculate_order_shares(order, agents)
+
+                    # 更新订单明细的总分润池（考虑借记卡封顶后的实际值）
+                    if order_total_pool > 0:
+                        detail_row['总分润池'] = round(order_total_pool, 4)
 
                     if not shares:
                         skipped_no_share += 1
