@@ -293,6 +293,39 @@ AI_TOOLS = [
                 "required": ["url"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "request_profit_share",
+            "description": "当用户明确要计算代理商分润、导出分润明细、生成分润报表时调用此工具。需要一级代理商编号和交易时间范围。系统会逐笔订单计算各级代理分润并导出 Excel（含代理分润明细和订单明细）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "org_no": {
+                        "type": "string",
+                        "description": "一级代理商编号，如 AG10000557"
+                    },
+                    "start_time": {
+                        "type": "string",
+                        "description": "交易开始时间，格式 YYYY-MM-DD HH:MM:SS。如用户说'2025年7月'则填 '2025-07-01 00:00:00'"
+                    },
+                    "end_time": {
+                        "type": "string",
+                        "description": "交易结束时间，格式 YYYY-MM-DD HH:MM:SS。如用户说'2025年7月'则填 '2025-07-31 23:59:59'"
+                    },
+                    "database_name": {
+                        "type": "string",
+                        "description": "可选，数据库连接名称关键词，默认使用'融聚商户通(海科)'"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "用户原始需求简要描述，用于确认卡片展示"
+                    }
+                },
+                "required": ["org_no", "start_time", "end_time", "description"]
+            }
+        }
     }
 ]
 
@@ -696,6 +729,8 @@ class AiService:
             return AiService._tool_request_lookup(args, user_id)
         elif tool_name == 'fetch_url':
             return AiService._tool_fetch_url(args)
+        elif tool_name == 'request_profit_share':
+            return AiService._tool_request_profit_share(args, user_id)
         else:
             return {'error': f'未知工具: {tool_name}'}
 
@@ -1618,6 +1653,64 @@ AI回复：{ai_response[:500] if ai_response else ''}
                 db.session.rollback()
             except Exception:
                 pass
+
+    @staticmethod
+    def _tool_request_profit_share(args: dict, user_id: int = None) -> dict:
+        """处理分润导出请求：解析参数、校验、解析数据库连接，返回确认信息给前端"""
+        from app.services.profit_share_service import ProfitShareService
+        from app.models.user import User
+
+        org_no = (args.get('org_no') or '').strip()
+        start_time = (args.get('start_time') or '').strip()
+        end_time = (args.get('end_time') or '').strip()
+        database_name = (args.get('database_name') or '').strip()
+        description = (args.get('description') or '').strip()
+
+        # 参数校验
+        missing = []
+        if not org_no:
+            missing.append('代理商编号(org_no)')
+        if not start_time:
+            missing.append('开始时间(start_time)')
+        if not end_time:
+            missing.append('结束时间(end_time)')
+        if missing:
+            return {
+                'error': f'缺少必要参数: {", ".join(missing)}',
+                'action_type': 'profit_share',
+                'missing_params': missing,
+            }
+
+        # 权限校验：分润导出仅管理员可用
+        if user_id:
+            user = User.query.get(user_id)
+            if user and not user.is_admin():
+                return {
+                    'error': '分润导出仅超级管理员可用，请联系管理员',
+                    'action_type': 'profit_share',
+                }
+
+        # 解析数据库连接
+        database_connection_id = None
+        database_display_name = '融聚商户通(海科)'
+        try:
+            conn = ProfitShareService.find_database_connection(None)
+            if conn:
+                database_connection_id = conn.id
+                database_display_name = conn.name
+        except Exception as e:
+            logger.warning(f'解析分润数据库连接失败: {e}')
+
+        return {
+            'action_type': 'profit_share',
+            'org_no': org_no,
+            'start_time': start_time,
+            'end_time': end_time,
+            'database_connection_id': database_connection_id,
+            'database_name': database_display_name,
+            'description': description or f'代理商 {org_no} 分润导出 {start_time} ~ {end_time}',
+            'confirm_message': f'即将执行分润导出：\n• 代理商编号：{org_no}\n• 交易时间：{start_time} ~ {end_time}\n• 数据库：{database_display_name}\n\n系统将逐笔订单计算各级代理分润并导出 Excel。',
+        }
 
     @staticmethod
     def _tool_fetch_url(args: dict) -> dict:

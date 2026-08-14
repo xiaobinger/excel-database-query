@@ -892,10 +892,12 @@ def send_message(chat_id):
                     '  2. 查询任务（query）：根据Excel文件中的主键数据去数据库批量查询匹配信息，需要上传Excel文件，调用 list_query_options / request_query\n' \
                     '  3. 系统任务（system_task）：后台运维类操作（如数据清理、缓存刷新、终端解绑、执行本地脚本等），支持SQL、API和本地脚本三种类型，调用 list_system_tasks / request_system_task\n' \
                     '  4. 信息查询（lookup）：根据用户提供的参数值快速查询数据库返回结果（如查询SN绑定状态、商户是否激活、订单是否出款等），结果直接在对话中展示，调用 list_lookup_options / request_lookup\n' \
+                    '  5. 分润导出（profit_share）：根据一级代理商编号和交易时间范围，逐笔订单计算各级代理分润并导出 Excel（含代理分润明细和订单明细），调用 request_profit_share\n' \
                     '- 当用户表达需要导出数据的意图时，调用 request_export 工具\n' \
                     '- 当用户表达需要批量查询（上传Excel文件）的意图时，调用 request_query 工具\n' \
                     '- 当用户表达需要执行系统任务的意图时，调用 request_system_task 工具\n' \
                     '- 当用户询问某个实体的状态、信息、详情时（如"这个SN的绑定状态"、"这个商户是否激活"），调用 request_lookup 工具\n' \
+                    '- 当用户表达需要计算代理商分润、导出分润明细、生成分润报表的意图时（如"给代理商AG10000557算2025年7月的分润"），调用 request_profit_share 工具，需提取代理商编号和交易时间范围\n' \
                     '- 重要：当用户的查询涉及多个不同维度的信息时（如"查一下SN123的绑定状态和交易信息"），应在同一次回复中同时调用多个 request_lookup 工具，分别查询不同维度的信息，然后将所有查询结果归总后统一回答用户\n' \
                     '- 重要：当用户的意图是条件性的（如"查一下这个SN的绑定状态，如果已绑定就解绑"、"查商户是否激活，未激活则激活"），必须先调用 request_lookup 查询状态，拿到结果后根据条件判断是否需要调用 request_system_task，在二次回复中完成条件判断和后续操作\n' \
                     '- 调用 request_export 时，务必从用户描述中提取所有参数值（如商户号、日期、渠道等）填入 params 对象\n' \
@@ -1081,7 +1083,7 @@ def send_message(chat_id):
             # 检查工具类型：如果是操作型工具（导出/查询），跳过AI二次确认
             # 信息查询(request_lookup)：只有所有lookup都是show_all_fields=true时才跳过AI二次回复
             # API系统任务自动执行(auto_executed)：走AI二次回复流程，让AI根据映射结果反馈用户
-            action_tools = {'request_export', 'request_query', 'request_system_task'}
+            action_tools = {'request_export', 'request_query', 'request_system_task', 'request_profit_share'}
             has_action = any(tc.get('function', {}).get('name', '') in action_tools for tc in tool_calls)
             # 检查是否有自动执行的API系统任务（需要AI二次回复反馈结果）
             has_auto_exec_system_task = any(
@@ -1284,7 +1286,7 @@ def send_message(chat_id):
                         'message_id': tool_msg.id,
                     })
                 # 导出/查询/系统任务确认卡片（API自动执行的系统任务不创建卡片，由AI二次回复反馈）
-                elif result and not result.get('error') and result.get('action_type') in ('export', 'query', 'system_task'):
+                elif result and not result.get('error') and result.get('action_type') in ('export', 'query', 'system_task', 'profit_share'):
                     if result.get('auto_executed'):
                         # API自动执行的系统任务，不创建确认卡片，结果由AI二次回复直接反馈
                         saved_tool_messages.append(tr)
@@ -1812,7 +1814,7 @@ def send_message_stream(chat_id):
                                 'message_id': tool_msg.id,
                             })
                         # 导出/查询/系统任务（API自动执行的不创建卡片，由AI二次回复反馈）
-                        elif result and not result.get('error') and result.get('action_type') in ('export', 'query', 'system_task'):
+                        elif result and not result.get('error') and result.get('action_type') in ('export', 'query', 'system_task', 'profit_share'):
                             if result.get('auto_executed'):
                                 # API自动执行的系统任务，不创建确认卡片
                                 saved_tool_messages.append(tr)
@@ -1876,7 +1878,7 @@ def send_message_stream(chat_id):
                 # 检查是否需要AI二次回复
                 # 信息查询(request_lookup)：只有所有lookup都是show_all_fields=true时才跳过AI二次回复
                 # API系统任务自动执行(auto_executed)：走AI二次回复流程，让AI根据映射结果反馈用户
-                action_tools = {'request_export', 'request_query', 'request_system_task'}
+                action_tools = {'request_export', 'request_query', 'request_system_task', 'request_profit_share'}
                 all_tool_calls = [accumulated_tool_calls[idx] for idx in sorted(accumulated_tool_calls.keys())]
                 has_action = any(tc['function']['name'] in action_tools for tc in all_tool_calls)
                 # 检查是否有自动执行的API系统任务（需要AI二次回复反馈结果）
@@ -2103,7 +2105,7 @@ def send_message_stream(chat_id):
                                 elif result2 and result2.get('action_type') == 'lookup':
                                     # show_all_fields=false，不创建卡片，由AI三次回复自然语言回答
                                     second_saved_tool_messages.append(tr2)
-                                elif result2 and not result2.get('error') and result2.get('action_type') in ('export', 'query', 'system_task'):
+                                elif result2 and not result2.get('error') and result2.get('action_type') in ('export', 'query', 'system_task', 'profit_share'):
                                     if result2.get('auto_executed'):
                                         # API自动执行的系统任务，不创建确认卡片
                                         second_saved_tool_messages.append(tr2)

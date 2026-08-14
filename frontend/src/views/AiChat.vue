@@ -341,7 +341,7 @@
                       <template v-if="msg._executing">任务执行中...</template>
                       <template v-else-if="msg._done">执行成功</template>
                       <template v-else-if="msg._failed">执行失败</template>
-                      <template v-else>{{ msg.tool_data.action_type === 'export' ? '导出任务确认' : msg.tool_data.action_type === 'system_task' ? '系统任务确认' : '查询任务确认' }}</template>
+                      <template v-else>{{ msg.tool_data.action_type === 'export' ? '导出任务确认' : msg.tool_data.action_type === 'system_task' ? '系统任务确认' : msg.tool_data.action_type === 'profit_share' ? '分润导出确认' : '查询任务确认' }}</template>
                     </span>
                   </div>
                   <div class="tool-card-body">
@@ -415,6 +415,14 @@
                       @click="confirmSystemTask(msg)"
                     >
                       <i class="fas fa-play"></i> 确认执行系统任务
+                    </el-button>
+                    <el-button
+                      v-if="msg.tool_data.action_type === 'profit_share' && !msg._executing && !msg._done && !msg._failed && !msg._ignored"
+                      type="primary"
+                      size="small"
+                      @click="confirmProfitShare(msg)"
+                    >
+                      <i class="fas fa-play"></i> 确认执行分润导出
                     </el-button>
                     <el-button
                       v-if="!msg._ignored && !msg._executing"
@@ -1367,22 +1375,53 @@ function formatTokens(n) {
   return String(n)
 }
 
-// 自动压缩标志，避免重复触发
-let autoCompressing = false
-async function autoCompressContext() {
-  if (autoCompressing || !currentChatId.value || !needAutoCompress.value) return
-  autoCompressing = true
+// 压缩提示标志，避免重复触发
+let compressPrompting = false
+
+/** 触发上下文压缩提示（自动/手动共用） */
+async function promptCompressContext(trigger = 'auto') {
+  if (compressPrompting || !currentChatId.value) return
+  compressPrompting = true
   try {
-    const res = await api.ai.compressChatContext(currentChatId.value, { keep_count: 10 })
-    if (res.data?.compressed) {
-      ElMessage.success('上下文已自动压缩：' + (res.data.message || ''))
-      // 重新加载消息
-      await reloadCurrentMessages()
+    await ElMessageBox.confirm(
+      `<div style="line-height:1.7">
+        <div style="margin-bottom:8px">当前对话上下文已使用 <b style="color:#f56c6c">${contextPercent.value}%</b>，建议处理以保持 AI 响应质量。</div>
+        <div style="color:#909399;font-size:13px">选择"开启新对话"将保留当前对话（后台自动压缩），并为你打开一个全新对话继续。</div>
+      </div>`,
+      '上下文即将满了',
+      {
+        dangerouslyUseHTMLString: true,
+        distinguishCancelAndClose: true,
+        confirmButtonText: '开启新对话',
+        cancelButtonText: '继续压缩当前',
+        type: 'warning',
+        showCancelButton: true,
+      }
+    )
+    // 用户点"开启新对话"：旧对话后台压缩 + 创建新对话
+    const oldChatId = currentChatId.value
+    // 后台压缩旧对话（不阻塞、不重载旧对话消息，因为马上切走）
+    api.ai.compressChatContext(oldChatId, { keep_count: 10 }).catch(() => {})
+    await createNewChat()
+    ElMessage.success('已开启新对话，原对话正在后台压缩归档，可随时切回查看')
+  } catch (action) {
+    if (action === 'cancel') {
+      // 用户点"继续压缩当前"：压缩当前对话并重载
+      try {
+        const res = await api.ai.compressChatContext(currentChatId.value, { keep_count: 10 })
+        if (res.data?.compressed) {
+          ElMessage.success(res.data.message || '上下文已压缩')
+          await reloadCurrentMessages()
+        } else {
+          ElMessage.info(res.data?.message || '无需压缩')
+        }
+      } catch (e) {
+        ElMessage.error('压缩失败：' + (e.message || '未知错误'))
+      }
     }
-  } catch (e) {
-    // 静默
+    // action === 'close' → 用户关闭按钮，什么都不做
   } finally {
-    autoCompressing = false
+    compressPrompting = false
   }
 }
 
@@ -1405,30 +1444,15 @@ async function reloadCurrentMessages() {
   } catch (e) {}
 }
 
-// 监听上下文用量，超阈值自动压缩
+// 监听上下文用量，超阈值自动提示
 watch(needAutoCompress, (val) => {
-  if (val) autoCompressContext()
+  if (val) promptCompressContext('auto')
 })
 
-// 手动压缩
+// 手动压缩（点击压缩按钮）
 async function manualCompressContext() {
   if (!currentChatId.value) return
-  try {
-    await ElMessageBox.confirm(
-      `当前上下文已使用 ${contextPercent.value}%，是否压缩？将保留最近 10 条消息，较早的消息将被归档。`,
-      '压缩上下文',
-      { confirmButtonText: '压缩', cancelButtonText: '取消', type: 'warning' }
-    )
-    const res = await api.ai.compressChatContext(currentChatId.value, { keep_count: 10 })
-    if (res.data?.compressed) {
-      ElMessage.success(res.data.message || '上下文已压缩')
-      await reloadCurrentMessages()
-    } else {
-      ElMessage.info(res.data?.message || '无需压缩')
-    }
-  } catch (e) {
-    // 用户取消
-  }
+  await promptCompressContext('manual')
 }
 
 // 语音输入
@@ -2323,7 +2347,7 @@ async function handleToolResults(toolResults) {
   if (!toolResults || toolResults.length === 0) return
   for (const tr of toolResults) {
     const result = tr.result
-    if (result && (result.action_type === 'export' || result.action_type === 'query' || result.action_type === 'system_task' || result.action_type === 'lookup')) {
+    if (result && (result.action_type === 'export' || result.action_type === 'query' || result.action_type === 'system_task' || result.action_type === 'lookup' || result.action_type === 'profit_share')) {
       // 系统任务：API自动执行的结果由AI二次回复直接反馈，不创建卡片
       if (result.action_type === 'system_task' && result.auto_executed) {
         continue
@@ -3996,6 +4020,226 @@ function pollSystemTaskStatus(executionId, msg) {
     }
     poll()
   })
+}
+
+// ============ 分润导出相关函数 ============
+// 确认执行分润导出（从工具卡片触发）
+async function confirmProfitShare(msg) {
+  const td = msg.tool_data
+  msg._executing = true
+  msg._progress = 5
+  msg._status_text = '正在提交分润导出任务...'
+  msg._done = false
+  msg._failed = false
+  msg._error_msg = ''
+
+  try {
+    const data = {
+      org_no: td.org_no,
+      start_time: td.start_time,
+      end_time: td.end_time,
+    }
+    if (td.database_connection_id) data.database_connection_id = td.database_connection_id
+    const res = await api.profitShare.execute(data)
+    const result = res.data || res
+    const taskId = result.task_id
+    if (!taskId) throw new Error('未获取到任务ID')
+
+    msg._status_text = '任务已提交，正在执行...'
+    saveMessageState(msg)
+    subscribeProfitShareSSE(taskId, msg)
+  } catch (e) {
+    msg._executing = false
+    msg._failed = true
+    msg._error_msg = e?.response?.data?.message || e.message || '未知错误'
+    msg._status_text = '提交失败'
+    saveMessageState(msg)
+    ElMessage.error('分润导出提交失败: ' + msg._error_msg)
+  }
+}
+
+// SSE 订阅分润导出任务进度
+function subscribeProfitShareSSE(taskId, msg) {
+  const url = api.profitShare.streamStatus(taskId)
+  const eventSource = new EventSource(url)
+  const statusTextMap = {
+    pending: '任务等待中...',
+    running: '正在计算分润...',
+    completed: '执行完成',
+    failed: '执行失败',
+    cancelled: '已取消',
+    manual_cancelled: '已终止',
+    timeout: '推送超时',
+  }
+
+  eventSource.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data)
+      if (data.error) {
+        eventSource.close()
+        msg._executing = false
+        msg._failed = true
+        msg._error_msg = data.error
+        msg._status_text = '执行失败'
+        saveMessageState(msg)
+        return
+      }
+      if (data.progress !== undefined) {
+        msg._progress = Math.round(data.progress)
+      }
+      if (data.status) {
+        msg._status_text = statusTextMap[data.status] || '执行中...'
+      }
+
+      // 任务结束
+      if (['completed', 'failed', 'cancelled', 'manual_cancelled', 'timeout'].includes(data.status)) {
+        eventSource.close()
+        msg._executing = false
+
+        if (data.status === 'completed') {
+          msg._done = true
+          msg._progress = 100
+          msg._status_text = '执行完成'
+          msg._download_url = `/api/download/${taskId}`
+          saveMessageState(msg)
+
+          // 弹出下载确认
+          ElMessageBox.confirm(
+            '分润导出任务已完成，是否立即下载文件？',
+            '下载确认',
+            { confirmButtonText: '立即下载', cancelButtonText: '稍后下载', type: 'success' }
+          ).then(() => {
+            downloadFile(msg._download_url)
+          }).catch(() => {})
+
+          // 推送完成反馈消息
+          const td = msg.tool_data
+          const summary = data.total_rows != null && data.success_count != null
+            ? `\n- 订单总数：${data.total_rows}\n- 成功：${data.success_count}，失败：${data.failure_count || 0}`
+            : ''
+          const feedbackContent = `✅ 代理商 **${td.org_no}** 的分润导出已完成！\n\n- 任务ID：\`${taskId}\`\n- 时间范围：${td.start_time} ~ ${td.end_time}${summary}\n\n可点击上方卡片下载文件，或前往"导出中心 → 分润导出"查看历史记录。`
+          pushAssistantFeedback(feedbackContent)
+        } else if (data.status === 'failed') {
+          msg._failed = true
+          msg._error_msg = data.error_message || '执行失败'
+          msg._status_text = '执行失败'
+          saveMessageState(msg)
+          const td = msg.tool_data
+          pushAssistantFeedback(`❌ 代理商 **${td.org_no}** 的分润导出执行失败\n\n**错误信息：** ${msg._error_msg}`)
+        } else if (data.status === 'timeout') {
+          msg._failed = true
+          msg._error_msg = '状态推送超时，请稍后在导出中心查看结果'
+          msg._status_text = '推送超时'
+          saveMessageState(msg)
+          ElMessage.warning('状态推送超时，请稍后刷新查看')
+        } else {
+          // cancelled / manual_cancelled
+          msg._status_text = statusTextMap[data.status] || '已终止'
+          saveMessageState(msg)
+        }
+      }
+    } catch {
+      // 忽略非JSON数据
+    }
+  }
+
+  eventSource.onerror = () => {
+    eventSource.close()
+    if (msg._executing) {
+      // SSE 断开后降级到轮询
+      pollProfitShareStatus(taskId, msg)
+    }
+  }
+}
+
+// 降级轮询（SSE 断开时使用）
+function pollProfitShareStatus(taskId, msg) {
+  let pollCount = 0
+  const maxPolls = 300
+  const statusTextMap = {
+    pending: '任务等待中...',
+    running: '正在计算分润...',
+    completed: '执行完成',
+    failed: '执行失败',
+    cancelled: '已取消',
+    manual_cancelled: '已终止',
+  }
+  const poll = async () => {
+    try {
+      pollCount++
+      if (pollCount > maxPolls) {
+        msg._executing = false
+        msg._failed = true
+        msg._error_msg = '任务执行超时'
+        msg._status_text = '执行超时'
+        saveMessageState(msg)
+        return
+      }
+      const res = await api.profitShare.status(taskId)
+      const data = res.data || res
+      if (!data) {
+        setTimeout(poll, 2000)
+        return
+      }
+      msg._progress = Math.round(data.progress || 0)
+      msg._status_text = statusTextMap[data.status] || '执行中...'
+
+      if (data.status === 'completed') {
+        msg._executing = false
+        msg._done = true
+        msg._progress = 100
+        msg._status_text = '执行完成'
+        msg._download_url = `/api/download/${taskId}`
+        saveMessageState(msg)
+        ElMessageBox.confirm(
+          '分润导出任务已完成，是否立即下载文件？',
+          '下载确认',
+          { confirmButtonText: '立即下载', cancelButtonText: '稍后下载', type: 'success' }
+        ).then(() => downloadFile(msg._download_url)).catch(() => {})
+        const td = msg.tool_data
+        const summary = data.total_rows != null && data.success_count != null
+          ? `\n- 订单总数：${data.total_rows}\n- 成功：${data.success_count}，失败：${data.failure_count || 0}`
+          : ''
+        const feedbackContent = `✅ 代理商 **${td.org_no}** 的分润导出已完成！\n\n- 任务ID：\`${taskId}\`\n- 时间范围：${td.start_time} ~ ${td.end_time}${summary}\n\n可点击上方卡片下载文件，或前往"导出中心 → 分润导出"查看历史记录。`
+        pushAssistantFeedback(feedbackContent)
+        return
+      }
+      if (['failed', 'cancelled', 'manual_cancelled'].includes(data.status)) {
+        msg._executing = false
+        if (data.status === 'failed') {
+          msg._failed = true
+          msg._error_msg = data.error_message || '执行失败'
+          msg._status_text = '执行失败'
+          const td = msg.tool_data
+          pushAssistantFeedback(`❌ 代理商 **${td.org_no}** 的分润导出执行失败\n\n**错误信息：** ${msg._error_msg}`)
+        } else {
+          msg._status_text = statusTextMap[data.status] || '已终止'
+        }
+        saveMessageState(msg)
+        return
+      }
+      setTimeout(poll, 1500)
+    } catch (e) {
+      msg._executing = false
+      msg._failed = true
+      msg._error_msg = '轮询任务状态失败: ' + (e.message || '未知错误')
+      msg._status_text = '轮询失败'
+      saveMessageState(msg)
+    }
+  }
+  poll()
+}
+
+// 推送助手反馈消息（持久化 + 渲染）
+async function pushAssistantFeedback(content) {
+  let feedbackId = Date.now()
+  try {
+    const fbRes = await api.ai.createMessage(currentChatId.value, { content })
+    feedbackId = fbRes.data?.id || feedbackId
+  } catch {}
+  messages.value.push({ id: feedbackId, role: 'assistant', content })
+  await nextTick()
+  scrollToBottom()
 }
 
 async function fetchActiveModels() {
