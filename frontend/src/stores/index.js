@@ -56,6 +56,7 @@ export const useAppStore = defineStore('app', () => {
       if (res.data.user) {
         user.value = res.data.user
         applyGenderTheme(res.data.user.gender)
+        await fetchMenuConfig()
       } else {
         await fetchCurrentUser()
       }
@@ -86,7 +87,7 @@ export const useAppStore = defineStore('app', () => {
       user.value = data
       applyGenderTheme(data.gender)
       // 加载菜单配置
-      fetchMenuConfig()
+      await fetchMenuConfig()
       return data
     } catch {
       logout()
