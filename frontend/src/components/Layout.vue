@@ -51,12 +51,14 @@
     <el-container>
       <el-header class="layout-header">
         <div class="header-left">
-          <el-button
-            :icon="isCollapsed ? 'Expand' : 'Fold'"
-            :type="isCollapsed ? 'primary' : ''"
-            class="collapse-btn"
+          <button
+            class="collapse-toggle"
+            :class="{ 'is-collapsed': isCollapsed }"
+            :title="isCollapsed ? '展开侧边栏' : '收起侧边栏'"
             @click="toggleCollapse"
-          />
+          >
+            <i class="fas fa-angles-left"></i>
+          </button>
           <el-breadcrumb separator="/">
             <el-breadcrumb-item>{{ currentTitle }}</el-breadcrumb-item>
           </el-breadcrumb>
@@ -336,18 +338,76 @@ onUnmounted(() => {
   gap: 12px;
 }
 
-.collapse-btn {
-  border: 1px solid var(--border-color);
-  background: var(--card-bg);
-  height: 34px;
-  width: 34px;
+.collapse-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
   padding: 0;
-  border-radius: 8px;
+  border: none;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 15px;
+  transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
 }
 
-.collapse-btn:hover {
-  border-color: var(--primary-color);
+.collapse-toggle::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--primary-color);
+  opacity: 0;
+  transform: scale(0.7);
+  transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.collapse-toggle > i {
+  position: relative;
+  z-index: 1;
+  transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), color 0.2s ease;
+}
+
+.collapse-toggle:hover {
   color: var(--primary-color);
+  transform: translateY(-1px);
+}
+
+.collapse-toggle:hover::before {
+  opacity: 0.1;
+  transform: scale(1);
+}
+
+.collapse-toggle:active {
+  transform: translateY(0) scale(0.94);
+}
+
+/* 折叠态：双箭头翻转朝右 + 主色柔光背景提示"菜单已隐藏" */
+.collapse-toggle.is-collapsed {
+  color: #fff;
+}
+
+.collapse-toggle.is-collapsed::before {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.collapse-toggle.is-collapsed > i {
+  transform: rotate(180deg);
+}
+
+.collapse-toggle.is-collapsed:hover {
+  color: #fff;
+  filter: brightness(1.08);
+}
+
+.collapse-toggle.is-collapsed:hover::before {
+  opacity: 0.85;
 }
 
 .header-right {
