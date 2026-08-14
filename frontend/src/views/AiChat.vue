@@ -74,6 +74,8 @@
               <i :class="msg.role === 'user' ? 'fas fa-user' : 'fas fa-robot'"></i>
             </div>
             <div class="message-content" :class="{ 'full-width': msg._type === 'tool' || msg._type === 'file' || msg._type === 'lookup' }">
+              <!-- 消息发送时间 -->
+              <div v-if="!msg._streaming && formatMsgTime(msg.created_at)" class="message-time">{{ formatMsgTime(msg.created_at) }}</div>
               <!-- 删除按钮（悬浮显示，执行中的任务不显示删除按钮） -->
               <div class="message-actions" v-show="msg._showActions && !msg._executing">
                 <el-dropdown v-if="isAdmin" trigger="click" @command="(cmd) => handleMsgDelete(cmd, msg)">
@@ -2725,6 +2727,29 @@ function scrollToBottom() {
   })
 }
 
+// 格式化消息发送时间
+function formatMsgTime(ts) {
+  if (!ts) return ''
+  let d
+  if (typeof ts === 'string') {
+    // 兼容 ISO 字符串（可能带 +08:00 时区）
+    d = new Date(ts)
+  } else if (typeof ts === 'number') {
+    d = new Date(ts < 1e12 ? ts * 1000 : ts)
+  } else {
+    return ''
+  }
+  if (isNaN(d.getTime())) return ''
+  const now = new Date()
+  const pad = n => String(n).padStart(2, '0')
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  const isSameDay = d.getFullYear() === now.getFullYear()
+    && d.getMonth() === now.getMonth()
+    && d.getDate() === now.getDate()
+  if (isSameDay) return hm
+  return `${d.getMonth() + 1}/${d.getDate()} ${hm}`
+}
+
 function renderMarkdown(text) {
   if (!text) return ''
   try {
@@ -4659,6 +4684,19 @@ onMounted(() => {
 
 .message-content.full-width {
   max-width: 100%;
+}
+
+/* 消息发送时间 */
+.message-time {
+  font-size: 11px;
+  color: #b0b5bd;
+  margin-bottom: 4px;
+  padding-left: 2px;
+}
+
+.message.user .message-time {
+  text-align: right;
+  padding-right: 2px;
 }
 
 /* 消息操作按钮（悬浮显示） */
