@@ -1,13 +1,72 @@
 import smtplib
+import json
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formataddr, formatdate, make_msgid
 from flask import Blueprint, request, jsonify
 from app import db
 from app.models.system_config import SystemConfig
-from app.utils.auth import permission_required
+from app.utils.auth import permission_required, login_required, admin_required
 
 system_bp = Blueprint('system', __name__, url_prefix='/api/system')
+
+# ── 菜单配置 ──────────────────────────────────────────────
+
+MENU_CONFIG_KEY = 'menu_config'
+
+# 所有可用菜单项（供系统地图选择，来源于系统路由）
+ALL_MENU_ITEMS = [
+    {"path": "/", "title": "仪表盘", "icon": "fa-tachometer-alt", "permission": "dashboard", "affix": True},
+    {"path": "/databases", "title": "数据库管理", "icon": "fa-database", "permission": "databases"},
+    {"path": "/scripts", "title": "脚本管理", "icon": "fa-clipboard-list", "permission": "scripts"},
+    {"path": "/query", "title": "查询执行", "icon": "fa-play-circle", "permission": "query"},
+    {"path": "/history", "title": "执行历史", "icon": "fa-history", "permission": "history"},
+    {"path": "/export-exec", "title": "导出任务", "icon": "fa-download", "permission": "export_exec"},
+    {"path": "/profit-share", "title": "分润导出", "icon": "fa-hand-holding-usd", "permission": "profit_share"},
+    {"path": "/auto-export", "title": "自动导出", "icon": "fa-clock", "permission": "auto_export"},
+    {"path": "/ai-chat", "title": "AI 助手", "icon": "fa-robot", "permission": "ai_chat"},
+    {"path": "/ai-sessions", "title": "AI会话管理", "icon": "fa-comments", "permission": "ai_sessions"},
+    {"path": "/skills", "title": "Skills", "icon": "fa-brain", "permission": "skills"},
+    {"path": "/system", "title": "系统配置", "icon": "fa-cog", "permission": "system"},
+    {"path": "/users", "title": "用户管理", "icon": "fa-users", "permission": "users"},
+    {"path": "/roles", "title": "角色管理", "icon": "fa-user-shield", "permission": "roles"},
+    {"path": "/agents", "title": "Agent 管理", "icon": "fa-robot", "permission": "agent_manager"},
+    {"path": "/cache-stats", "title": "缓存统计", "icon": "fa-bolt", "permission": "cache_stats"},
+    {"path": "/business", "title": "业务系统", "icon": "fa-th-large", "permission": "business_systems"},
+    {"path": "/system-tasks", "title": "系统任务", "icon": "fa-cogs", "permission": "system_tasks"},
+    {"path": "/system-map", "title": "系统地图", "icon": "fa-sitemap", "permission": "system_map"},
+]
+
+# 默认菜单配置
+DEFAULT_MENU_CONFIG = [
+    {"type": "item", "path": "/", "title": "仪表盘", "icon": "fa-tachometer-alt", "permission": "dashboard", "affix": True, "visible": True},
+    {"type": "group", "title": "数据管理", "icon": "fa-database", "visible": True, "children": [
+        {"path": "/databases", "title": "数据库管理", "icon": "fa-database", "permission": "databases", "visible": True},
+        {"path": "/scripts", "title": "脚本管理", "icon": "fa-clipboard-list", "permission": "scripts", "visible": True},
+    ]},
+    {"type": "group", "title": "导出中心", "icon": "fa-download", "visible": True, "children": [
+        {"path": "/query", "title": "查询执行", "icon": "fa-play-circle", "permission": "query", "visible": True},
+        {"path": "/history", "title": "执行历史", "icon": "fa-history", "permission": "history", "visible": True},
+        {"path": "/export-exec", "title": "导出任务", "icon": "fa-download", "permission": "export_exec", "visible": True},
+        {"path": "/profit-share", "title": "分润导出", "icon": "fa-hand-holding-usd", "permission": "profit_share", "visible": True},
+        {"path": "/auto-export", "title": "自动导出", "icon": "fa-clock", "permission": "auto_export", "visible": True},
+    ]},
+    {"type": "group", "title": "AI 智能", "icon": "fa-robot", "visible": True, "children": [
+        {"path": "/ai-chat", "title": "AI 助手", "icon": "fa-robot", "permission": "ai_chat", "visible": True},
+        {"path": "/ai-sessions", "title": "AI会话管理", "icon": "fa-comments", "permission": "ai_sessions", "visible": True},
+        {"path": "/skills", "title": "Skills", "icon": "fa-brain", "permission": "skills", "visible": True},
+    ]},
+    {"type": "group", "title": "系统管理", "icon": "fa-cog", "visible": True, "children": [
+        {"path": "/system", "title": "系统配置", "icon": "fa-cog", "permission": "system", "visible": True},
+        {"path": "/users", "title": "用户管理", "icon": "fa-users", "permission": "users", "visible": True},
+        {"path": "/roles", "title": "角色管理", "icon": "fa-user-shield", "permission": "roles", "visible": True},
+        {"path": "/agents", "title": "Agent 管理", "icon": "fa-robot", "permission": "agent_manager", "visible": True},
+        {"path": "/cache-stats", "title": "缓存统计", "icon": "fa-bolt", "permission": "cache_stats", "visible": True},
+        {"path": "/business", "title": "业务系统", "icon": "fa-th-large", "permission": "business_systems", "visible": True},
+        {"path": "/system-tasks", "title": "系统任务", "icon": "fa-cogs", "permission": "system_tasks", "visible": True},
+        {"path": "/system-map", "title": "系统地图", "icon": "fa-sitemap", "permission": "system_map", "visible": True},
+    ]},
+]
 
 
 @system_bp.route('/config', methods=['GET'])
@@ -153,3 +212,48 @@ def test_email():
         return jsonify({'success': True, 'message': '测试邮件发送成功，请检查收件箱（含垃圾邮件文件夹）'})
     except Exception as e:
         return jsonify({'success': False, 'message': f'邮件发送失败: {str(e)}'}), 500
+
+
+# ── 菜单配置 API ──────────────────────────────────────────
+
+@system_bp.route('/menu-config', methods=['GET'])
+@login_required
+def get_menu_config():
+    """获取菜单配置（登录用户可访问，用于渲染侧边栏）"""
+    config = SystemConfig.query.filter_by(config_key=MENU_CONFIG_KEY).first()
+    if config and config.config_value:
+        try:
+            menu_config = json.loads(config.config_value)
+            return jsonify({'success': True, 'data': menu_config})
+        except json.JSONDecodeError:
+            pass
+    return jsonify({'success': True, 'data': DEFAULT_MENU_CONFIG})
+
+
+@system_bp.route('/menu-config', methods=['PUT'])
+@admin_required
+def update_menu_config():
+    """保存菜单配置（仅管理员）"""
+    data = request.get_json()
+    if not data or 'menu_config' not in data:
+        return jsonify({'success': False, 'message': '请求数据为空'}), 400
+
+    menu_config = data.get('menu_config')
+    if not isinstance(menu_config, list):
+        return jsonify({'success': False, 'message': '菜单配置必须是数组'}), 400
+
+    config = SystemConfig.query.filter_by(config_key=MENU_CONFIG_KEY).first()
+    if not config:
+        config = SystemConfig(config_key=MENU_CONFIG_KEY, description='菜单配置')
+        db.session.add(config)
+    config.config_value = json.dumps(menu_config, ensure_ascii=False)
+    db.session.commit()
+
+    return jsonify({'success': True, 'message': '菜单配置已更新', 'data': menu_config})
+
+
+@system_bp.route('/menu-items', methods=['GET'])
+@admin_required
+def get_menu_items():
+    """获取所有可用菜单项（供系统地图选择，仅管理员）"""
+    return jsonify({'success': True, 'data': ALL_MENU_ITEMS})

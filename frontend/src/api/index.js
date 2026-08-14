@@ -151,6 +151,9 @@ const system = {
   testEmail: (data) => http.post('/system/test-email', data),
   batchDelete: (ids) => http.post('/system/config/batch-delete', { ids }),
   deleteAll: () => http.delete('/system/config/all'),
+  getMenuConfig: () => http.get('/system/menu-config'),
+  saveMenuConfig: (data) => http.put('/system/menu-config', { menu_config: data }),
+  getMenuItems: () => http.get('/system/menu-items'),
 }
 
 const download = {

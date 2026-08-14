@@ -30,7 +30,8 @@ const routes = [
       { path: 'agents', name: 'Agents', component: () => import('../views/AgentManager.vue'), meta: { menu: 'agent_manager', title: 'Agent 管理' } },
       { path: 'cache-stats', name: 'CacheStats', component: () => import('../views/CacheManager.vue'), meta: { menu: 'cache_stats', title: '缓存统计' } },
       { path: 'business', name: 'BusinessSystems', component: () => import('../views/BusinessSystems.vue'), meta: { menu: 'business_systems', title: '业务系统' } },
-      { path: 'system-tasks', name: 'SystemTasks', component: () => import('../views/SystemTaskManager.vue'), meta: { menu: 'system_tasks', title: '系统任务' } }
+      { path: 'system-tasks', name: 'SystemTasks', component: () => import('../views/SystemTaskManager.vue'), meta: { menu: 'system_tasks', title: '系统任务' } },
+      { path: 'system-map', name: 'SystemMap', component: () => import('../views/SystemMap.vue'), meta: { menu: 'system_map', title: '系统地图' } }
     ]
   }
 ]

@@ -16,7 +16,7 @@
         :text-color="sidebarText"
         :active-text-color="sidebarActive"
       >
-        <template v-for="item in menuConfig" :key="item.path || item.title">
+        <template v-for="item in visibleMenu" :key="item.path || item.title">
           <!-- 单独一级菜单 -->
           <el-menu-item
             v-if="item.type === 'item' && store.hasMenuPermission(item.permission)"
@@ -37,7 +37,7 @@
             </template>
             <el-menu-item
               v-for="child in item.children"
-              v-show="store.hasMenuPermission(child.permission)"
+              v-show="child.visible !== false && store.hasMenuPermission(child.permission)"
               :key="child.path"
               :index="child.path"
             >
@@ -137,7 +137,7 @@ import { useAppStore } from '../stores'
 import { ElMessage } from 'element-plus'
 import ThemeSwitch from './ThemeSwitch.vue'
 import TagsView from './TagsView.vue'
-import { menuConfig, titleMap } from '../config/menuConfig'
+import { titleMap } from '../config/menuConfig'
 
 const route = useRoute()
 const store = useAppStore()
@@ -155,10 +155,16 @@ const displayName = computed(() => {
 
 const currentTitle = computed(() => route.meta?.title || titleMap[route.path] || '仪表盘')
 
-/** 检查分组中是否有有权限的子菜单 */
+/** 仅展示 visible !== false 的顶层菜单项/分组 */
+const visibleMenu = computed(() => {
+  const cfg = store.menuConfig && store.menuConfig.length ? store.menuConfig : []
+  return cfg.filter(item => item.visible !== false)
+})
+
+/** 检查分组中是否有有权限且可见的子菜单 */
 function hasVisibleChildren(group) {
   if (!group.children) return false
-  return group.children.some(child => store.hasMenuPermission(child.permission))
+  return group.children.some(child => child.visible !== false && store.hasMenuPermission(child.permission))
 }
 
 const sidebarBg = ref('#1d1e1f')

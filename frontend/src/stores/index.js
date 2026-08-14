@@ -4,6 +4,7 @@ import api from '../api'
 import { ElMessage } from 'element-plus'
 import router from '../router'
 import { useTagsViewStore } from './tagsView'
+import { DEFAULT_MENU_CONFIG } from '../config/menuConfig'
 
 export const useAppStore = defineStore('app', () => {
   const databases = ref([])
@@ -15,6 +16,7 @@ export const useAppStore = defineStore('app', () => {
   const theme = ref(localStorage.getItem('theme') || 'default')
   const themeUserSet = ref(localStorage.getItem('theme_user_set') === 'true')
   const taskVersion = ref(0)
+  const menuConfig = ref([])
 
   const isAuthenticated = computed(() => !!token.value)
 
@@ -65,6 +67,7 @@ export const useAppStore = defineStore('app', () => {
     token.value = ''
     user.value = null
     themeUserSet.value = false
+    menuConfig.value = []
     localStorage.removeItem('token')
     localStorage.removeItem('user')
     localStorage.removeItem('theme_user_set')
@@ -79,10 +82,21 @@ export const useAppStore = defineStore('app', () => {
       const data = res.data || res
       user.value = data
       applyGenderTheme(data.gender)
+      // 加载菜单配置
+      fetchMenuConfig()
       return data
     } catch {
       logout()
       return null
+    }
+  }
+
+  async function fetchMenuConfig() {
+    try {
+      const res = await api.system.getMenuConfig()
+      menuConfig.value = res.data || res || []
+    } catch {
+      menuConfig.value = DEFAULT_MENU_CONFIG
     }
   }
 
@@ -161,6 +175,7 @@ export const useAppStore = defineStore('app', () => {
     user,
     theme,
     taskVersion,
+    menuConfig,
     isAuthenticated,
     isAdmin,
     hasMenuPermission,
@@ -169,6 +184,7 @@ export const useAppStore = defineStore('app', () => {
     login,
     logout,
     fetchCurrentUser,
+    fetchMenuConfig,
     fetchDatabases,
     fetchScripts,
     setTheme,
