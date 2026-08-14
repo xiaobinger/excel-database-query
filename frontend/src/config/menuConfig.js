@@ -44,9 +44,7 @@ export const menuConfig = [
     icon: 'fa-database',
     children: [
       { path: '/databases', title: '数据库管理', icon: 'fa-database', permission: 'databases' },
-      { path: '/scripts', title: '脚本管理', icon: 'fa-clipboard-list', permission: 'scripts' },
-      { path: '/query', title: '查询执行', icon: 'fa-play-circle', permission: 'query' },
-      { path: '/history', title: '执行历史', icon: 'fa-history', permission: 'history' }
+      { path: '/scripts', title: '脚本管理', icon: 'fa-clipboard-list', permission: 'scripts' }
     ]
   },
   {
@@ -54,6 +52,8 @@ export const menuConfig = [
     title: '导出中心',
     icon: 'fa-download',
     children: [
+      { path: '/query', title: '查询执行', icon: 'fa-play-circle', permission: 'query' },
+      { path: '/history', title: '执行历史', icon: 'fa-history', permission: 'history' },
       { path: '/export-exec', title: '导出任务', icon: 'fa-download', permission: 'export_exec' },
       { path: '/profit-share', title: '分润导出', icon: 'fa-hand-holding-usd', permission: 'profit_share' },
       { path: '/auto-export', title: '自动导出', icon: 'fa-clock', permission: 'auto_export' }
