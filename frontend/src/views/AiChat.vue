@@ -1,6 +1,6 @@
 <template>
   <div class="ai-chat">
-    <div class="chat-sidebar">
+    <div class="chat-sidebar" :class="{ collapsed: chatSidebarCollapsed }">
       <div class="sidebar-header">
         <el-button type="primary" style="width: 100%" @click="createNewChat">
           <i class="fas fa-plus"></i> 新对话
@@ -35,9 +35,26 @@
         </div>
         <el-empty v-if="chats.length === 0" description="暂无对话" :image-size="60" />
       </div>
+      <!-- 侧边栏折叠按钮（展开态） -->
+      <button
+        class="sidebar-collapse-toggle"
+        :title="chatSidebarCollapsed ? '展开对话列表' : '收起对话列表'"
+        @click="toggleChatSidebar"
+      >
+        <i class="fas fa-angles-left"></i>
+      </button>
     </div>
 
     <div class="chat-main">
+      <!-- 折叠态：浮动展开按钮 -->
+      <button
+        v-if="chatSidebarCollapsed"
+        class="sidebar-expand-fab"
+        :title="'展开对话列表'"
+        @click="toggleChatSidebar"
+      >
+        <i class="fas fa-angles-right"></i>
+      </button>
       <div v-if="!currentChatId" class="chat-welcome">
         <div class="welcome-icon"><i class="fas fa-robot"></i></div>
         <h2>AI 智能助手</h2>
@@ -1194,6 +1211,12 @@ marked.setOptions({
 
 const chats = ref([])
 const currentChatId = ref(null)
+const chatSidebarCollapsed = ref(localStorage.getItem('ai_chat_sidebar_collapsed') === 'true')
+
+function toggleChatSidebar() {
+  chatSidebarCollapsed.value = !chatSidebarCollapsed.value
+  localStorage.setItem('ai_chat_sidebar_collapsed', String(chatSidebarCollapsed.value))
+}
 const messages = ref([])
 const inputText = ref('')
 const loading = ref(false)
@@ -3955,12 +3978,27 @@ onMounted(() => {
 }
 
 .chat-sidebar {
+  position: relative;
   width: 260px;
   border-right: 1px solid #eef2f7;
   display: flex;
   flex-direction: column;
   background: #fafbfc;
-  transition: width 0.2s;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.3s;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.chat-sidebar.collapsed {
+  width: 0;
+  border-right-color: transparent;
+}
+
+.chat-sidebar.collapsed .sidebar-header,
+.chat-sidebar.collapsed .chat-list,
+.chat-sidebar.collapsed .sidebar-collapse-toggle {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .sidebar-header {
@@ -4015,11 +4053,103 @@ onMounted(() => {
   opacity: 1;
 }
 
+/* 侧边栏折叠按钮（展开态，固定在侧边栏右下角） */
+.sidebar-collapse-toggle {
+  position: absolute;
+  right: -12px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 48px;
+  padding: 0;
+  border: 1px solid #eef2f7;
+  border-radius: 0 10px 10px 0;
+  background: #fafbfc;
+  color: #909399;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar-collapse-toggle:hover {
+  background: var(--primary-color, #409eff);
+  border-color: var(--primary-color, #409eff);
+  color: #fff;
+  width: 28px;
+}
+
+.sidebar-collapse-toggle > i {
+  transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* 折叠态：浮动展开按钮（贴在 chat-main 左上角） */
+.sidebar-expand-fab {
+  position: absolute;
+  left: 12px;
+  top: 16px;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: none;
+  border-radius: 11px;
+  background: var(--primary-color, #409eff);
+  color: #fff;
+  cursor: pointer;
+  font-size: 15px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+  transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar-expand-fab::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: #fff;
+  opacity: 0;
+  transform: scale(0.7);
+  transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar-expand-fab > i {
+  position: relative;
+  z-index: 1;
+  transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.sidebar-expand-fab:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+  filter: brightness(1.08);
+}
+
+.sidebar-expand-fab:hover::before {
+  opacity: 0.15;
+  transform: scale(1);
+}
+
+.sidebar-expand-fab:hover > i {
+  transform: translateX(2px);
+}
+
+.sidebar-expand-fab:active {
+  transform: translateY(0) scale(0.94);
+}
+
 .chat-main {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
+  position: relative;
 }
 
 .chat-welcome {
