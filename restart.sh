@@ -112,7 +112,9 @@ if [ "$OLD_HEAD" = "$NEW_HEAD" ]; then
     exit 0
 fi
 
-echo "[更新] 代码已更新: ${OLD_HEAD:0:7} -> ${NEW_HEAD:0:7}"
+OLD_SHORT=$(echo "$OLD_HEAD" | cut -c1-7)
+NEW_SHORT=$(echo "$NEW_HEAD" | cut -c1-7)
+echo "[更新] 代码已更新: $OLD_SHORT -> $NEW_SHORT"
 
 # ── 2. 判断变更范围 ──────────────────────────────────────
 
