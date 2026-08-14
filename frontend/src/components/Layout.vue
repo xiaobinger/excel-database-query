@@ -53,8 +53,9 @@
         <div class="header-left">
           <el-button
             :icon="isCollapsed ? 'Expand' : 'Fold'"
-            text
-            @click="isCollapsed = !isCollapsed"
+            :type="isCollapsed ? 'primary' : ''"
+            class="collapse-btn"
+            @click="toggleCollapse"
           />
           <el-breadcrumb separator="/">
             <el-breadcrumb-item>{{ currentTitle }}</el-breadcrumb-item>
@@ -66,6 +67,7 @@
             {{ serverOnline ? '服务正常' : '服务异常' }}
           </el-tag>
           <ThemeSwitch />
+          <TaskBadge />
           <el-dropdown trigger="click" @command="handleUserCommand">
             <div class="user-info">
               <el-avatar :size="30" class="user-avatar">
@@ -130,22 +132,30 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../api'
 import { useAppStore } from '../stores'
+import { useTaskMonitorStore } from '../stores/taskMonitor'
 import { ElMessage } from 'element-plus'
 import ThemeSwitch from './ThemeSwitch.vue'
 import TagsView from './TagsView.vue'
+import TaskBadge from './TaskBadge.vue'
 import { titleMap } from '../config/menuConfig'
 
 const route = useRoute()
 const store = useAppStore()
-const isCollapsed = ref(false)
+const monitor = useTaskMonitorStore()
+const isCollapsed = ref(localStorage.getItem('sidebar_collapsed') === 'true')
 const serverOnline = ref(false)
 const passwordDialogVisible = ref(false)
 const passwordSubmitting = ref(false)
 const passwordFormRef = ref(null)
+
+function toggleCollapse() {
+  isCollapsed.value = !isCollapsed.value
+  localStorage.setItem('sidebar_collapsed', String(isCollapsed.value))
+}
 
 const activeMenu = computed(() => route.path)
 
@@ -240,11 +250,20 @@ async function checkServer() {
   }
 }
 
+let serverTimer = null
+
 onMounted(() => {
   store.initTheme()
   updateSidebarColors()
   checkServer()
-  setInterval(checkServer, 30000)
+  serverTimer = setInterval(checkServer, 30000)
+  // 启动任务监控轮询
+  monitor.start()
+})
+
+onUnmounted(() => {
+  if (serverTimer) { clearInterval(serverTimer); serverTimer = null }
+  monitor.stop()
 })
 </script>
 
@@ -315,6 +334,20 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.collapse-btn {
+  border: 1px solid var(--border-color);
+  background: var(--card-bg);
+  height: 34px;
+  width: 34px;
+  padding: 0;
+  border-radius: 8px;
+}
+
+.collapse-btn:hover {
+  border-color: var(--primary-color);
+  color: var(--primary-color);
 }
 
 .header-right {

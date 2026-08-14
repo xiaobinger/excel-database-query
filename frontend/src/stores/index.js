@@ -4,6 +4,7 @@ import api from '../api'
 import { ElMessage } from 'element-plus'
 import router from '../router'
 import { useTagsViewStore } from './tagsView'
+import { useTaskMonitorStore } from './taskMonitor'
 import { DEFAULT_MENU_CONFIG } from '../config/menuConfig'
 
 export const useAppStore = defineStore('app', () => {
@@ -73,6 +74,8 @@ export const useAppStore = defineStore('app', () => {
     localStorage.removeItem('theme_user_set')
     // 清空标签页
     useTagsViewStore().removeAllViews()
+    // 重置任务监控
+    try { useTaskMonitorStore().reset() } catch (e) {}
     router.push('/login')
   }
 

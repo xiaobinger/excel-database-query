@@ -160,6 +160,11 @@ const download = {
   file: (taskId) => `/api/download/${taskId}`
 }
 
+const tasks = {
+  getActive: () => http.get('/tasks/active'),
+  getRecent: (params) => http.get('/tasks/recent', { params }),
+}
+
 const ai = {
   getConfigs: () => http.get('/ai/configs'),
   getActiveModels: () => http.get('/ai/active-models'),
@@ -266,4 +271,4 @@ const profitShare = {
   databases: () => http.get('/profit-share/databases'),
 }
 
-export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, ai, agent, business, systemTask, lookup, profitShare }
+export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, business, systemTask, lookup, profitShare }
