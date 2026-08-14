@@ -190,6 +190,7 @@ const ai = {
   batchHardDeleteChats: (ids) => http.post('/ai/chats/batch-hard-delete', { ids }),
   hardDeleteAllChats: () => http.delete('/ai/chats/all-hard'),
   clearChatMessages: (id, data) => http.post(`/ai/chats/${id}/clear`, data),
+  compressChatContext: (id, data) => http.post(`/ai/chats/${id}/compress`, data),
   retryMessage: (chatId, msgId) => http.post(`/ai/chats/${chatId}/messages/${msgId}/retry`),
   getMessages: (chatId) => http.get(`/ai/chats/${chatId}/messages`),
   sendMessage: (chatId, data) => http.post(`/ai/chats/${chatId}/send`, data, { timeout: 180000 }),

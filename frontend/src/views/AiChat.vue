@@ -589,6 +589,29 @@
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
+              <!-- 上下文用量指示器 -->
+              <div
+                v-if="currentChatId && messages.length > 0"
+                class="context-indicator"
+                :class="'is-' + contextStatus"
+                :title="`上下文窗口 ${formatTokens(contextWindow)} · 已用 ${formatTokens(usedContextTokens)} · 剩余 ${formatTokens(remainingContextTokens)}`"
+              >
+                <i class="fas fa-layer-group ctx-icon"></i>
+                <div class="ctx-body">
+                  <div class="ctx-bar">
+                    <div class="ctx-bar-fill" :style="{ width: contextPercent + '%' }"></div>
+                  </div>
+                  <span class="ctx-text">{{ contextPercent }}% · {{ formatTokens(remainingContextTokens) }}</span>
+                </div>
+                <button
+                  v-if="contextStatus !== 'normal'"
+                  class="ctx-compress-btn"
+                  title="压缩上下文"
+                  @click="manualCompressContext"
+                >
+                  <i class="fas fa-compress-alt"></i>
+                </button>
+              </div>
               <div class="input-buttons">
                 <el-upload
                   :show-file-list="false"
@@ -1188,7 +1211,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, nextTick, onUnmounted, computed } from 'vue'
+import { ref, reactive, onMounted, nextTick, onUnmounted, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import { useAppStore } from '../stores'
@@ -1241,6 +1264,172 @@ const selectedAgent = ref(null)  // { id, name, description, is_default }
 const canSwitchAgent = ref(false)  // 是否有切换Agent权限
 const agentMemoryCount = ref(0)  // 当前选中Agent的记忆数量
 const canSwitchModel = ref(false)  // 是否有切换模型权限
+
+// ── 上下文用量计算 ──────────────────────────────────────
+
+/** 根据模型名称估算上下文窗口（token数） */
+function estimateContextWindow(modelName) {
+  if (!modelName) return 32000
+  const name = modelName.toLowerCase()
+  // Claude 系列
+  if (name.includes('claude-3') || name.includes('claude-sonnet') || name.includes('claude-opus') || name.includes('claude-haiku')) return 200000
+  if (name.includes('claude')) return 100000
+  // GPT-4o / o1 / o3
+  if (name.includes('gpt-4o') || name.includes('gpt-4.1') || name.includes('o1') || name.includes('o3')) return 128000
+  // GPT-4 turbo
+  if (name.includes('gpt-4-turbo') || name.includes('gpt-4-1106') || name.includes('gpt-4-0125')) return 128000
+  // GPT-4 8k
+  if (name.includes('gpt-4')) return 8192
+  // GPT-3.5
+  if (name.includes('gpt-3.5')) return 16385
+  // DeepSeek
+  if (name.includes('deepseek')) return 64000
+  // 智谱 GLM
+  if (name.includes('glm-4')) return 128000
+  if (name.includes('glm')) return 128000
+  // 通义千问
+  if (name.includes('qwen') || name.includes('qwen2')) return 32768
+  if (name.includes('qwen-long')) return 1000000
+  // Kimi / Moonshot
+  if (name.includes('moonshot') || name.includes('kimi')) return 128000
+  // 默认
+  return 32000
+}
+
+/** 估算文本 token 数（中英混合近似：中文约1.5字符/token，英文约4字符/token） */
+function estimateTokens(text) {
+  if (!text) return 0
+  const str = typeof text === 'string' ? text : JSON.stringify(text)
+  let chinese = 0
+  let other = 0
+  for (const ch of str) {
+    if (/[\u4e00-\u9fa5]/.test(ch)) chinese++
+    else other++
+  }
+  return Math.ceil(chinese / 1.5 + other / 4)
+}
+
+/** 当前生效模型（选中 or 第一个活跃 or 默认估算） */
+const effectiveModel = computed(() => selectedModel.value || activeModels.value[0] || null)
+
+/** 当前对话上下文窗口大小（token） */
+const contextWindow = computed(() => {
+  const model = effectiveModel.value
+  return estimateContextWindow(model?.model_name)
+})
+
+/** 已用上下文 token（优先用最后一条 assistant 消息的 prompt_tokens，否则估算所有消息） */
+const usedContextTokens = computed(() => {
+  if (!messages.value || messages.value.length === 0) return 0
+  // 找最后一条有 prompt_tokens 的 assistant 消息
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    const m = messages.value[i]
+    if (m.role === 'assistant' && m._prompt_tokens && m._prompt_tokens > 0) {
+      return m._prompt_tokens + (m._completion_tokens || 0)
+    }
+  }
+  // 无 token 记录，估算所有消息内容
+  let total = 0
+  for (const m of messages.value) {
+    if (m._dismissed || m._ignored) continue
+    total += estimateTokens(m.content)
+    if (m.tool_data) total += estimateTokens(m.tool_data)
+    if (m._file_data) total += estimateTokens(m._file_data)
+  }
+  return total
+})
+
+/** 上下文使用百分比（0-100，保留1位小数） */
+const contextPercent = computed(() => {
+  const win = contextWindow.value
+  if (win <= 0) return 0
+  const pct = (usedContextTokens.value / win) * 100
+  return Math.min(100, Math.round(pct * 10) / 10)
+})
+
+/** 剩余 token */
+const remainingContextTokens = computed(() => Math.max(0, contextWindow.value - usedContextTokens.value))
+
+/** 使用状态：normal / warning / danger */
+const contextStatus = computed(() => {
+  const p = contextPercent.value
+  if (p >= 85) return 'danger'
+  if (p >= 60) return 'warning'
+  return 'normal'
+})
+
+/** 是否需要自动压缩（≥85% 且当前对话有消息） */
+const needAutoCompress = computed(() => contextPercent.value >= 85 && messages.value.length > 12)
+
+/** 格式化 token 数字（K 单位） */
+function formatTokens(n) {
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K'
+  return String(n)
+}
+
+// 自动压缩标志，避免重复触发
+let autoCompressing = false
+async function autoCompressContext() {
+  if (autoCompressing || !currentChatId.value || !needAutoCompress.value) return
+  autoCompressing = true
+  try {
+    const res = await api.ai.compressChatContext(currentChatId.value, { keep_count: 10 })
+    if (res.data?.compressed) {
+      ElMessage.success('上下文已自动压缩：' + (res.data.message || ''))
+      // 重新加载消息
+      await reloadCurrentMessages()
+    }
+  } catch (e) {
+    // 静默
+  } finally {
+    autoCompressing = false
+  }
+}
+
+async function reloadCurrentMessages() {
+  if (!currentChatId.value) return
+  try {
+    const res = await api.ai.getMessages(currentChatId.value)
+    const msgs = res.data || []
+    messages.value = msgs.map(m => {
+      const base = { ...m, _dismissed: false, _tokens: m.tokens_used || 0, _prompt_tokens: m.prompt_tokens || 0, _completion_tokens: m.completion_tokens || 0, _elapsed: m.elapsed || 0 }
+      if (m._metadata) {
+        const meta = m._metadata
+        if (meta._type === 'tool') {
+          base._type = 'tool'
+          base.tool_data = meta.tool_data
+        }
+      }
+      return base
+    })
+  } catch (e) {}
+}
+
+// 监听上下文用量，超阈值自动压缩
+watch(needAutoCompress, (val) => {
+  if (val) autoCompressContext()
+})
+
+// 手动压缩
+async function manualCompressContext() {
+  if (!currentChatId.value) return
+  try {
+    await ElMessageBox.confirm(
+      `当前上下文已使用 ${contextPercent.value}%，是否压缩？将保留最近 10 条消息，较早的消息将被归档。`,
+      '压缩上下文',
+      { confirmButtonText: '压缩', cancelButtonText: '取消', type: 'warning' }
+    )
+    const res = await api.ai.compressChatContext(currentChatId.value, { keep_count: 10 })
+    if (res.data?.compressed) {
+      ElMessage.success(res.data.message || '上下文已压缩')
+      await reloadCurrentMessages()
+    } else {
+      ElMessage.info(res.data?.message || '无需压缩')
+    }
+  } catch (e) {
+    // 用户取消
+  }
+}
 
 // 语音输入
 const isRecording = ref(false)
@@ -5149,6 +5338,108 @@ onMounted(() => {
   align-items: center;
   gap: 8px;
   padding: 0 2px;
+}
+
+/* 上下文用量指示器 */
+.context-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 9px;
+  background: #f5f7fa;
+  border: 1px solid #eef2f7;
+  font-size: 11px;
+  color: #909399;
+  transition: all 0.25s ease;
+  max-width: 220px;
+}
+
+.context-indicator .ctx-icon {
+  font-size: 12px;
+  color: #909399;
+  flex-shrink: 0;
+}
+
+.context-indicator .ctx-body {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.context-indicator .ctx-bar {
+  width: 56px;
+  height: 5px;
+  border-radius: 3px;
+  background: #e4e7ed;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.context-indicator .ctx-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: #67c23a;
+  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1), background 0.3s;
+}
+
+.context-indicator .ctx-text {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.context-indicator .ctx-compress-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 10px;
+  flex-shrink: 0;
+  transition: all 0.2s;
+}
+
+.context-indicator .ctx-compress-btn:hover {
+  background: rgba(0, 0, 0, 0.08);
+  transform: scale(1.1);
+}
+
+/* 状态色 */
+.context-indicator.is-normal .ctx-bar-fill { background: #67c23a; }
+.context-indicator.is-normal .ctx-icon { color: #67c23a; }
+
+.context-indicator.is-warning {
+  background: #fdf6ec;
+  border-color: #faecd8;
+  color: #e6a23c;
+}
+.context-indicator.is-warning .ctx-bar-fill { background: #e6a23c; }
+.context-indicator.is-warning .ctx-icon { color: #e6a23c; }
+
+.context-indicator.is-danger {
+  background: #fef0f0;
+  border-color: #fde2e2;
+  color: #f56c6c;
+  animation: ctx-pulse 1.6s ease-in-out infinite;
+}
+.context-indicator.is-danger .ctx-bar-fill { background: #f56c6c; }
+.context-indicator.is-danger .ctx-icon { color: #f56c6c; }
+.context-indicator.is-danger .ctx-compress-btn:hover {
+  background: #f56c6c;
+  color: #fff;
+}
+
+@keyframes ctx-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 108, 108, 0.3); }
+  50% { box-shadow: 0 0 0 4px rgba(245, 108, 108, 0); }
 }
 
 .input-text-wrapper {

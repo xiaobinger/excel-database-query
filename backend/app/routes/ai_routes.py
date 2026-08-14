@@ -508,6 +508,63 @@ def retry_message(chat_id, message_id):
     return jsonify({'success': True, 'data': {'user_content': user_msg.content}})
 
 
+@ai_bp.route('/chats/<int:chat_id>/compress', methods=['POST'])
+@login_required
+def compress_chat_context(chat_id):
+    """压缩对话上下文：软删除较早的消息，仅保留最近的 keep_count 条，
+    并在保留消息前插入一条摘要消息（可选）。
+
+    请求体：{ keep_count: int (默认10), summary: str (可选摘要文本) }
+    """
+    current_user = get_current_user()
+    chat = AiChat.query.filter_by(id=chat_id, user_id=current_user.id).first()
+    if not chat:
+        return jsonify({'success': False, 'message': '对话不存在'}), 404
+
+    data = request.get_json() or {}
+    keep_count = int(data.get('keep_count', 10))
+    keep_count = max(2, min(keep_count, 50))
+    summary = (data.get('summary') or '').strip()
+
+    # 取所有未删除消息（正序）
+    all_msgs = AiChatMessage.query.filter_by(chat_id=chat_id, is_deleted=False)\
+        .order_by(AiChatMessage.created_at.asc()).all()
+
+    if len(all_msgs) <= keep_count:
+        return jsonify({'success': True, 'data': {'compressed': False, 'message': '消息数量较少，无需压缩'}})
+
+    # 保留最近 keep_count 条
+    to_keep = all_msgs[-keep_count:]
+    to_delete = all_msgs[:-keep_count]
+
+    # 软删除较早消息
+    for m in to_delete:
+        m.is_deleted = True
+
+    # 可选：插入摘要消息（放在保留消息最前面）
+    if summary:
+        summary_msg = AiChatMessage(
+            chat_id=chat_id,
+            role='assistant',
+            content=f'[上下文摘要] {summary}',
+            tokens_used=0,
+            is_deleted=False,
+        )
+        db.session.add(summary_msg)
+
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'compressed': True,
+            'deleted_count': len(to_delete),
+            'kept_count': keep_count,
+            'message': f'已压缩上下文，删除较早的 {len(to_delete)} 条消息，保留最近 {keep_count} 条'
+        }
+    })
+
+
 # ============ Hard Delete Chat (Admin Only) ============
 @ai_bp.route('/chats/<int:chat_id>/hard', methods=['DELETE'])
 @login_required
