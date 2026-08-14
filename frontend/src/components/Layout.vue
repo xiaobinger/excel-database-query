@@ -9,84 +9,43 @@
         :default-active="activeMenu"
         :collapse="isCollapsed"
         :collapse-transition="false"
+        :unique-opened="true"
         router
         class="sidebar-menu"
         :background-color="sidebarBg"
         :text-color="sidebarText"
         :active-text-color="sidebarActive"
       >
-        <el-menu-item v-if="store.hasMenuPermission('dashboard')" index="/">
-          <i class="fas fa-tachometer-alt"></i>
-          <template #title>仪表盘</template>
-        </el-menu-item>
-        <el-menu-item v-if="store.hasMenuPermission('databases')" index="/databases">
-          <i class="fas fa-database"></i>
-          <template #title>数据库管理</template>
-        </el-menu-item>
-        <el-menu-item v-if="store.hasMenuPermission('scripts')" index="/scripts">
-          <i class="fas fa-clipboard-list"></i>
-          <template #title>脚本管理</template>
-        </el-menu-item>
-        <el-menu-item v-if="store.hasMenuPermission('query')" index="/query">
-          <i class="fas fa-play-circle"></i>
-          <template #title>查询执行</template>
-        </el-menu-item>
-        <el-menu-item v-if="store.hasMenuPermission('export_exec')" index="/export-exec">
-          <i class="fas fa-download"></i>
-          <template #title>导出任务</template>
-        </el-menu-item>
-        <el-menu-item v-if="store.hasMenuPermission('profit_share')" index="/profit-share">
-          <i class="fas fa-hand-holding-usd"></i>
-          <template #title>分润导出</template>
-        </el-menu-item>
-        <el-menu-item v-if="store.hasMenuPermission('auto_export')" index="/auto-export">
-          <i class="fas fa-clock"></i>
-          <template #title>自动导出</template>
-        </el-menu-item>
-        <el-menu-item v-if="store.hasMenuPermission('system')" index="/system">
-          <i class="fas fa-cog"></i>
-          <template #title>系统配置</template>
-        </el-menu-item>
-        <el-menu-item v-if="store.hasMenuPermission('history')" index="/history">
-          <i class="fas fa-history"></i>
-          <template #title>执行历史</template>
-        </el-menu-item>
-        <el-menu-item v-if="store.hasMenuPermission('users')" index="/users">
-          <i class="fas fa-users"></i>
-          <template #title>用户管理</template>
-        </el-menu-item>
-        <el-menu-item v-if="store.hasMenuPermission('roles')" index="/roles">
-          <i class="fas fa-user-shield"></i>
-          <template #title>角色管理</template>
-        </el-menu-item>
-        <el-menu-item v-if="store.hasMenuPermission('ai_chat')" index="/ai-chat">
-          <i class="fas fa-robot"></i>
-          <template #title>AI 助手</template>
-        </el-menu-item>
-        <el-menu-item v-if="store.hasMenuPermission('ai_sessions')" index="/ai-sessions">
-          <i class="fas fa-comments"></i>
-          <template #title>AI会话管理</template>
-        </el-menu-item>
-        <el-menu-item v-if="store.hasMenuPermission('skills')" index="/skills">
-          <i class="fas fa-brain"></i>
-          <template #title>Skills</template>
-        </el-menu-item>
-        <el-menu-item v-if="store.hasMenuPermission('agent_manager')" index="/agents">
-          <i class="fas fa-robot"></i>
-          <template #title>Agent 管理</template>
-        </el-menu-item>
-        <el-menu-item v-if="store.hasMenuPermission('cache_stats')" index="/cache-stats">
-          <i class="fas fa-bolt"></i>
-          <template #title>缓存统计</template>
-        </el-menu-item>
-        <el-menu-item v-if="store.hasMenuPermission('business_systems')" index="/business">
-          <i class="fas fa-th-large"></i>
-          <template #title>业务系统</template>
-        </el-menu-item>
-        <el-menu-item v-if="store.hasMenuPermission('system_tasks')" index="/system-tasks">
-          <i class="fas fa-cogs"></i>
-          <template #title>系统任务</template>
-        </el-menu-item>
+        <template v-for="item in menuConfig" :key="item.path || item.title">
+          <!-- 单独一级菜单 -->
+          <el-menu-item
+            v-if="item.type === 'item' && store.hasMenuPermission(item.permission)"
+            :index="item.path"
+          >
+            <i class="fas" :class="item.icon"></i>
+            <template #title>{{ item.title }}</template>
+          </el-menu-item>
+
+          <!-- 分组菜单（二级） -->
+          <el-sub-menu
+            v-else-if="item.type === 'group' && hasVisibleChildren(item)"
+            :index="item.title"
+          >
+            <template #title>
+              <i class="fas" :class="item.icon"></i>
+              <span>{{ item.title }}</span>
+            </template>
+            <el-menu-item
+              v-for="child in item.children"
+              v-show="store.hasMenuPermission(child.permission)"
+              :key="child.path"
+              :index="child.path"
+            >
+              <i class="fas" :class="child.icon"></i>
+              <template #title>{{ child.title }}</template>
+            </el-menu-item>
+          </el-sub-menu>
+        </template>
       </el-menu>
     </el-aside>
     <el-container>
@@ -128,8 +87,13 @@
           </el-dropdown>
         </div>
       </el-header>
+      <TagsView />
       <el-main class="layout-main">
-        <router-view />
+        <router-view v-slot="{ Component }">
+          <keep-alive>
+            <component :is="Component" />
+          </keep-alive>
+        </router-view>
       </el-main>
     </el-container>
 
@@ -172,6 +136,8 @@ import api from '../api'
 import { useAppStore } from '../stores'
 import { ElMessage } from 'element-plus'
 import ThemeSwitch from './ThemeSwitch.vue'
+import TagsView from './TagsView.vue'
+import { menuConfig, titleMap } from '../config/menuConfig'
 
 const route = useRoute()
 const store = useAppStore()
@@ -187,27 +153,13 @@ const displayName = computed(() => {
   return store.user?.display_name || store.user?.username || ''
 })
 
-const titleMap = {
-  '/': '仪表盘',
-  '/databases': '数据库管理',
-  '/scripts': '脚本管理',
-  '/query': '查询执行',
-  '/export-exec': '导出任务',
-  '/auto-export': '自动导出',
-  '/system': '系统配置',
-  '/history': '执行历史',
-  '/users': '用户管理',
-  '/roles': '角色管理',
-  '/ai-chat': 'AI 助手',
-  '/ai-sessions': 'AI会话管理',
-  '/skills': 'Skills',
-  '/agents': 'Agent 管理',
-  '/cache-stats': '缓存统计',
-  '/business': '业务系统',
-  '/system-tasks': '系统任务'
-}
+const currentTitle = computed(() => route.meta?.title || titleMap[route.path] || '仪表盘')
 
-const currentTitle = computed(() => titleMap[route.path] || '仪表盘')
+/** 检查分组中是否有有权限的子菜单 */
+function hasVisibleChildren(group) {
+  if (!group.children) return false
+  return group.children.some(child => store.hasMenuPermission(child.permission))
+}
 
 const sidebarBg = ref('#1d1e1f')
 const sidebarText = ref('#bfcbd9')
@@ -325,6 +277,9 @@ onMounted(() => {
 
 .sidebar-menu {
   border-right: none;
+  overflow-y: auto;
+  overflow-x: hidden;
+  height: calc(100vh - 60px);
 }
 
 .sidebar-menu .el-menu-item {
@@ -332,7 +287,8 @@ onMounted(() => {
   line-height: 50px;
 }
 
-.sidebar-menu .el-menu-item i {
+.sidebar-menu .el-menu-item i,
+.sidebar-menu .el-sub-menu__title i {
   margin-right: 10px;
   font-size: 16px;
   width: 20px;

@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import api from '../api'
 import { ElMessage } from 'element-plus'
 import router from '../router'
+import { useTagsViewStore } from './tagsView'
 
 export const useAppStore = defineStore('app', () => {
   const databases = ref([])
@@ -67,6 +68,8 @@ export const useAppStore = defineStore('app', () => {
     localStorage.removeItem('token')
     localStorage.removeItem('user')
     localStorage.removeItem('theme_user_set')
+    // 清空标签页
+    useTagsViewStore().removeAllViews()
     router.push('/login')
   }
 
