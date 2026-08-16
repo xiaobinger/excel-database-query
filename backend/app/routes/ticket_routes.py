@@ -12,6 +12,7 @@ AI指派：
 """
 import os
 import uuid
+import json
 import threading
 import logging
 from datetime import datetime
@@ -111,7 +112,7 @@ def _add_comment(ticket, user_id, content, action='comment', is_ai=False):
 # ── AI处理工单 ──────────────────────────────────────────────
 
 def _process_ticket_with_ai_async(ticket_id, app):
-    """后台线程：用AI处理工单"""
+    """后台线程：用AI处理工单（支持工具调用，可匹配系统的导出/查询/系统任务等）"""
     with app.app_context():
         try:
             ticket = Ticket.query.get(ticket_id)
@@ -130,43 +131,179 @@ def _process_ticket_with_ai_async(ticket_id, app):
             if not ai_config:
                 raise Exception('未找到可用的AI模型配置')
 
-            # 构建系统提示词
-            system_prompt = agent.system_prompt if agent and agent.system_prompt else (
-                '你是一个工单处理助手。用户会提交工单描述问题或需求。'
-                '请根据工单内容尝试给出解决方案或处理结果。\n\n'
-                '重要规则：\n'
-                '- 如果你能直接给出解决方案（如解答问题、提供操作指引），请详细回复，回复以【已处理】开头。\n'
-                '- 如果你无法直接处理（如需要人工操作数据库、需要物理操作、需要权限审批等），'
-                '请说明原因，回复以【待人工处理】开头。\n'
-                '- 回复使用中文，支持Markdown格式。'
-            )
-
             # 获取业务系统名称作为上下文
             system_name = ticket.business_system.name if ticket.business_system else '未指定'
 
+            # 构建工单处理专用系统提示词（含工具说明）
+            ticket_system_prompt = _build_ticket_ai_prompt(agent, system_name)
+
             messages = [
-                {'role': 'system', 'content': system_prompt},
+                {'role': 'system', 'content': ticket_system_prompt},
                 {'role': 'user', 'content': f'## 工单编号: {ticket.ticket_no}\n## 标题: {ticket.title}\n## 涉及系统: {system_name}\n\n## 工单内容:\n{ticket.content}'},
             ]
 
-            # 调用LLM
-            from app.services.ai_service import AiService
-            content, tokens, p_tokens, c_tokens, cache_create, cache_read = AiService.chat(ai_config, messages)
+            from app.services.ai_service import AiService, filter_tools
+            from app.routes.ai_routes import TICKET_FALLBACK_RULE
 
-            if not content or not content.strip():
-                raise Exception('AI返回空内容')
+            # 根据Agent的enabled_tools过滤工具列表
+            enabled_tools = agent.get_enabled_tools() if agent else None
+            filtered_tools = filter_tools(enabled_tools)
 
-            content = content.strip()
+            # 操作型工具：触发即视为已处理（任务已创建）
+            action_tools = {'request_export', 'request_query', 'request_system_task', 'request_profit_share'}
 
-            # 判断AI是否成功处理
-            is_handled = content.startswith('【已处理】') or not content.startswith('【待人工处理】')
-            # 默认如果AI没有明确表示无法处理，就认为已处理
-            if content.startswith('【待人工处理】'):
-                is_handled = False
-                # 去掉标记前缀
-                ai_result = content[len('【待人工处理】'):].strip()
+            # 工具调用循环（最多3轮，防止死循环）
+            max_rounds = 3
+            tool_executed = False  # 是否成功执行过工具
+            action_triggered = False  # 是否触发了操作型工具
+            final_content = ''  # AI最终回复
+            tool_log = []  # 工具调用日志（用于工单评论）
+
+            for round_idx in range(max_rounds):
+                ai_response = AiService.chat_with_failover(
+                    messages, use_tools=True, tools=filtered_tools
+                )
+                content = ai_response.get('content', '') or ''
+                tool_calls = ai_response.get('tool_calls', []) or []
+
+                if not tool_calls:
+                    # AI没有调用工具，直接返回文本回复
+                    final_content = content
+                    break
+
+                # 执行工具调用
+                tool_results = []
+                for tc in tool_calls:
+                    func_name = tc.get('function', {}).get('name', '')
+                    func_args = tc.get('function', {}).get('arguments', '')
+                    logger.info(f'工单{ticket.ticket_no} AI调用工具(轮次{round_idx+1}): {func_name}({func_args})')
+
+                    result = AiService.execute_tool_call(func_name, func_args, ticket.created_by)
+                    tool_results.append({
+                        'tool_call_id': tc['id'],
+                        'name': func_name,
+                        'result': result,
+                    })
+
+                    # 记录工具调用日志
+                    result_summary = ''
+                    if isinstance(result, dict):
+                        if result.get('error'):
+                            result_summary = f"错误: {result['error']}"
+                        elif result.get('action_type') == 'export':
+                            task_id = result.get('task_id', '')
+                            result_summary = f"已创建导出任务(任务ID: {task_id})" if task_id else "导出任务已触发"
+                            action_triggered = True
+                            tool_executed = True
+                        elif result.get('action_type') == 'query':
+                            task_id = result.get('task_id', '')
+                            result_summary = f"已创建查询任务(任务ID: {task_id})" if task_id else "查询任务已触发"
+                            action_triggered = True
+                            tool_executed = True
+                        elif result.get('action_type') == 'system_task':
+                            if result.get('auto_executed'):
+                                result_summary = f"API系统任务已自动执行: {result.get('mapping_summary', '完成')}"
+                                tool_executed = True
+                            else:
+                                task_id = result.get('task_id', '')
+                                result_summary = f"已创建系统任务(任务ID: {task_id})" if task_id else "系统任务已触发"
+                                action_triggered = True
+                                tool_executed = True
+                        elif result.get('action_type') == 'lookup':
+                            total = result.get('total', 0)
+                            data = result.get('data', [])
+                            result_summary = f"查询到{total}条记录" if total else "未查询到记录"
+                            tool_executed = True
+                        elif result.get('action_type') == 'profit_share':
+                            task_id = result.get('task_id', '')
+                            result_summary = f"已创建分润导出任务(任务ID: {task_id})" if task_id else "分润导出已触发"
+                            action_triggered = True
+                            tool_executed = True
+                        elif result.get('total') is not None:
+                            result_summary = f"匹配到{result['total']}项"
+                        else:
+                            result_summary = '已执行'
+                    else:
+                        result_summary = str(result)[:200]
+
+                    tool_log.append(f'**调用工具**: `{func_name}` → {result_summary}')
+
+                # 如果触发了操作型工具，不需要继续循环（任务已创建）
+                if action_triggered:
+                    # 构建工具结果消息，让AI生成一次归总回复
+                    messages.append({
+                        'role': 'assistant',
+                        'content': content,
+                        'tool_calls': tool_calls,
+                    })
+                    for tr in tool_results:
+                        messages.append({
+                            'role': 'tool',
+                            'tool_call_id': tr['tool_call_id'],
+                            'content': json.dumps(tr['result'], ensure_ascii=False),
+                        })
+                    # 请求AI归总结果（不带工具，避免再次调用）
+                    try:
+                        summary_content, _, _, _, _, _ = AiService.chat_with_failover(messages, use_tools=False)
+                        final_content = summary_content or ''
+                    except Exception as se:
+                        logger.warning(f'工单{ticket.ticket_no} AI归总回复失败: {se}')
+                        final_content = '已触发相关任务执行，请到对应模块查看执行结果。'
+                    break
+
+                # 非操作型工具（list_*或lookup），构建工具结果消息继续循环
+                messages.append({
+                    'role': 'assistant',
+                    'content': content,
+                    'tool_calls': tool_calls,
+                })
+                for tr in tool_results:
+                    messages.append({
+                        'role': 'tool',
+                        'tool_call_id': tr['tool_call_id'],
+                        'content': json.dumps(tr['result'], ensure_ascii=False),
+                    })
+
+                # 最后一轮，请求AI生成最终回复（不带工具）
+                if round_idx == max_rounds - 1:
+                    try:
+                        final_content, _, _, _, _, _ = AiService.chat_with_failover(messages, use_tools=False)
+                        final_content = final_content or ''
+                    except Exception as se:
+                        logger.warning(f'工单{ticket.ticket_no} AI最终回复失败: {se}')
+                        final_content = content or '处理完成'
             else:
-                ai_result = content[len('【已处理】'):].strip() if content.startswith('【已处理】') else content
+                # 循环正常结束但未break（理论上不会走到这里）
+                if not final_content:
+                    final_content = content or '处理完成'
+
+            final_content = (final_content or '').strip()
+            if not final_content:
+                final_content = 'AI已处理，但未返回详细内容。'
+
+            # 判断工单是否处理成功
+            # 1. 执行过工具（特别是操作型工具）→ 已处理
+            # 2. AI回复以【待人工处理】开头 → 待指派
+            # 3. 其他情况默认已处理
+            if final_content.startswith('【待人工处理】'):
+                is_handled = False
+                ai_result = final_content[len('【待人工处理】'):].strip()
+            elif final_content.startswith('【已处理】'):
+                is_handled = True
+                ai_result = final_content[len('【已处理】'):].strip()
+            elif tool_executed:
+                # 执行过工具，默认视为已处理
+                is_handled = True
+                ai_result = final_content
+            else:
+                # 未执行工具，AI纯文本回复，视为已处理（提供方案/解答）
+                is_handled = True
+                ai_result = final_content
+
+            # 如果有工具调用日志，附加到结果中
+            if tool_log:
+                tool_log_text = '\n\n'.join(tool_log)
+                ai_result = f'{ai_result}\n\n---\n**处理过程：**\n{tool_log_text}'
 
             ticket.ai_result = ai_result
 
@@ -175,15 +312,15 @@ def _process_ticket_with_ai_async(ticket_id, app):
                 ticket.status = STATUS_PROCESSED
                 ticket.processed_at = datetime.utcnow()
                 _add_comment(ticket, None, ai_result, 'ai_process', is_ai=True)
-                _add_comment(ticket, None, f'AI已完成处理，等待提交人核实', 'status_change', is_ai=True)
+                _add_comment(ticket, None, 'AI已完成处理，等待提交人核实', 'status_change', is_ai=True)
             else:
                 # AI处理失败 → 待指派
                 ticket.status = STATUS_PENDING_ASSIGNMENT
                 _add_comment(ticket, None, ai_result, 'ai_process', is_ai=True)
-                _add_comment(ticket, None, f'AI无法直接处理此工单，状态已转为「待指派」，请提交人重新指派给具体的人来人工介入', 'status_change', is_ai=True)
+                _add_comment(ticket, None, 'AI无法直接处理此工单，状态已转为「待指派」，请提交人重新指派给具体的人来人工介入', 'status_change', is_ai=True)
 
             db.session.commit()
-            logger.info(f'工单 {ticket.ticket_no} AI处理完成，结果状态: {ticket.status}')
+            logger.info(f'工单 {ticket.ticket_no} AI处理完成，结果状态: {ticket.status}，执行工具: {tool_executed}，操作型: {action_triggered}')
 
         except Exception as e:
             logger.error(f'工单AI处理失败 ticket_id={ticket_id}: {e}', exc_info=True)
@@ -206,6 +343,45 @@ def _process_ticket_with_ai_async(ticket_id, app):
                             db.session.rollback()
             except:
                 pass
+
+
+def _build_ticket_ai_prompt(agent, system_name):
+    """构建工单处理专用的系统提示词（含工具说明和工单处理规则）"""
+    from app.routes.ai_routes import TICKET_FALLBACK_RULE
+
+    # 基础工具说明
+    base_prompt = (
+        '你是一个工单处理助手，可以调用系统工具来实际处理工单需求。\n\n'
+        '## 可用工具\n'
+        '系统中有以下工具可供调用：\n'
+        '1. 导出任务（export）：从数据库导出数据到Excel，调用 list_export_options / request_export\n'
+        '2. 查询任务（query）：根据Excel文件中的主键数据去数据库批量查询匹配信息，调用 list_query_options / request_query\n'
+        '3. 系统任务（system_task）：后台运维类操作（如数据清理、缓存刷新、终端解绑、执行本地脚本等），支持SQL、API和本地脚本三种类型，调用 list_system_tasks / request_system_task\n'
+        '4. 信息查询（lookup）：根据用户提供的参数值快速查询数据库返回结果（如查询SN绑定状态、商户是否激活、订单是否出款等），调用 list_lookup_options / request_lookup\n'
+        '5. 分润导出（profit_share）：根据代理商编号和交易时间范围计算各级代理分润并导出Excel，调用 request_profit_share\n\n'
+        '## 工单处理规则\n'
+        '- 仔细分析工单内容，判断属于哪种任务类型，调用对应工具实际执行\n'
+        '- 如果工单内容包含明确的参数（如商户号、订单号、SN号、日期等），直接调用 request_* 工具执行\n'
+        '- 如果不确定具体任务名称，先调用 list_* 工具查找匹配项\n'
+        '- API类型的系统任务参数齐全时会自动执行并返回结果，请根据mapping_summary（映射摘要）用自然语言说明执行结果\n'
+        '- 如果用户的意图是条件性的（如"查一下这个SN的绑定状态，如果已绑定就解绑"），先调用 request_lookup 查询状态，再根据结果决定是否调用 request_system_task\n'
+        '- 如果同时需要对多个对象执行同样的操作（如"解绑SN001、SN002"），请同时调用多个 request_system_task\n'
+        '- 务必从工单内容中提取所有参数值填入 params 对象，params的键名必须使用list_*工具返回的参数配置中的name字段值\n\n'
+        '## 回复格式规则\n'
+        '- 如果你成功调用了工具并执行了任务（导出/查询/系统任务/信息查询/分润导出），请用自然语言总结执行结果，回复以【已处理】开头\n'
+        '- 如果你无法通过工具处理（如需要物理操作、需要人工审批、需要外部协调等），请说明原因，回复以【待人工处理】开头\n'
+        '- 如果你能直接给出解决方案或操作指引（如解答问题、提供步骤），请详细回复，回复以【已处理】开头\n'
+        '- 回复使用中文，支持Markdown格式\n'
+    )
+
+    # 附加Agent的系统提示词（如果存在）
+    if agent and agent.system_prompt:
+        base_prompt = base_prompt + '\n## Agent专属能力\n' + agent.system_prompt
+
+    # 追加工单兜底规则
+    base_prompt = base_prompt + '\n' + TICKET_FALLBACK_RULE
+
+    return base_prompt
 
 
 def _trigger_ai_processing(ticket):
