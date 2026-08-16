@@ -100,7 +100,7 @@
         </router-view>
       </el-main>
       <el-footer class="layout-footer">
-        <span>Copyright © 2024-{{ currentYear }} Power By XiaoBinger</span>
+        <span>Copyright © 2026-{{ currentYear }} Power By XiaoBinger</span>
         <span class="footer-divider">|</span>
         <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">粤ICP备2026000000号</a>
       </el-footer>
