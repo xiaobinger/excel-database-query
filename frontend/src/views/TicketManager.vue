@@ -222,19 +222,19 @@
             <el-button v-if="detailData.status === 'processed'" type="success" @click="handleAction('confirm')">
               <i class="fas fa-check-circle"></i> 核实通过
             </el-button>
-            <el-button v-if="detailData.status === 'processed'" type="warning" @click="handleAction('reopen')">
+            <el-button v-if="detailData.status === 'processed'" type="warning" @click="openReassignDialog('reopen')">
               <i class="fas fa-redo"></i> 重新发起
             </el-button>
             <el-button v-if="detailData.status === 'rejected'" type="primary" @click="openReasonDialog('appeal')">
               <i class="fas fa-gavel"></i> 申诉重启
             </el-button>
             <!-- 待指派：提交人重新指派 -->
-            <el-button v-if="detailData.status === 'pending_assignment'" type="primary" @click="openReassignDialog">
+            <el-button v-if="detailData.status === 'pending_assignment'" type="primary" @click="openReassignDialog('reassign')">
               <i class="fas fa-user-plus"></i> 重新指派
             </el-button>
           </template>
           <!-- 管理员也可重新指派 -->
-          <el-button v-if="isAdmin && detailData.status === 'pending_assignment' && !isCreator" type="primary" @click="openReassignDialog">
+          <el-button v-if="isAdmin && detailData.status === 'pending_assignment' && !isCreator" type="primary" @click="openReassignDialog('reassign')">
             <i class="fas fa-user-plus"></i> 重新指派
           </el-button>
           <!-- 重试AI处理（指派给AI且处于待指派/已提交状态） -->
@@ -296,8 +296,8 @@
       </template>
     </el-dialog>
 
-    <!-- 重新指派对话框 -->
-    <el-dialog v-model="reassignVisible" title="重新指派工单" width="520px" append-to-body destroy-on-close>
+    <!-- 重新指派/重新发起来 对话框 -->
+    <el-dialog v-model="reassignVisible" :title="reassignAction === 'reopen' ? '重新发起工单' : '重新指派工单'" width="520px" append-to-body destroy-on-close>
       <el-form :model="reassignForm" label-width="90px">
         <el-form-item label="指派类型">
           <el-radio-group v-model="reassignForm.assignee_type">
@@ -657,7 +657,6 @@ async function handleAction(action) {
     process: '开始处理',
     complete: '完成处理',
     confirm: '核实通过',
-    reopen: '重新发起',
     close: '关闭工单',
   }
   try {
@@ -717,12 +716,20 @@ async function submitReason() {
   }
 }
 
-// 重新指派对话框
+// 重新指派/重新发起 对话框
 const reassignVisible = ref(false)
 const reassignForm = ref({ assignee_type: 'user', assignee_id: null, assignee_agent_id: null })
+const reassignAction = ref('reassign')
 
-async function openReassignDialog() {
-  reassignForm.value = { assignee_type: 'user', assignee_id: null, assignee_agent_id: null }
+async function openReassignDialog(action = 'reassign') {
+  reassignAction.value = action
+  // 默认填充当前指派信息，方便用户修改
+  const cur = detailData.value
+  reassignForm.value = {
+    assignee_type: cur.assignee_type || 'user',
+    assignee_id: cur.assignee_type !== 'ai' ? cur.assignee_id : null,
+    assignee_agent_id: cur.assignee_type === 'ai' ? cur.assignee_agent_id : null,
+  }
   reassignVisible.value = true
   // 加载指派人和AI Agent选项
   Promise.all([fetchAssignees(), fetchAiAgents()])
@@ -735,16 +742,20 @@ async function submitReassign() {
   }
   actionLoading.value = true
   try {
-    const payload = { action: 'reassign', ...reassignForm.value }
+    const payload = { action: reassignAction.value, ...reassignForm.value }
     if (payload.assignee_type === 'ai') {
       delete payload.assignee_id
     } else {
       delete payload.assignee_agent_id
     }
     const res = await api.tickets.updateStatus(detailData.value.id, payload)
-    ElMessage.success(res.message || '已重新指派')
+    ElMessage.success(res.message || '操作成功')
     reassignVisible.value = false
     detailData.value = res.data || detailData.value
+    // 如果是AI处理中，启动轮询
+    if (isAiProcessing.value) {
+      startAiPolling()
+    }
     fetchTickets()
   } catch (e) {
     ElMessage.error(e?.response?.data?.message || '操作失败')

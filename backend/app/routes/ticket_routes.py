@@ -643,11 +643,20 @@ def update_status(ticket_id):
     if requires_reason and not reason:
         return jsonify({'success': False, 'message': '此操作必须填写原因'}), 400
 
-    # 重新指派特殊处理
-    if action == 'reassign':
-        new_assignee_type = (data.get('assignee_type') or 'user').strip()
+    # 重新指派 / 重新发起 特殊处理（都需要重新指派）
+    if action in ('reassign', 'reopen'):
+        new_assignee_type = (data.get('assignee_type') or '').strip()
         new_assignee_id = data.get('assignee_id')
         new_assignee_agent_id = data.get('assignee_agent_id')
+
+        # reopen时如果未提供指派类型，默认保留原指派
+        if action == 'reopen' and not new_assignee_type:
+            new_assignee_type = ticket.assignee_type or 'user'
+            # 保留原指派人/Agent
+            new_assignee_id = ticket.assignee_id
+            new_assignee_agent_id = ticket.assignee_agent_id
+        elif not new_assignee_type:
+            new_assignee_type = 'user'
 
         if new_assignee_type == 'ai':
             if new_assignee_agent_id:
@@ -694,8 +703,15 @@ def update_status(ticket_id):
         ticket.closed_at = None
         ticket.reject_reason = None
         ticket.appeal_reason = None
+        # 清空上次AI处理结果
+        ticket.ai_result = None
 
-        _add_comment(ticket, current_user.id, comment_text or '提交人重新指派了工单', 'status_change')
+        if action == 'reassign':
+            action_msg = '提交人重新指派了工单'
+        else:
+            action_msg = '提交人重新发起了工单'
+
+        _add_comment(ticket, current_user.id, comment_text or action_msg, 'status_change')
 
         db.session.commit()
 
@@ -703,10 +719,11 @@ def update_status(ticket_id):
         if new_assignee_type == 'ai':
             _trigger_ai_processing(ticket)
 
+        msg = '工单已重新指派' if action == 'reassign' else '工单已重新发起'
         return jsonify({
             'success': True,
             'data': ticket.to_dict(include_comments=True),
-            'message': '工单已重新指派' + ('，AI正在处理中' if new_assignee_type == 'ai' else '')
+            'message': msg + ('，AI正在处理中' if new_assignee_type == 'ai' else '')
         })
 
     # 执行流转
@@ -726,7 +743,7 @@ def update_status(ticket_id):
         ticket.processed_at = now
     elif to_status == STATUS_CLOSED:
         ticket.closed_at = now
-    elif to_status == STATUS_SUBMITTED and action in ('reopen', 'appeal'):
+    elif to_status == STATUS_SUBMITTED and action == 'appeal':
         ticket.submitted_at = now
         ticket.received_at = None
         ticket.processed_at = None
