@@ -103,10 +103,13 @@
           </el-select>
         </el-form-item>
         <el-form-item v-else label="AI Agent" prop="assignee_agent_id">
-          <el-select v-model="createForm.assignee_agent_id" placeholder="选择AI Agent（留空使用默认）" clearable filterable style="width: 100%">
+          <el-select v-if="canSwitchAgent" v-model="createForm.assignee_agent_id" placeholder="选择AI Agent（留空使用默认）" clearable filterable style="width: 100%">
             <el-option v-for="a in aiAgents" :key="a.id" :label="a.name + (a.is_default ? '（默认）' : '')" :value="a.id" />
           </el-select>
-          <div class="form-tip"><i class="fas fa-info-circle"></i> 指派给AI后，AI将自动处理该工单。处理失败会转为"待指派"状态。</div>
+          <div v-else class="form-tip">
+            <i class="fas fa-info-circle"></i> 将指派给默认AI Agent自动处理（无切换Agent权限）
+          </div>
+          <div v-if="canSwitchAgent" class="form-tip"><i class="fas fa-info-circle"></i> 指派给AI后，AI将自动处理该工单。处理失败会转为"待指派"状态。</div>
         </el-form-item>
         <el-form-item label="工单内容" prop="content">
           <MarkdownEditor v-model="createForm.content" :upload-fn="uploadAttachment" placeholder="详细描述工单内容，支持图片、视频和 Markdown 格式" :height="280" />
@@ -291,9 +294,12 @@
           </el-select>
         </el-form-item>
         <el-form-item v-else label="AI Agent">
-          <el-select v-model="reassignForm.assignee_agent_id" placeholder="选择AI Agent（留空使用默认）" clearable filterable style="width: 100%">
+          <el-select v-if="canSwitchAgent" v-model="reassignForm.assignee_agent_id" placeholder="选择AI Agent（留空使用默认）" clearable filterable style="width: 100%">
             <el-option v-for="a in aiAgents" :key="a.id" :label="a.name + (a.is_default ? '（默认）' : '')" :value="a.id" />
           </el-select>
+          <div v-else class="form-tip">
+            <i class="fas fa-info-circle"></i> 将指派给默认AI Agent自动处理（无切换Agent权限）
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -378,6 +384,7 @@ const createRules = {
 const assignees = ref([])
 const businessSystems = ref([])
 const aiAgents = ref([])
+const canSwitchAgent = ref(false)
 
 async function openCreateDialog() {
   createForm.value = { title: '', content: '', assignee_type: 'user', assignee_id: null, assignee_agent_id: null, business_system_id: null }
@@ -404,11 +411,14 @@ async function fetchBusinessSystems() {
 }
 
 async function fetchAiAgents() {
-  if (aiAgents.value.length > 0) return
   try {
     const res = await api.tickets.aiAgents()
-    aiAgents.value = res.data || res || []
-  } catch {}
+    aiAgents.value = res.data || []
+    canSwitchAgent.value = res.can_switch_agent || false
+  } catch {
+    aiAgents.value = []
+    canSwitchAgent.value = false
+  }
 }
 
 async function submitCreate() {

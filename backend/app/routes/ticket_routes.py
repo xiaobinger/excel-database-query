@@ -330,7 +330,16 @@ def create_ticket():
             except (TypeError, ValueError):
                 assignee_agent_id = None
 
-        # 未指定Agent则用默认Agent
+        # 权限校验：普通用户无切换Agent权限时，忽略指定的Agent，直接用默认
+        # 普通用户有切换权限时，校验指定的Agent是否在授权范围内
+        if assignee_agent_id and not current_user.is_admin():
+            if not current_user.can_switch_agent():
+                # 无切换权限：忽略指定，用默认Agent
+                assignee_agent_id = None
+            elif not current_user.can_use_agent(assignee_agent_id):
+                return jsonify({'success': False, 'message': '无权使用该AI Agent，请选择授权范围内的Agent'}), 403
+
+        # 未指定Agent（或被忽略）则用默认Agent
         if not assignee_agent_id:
             agent = AiAgent.query.filter_by(is_active=True, is_default=True).first()
             if not agent:
@@ -456,6 +465,20 @@ def update_status(ticket_id):
         new_assignee_agent_id = data.get('assignee_agent_id')
 
         if new_assignee_type == 'ai':
+            if new_assignee_agent_id:
+                try:
+                    new_assignee_agent_id = int(new_assignee_agent_id)
+                except (TypeError, ValueError):
+                    new_assignee_agent_id = None
+
+            # 权限校验：普通用户无切换Agent权限时，忽略指定的Agent，直接用默认
+            # 普通用户有切换权限时，校验指定的Agent是否在授权范围内
+            if new_assignee_agent_id and not current_user.is_admin():
+                if not current_user.can_switch_agent():
+                    new_assignee_agent_id = None
+                elif not current_user.can_use_agent(new_assignee_agent_id):
+                    return jsonify({'success': False, 'message': '无权使用该AI Agent，请选择授权范围内的Agent'}), 403
+
             if not new_assignee_agent_id:
                 agent = AiAgent.query.filter_by(is_active=True, is_default=True).first()
                 if not agent:
@@ -626,8 +649,28 @@ def list_assignees():
 @ticket_bp.route('/ai-agents', methods=['GET'])
 @login_required
 def list_ai_agents():
-    """获取可指派的AI Agent列表"""
-    agents = AiAgent.query.filter_by(is_active=True).order_by(AiAgent.is_default.desc()).all()
+    """获取可指派的AI Agent列表
+
+    权限规则：
+      - 管理员：返回所有启用的Agent
+      - 普通用户有切换Agent权限：返回授权过的Agent（含默认）
+      - 普通用户无切换Agent权限：返回空列表，前端隐藏选择框直接用默认Agent
+    返回 can_switch_agent 标识供前端控制是否显示Agent选择框
+    """
+    current_user = get_current_user()
+    can_switch = current_user.can_switch_agent()
+
+    if current_user.is_admin():
+        agents = AiAgent.query.filter_by(is_active=True).order_by(AiAgent.is_default.desc(), AiAgent.name).all()
+    elif can_switch:
+        # 有切换权限：返回授权过的Agent（get_allowed_agents 已包含默认Agent）
+        agents = current_user.get_allowed_agents()
+        # 按 is_default 优先排序
+        agents = sorted(agents, key=lambda a: (not a.is_default, a.name))
+    else:
+        # 无切换权限：返回空列表，前端直接用默认Agent
+        agents = []
+
     data = [
         {
             'id': a.id,
@@ -637,7 +680,7 @@ def list_ai_agents():
         }
         for a in agents
     ]
-    return jsonify({'success': True, 'data': data})
+    return jsonify({'success': True, 'data': data, 'can_switch_agent': can_switch})
 
 
 @ticket_bp.route('/upload', methods=['POST'])
@@ -755,6 +798,18 @@ def create_ticket_from_ai(title, content, assignee_type='user', assignee_id=None
                 assignee_agent_id_val = int(assignee_agent_id)
             except (TypeError, ValueError):
                 assignee_agent_id_val = None
+
+        # 权限校验：普通用户无切换Agent权限时，忽略指定的Agent，直接用默认
+        # 普通用户有切换权限时，校验指定的Agent是否在授权范围内（不在则降级用默认）
+        creator = User.query.get(created_by) if created_by else None
+        if assignee_agent_id_val and creator and not creator.is_admin():
+            if not creator.can_switch_agent():
+                # 无切换权限：忽略指定，用默认Agent
+                assignee_agent_id_val = None
+            elif not creator.can_use_agent(assignee_agent_id_val):
+                # 无权使用该Agent：降级用默认Agent
+                assignee_agent_id_val = None
+
         if not assignee_agent_id_val:
             agent = AiAgent.query.filter_by(is_active=True, is_default=True).first()
             if not agent:

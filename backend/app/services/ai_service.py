@@ -1840,14 +1840,24 @@ AI回复：{ai_response[:500] if ai_response else ''}
             assignee_display = user.display_name or user.username
         else:
             # 指派给AI：可选 assignee_name 匹配 Agent 名称，未指定则用默认 Agent
+            # 权限校验：普通用户无切换权限或不在授权范围内的Agent会被忽略，降级用默认
+            creator_user = User.query.get(user_id) if user_id else None
+            creator_can_switch = creator_user.can_switch_agent() if creator_user else True
+
             if assignee_name:
                 agent = AiAgent.query.filter(
                     AiAgent.name.like(f'%{assignee_name}%'),
                     AiAgent.is_active.is_(True),
                 ).first()
                 if agent:
-                    assignee_agent_id = agent.id
-                    assignee_display = agent.name
+                    # 普通用户校验授权范围
+                    if creator_user and not creator_user.is_admin():
+                        if not creator_can_switch or not creator_user.can_use_agent(agent.id):
+                            # 无权限使用该Agent，忽略并降级用默认
+                            agent = None
+                    if agent:
+                        assignee_agent_id = agent.id
+                        assignee_display = agent.name
             if not assignee_agent_id:
                 agent = AiAgent.query.filter_by(is_active=True, is_default=True).first()
                 if not agent:
