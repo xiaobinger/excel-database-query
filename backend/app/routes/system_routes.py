@@ -34,6 +34,7 @@ ALL_MENU_ITEMS = [
     {"path": "/cache-stats", "title": "缓存统计", "icon": "fa-bolt", "permission": "cache_stats"},
     {"path": "/business", "title": "业务系统", "icon": "fa-th-large", "permission": "business_systems"},
     {"path": "/system-tasks", "title": "系统任务", "icon": "fa-cogs", "permission": "system_tasks"},
+    {"path": "/tickets", "title": "工单管理", "icon": "fa-ticket", "permission": "tickets"},
     {"path": "/system-map", "title": "系统地图", "icon": "fa-sitemap", "permission": "system_map"},
 ]
 
@@ -64,6 +65,7 @@ DEFAULT_MENU_CONFIG = [
         {"path": "/cache-stats", "title": "缓存统计", "icon": "fa-bolt", "permission": "cache_stats", "visible": True},
         {"path": "/business", "title": "业务系统", "icon": "fa-th-large", "permission": "business_systems", "visible": True},
         {"path": "/system-tasks", "title": "系统任务", "icon": "fa-cogs", "permission": "system_tasks", "visible": True},
+        {"path": "/tickets", "title": "工单管理", "icon": "fa-ticket", "permission": "tickets", "visible": True},
         {"path": "/system-map", "title": "系统地图", "icon": "fa-sitemap", "permission": "system_map", "visible": True},
     ]},
 ]

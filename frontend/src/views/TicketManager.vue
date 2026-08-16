@@ -1,0 +1,796 @@
+<template>
+  <div class="ticket-manager">
+    <el-card shadow="hover">
+      <template #header>
+        <div class="card-header">
+          <span><i class="fas fa-ticket"></i> 工单管理</span>
+          <div class="header-actions">
+            <el-select v-model="statusFilter" placeholder="状态筛选" clearable style="width: 130px" @change="fetchTickets">
+              <el-option v-for="(label, key) in statusLabels" :key="key" :label="label" :value="key" />
+            </el-select>
+            <el-input v-model="keyword" placeholder="搜索工单编号/标题" clearable style="width: 220px" @keyup.enter="fetchTickets" @clear="fetchTickets">
+              <template #prefix><i class="fas fa-search"></i></template>
+            </el-input>
+            <el-button type="primary" @click="openCreateDialog">
+              <i class="fas fa-plus"></i> 提交工单
+            </el-button>
+            <el-button @click="fetchTickets">
+              <i class="fas fa-sync-alt"></i> 刷新
+            </el-button>
+          </div>
+        </div>
+      </template>
+
+      <el-table :data="tickets" stripe v-loading="loading" style="width: 100%" @row-click="openDetail">
+        <el-table-column prop="ticket_no" label="工单编号" width="150" show-overflow-tooltip />
+        <el-table-column prop="title" label="标题" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="creator_name" label="提交人" width="120" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span>{{ row.creator_name || row.creator_username || '-' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="assignee_name" label="指派人" width="120" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.assignee_name">{{ row.assignee_name }}</span>
+            <span v-else style="color: #c0c4cc">未指派</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="business_system_name" label="涉及系统" width="140" show-overflow-tooltip>
+          <template #default="{ row }">
+            <el-tag v-if="row.business_system_name" size="small" effect="plain">{{ row.business_system_name }}</el-tag>
+            <span v-else style="color: #c0c4cc">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="status" label="状态" width="110" align="center">
+          <template #default="{ row }">
+            <el-tag :type="statusTagType(row.status)" size="small">{{ statusLabels[row.status] || row.status }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="submitted_at" label="提交时间" width="170" show-overflow-tooltip />
+        <el-table-column prop="processed_at" label="处理时间" width="170" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.processed_at">{{ row.processed_at }}</span>
+            <span v-else style="color: #c0c4cc">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="100" align="center" fixed="right">
+          <template #default="{ row }">
+            <el-button size="small" type="primary" text @click.stop="openDetail(row)">
+              <i class="fas fa-eye"></i> 详情
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div class="pagination-area">
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :page-sizes="[10, 20, 50]"
+          :total="total"
+          layout="total, sizes, prev, pager, next, jumper"
+          @size-change="fetchTickets"
+          @current-change="fetchTickets"
+        />
+      </div>
+
+      <el-empty v-if="!loading && tickets.length === 0" description="暂无工单" />
+    </el-card>
+
+    <!-- 创建工单对话框 -->
+    <el-dialog v-model="createVisible" title="提交工单" width="780px" destroy-on-close top="5vh">
+      <el-form ref="createFormRef" :model="createForm" :rules="createRules" label-width="90px">
+        <el-form-item label="标题" prop="title">
+          <el-input v-model="createForm.title" placeholder="请输入工单标题" maxlength="100" show-word-limit />
+        </el-form-item>
+        <el-form-item label="涉及系统" prop="business_system_id">
+          <el-select v-model="createForm.business_system_id" placeholder="选择涉及的业务系统（可选）" clearable filterable style="width: 100%">
+            <el-option v-for="s in businessSystems" :key="s.id" :label="s.name" :value="s.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="指派给" prop="assignee_id">
+          <el-select v-model="createForm.assignee_id" placeholder="选择处理人" filterable style="width: 100%">
+            <el-option v-for="u in assignees" :key="u.id" :label="u.display_name" :value="u.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="工单内容" prop="content">
+          <MarkdownEditor v-model="createForm.content" :upload-fn="uploadAttachment" placeholder="详细描述工单内容，支持图片、视频和 Markdown 格式" :height="280" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="createVisible = false">取消</el-button>
+        <el-button type="primary" :loading="submitting" @click="submitCreate">提交工单</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 工单详情对话框 -->
+    <el-dialog v-model="detailVisible" :title="`工单详情 - ${detailData.ticket_no || ''}`" width="900px" destroy-on-close top="3vh">
+      <div class="detail-content" v-loading="detailLoading">
+        <!-- 状态进度条 -->
+        <div class="status-progress">
+          <el-steps :active="currentStep" finish-status="success" align-center>
+            <el-step title="已提交" :description="detailData.submitted_at" />
+            <el-step title="已接收" :description="detailData.received_at" />
+            <el-step title="已处理" :description="detailData.processed_at" />
+            <el-step title="结束" :description="detailData.closed_at" />
+          </el-steps>
+          <div v-if="detailData.status === 'rejected'" class="rejected-banner">
+            <i class="fas fa-ban"></i> 工单已被拒绝：
+            <span v-if="detailData.reject_reason">{{ detailData.reject_reason }}</span>
+          </div>
+        </div>
+
+        <el-descriptions :column="2" border size="small" style="margin-top: 16px">
+          <el-descriptions-item label="工单编号">{{ detailData.ticket_no || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag :type="statusTagType(detailData.status)" size="small">{{ statusLabels[detailData.status] || detailData.status }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="标题" :span="2">{{ detailData.title || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="提交人">{{ detailData.creator_name || detailData.creator_username || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="指派人">{{ detailData.assignee_name || detailData.assignee_username || '未指派' }}</el-descriptions-item>
+          <el-descriptions-item label="涉及系统">
+            <el-tag v-if="detailData.business_system_name" size="small" effect="plain">{{ detailData.business_system_name }}</el-tag>
+            <span v-else>-</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="提交时间">{{ detailData.submitted_at || '-' }}</el-descriptions-item>
+        </el-descriptions>
+
+        <!-- 工单内容 -->
+        <el-divider content-position="left">工单内容</el-divider>
+        <div class="ticket-content" v-html="renderMarkdown(detailData.content)"></div>
+
+        <!-- 拒绝/申诉信息 -->
+        <div v-if="detailData.reject_reason" class="reason-block reject">
+          <div class="reason-title"><i class="fas fa-ban"></i> 拒绝原因</div>
+          <div class="reason-content" v-html="renderMarkdown(detailData.reject_reason)"></div>
+        </div>
+        <div v-if="detailData.appeal_reason" class="reason-block appeal">
+          <div class="reason-title"><i class="fas fa-gavel"></i> 申诉理由</div>
+          <div class="reason-content" v-html="renderMarkdown(detailData.appeal_reason)"></div>
+        </div>
+
+        <!-- 操作按钮区 -->
+        <el-divider content-position="left">操作</el-divider>
+        <div class="action-bar">
+          <!-- 指派人操作 -->
+          <template v-if="isAssignee">
+            <el-button v-if="detailData.status === 'submitted'" type="primary" @click="handleAction('receive')">
+              <i class="fas fa-check"></i> 接收工单
+            </el-button>
+            <el-button v-if="detailData.status === 'received'" type="primary" @click="handleAction('process')">
+              <i class="fas fa-cog"></i> 开始处理
+            </el-button>
+            <el-button v-if="detailData.status === 'processing'" type="success" @click="handleAction('complete')">
+              <i class="fas fa-check-double"></i> 完成处理
+            </el-button>
+            <el-button v-if="['submitted', 'received'].includes(detailData.status)" type="danger" @click="openReasonDialog('reject')">
+              <i class="fas fa-ban"></i> 拒绝
+            </el-button>
+          </template>
+          <!-- 提交人操作 -->
+          <template v-if="isCreator">
+            <el-button v-if="detailData.status === 'processed'" type="success" @click="handleAction('confirm')">
+              <i class="fas fa-check-circle"></i> 核实通过
+            </el-button>
+            <el-button v-if="detailData.status === 'processed'" type="warning" @click="handleAction('reopen')">
+              <i class="fas fa-redo"></i> 重新发起
+            </el-button>
+            <el-button v-if="detailData.status === 'rejected'" type="primary" @click="openReasonDialog('appeal')">
+              <i class="fas fa-gavel"></i> 申诉重启
+            </el-button>
+          </template>
+          <!-- 管理员操作 -->
+          <el-button v-if="isAdmin && detailData.status !== 'closed'" type="info" @click="handleAction('close')">
+            <i class="fas fa-times-circle"></i> 关闭工单
+          </el-button>
+          <el-popconfirm v-if="isAdmin" title="确定删除此工单？此操作不可恢复" @confirm="handleDelete">
+            <template #reference>
+              <el-button type="danger" plain><i class="fas fa-trash"></i> 删除</el-button>
+            </template>
+          </el-popconfirm>
+        </div>
+
+        <!-- 评论列表 -->
+        <el-divider content-position="left">评论 ({{ (detailData.comments || []).length }})</el-divider>
+        <div class="comments-list">
+          <div v-if="!detailData.comments || detailData.comments.length === 0" class="no-comments">暂无评论</div>
+          <div v-for="c in detailData.comments" :key="c.id" class="comment-item" :class="c.action">
+            <div class="comment-avatar">
+              <i :class="commentActionIcon(c.action)"></i>
+            </div>
+            <div class="comment-body">
+              <div class="comment-head">
+                <span class="comment-author">{{ c.user_name || c.user_username || '未知' }}</span>
+                <el-tag v-if="c.action !== 'comment'" :type="commentActionTagType(c.action)" size="small" effect="plain">
+                  {{ commentActionLabel(c.action) }}
+                </el-tag>
+                <span class="comment-time">{{ c.created_at }}</span>
+              </div>
+              <div class="comment-content" v-html="renderMarkdown(c.content)"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 添加评论 -->
+        <div class="comment-input-area">
+          <MarkdownEditor v-model="commentText" :upload-fn="uploadAttachment" placeholder="发表评论（支持 Markdown、图片、视频）" :height="120" :toolbar="true" />
+          <el-button type="primary" :loading="commenting" :disabled="!commentText.trim()" @click="submitComment" style="margin-top: 8px">
+            <i class="fas fa-paper-plane"></i> 发表评论
+          </el-button>
+        </div>
+      </div>
+    </el-dialog>
+
+    <!-- 拒绝/申诉原因对话框 -->
+    <el-dialog v-model="reasonVisible" :title="reasonTitle" width="600px" append-to-body destroy-on-close>
+      <el-form :model="reasonForm">
+        <el-form-item label="原因说明" required>
+          <MarkdownEditor v-model="reasonForm.reason" :upload-fn="uploadAttachment" :placeholder="reasonPlaceholder" :height="180" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="reasonVisible = false">取消</el-button>
+        <el-button type="primary" :loading="actionLoading" @click="submitReason">确认</el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<script setup>
+import { ref, computed, onMounted } from 'vue'
+import api from '../api'
+import { useAppStore } from '../stores'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { marked } from 'marked'
+import MarkdownEditor from '../components/MarkdownEditor.vue'
+
+const store = useAppStore()
+const isAdmin = computed(() => store.isAdmin)
+
+// 状态配置
+const statusLabels = {
+  submitted: '已提交',
+  received: '已接收',
+  processing: '处理中',
+  rejected: '拒绝',
+  processed: '已处理',
+  closed: '结束',
+}
+
+const statusTagType = (status) => {
+  const map = {
+    submitted: 'info',
+    received: 'warning',
+    processing: 'warning',
+    rejected: 'danger',
+    processed: 'success',
+    closed: '',
+  }
+  return map[status] || 'info'
+}
+
+// 列表数据
+const loading = ref(false)
+const tickets = ref([])
+const total = ref(0)
+const currentPage = ref(1)
+const pageSize = ref(20)
+const statusFilter = ref('')
+const keyword = ref('')
+
+async function fetchTickets() {
+  loading.value = true
+  try {
+    const params = { page: currentPage.value, per_page: pageSize.value }
+    if (statusFilter.value) params.status = statusFilter.value
+    if (keyword.value.trim()) params.keyword = keyword.value.trim()
+    const res = await api.tickets.list(params)
+    const data = res.data || res || {}
+    tickets.value = Array.isArray(data) ? data : (data.data || [])
+    total.value = data.total || tickets.value.length
+  } catch {
+    tickets.value = []
+    total.value = 0
+  } finally {
+    loading.value = false
+  }
+}
+
+// 创建工单
+const createVisible = ref(false)
+const submitting = ref(false)
+const createFormRef = ref(null)
+const createForm = ref({ title: '', content: '', assignee_id: null, business_system_id: null })
+const createRules = {
+  title: [{ required: true, message: '请输入标题', trigger: 'blur' }],
+  content: [{ required: true, message: '请输入工单内容', trigger: 'blur' }],
+  assignee_id: [{ required: true, message: '请选择指派人', trigger: 'change' }],
+}
+const assignees = ref([])
+const businessSystems = ref([])
+
+async function openCreateDialog() {
+  createForm.value = { title: '', content: '', assignee_id: null, business_system_id: null }
+  createVisible.value = true
+  // 并行加载选项数据
+  Promise.all([fetchAssignees(), fetchBusinessSystems()])
+}
+
+async function fetchAssignees() {
+  if (assignees.value.length > 0) return
+  try {
+    const res = await api.tickets.assignees()
+    assignees.value = res.data || res || []
+  } catch {}
+}
+
+async function fetchBusinessSystems() {
+  if (businessSystems.value.length > 0) return
+  try {
+    const res = await api.business.listSystems()
+    const data = res.data || res || []
+    businessSystems.value = Array.isArray(data) ? data : (data.data || [])
+  } catch {}
+}
+
+async function submitCreate() {
+  if (!createFormRef.value) return
+  await createFormRef.value.validate(async (valid) => {
+    if (!valid) return
+    submitting.value = true
+    try {
+      await api.tickets.create(createForm.value)
+      ElMessage.success('工单已提交')
+      createVisible.value = false
+      fetchTickets()
+    } catch (e) {
+      ElMessage.error(e?.response?.data?.message || '提交失败')
+    } finally {
+      submitting.value = false
+    }
+  })
+}
+
+// 详情
+const detailVisible = ref(false)
+const detailLoading = ref(false)
+const detailData = ref({})
+
+const isAssignee = computed(() => detailData.value.assignee_id === store.user?.id)
+const isCreator = computed(() => detailData.value.created_by === store.user?.id)
+
+// 进度条当前步骤
+const currentStep = computed(() => {
+  const s = detailData.value.status
+  if (s === 'submitted') return 0
+  if (s === 'received' || s === 'processing') return 1
+  if (s === 'processed') return 2
+  if (s === 'closed') return 3
+  if (s === 'rejected') return 0
+  return 0
+})
+
+async function openDetail(row) {
+  detailVisible.value = true
+  detailLoading.value = true
+  detailData.value = {}
+  commentText.value = ''
+  try {
+    const res = await api.tickets.get(row.id)
+    detailData.value = res.data || res || {}
+  } catch (e) {
+    ElMessage.error('加载详情失败')
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+async function refreshDetail() {
+  if (!detailData.value.id) return
+  try {
+    const res = await api.tickets.get(detailData.value.id)
+    detailData.value = res.data || res || {}
+  } catch {}
+}
+
+// 状态操作
+const actionLoading = ref(false)
+
+async function handleAction(action) {
+  const actionLabels = {
+    receive: '接收',
+    process: '开始处理',
+    complete: '完成处理',
+    confirm: '核实通过',
+    reopen: '重新发起',
+    close: '关闭工单',
+  }
+  try {
+    await ElMessageBox.confirm(`确定要执行「${actionLabels[action]}」操作吗？`, '确认', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: action === 'close' ? 'warning' : 'info',
+    })
+  } catch {
+    return
+  }
+  actionLoading.value = true
+  try {
+    const res = await api.tickets.updateStatus(detailData.value.id, { action })
+    ElMessage.success(res.message || '操作成功')
+    detailData.value = res.data || detailData.value
+    fetchTickets()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '操作失败')
+  } finally {
+    actionLoading.value = false
+  }
+}
+
+// 拒绝/申诉原因对话框
+const reasonVisible = ref(false)
+const reasonForm = ref({ reason: '' })
+const reasonAction = ref('')
+const reasonTitle = computed(() => reasonAction.value === 'reject' ? '拒绝工单' : '申诉重启')
+const reasonPlaceholder = computed(() => reasonAction.value === 'reject' ? '请详细说明拒绝原因（必填）' : '请说明申诉重启的理由（必填）')
+
+function openReasonDialog(action) {
+  reasonAction.value = action
+  reasonForm.value = { reason: '' }
+  reasonVisible.value = true
+}
+
+async function submitReason() {
+  if (!reasonForm.value.reason.trim()) {
+    ElMessage.warning('请填写原因')
+    return
+  }
+  actionLoading.value = true
+  try {
+    const res = await api.tickets.updateStatus(detailData.value.id, {
+      action: reasonAction.value,
+      reason: reasonForm.value.reason,
+    })
+    ElMessage.success(res.message || '操作成功')
+    reasonVisible.value = false
+    detailData.value = res.data || detailData.value
+    fetchTickets()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '操作失败')
+  } finally {
+    actionLoading.value = false
+  }
+}
+
+// 评论
+const commentText = ref('')
+const commenting = ref(false)
+
+async function submitComment() {
+  if (!commentText.value.trim()) return
+  commenting.value = true
+  try {
+    await api.tickets.addComment(detailData.value.id, { content: commentText.value })
+    ElMessage.success('评论已发表')
+    commentText.value = ''
+    refreshDetail()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '评论失败')
+  } finally {
+    commenting.value = false
+  }
+}
+
+function commentActionLabel(action) {
+  const map = { comment: '评论', reject: '拒绝', appeal: '申诉', status_change: '状态变更' }
+  return map[action] || action
+}
+
+function commentActionIcon(action) {
+  const map = {
+    comment: 'fas fa-comment',
+    reject: 'fas fa-ban',
+    appeal: 'fas fa-gavel',
+    status_change: 'fas fa-flag',
+  }
+  return map[action] || 'fas fa-comment'
+}
+
+function commentActionTagType(action) {
+  const map = { comment: '', reject: 'danger', appeal: 'warning', status_change: 'info' }
+  return map[action] || ''
+}
+
+// 删除
+async function handleDelete() {
+  try {
+    await api.tickets.delete(detailData.value.id)
+    ElMessage.success('工单已删除')
+    detailVisible.value = false
+    fetchTickets()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '删除失败')
+  }
+}
+
+// 上传附件
+async function uploadAttachment(file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await api.tickets.upload(formData)
+  return res.data || res
+}
+
+// Markdown 渲染
+function renderMarkdown(text) {
+  if (!text) return ''
+  try {
+    return marked.parse(text)
+  } catch {
+    return text
+  }
+}
+
+onMounted(() => {
+  fetchTickets()
+})
+</script>
+
+<style scoped>
+.ticket-manager {
+  max-width: 1400px;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.card-header i {
+  margin-right: 8px;
+  color: var(--primary-color, #409eff);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pagination-area {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+:deep(.el-table__row) {
+  cursor: pointer;
+}
+
+.detail-content {
+  max-height: 78vh;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+/* 状态进度条 */
+.status-progress {
+  padding: 12px 20px;
+  background: #f5f7fa;
+  border-radius: 8px;
+}
+
+.rejected-banner {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: #fef0f0;
+  border: 1px solid #fde2e2;
+  border-radius: 6px;
+  color: #f56c6c;
+  font-size: 13px;
+}
+
+.rejected-banner i {
+  margin-right: 6px;
+}
+
+/* 工单内容 */
+.ticket-content {
+  padding: 12px 16px;
+  background: #fafafa;
+  border-radius: 6px;
+  line-height: 1.7;
+}
+
+.ticket-content :deep(img) {
+  max-width: 100%;
+  border-radius: 6px;
+  margin: 8px 0;
+}
+
+.ticket-content :deep(video) {
+  max-width: 100%;
+  border-radius: 6px;
+  margin: 8px 0;
+}
+
+.ticket-content :deep(pre) {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.ticket-content :deep(code) {
+  background: #f0f0f0;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 13px;
+}
+
+.ticket-content :deep(pre code) {
+  background: transparent;
+  padding: 0;
+}
+
+/* 拒绝/申诉原因块 */
+.reason-block {
+  margin-top: 12px;
+  padding: 12px 16px;
+  border-radius: 6px;
+}
+
+.reason-block.reject {
+  background: #fef0f0;
+  border: 1px solid #fde2e2;
+}
+
+.reason-block.appeal {
+  background: #fdf6ec;
+  border: 1px solid #faecd8;
+}
+
+.reason-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+
+.reason-block.reject .reason-title {
+  color: #f56c6c;
+}
+
+.reason-block.appeal .reason-title {
+  color: #e6a23c;
+}
+
+.reason-content {
+  line-height: 1.6;
+  font-size: 13px;
+}
+
+.reason-content :deep(img) {
+  max-width: 100%;
+  border-radius: 4px;
+}
+
+/* 操作区 */
+.action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+/* 评论 */
+.comments-list {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.no-comments {
+  text-align: center;
+  color: #c0c4cc;
+  padding: 24px 0;
+  font-size: 13px;
+}
+
+.comment-item {
+  display: flex;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.comment-item:last-child {
+  border-bottom: none;
+}
+
+.comment-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #f0f2f5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #606266;
+  flex-shrink: 0;
+}
+
+.comment-item.reject .comment-avatar {
+  background: #fef0f0;
+  color: #f56c6c;
+}
+
+.comment-item.appeal .comment-avatar {
+  background: #fdf6ec;
+  color: #e6a23c;
+}
+
+.comment-item.status_change .comment-avatar {
+  background: #f4f4f5;
+  color: #909399;
+}
+
+.comment-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.comment-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.comment-author {
+  font-weight: 600;
+  font-size: 13px;
+  color: #303133;
+}
+
+.comment-time {
+  font-size: 12px;
+  color: #c0c4cc;
+  margin-left: auto;
+}
+
+.comment-content {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #606266;
+  word-break: break-word;
+}
+
+.comment-content :deep(img) {
+  max-width: 100%;
+  border-radius: 4px;
+}
+
+.comment-content :deep(video) {
+  max-width: 100%;
+  border-radius: 4px;
+}
+
+.comment-content :deep(pre) {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: 8px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 12px;
+}
+
+/* 评论输入区 */
+.comment-input-area {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed #dcdfe6;
+}
+</style>

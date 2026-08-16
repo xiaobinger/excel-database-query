@@ -108,6 +108,50 @@ def _normalize_execution(execution):
     }
 
 
+# 工单状态映射到任务监控的伪状态（便于前端复用 statusMeta）
+TICKET_STATUS_MAP = {
+    'submitted': 'pending',
+    'received': 'running',
+    'processing': 'running',
+    'rejected': 'failed',
+    'processed': 'pending',
+    'closed': 'completed',
+}
+
+TICKET_STATUS_PROGRESS = {
+    'submitted': 20,
+    'received': 45,
+    'processing': 65,
+    'rejected': 30,
+    'processed': 85,
+    'closed': 100,
+}
+
+
+def _normalize_ticket(ticket):
+    """工单归一化为任务监控条目"""
+    from app.routes.ticket_routes import STATUS_LABELS
+    return {
+        'id': f"tk_{ticket.id}",
+        'task_id': ticket.ticket_no,
+        'kind': 'ticket',
+        'category': '工单',
+        'title': ticket.title,
+        'status': TICKET_STATUS_MAP.get(ticket.status, ticket.status),
+        'raw_status': ticket.status,
+        'raw_status_label': STATUS_LABELS.get(ticket.status, ticket.status),
+        'progress': TICKET_STATUS_PROGRESS.get(ticket.status, 0),
+        'total_rows': 0,
+        'success_count': 0,
+        'failure_count': 0,
+        'error_message': ticket.reject_reason,
+        'started_at': ticket.submitted_at.isoformat() if ticket.submitted_at else None,
+        'completed_at': ticket.closed_at.isoformat() if ticket.closed_at else None,
+        'created_at': ticket.created_at.isoformat() if ticket.created_at else None,
+        'url': '/tickets',
+    }
+
+
 @task_bp.route('/active', methods=['GET'])
 @login_required
 def get_active_tasks():
@@ -136,6 +180,18 @@ def get_active_tasks():
     ste_list = ste_query.order_by(SystemTaskExecution.created_at.desc()).all()
     for e in ste_list:
         result.append(_normalize_execution(e))
+
+    # Ticket（未结束的工单视为进行中，提交人和指派人可见）
+    from app.models.ticket import Ticket
+    ticket_active_statuses = ('submitted', 'received', 'processing', 'rejected', 'processed')
+    tk_query = Ticket.query.filter(Ticket.status.in_(ticket_active_statuses))
+    if not is_admin and current_user:
+        tk_query = tk_query.filter(
+            db.or_(Ticket.created_by == current_user.id, Ticket.assignee_id == current_user.id)
+        )
+    tk_list = tk_query.order_by(Ticket.created_at.desc()).limit(50).all()
+    for t in tk_list:
+        result.append(_normalize_ticket(t))
 
     # 合并后按 created_at 降序
     result.sort(key=lambda x: x.get('created_at') or '', reverse=True)
@@ -180,6 +236,20 @@ def get_recent_tasks():
     ste_list = ste_query.order_by(SystemTaskExecution.completed_at.desc()).limit(limit).all()
     for e in ste_list:
         result.append(_normalize_execution(e))
+
+    # Ticket（最近结束的工单）
+    from app.models.ticket import Ticket
+    tk_query = Ticket.query.filter(
+        Ticket.status == 'closed',
+        Ticket.closed_at >= since
+    )
+    if not is_admin and current_user:
+        tk_query = tk_query.filter(
+            db.or_(Ticket.created_by == current_user.id, Ticket.assignee_id == current_user.id)
+        )
+    tk_list = tk_query.order_by(Ticket.closed_at.desc()).limit(limit).all()
+    for t in tk_list:
+        result.append(_normalize_ticket(t))
 
     result.sort(key=lambda x: x.get('completed_at') or '', reverse=True)
 

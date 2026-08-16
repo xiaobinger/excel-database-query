@@ -272,4 +272,16 @@ const profitShare = {
   databases: () => http.get('/profit-share/databases'),
 }
 
-export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, business, systemTask, lookup, profitShare }
+const tickets = {
+  list: (params) => http.get('/tickets', { params }),
+  get: (id) => http.get(`/tickets/${id}`),
+  create: (data) => http.post('/tickets', data),
+  updateStatus: (id, data) => http.put(`/tickets/${id}/status`, data),
+  addComment: (id, data) => http.post(`/tickets/${id}/comments`, data),
+  delete: (id) => http.delete(`/tickets/${id}`),
+  assignees: () => http.get('/tickets/assignees'),
+  upload: (formData) => http.post('/tickets/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  stats: () => http.get('/tickets/stats'),
+}
+
+export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, business, systemTask, lookup, profitShare, tickets }
