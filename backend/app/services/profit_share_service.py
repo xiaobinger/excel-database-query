@@ -623,6 +623,7 @@ class ProfitShareService:
             'start_time': start_time,
             'end_time': end_time,
             'database_connection_id': database_connection_id,
+            'task_type': 'profit_share',
         })
 
         if database_connection_id:

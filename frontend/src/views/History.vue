@@ -54,9 +54,9 @@
             </template>
           </template>
         </el-table-column>
-        <el-table-column prop="type" label="类型" width="90" align="center">
+        <el-table-column prop="type" label="类型" width="100" align="center">
           <template #default="{ row }">
-            <el-tag :type="row.type === 'export' ? 'warning' : 'primary'" size="small">{{ row.type === 'export' ? '导出' : '查询' }}</el-tag>
+            <el-tag :type="typeTagType(row)" size="small">{{ typeLabel(row) }}</el-tag>
             <el-tag v-if="row.is_auto" type="info" size="small" style="margin-left: 4px">自动</el-tag>
           </template>
         </el-table-column>
@@ -167,7 +167,7 @@
         <el-descriptions :column="2" border size="small">
           <el-descriptions-item label="任务ID">{{ detailData.task_id || '-' }}</el-descriptions-item>
           <el-descriptions-item label="任务类型">
-            <el-tag :type="detailData.type === 'export' ? 'warning' : 'primary'" size="small">{{ detailData.type === 'export' ? '导出任务' : '查询任务' }}</el-tag>
+            <el-tag :type="typeTagType(detailData)" size="small">{{ typeLabel(detailData, true) }}</el-tag>
             <el-tag v-if="detailData.is_auto" type="info" size="small" style="margin-left: 4px">自动执行</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="查询选项">
@@ -338,6 +338,25 @@ function progressStatus(status) {
 function levelLabel(level) {
   const map = { info: 'INFO', warning: 'WARN', error: 'ERROR', success: 'OK' }
   return map[level] || 'INFO'
+}
+
+// 是否分润导出任务
+function isProfitShare(row) {
+  return row?.is_profit_share || row?.params_values?.task_type === 'profit_share'
+}
+
+// 任务类型标签文案
+function typeLabel(row, full = false) {
+  if (isProfitShare(row)) return full ? '分润导出任务' : '分润导出'
+  if (row?.type === 'export') return full ? '导出任务' : '导出'
+  return full ? '查询任务' : '查询'
+}
+
+// 任务类型标签颜色
+function typeTagType(row) {
+  if (isProfitShare(row)) return 'success'
+  if (row?.type === 'export') return 'warning'
+  return 'primary'
 }
 
 async function fetchTasks() {
