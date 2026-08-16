@@ -763,15 +763,16 @@ def update_status(ticket_id):
     """状态流转
 
     操作类型（action）：
-      receive   指派人接收          submitted → received
-      process   指派人开始处理       received → processing
-      complete  指派人完成处理       processing → processed
-      reject    指派人拒绝（需reason） submitted/received → rejected
-      confirm   提交人核实通过       processed → closed
-      reopen    提交人重新发起       processed → submitted
-      appeal    提交人申诉重启（需reason） rejected → submitted
-      reassign  提交人重新指派       pending_assignment → submitted（需 assignee_id 或 assignee_type='ai'）
-      close     管理员关闭           any → closed
+      receive        指派人接收          submitted → received
+      process        指派人开始处理       received → processing
+      complete       指派人完成处理       processing → processed
+      reject         指派人拒绝（需reason） submitted/received → rejected
+      confirm        提交人核实通过       processed → closed
+      reopen         提交人重新发起       processed → submitted
+      appeal         提交人申诉重启（需reason） rejected → submitted
+      reassign       提交人重新指派       pending_assignment → submitted（需 assignee_id 或 assignee_type='ai'）
+      transfer_to_ai 被指派人移交给AI     received/processing → submitted（需 assignee_type='ai'）
+      close          管理员关闭           any → closed
 
     请求体：{ action: str, reason?: str, comment?: str, assignee_id?: int, assignee_type?: str }
     """
@@ -803,6 +804,7 @@ def update_status(ticket_id):
         'reopen': ([STATUS_PROCESSED], STATUS_SUBMITTED, 'creator', False, 'status_change'),
         'appeal': ([STATUS_REJECTED], STATUS_SUBMITTED, 'creator', True, 'appeal'),
         'reassign': ([STATUS_PENDING_ASSIGNMENT, STATUS_PENDING_CONFIRMATION], STATUS_SUBMITTED, 'creator', False, 'status_change'),
+        'transfer_to_ai': ([STATUS_RECEIVED, STATUS_PROCESSING], STATUS_SUBMITTED, 'assignee', False, 'status_change'),
         'close': (list(STATUS_LABELS.keys()), STATUS_CLOSED, 'admin', False, 'status_change'),
     }
 
@@ -830,11 +832,15 @@ def update_status(ticket_id):
     if requires_reason and not reason:
         return jsonify({'success': False, 'message': '此操作必须填写原因'}), 400
 
-    # 重新指派 / 重新发起 特殊处理（都需要重新指派）
-    if action in ('reassign', 'reopen'):
+    # 重新指派 / 重新发起 / 移交AI 特殊处理（都需要重新指派）
+    if action in ('reassign', 'reopen', 'transfer_to_ai'):
         new_assignee_type = (data.get('assignee_type') or '').strip()
         new_assignee_id = data.get('assignee_id')
         new_assignee_agent_id = data.get('assignee_agent_id')
+
+        # transfer_to_ai 强制指派给AI
+        if action == 'transfer_to_ai':
+            new_assignee_type = 'ai'
 
         # reopen时如果未提供指派类型，默认保留原指派
         if action == 'reopen' and not new_assignee_type:
@@ -896,6 +902,8 @@ def update_status(ticket_id):
 
         if action == 'reassign':
             action_msg = '提交人重新指派了工单'
+        elif action == 'transfer_to_ai':
+            action_msg = '被指派人将工单移交给AI处理'
         else:
             action_msg = '提交人重新发起了工单'
 
@@ -907,7 +915,12 @@ def update_status(ticket_id):
         if new_assignee_type == 'ai':
             _trigger_ai_processing(ticket)
 
-        msg = '工单已重新指派' if action == 'reassign' else '工单已重新发起'
+        if action == 'reassign':
+            msg = '工单已重新指派'
+        elif action == 'transfer_to_ai':
+            msg = '工单已移交给AI'
+        else:
+            msg = '工单已重新发起'
         return jsonify({
             'success': True,
             'data': ticket.to_dict(include_comments=True),
