@@ -180,7 +180,7 @@ def create_ticket():
     data = request.get_json() or {}
     title = (data.get('title') or '').strip()
     content = (data.get('content') or '').strip()
-    assignee_id = data.get('assignee_id', type=int)
+    assignee_id = data.get('assignee_id')
 
     if not title:
         return jsonify({'success': False, 'message': '标题不能为空'}), 400
@@ -189,9 +189,21 @@ def create_ticket():
     if not assignee_id:
         return jsonify({'success': False, 'message': '请选择指派人'}), 400
 
+    try:
+        assignee_id = int(assignee_id)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'message': '指派人ID格式错误'}), 400
+
     assignee = User.query.get(assignee_id)
     if not assignee or not assignee.is_active:
         return jsonify({'success': False, 'message': '指派人不存在或已禁用'}), 400
+
+    business_system_id = data.get('business_system_id')
+    if business_system_id:
+        try:
+            business_system_id = int(business_system_id)
+        except (TypeError, ValueError):
+            business_system_id = None
 
     current_user = get_current_user()
     now = datetime.utcnow()
@@ -200,7 +212,7 @@ def create_ticket():
         ticket_no=_generate_ticket_no(),
         title=title,
         content=content,
-        business_system_id=data.get('business_system_id', type=int),
+        business_system_id=business_system_id,
         assignee_id=assignee_id,
         created_by=current_user.id,
         status=STATUS_SUBMITTED,
