@@ -75,7 +75,7 @@
           <div class="summary-card summary-duration">
             <div class="summary-icon"><i class="fas fa-stopwatch"></i></div>
             <div class="summary-info">
-              <div class="summary-value">{{ summary.overall_avg_duration_hours || 0 }}h</div>
+              <div class="summary-value">{{ formatDuration(summary.overall_avg_duration_seconds || 0) }}</div>
               <div class="summary-label">平均处理时长</div>
             </div>
           </div>
@@ -119,7 +119,7 @@
               <span class="ai-summary-item">待确认 <b style="color: #e6a23c">{{ summary.ai_total_pending || 0 }}</b></span>
               <span class="ai-summary-item">失败 <b style="color: #f56c6c">{{ summary.ai_total_failed || 0 }}</b></span>
               <span class="ai-summary-item">完成率 <b>{{ summary.ai_completion_rate || 0 }}%</b></span>
-              <span class="ai-summary-item">平均耗时 <b>{{ formatDuration(summary.ai_avg_duration_hours || 0) }}</b></span>
+              <span class="ai-summary-item">平均耗时 <b>{{ formatDuration(summary.ai_avg_duration_seconds || 0) }}</b></span>
             </div>
           </div>
         </template>
@@ -165,10 +165,10 @@
               </div>
             </template>
           </el-table-column>
-          <el-table-column prop="avg_duration_hours" label="平均处理时长" width="130" align="center" sortable>
+          <el-table-column prop="avg_duration_seconds" label="平均处理时长" width="130" align="center" sortable>
             <template #default="{ row }">
-              <span v-if="row.avg_duration_hours > 0" :style="{ color: getDurationColor(row.avg_duration_hours) }">
-                <i class="fas fa-clock"></i> {{ formatDuration(row.avg_duration_hours) }}
+              <span v-if="row.avg_duration_seconds > 0" :style="{ color: getDurationColor(row.avg_duration_seconds) }">
+                <i class="fas fa-clock"></i> {{ formatDuration(row.avg_duration_seconds) }}
               </span>
               <span v-else style="color: #c0c4cc">-</span>
             </template>
@@ -219,10 +219,10 @@
               </div>
             </template>
           </el-table-column>
-          <el-table-column prop="avg_duration_hours" label="平均处理时长" width="140" align="center" sortable>
+          <el-table-column prop="avg_duration_seconds" label="平均处理时长" width="140" align="center" sortable>
             <template #default="{ row }">
-              <span v-if="row.avg_duration_hours > 0" :style="{ color: getDurationColor(row.avg_duration_hours) }">
-                <i class="fas fa-clock"></i> {{ formatDuration(row.avg_duration_hours) }}
+              <span v-if="row.avg_duration_seconds > 0" :style="{ color: getDurationColor(row.avg_duration_seconds) }">
+                <i class="fas fa-clock"></i> {{ formatDuration(row.avg_duration_seconds) }}
               </span>
               <span v-else style="color: #c0c4cc">-</span>
             </template>
@@ -350,21 +350,25 @@ function getRateColor(rate) {
   return '#f56c6c'
 }
 
-function getDurationColor(hours) {
-  if (hours <= 2) return '#67c23a'
-  if (hours <= 24) return '#e6a23c'
-  return '#f56c6c'
+function getDurationColor(seconds) {
+  if (seconds <= 300) return '#67c23a'       // 5分钟内 绿色
+  if (seconds <= 3600) return '#e6a23c'       // 1小时内 黄色
+  return '#f56c6c'                             // 超过1小时 红色
 }
 
-function formatDuration(hours) {
-  if (hours < 1) {
-    return Math.round(hours * 60) + '分钟'
+function formatDuration(seconds) {
+  if (!seconds || seconds <= 0) return '-'
+  if (seconds < 60) {
+    return Math.round(seconds) + '秒'
   }
-  if (hours < 24) {
-    return hours + '小时'
+  if (seconds < 3600) {
+    return Math.round(seconds / 60) + '分钟'
   }
-  const days = Math.floor(hours / 24)
-  const remainHours = Math.round(hours % 24)
+  if (seconds < 86400) {
+    return (seconds / 3600).toFixed(1) + '小时'
+  }
+  const days = Math.floor(seconds / 86400)
+  const remainHours = Math.round((seconds % 86400) / 3600)
   return remainHours > 0 ? `${days}天${remainHours}小时` : `${days}天`
 }
 
