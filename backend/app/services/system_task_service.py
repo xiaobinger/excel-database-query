@@ -742,10 +742,28 @@ class SystemTaskService:
                 current[idx] = value
 
     @staticmethod
-    def execute_api_sync(system_task: SystemTask, params_values: Dict[str, Any]) -> Dict[str, Any]:
-        """同步执行API类型系统任务，直接返回执行结果（用于AI自动执行场景）"""
+    def execute_api_sync(system_task: SystemTask, params_values: Dict[str, Any], user_id: int = None) -> Dict[str, Any]:
+        """同步执行API类型系统任务，直接返回执行结果（用于AI自动执行场景）
+
+        会创建SystemTaskExecution记录，使执行结果进入执行历史。
+        """
         if not system_task.api_url:
             return {'error': 'API地址未配置', 'success': False}
+
+        # 创建执行记录
+        execution_id = str(uuid.uuid4())
+        execution = SystemTaskExecution(
+            execution_id=execution_id,
+            system_task_id=system_task.id,
+            status='running',
+            task_type='api',
+            created_by=user_id,
+            started_at=datetime.utcnow(),
+        )
+        execution.set_params_values(params_values)
+        execution.add_log(f'开始执行API系统任务: {system_task.name}')
+        db.session.add(execution)
+        db.session.commit()
 
         url = system_task.api_url
         method = (system_task.api_method or 'POST').upper()
@@ -850,6 +868,19 @@ class SystemTaskService:
                 resp_data_mapped, mapping_info = SystemTaskService._apply_response_mapping(resp_data, response_mapping)
                 mapping_summary = SystemTaskService._build_mapping_summary(resp_data, response_mapping)
 
+            # 更新执行记录
+            execution.status = 'completed' if is_success else 'failed'
+            execution.progress = 100
+            execution.completed_at = datetime.utcnow()
+            execution.set_result_data({
+                'status_code': resp.status_code,
+                'response': resp_data_mapped if isinstance(resp_data_mapped, (dict, list)) else resp_text,
+                'mapping_applied': bool(mapping_info),
+                'mapping_summary': mapping_summary,
+            })
+            execution.add_log(f'API请求完成，状态码: {resp.status_code}', 'info' if is_success else 'error')
+            db.session.commit()
+
             return {
                 'status_code': resp.status_code,
                 'response': resp_data_mapped if isinstance(resp_data_mapped, (dict, list)) else resp_text,
@@ -859,18 +890,47 @@ class SystemTaskService:
                 'mapping_summary': mapping_summary,
                 'success': is_success,
                 'auto_executed': True,
+                'execution_id': execution_id,
             }
 
-        except requests.exceptions.Timeout:
+        except requests.exceptions.Timeout as e:
+            execution.status = 'failed'
+            execution.error_message = f'API请求超时({timeout}秒)'
+            execution.completed_at = datetime.utcnow()
+            execution.add_log(f'API请求超时({timeout}秒)', 'error')
+            db.session.commit()
             return {'error': f'API请求超时({timeout}秒)', 'success': False}
         except requests.exceptions.RequestException as e:
+            execution.status = 'failed'
+            execution.error_message = f'API请求失败: {str(e)}'
+            execution.completed_at = datetime.utcnow()
+            execution.add_log(f'API请求失败: {str(e)}', 'error')
+            db.session.commit()
             return {'error': f'API请求失败: {str(e)}', 'success': False}
 
     @staticmethod
-    def execute_script_sync(system_task: SystemTask, params_values: Dict[str, Any]) -> Dict[str, Any]:
-        """同步执行本地脚本类型系统任务，直接返回执行结果（用于AI自动执行场景）"""
+    def execute_script_sync(system_task: SystemTask, params_values: Dict[str, Any], user_id: int = None) -> Dict[str, Any]:
+        """同步执行本地脚本类型系统任务，直接返回执行结果（用于AI自动执行场景）
+
+        会创建SystemTaskExecution记录，使执行结果进入执行历史。
+        """
         if not system_task.script_path:
             return {'error': '本地脚本路径未配置', 'success': False}
+
+        # 创建执行记录
+        execution_id = str(uuid.uuid4())
+        execution = SystemTaskExecution(
+            execution_id=execution_id,
+            system_task_id=system_task.id,
+            status='running',
+            task_type='script',
+            created_by=user_id,
+            started_at=datetime.utcnow(),
+        )
+        execution.set_params_values(params_values)
+        execution.add_log(f'开始执行本地脚本任务: {system_task.name}')
+        db.session.add(execution)
+        db.session.commit()
 
         script_path = system_task.script_path
         script_type = system_task.script_type or 'python'
@@ -932,19 +992,47 @@ class SystemTaskService:
                 except (json.JSONDecodeError, ValueError):
                     parsed_output = stdout_data
 
+            # 更新执行记录
+            execution.status = 'completed' if is_success else 'failed'
+            execution.progress = 100
+            execution.completed_at = datetime.utcnow()
+            execution.set_result_data({
+                'returncode': returncode,
+                'stdout': parsed_output if parsed_output is not None else stdout,
+                'stderr': stderr,
+            })
+            execution.add_log(f'脚本执行完成，返回码: {returncode}', 'info' if is_success else 'error')
+            db.session.commit()
+
             return {
                 'returncode': returncode,
                 'stdout': parsed_output if parsed_output is not None else stdout,
                 'stderr': stderr,
                 'success': is_success,
                 'auto_executed': True,
+                'execution_id': execution_id,
             }
 
         except subprocess.TimeoutExpired:
+            execution.status = 'failed'
+            execution.error_message = f'脚本执行超时({timeout}秒)'
+            execution.completed_at = datetime.utcnow()
+            execution.add_log(f'脚本执行超时({timeout}秒)', 'error')
+            db.session.commit()
             return {'error': f'脚本执行超时({timeout}秒)', 'success': False}
         except FileNotFoundError as e:
+            execution.status = 'failed'
+            execution.error_message = f'脚本解释器未找到: {str(e)}'
+            execution.completed_at = datetime.utcnow()
+            execution.add_log(f'脚本解释器未找到: {str(e)}', 'error')
+            db.session.commit()
             return {'error': f'脚本解释器未找到: {str(e)}', 'success': False}
         except Exception as e:
+            execution.status = 'failed'
+            execution.error_message = f'脚本执行失败: {str(e)}'
+            execution.completed_at = datetime.utcnow()
+            execution.add_log(f'脚本执行失败: {str(e)}', 'error')
+            db.session.commit()
             return {'error': f'脚本执行失败: {str(e)}', 'success': False}
 
     @staticmethod

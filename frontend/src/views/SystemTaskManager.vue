@@ -95,7 +95,25 @@
         </el-tab-pane>
 
         <el-tab-pane label="执行记录" name="executions">
-          <el-table :data="executionList" stripe v-loading="executionLoading" style="width: 100%">
+          <div style="margin-bottom: 12px; display: flex; gap: 8px;">
+            <el-button
+              v-if="store.hasButtonPermission('system_task:delete_log')"
+              type="danger" plain size="small"
+              :disabled="selectedExecutionRows.length === 0"
+              @click="handleBatchDeleteExecutions"
+            >
+              <i class="fas fa-trash-alt"></i> 批量删除 <span v-if="selectedExecutionRows.length > 0">({{ selectedExecutionRows.length }})</span>
+            </el-button>
+            <el-button
+              v-if="store.hasButtonPermission('system_task:delete_log')"
+              type="danger" plain size="small"
+              @click="handleDeleteAllExecutions"
+            >
+              <i class="fas fa-broom"></i> 清空全部
+            </el-button>
+          </div>
+          <el-table :data="executionList" stripe v-loading="executionLoading" style="width: 100%" @selection-change="rows => selectedExecutionRows = rows">
+            <el-table-column type="selection" width="45" />
             <el-table-column prop="execution_id" label="执行ID" min-width="200" show-overflow-tooltip />
             <el-table-column prop="system_task_name" label="任务名称" min-width="140" show-overflow-tooltip />
             <el-table-column label="类型" width="80" align="center">
@@ -519,6 +537,7 @@ const editId = ref(null)
 const formRef = ref(null)
 const tableRef = ref(null)
 const selectedRows = ref([])
+const selectedExecutionRows = ref([])
 const taskList = ref([])
 const executionList = ref([])
 const sqlScripts = ref([])
@@ -1004,6 +1023,48 @@ async function handleDeleteExecution(executionId) {
     ElMessage.success('删除成功')
     fetchExecutions()
   } catch {
+  }
+}
+
+async function handleBatchDeleteExecutions() {
+  if (selectedExecutionRows.value.length === 0) return
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除选中的 ${selectedExecutionRows.value.length} 条执行记录吗？`,
+      '批量删除',
+      { type: 'warning', confirmButtonText: '确定删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  try {
+    const ids = selectedExecutionRows.value.map(r => r.execution_id)
+    const res = await api.systemTask.batchDeleteExecutions(ids)
+    ElMessage.success(res.message || '批量删除成功')
+    selectedExecutionRows.value = []
+    fetchExecutions()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '批量删除失败')
+  }
+}
+
+async function handleDeleteAllExecutions() {
+  try {
+    await ElMessageBox.confirm(
+      '确定要清空所有执行记录吗？此操作不可恢复！',
+      '清空全部',
+      { type: 'warning', confirmButtonText: '确定清空', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  try {
+    const res = await api.systemTask.deleteAllExecutions()
+    ElMessage.success(res.message || '已清空')
+    selectedExecutionRows.value = []
+    fetchExecutions()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '清空失败')
   }
 }
 

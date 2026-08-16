@@ -420,3 +420,57 @@ def delete_execution(execution_id):
     db.session.delete(execution)
     db.session.commit()
     return jsonify({'success': True, 'message': '已删除'})
+
+
+@system_task_bp.route('/executions/batch-delete', methods=['POST'])
+@login_required
+def batch_delete_executions():
+    """批量删除执行记录
+
+    权限：管理员可删除所有；普通用户只能删除自己创建的记录。
+    """
+    data = request.get_json()
+    if not data or 'ids' not in data:
+        return jsonify({'success': False, 'message': '请提供要删除的执行记录ID列表'}), 400
+
+    ids = data.get('ids', [])
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'success': False, 'message': 'ids必须是非空列表'}), 400
+
+    current_user = get_current_user()
+    deleted_count = 0
+    for exec_id in ids:
+        execution = SystemTaskExecution.query.filter_by(execution_id=exec_id).first()
+        if not execution:
+            continue
+        if current_user and not current_user.is_admin() and execution.created_by != current_user.id:
+            continue
+        db.session.delete(execution)
+        deleted_count += 1
+
+    try:
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'成功删除{deleted_count}条记录', 'deleted_count': deleted_count})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
+@system_task_bp.route('/executions/all', methods=['DELETE'])
+@login_required
+def delete_all_executions():
+    """清空执行记录
+
+    权限：管理员可清空所有；普通用户只能清空自己创建的记录。
+    """
+    current_user = get_current_user()
+    try:
+        if current_user and current_user.is_admin():
+            deleted_count = SystemTaskExecution.query.delete()
+        else:
+            deleted_count = SystemTaskExecution.query.filter_by(created_by=current_user.id).delete(synchronize_session=False)
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'成功删除{deleted_count}条记录', 'deleted_count': deleted_count})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 400

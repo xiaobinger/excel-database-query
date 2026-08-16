@@ -1117,7 +1117,7 @@ class AiService:
 
         if is_api_task and all_params_filled and not needs_dbSelection:
             try:
-                exec_result = SystemTaskService.execute_api_sync(task, params)
+                exec_result = SystemTaskService.execute_api_sync(task, params, user_id=user_id)
                 logger.info(f'API系统任务同步执行完成: task={task.name}, success={exec_result.get("success")}, mapping_summary={exec_result.get("mapping_summary", "")}')
                 # 构建返回给AI的结果，包含映射摘要
                 result = {
@@ -1149,7 +1149,7 @@ class AiService:
         # 本地脚本类型任务 + 参数齐全 → 直接同步执行
         if is_script_task and all_params_filled:
             try:
-                exec_result = SystemTaskService.execute_script_sync(task, params)
+                exec_result = SystemTaskService.execute_script_sync(task, params, user_id=user_id)
                 logger.info(f'本地脚本任务同步执行完成: task={task.name}, success={exec_result.get("success")}')
                 result = {
                     'action_type': 'system_task',

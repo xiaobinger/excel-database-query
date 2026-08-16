@@ -257,6 +257,8 @@ const systemTask = {
   getExecution: (executionId) => http.get(`/system-tasks/executions/${executionId}`),
   cancelExecution: (executionId) => http.post(`/system-tasks/executions/${executionId}/cancel`),
   deleteExecution: (executionId) => http.delete(`/system-tasks/executions/${executionId}`),
+  batchDeleteExecutions: (ids) => http.post('/system-tasks/executions/batch-delete', { ids }),
+  deleteAllExecutions: () => http.delete('/system-tasks/executions/all'),
   streamExecution: (executionId) => `/api/system-tasks/executions/${executionId}/stream`,
 }
 
