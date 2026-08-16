@@ -50,6 +50,10 @@
             <span v-if="row.assignee_type === 'ai' && row.status === 'processing'" class="ai-status-tag">
               <i class="fas fa-robot fa-spin"></i> AI处理中
             </span>
+            <!-- AI待确认：橙色警告标签 -->
+            <el-tag v-else-if="row.assignee_type === 'ai' && row.status === 'pending_confirmation'" type="warning" effect="dark" size="small">
+              <i class="fas fa-exclamation-triangle"></i> 待确认
+            </el-tag>
             <el-tag v-else :type="statusTagType(row.status)" size="small">{{ statusLabels[row.status] || row.status }}</el-tag>
           </template>
         </el-table-column>
@@ -157,6 +161,17 @@
               </div>
             </div>
           </div>
+          <!-- 待确认执行提示 -->
+          <div v-if="isPendingConfirmation" class="pending-confirmation-banner">
+            <i class="fas fa-exclamation-triangle"></i>
+            <div class="pending-confirmation-info">
+              <div class="pending-confirmation-title">⚠️ AI需执行数据变更操作，等待您确认</div>
+              <div class="pending-confirmation-detail" v-if="detailData.pending_action">
+                任务：{{ detailData.pending_action.task_name }} | 参数：{{ JSON.stringify(detailData.pending_action.params_values) }}
+              </div>
+              <div class="pending-confirmation-hint">请在下方评论「同意」或「确认执行」，或点击下方按钮确认执行</div>
+            </div>
+          </div>
         </div>
 
         <el-descriptions :column="2" border size="small" style="margin-top: 16px">
@@ -232,6 +247,16 @@
             <el-button v-if="detailData.status === 'pending_assignment'" type="primary" @click="openReassignDialog('reassign')">
               <i class="fas fa-user-plus"></i> 重新指派
             </el-button>
+            <!-- 待确认：提交人确认执行或取消 -->
+            <el-button v-if="detailData.status === 'pending_confirmation'" type="success" @click="handleConfirmAction">
+              <i class="fas fa-check-circle"></i> 确认执行
+            </el-button>
+            <el-button v-if="detailData.status === 'pending_confirmation'" type="warning" @click="handleCancelAction">
+              <i class="fas fa-times-circle"></i> 取消执行
+            </el-button>
+            <el-button v-if="detailData.status === 'pending_confirmation'" type="primary" @click="openReassignDialog('reassign')">
+              <i class="fas fa-user-plus"></i> 重新指派
+            </el-button>
           </template>
           <!-- 管理员也可重新指派 -->
           <el-button v-if="isAdmin && detailData.status === 'pending_assignment' && !isCreator" type="primary" @click="openReassignDialog('reassign')">
@@ -275,7 +300,7 @@
 
         <!-- 添加评论 -->
         <div class="comment-input-area">
-          <MarkdownEditor v-model="commentText" :upload-fn="uploadAttachment" placeholder="发表评论（支持 Markdown、图片、视频）" :height="120" :toolbar="true" />
+          <MarkdownEditor v-model="commentText" :upload-fn="uploadAttachment" :placeholder="commentPlaceholder" :height="120" :toolbar="true" />
           <el-button type="primary" :loading="commenting" :disabled="!commentText.trim()" @click="submitComment" style="margin-top: 8px">
             <i class="fas fa-paper-plane"></i> 发表评论
           </el-button>
@@ -346,6 +371,7 @@ const statusLabels = {
   rejected: '拒绝',
   processed: '已处理',
   pending_assignment: '待指派',
+  pending_confirmation: '待确认',
   closed: '结束',
 }
 
@@ -357,6 +383,7 @@ const statusTagType = (status) => {
     rejected: 'danger',
     processed: 'success',
     pending_assignment: 'danger',
+    pending_confirmation: 'warning',
     closed: '',
   }
   return map[status] || 'info'
@@ -564,6 +591,11 @@ const isCreator = computed(() => detailData.value.created_by === store.user?.id)
 // 是否AI处理中（用于显示进度提示和轮询）
 const isAiProcessing = computed(() =>
   detailData.value.assignee_type === 'ai' && detailData.value.status === 'processing'
+)
+
+// 是否待确认执行（AI需执行数据变更操作，等待提交人确认）
+const isPendingConfirmation = computed(() =>
+  detailData.value.assignee_type === 'ai' && detailData.value.status === 'pending_confirmation'
 )
 
 // 进度条当前步骤
@@ -788,9 +820,72 @@ async function handleRetryAi() {
   }
 }
 
+// 确认执行待确认的数据变更操作
+async function handleConfirmAction() {
+  const taskName = detailData.value.pending_action?.task_name || ''
+  try {
+    await ElMessageBox.confirm(
+      `确定要执行数据变更操作「${taskName}」吗？\n此操作会直接影响生产数据，请谨慎确认！`,
+      '确认执行数据变更',
+      {
+        confirmButtonText: '确认执行',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    )
+  } catch {
+    return
+  }
+  actionLoading.value = true
+  try {
+    const res = await api.tickets.confirmAction(detailData.value.id)
+    ElMessage.success(res.message || '已确认执行，AI正在处理中')
+    detailData.value = res.data || detailData.value
+    if (isAiProcessing.value) {
+      startAiPolling()
+    }
+    fetchTickets()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '操作失败')
+  } finally {
+    actionLoading.value = false
+  }
+}
+
+// 取消执行待确认的数据变更操作
+async function handleCancelAction() {
+  try {
+    await ElMessageBox.confirm('确定要取消执行此数据变更操作吗？工单将转为待指派状态。', '取消执行', {
+      confirmButtonText: '确定取消',
+      cancelButtonText: '再想想',
+      type: 'info',
+    })
+  } catch {
+    return
+  }
+  actionLoading.value = true
+  try {
+    const res = await api.tickets.cancelAction(detailData.value.id)
+    ElMessage.success(res.message || '已取消执行')
+    detailData.value = res.data || detailData.value
+    fetchTickets()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '操作失败')
+  } finally {
+    actionLoading.value = false
+  }
+}
+
 // 评论
 const commentText = ref('')
 const commenting = ref(false)
+// 评论输入框placeholder（待确认状态时提示可输入"同意"确认执行）
+const commentPlaceholder = computed(() => {
+  if (isPendingConfirmation.value && isCreator.value) {
+    return '发表评论（支持 Markdown、图片、视频）。如需确认执行数据变更操作，可直接输入「同意」或「确认执行」'
+  }
+  return '发表评论（支持 Markdown、图片、视频）'
+})
 
 async function submitComment() {
   if (!commentText.value.trim()) return
@@ -940,6 +1035,48 @@ onUnmounted(() => {
 
 .pending-banner i {
   margin-right: 6px;
+}
+
+/* 待确认执行提示 */
+.pending-confirmation-banner {
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: linear-gradient(90deg, #fff4e6 0%, #ffe8cc 100%);
+  border: 1px solid #ffcc7a;
+  border-radius: 6px;
+  color: #d46b08;
+  font-size: 13px;
+  display: flex;
+  align-items: flex-start;
+}
+
+.pending-confirmation-banner > i {
+  margin-right: 10px;
+  margin-top: 2px;
+  font-size: 16px;
+  color: #fa8c16;
+}
+
+.pending-confirmation-info {
+  flex: 1;
+}
+
+.pending-confirmation-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.pending-confirmation-detail {
+  font-size: 12px;
+  color: #ad6800;
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+
+.pending-confirmation-hint {
+  font-size: 12px;
+  color: #fa8c16;
+  opacity: 0.85;
 }
 
 /* AI处理中提示 */

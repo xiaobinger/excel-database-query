@@ -1,18 +1,20 @@
 """工单模型
 
 状态流转：
-  submitted          已提交    提交人创建 / 申诉重启 / 核实不通过重新发起 / 重新指派
-  received           已接收    指派人接收
-  processing         处理中    指派人开始处理 / AI处理中
-  rejected           拒绝      指派人拒绝（需原因），提交人可申诉重启
-  processed          已处理    指派人完成处理 / AI处理成功，待提交人核实
-  pending_assignment 待指派    AI处理失败，提醒提交人重新指派具体的人来人工介入
-  closed             结束      提交人核实通过 / 管理员关闭
+  submitted             已提交     提交人创建 / 申诉重启 / 核实不通过重新发起 / 重新指派
+  received              已接收     指派人接收
+  processing            处理中     指派人开始处理 / AI处理中
+  rejected              拒绝       指派人拒绝（需原因），提交人可申诉重启
+  processed             已处理     指派人完成处理 / AI处理成功，待提交人核实
+  pending_assignment    待指派     AI处理失败，提醒提交人重新指派具体的人来人工介入
+  pending_confirmation  待确认     AI需执行数据变更类任务(如SQL系统任务)，等待提交人确认后继续执行
+  closed                结束       提交人核实通过 / 管理员关闭
 
 指派类型：
   user  指派给具体用户（assignee_id 关联 users.id）
   ai    指派给AI助手（assignee_agent_id 关联 ai_agents.id，由AI自动处理）
 """
+import json
 from datetime import datetime
 from app import db
 from app.utils.helpers import beijing_isoformat
@@ -37,6 +39,7 @@ class Ticket(db.Model):
     reject_reason = db.Column(db.Text, comment='最新拒绝原因')
     appeal_reason = db.Column(db.Text, comment='最新申诉理由')
     ai_result = db.Column(db.Text, comment='AI处理结果')
+    pending_action = db.Column(db.Text, comment='待确认执行的任务信息(JSON)，AI遇到数据变更类任务时存储')
 
     submitted_at = db.Column(db.DateTime, comment='提交时间')
     received_at = db.Column(db.DateTime, comment='接收时间')
@@ -53,6 +56,23 @@ class Ticket(db.Model):
     business_system = db.relationship('BusinessSystem', foreign_keys=[business_system_id], lazy='joined')
     comments = db.relationship('TicketComment', backref='ticket', lazy='select', cascade='all, delete-orphan',
                                order_by='TicketComment.created_at.asc()')
+
+    def get_pending_action(self) -> dict:
+        """获取待确认执行的任务信息"""
+        if self.pending_action:
+            try:
+                return json.loads(self.pending_action)
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return {}
+
+    def set_pending_action(self, data: dict):
+        """设置待确认执行的任务信息"""
+        self.pending_action = json.dumps(data, ensure_ascii=False) if data else None
+
+    def clear_pending_action(self):
+        """清空待确认执行的任务信息"""
+        self.pending_action = None
 
     def to_dict(self, include_comments=False) -> dict:
         # 指派人名称
@@ -82,6 +102,7 @@ class Ticket(db.Model):
             'reject_reason': self.reject_reason,
             'appeal_reason': self.appeal_reason,
             'ai_result': self.ai_result,
+            'pending_action': self.get_pending_action(),
             'submitted_at': beijing_isoformat(self.submitted_at),
             'received_at': beijing_isoformat(self.received_at),
             'processed_at': beijing_isoformat(self.processed_at),
