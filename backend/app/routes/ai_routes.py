@@ -15,6 +15,19 @@ import requests
 logger = logging.getLogger(__name__)
 ai_bp = Blueprint('ai', __name__, url_prefix='/api/ai')
 
+# 工单兜底规则：无论使用哪个提示词来源，都统一追加此规则
+TICKET_FALLBACK_RULE = (
+    '## 工单兜底规则（必须遵守）\n'
+    '- 当用户的请求不属于任何可用工具的能力范围（导出/查询/系统任务/信息查询/分润导出），'
+    '或者调用了工具但未找到匹配项（返回total=0或error），或者任务执行失败时，'
+    '必须主动询问用户是否要将此需求转化为工单交由人工处理。\n'
+    '- 例如回复："我目前无法直接处理这个请求，是否需要为您创建一个工单，由相关人员来处理？"\n'
+    '- 用户同意后，调用create_ticket工具创建工单，工单内容根据用户原始指令生成。\n'
+    '- 重要：创建工单时，指派对象必须由用户明确指定。只有用户明确说出"指派给AI"、"让AI处理"等表述时才传assignee_type=ai；'
+    '用户给出具体人名时传assignee_type=user并填assignee_name。如果用户没有明确说明指派给谁，不要填写assignee_type字段，系统会返回询问提示。\n'
+    '- 不要直接回复"无法处理"、"我不支持这个功能"等就结束对话，必须给出转工单的选项。'
+)
+
 # 活跃流式请求跟踪：{chat_id: {'aborted': bool, 'request_id': str, 'content': str, ...}}
 _active_streams = {}
 # 已完成流式请求缓存（供断线重连读取最终状态）：{chat_id: (stream_info, finished_time)}
@@ -874,15 +887,15 @@ def send_message(chat_id):
         
         if agent and agent.system_prompt:
             # 使用Agent的系统提示词，并附加上下文
-            sys_prompt = context + '\n\n' + agent.system_prompt
+            sys_prompt = context + '\n\n' + agent.system_prompt + '\n\n' + TICKET_FALLBACK_RULE
             messages.append({'role': 'system', 'content': sys_prompt})
         elif ai_config.system_prompt:
-            messages.append({'role': 'system', 'content': ai_config.system_prompt})
+            messages.append({'role': 'system', 'content': ai_config.system_prompt + '\n\n' + TICKET_FALLBACK_RULE})
         else:
             # 使用默认Agent的提示词
             default_agent = AiAgent.query.filter_by(is_default=True, is_active=True).first()
             if default_agent and default_agent.system_prompt:
-                sys_prompt = context + '\n\n' + default_agent.system_prompt
+                sys_prompt = context + '\n\n' + default_agent.system_prompt + '\n\n' + TICKET_FALLBACK_RULE
                 messages.append({'role': 'system', 'content': sys_prompt})
             else:
                 # 最后的fallback：硬编码的默认提示词
@@ -901,7 +914,6 @@ def send_message(chat_id):
                     '- 当用户表达需要计算代理商分润、导出分润明细、生成分润报表的意图时（如"给代理商AG10000557算2025年7月的分润"），调用 request_profit_share 工具，需提取代理商编号和交易时间范围\n' \
                     '- 当用户表达需要创建工单、报修、反馈问题、提交工单的意图时，调用 create_ticket 工具\n' \
                     '- 重要：创建工单时，指派对象必须由用户明确指定。只有用户明确说出"指派给AI"、"让AI处理"等表述时才传assignee_type=ai；用户给出具体人名时传assignee_type=user并填assignee_name。如果用户没有明确说明指派给谁，不要填写assignee_type字段，系统会返回询问提示，你需要根据提示向用户询问指派对象\n' \
-                    '- 重要：当AI无法完成用户的任务或处理失败时，应主动询问用户是否要将任务转化为工单，用户同意后再调用create_ticket，工单内容根据用户原始指令生成，并询问用户指派给谁\n' \
                     '- 重要：当用户的查询涉及多个不同维度的信息时（如"查一下SN123的绑定状态和交易信息"），应在同一次回复中同时调用多个 request_lookup 工具，分别查询不同维度的信息，然后将所有查询结果归总后统一回答用户\n' \
                     '- 重要：当用户的意图是条件性的（如"查一下这个SN的绑定状态，如果已绑定就解绑"、"查商户是否激活，未激活则激活"），必须先调用 request_lookup 查询状态，拿到结果后根据条件判断是否需要调用 request_system_task，在二次回复中完成条件判断和后续操作\n' \
                     '- 调用 request_export 时，务必从用户描述中提取所有参数值（如商户号、日期、渠道等）填入 params 对象\n' \
@@ -916,7 +928,8 @@ def send_message(chat_id):
                     '- 如果用户没有指定具体的信息查询名称，先调用 list_lookup_options 列出相关查询让用户选择\n' \
                     '- 如果用户提供了参数值，务必在调用工具时传入正确的参数\n' \
                     '- 如果缺少必填参数，在回复中向用户询问\n' \
-                    '- 当用户上传文件时，消息中会包含文件信息（行数和列名），根据列名自动匹配最合适的查询或导出选项\n'
+                    '- 当用户上传文件时，消息中会包含文件信息（行数和列名），根据列名自动匹配最合适的查询或导出选项\n' \
+                    + TICKET_FALLBACK_RULE
                 messages.append({'role': 'system', 'content': sys_prompt})
 
         # 截断历史消息：只保留最近50条，避免token膨胀
@@ -1504,15 +1517,15 @@ def send_message_stream(chat_id):
         
         if agent and agent.system_prompt:
             # 使用Agent的系统提示词，并附加上下文
-            sys_prompt = context + '\n\n' + agent.system_prompt
+            sys_prompt = context + '\n\n' + agent.system_prompt + '\n\n' + TICKET_FALLBACK_RULE
             messages.append({'role': 'system', 'content': sys_prompt})
         elif ai_config.system_prompt:
-            messages.append({'role': 'system', 'content': ai_config.system_prompt})
+            messages.append({'role': 'system', 'content': ai_config.system_prompt + '\n\n' + TICKET_FALLBACK_RULE})
         else:
             # 使用默认Agent的提示词
             default_agent = AiAgent.query.filter_by(is_default=True, is_active=True).first()
             if default_agent and default_agent.system_prompt:
-                sys_prompt = context + '\n\n' + default_agent.system_prompt
+                sys_prompt = context + '\n\n' + default_agent.system_prompt + '\n\n' + TICKET_FALLBACK_RULE
                 messages.append({'role': 'system', 'content': sys_prompt})
             else:
                 # 最后的fallback：硬编码的默认提示词
@@ -1522,14 +1535,12 @@ def send_message_stream(chat_id):
                     '  2. 查询任务（query）：根据Excel文件中的主键数据去数据库批量查询匹配信息\n' \
                     '  3. 系统任务（system_task）：后台运维类操作（支持SQL、API和本地脚本三种类型）\n' \
                     '  4. 信息查询（lookup）：根据参数值快速查询数据库返回结果\n' \
-                    '  5. 创建工单（create_ticket）：用户希望创建工单、报修、反馈问题时调用；也可在AI无法完成用户任务时，征得用户同意后将任务转化为工单\n' \
-                    '- 重要：创建工单时，指派对象必须由用户明确指定。只有用户明确说出"指派给AI"、"让AI处理"等表述时才传assignee_type=ai；用户给出具体人名时传assignee_type=user并填assignee_name。如果用户没有明确说明指派给谁，不要填写assignee_type字段，系统会返回询问提示，你需要根据提示向用户询问指派对象\n' \
-                    '- 重要：当AI无法完成用户的任务或处理失败时，应主动询问用户是否要将任务转化为工单，用户同意后再调用create_ticket，工单内容根据用户原始指令生成，并询问用户指派给谁\n' \
                     '- 重要：当用户的查询涉及多个不同维度的信息时（如"查一下SN123的绑定状态和交易信息"），应在同一次回复中同时调用多个 request_lookup 工具，分别查询不同维度的信息，然后将所有查询结果归总后统一回答用户\n' \
                     '- 重要：当用户的意图是条件性的（如"查一下这个SN的绑定状态，如果已绑定就解绑"、"查商户是否激活，未激活则激活"），必须先调用 request_lookup 查询状态，拿到结果后根据条件判断是否需要调用 request_system_task，在二次回复中完成条件判断和后续操作\n' \
                     '- 重要：API类型的系统任务参数齐全时会自动执行并返回结果（包含mapping_summary映射摘要），请直接根据映射摘要用自然语言告诉用户执行结果\n' \
                     '- 重要：如果用户同时要求对多个对象执行同样的API系统任务（如"解绑SN001、SN002、SN003"），请在同一次回复中同时调用多个 request_system_task，每个调用对应一个对象，系统会自动并行执行，你只需汇总所有结果用列表形式反馈给用户\n' \
-                    '- 重要：调用 list_lookup_options 时，如果用户提供了具体的参数值（如SN号、商户号等），务必同时传入 params 参数，这样当匹配到唯一查询时系统可以自动执行，大幅加快响应速度\n'
+                    '- 重要：调用 list_lookup_options 时，如果用户提供了具体的参数值（如SN号、商户号等），务必同时传入 params 参数，这样当匹配到唯一查询时系统可以自动执行，大幅加快响应速度\n' \
+                    + TICKET_FALLBACK_RULE
                 messages.append({'role': 'system', 'content': sys_prompt})
 
         # 截断历史消息：只保留最近50条，避免token膨胀

@@ -818,7 +818,10 @@ class AiService:
                 'description': s.description or '',
                 'params': params,  # 返回完整参数配置，前端参数设置对话框需要
             })
-        return {'scripts': result, 'total': len(result)}
+        resp = {'scripts': result, 'total': len(result)}
+        if len(result) == 0:
+            resp['_hint'] = '未找到匹配的导出选项。如果用户的请求无法通过现有导出任务完成，请主动询问用户是否要将此需求转化为工单交由人工处理（调用create_ticket工具）。'
+        return resp
 
     @staticmethod
     def _tool_list_query_options(args: dict, user_id: int = None) -> dict:
@@ -845,7 +848,10 @@ class AiService:
                 'query_fields': query_fields,
             }
             result.append(item)
-        return {'scripts': result, 'total': len(result)}
+        resp = {'scripts': result, 'total': len(result)}
+        if len(result) == 0:
+            resp['_hint'] = '未找到匹配的查询选项。如果用户的请求无法通过现有查询任务完成，请主动询问用户是否要将此需求转化为工单交由人工处理（调用create_ticket工具）。'
+        return resp
 
     @staticmethod
     def _extract_select_columns(sql_text: str) -> list:
@@ -970,7 +976,10 @@ class AiService:
                 'response_mapping': response_mapping_info,
                 'script_info': script_info,
             })
-        return {'tasks': result, 'total': len(result)}
+        resp = {'tasks': result, 'total': len(result)}
+        if len(result) == 0:
+            resp['_hint'] = '未找到匹配的系统任务。如果用户的请求无法通过现有任务完成，请主动询问用户是否要将此需求转化为工单交由人工处理（调用create_ticket工具）。'
+        return resp
 
     @staticmethod
     def _tool_request_system_task(args: dict, user_id: int = None) -> dict:
@@ -999,7 +1008,7 @@ class AiService:
             ).first()
 
         if not task:
-            return {'error': f'未找到名为"{task_name}"的系统任务'}
+            return {'error': f'未找到名为"{task_name}"的系统任务', '_hint': '未找到匹配的系统任务。如果用户的请求无法通过现有任务完成，请主动询问用户是否要将此需求转化为工单交由人工处理（调用create_ticket工具）。'}
 
         # 权限校验
         if user_id:
@@ -1197,7 +1206,10 @@ class AiService:
                 'params': params,
                 'query_fields': query_fields,
             })
-        return {'scripts': result, 'total': len(result)}
+        resp = {'scripts': result, 'total': len(result)}
+        if len(result) == 0:
+            resp['_hint'] = '未找到匹配的信息查询选项。如果用户的请求无法通过现有查询完成，请主动询问用户是否要将此需求转化为工单交由人工处理（调用create_ticket工具）。'
+        return resp
 
     @staticmethod
     def _tool_request_lookup(args: dict, user_id: int = None) -> dict:
@@ -1227,7 +1239,7 @@ class AiService:
             ).first()
 
         if not script:
-            return {'error': f'未找到名为"{lookup_name}"的信息查询选项', 'action_type': 'lookup'}
+            return {'error': f'未找到名为"{lookup_name}"的信息查询选项', 'action_type': 'lookup', '_hint': '未找到匹配的信息查询选项。如果用户的请求无法通过现有查询完成，请主动询问用户是否要将此需求转化为工单交由人工处理（调用create_ticket工具）。'}
 
         # 权限校验
         if user_id:
@@ -1409,7 +1421,7 @@ class AiService:
             script = Script.query.filter(Script.name.like(f'%{export_name}%'), Script.type == 'export').first()
 
         if not script:
-            return {'error': f'未找到名为"{export_name}"的导出选项'}
+            return {'error': f'未找到名为"{export_name}"的导出选项', '_hint': '未找到匹配的导出选项。如果用户的请求无法通过现有导出任务完成，请主动询问用户是否要将此需求转化为工单交由人工处理（调用create_ticket工具）。'}
 
         # 权限校验
         if user_id:
@@ -1459,7 +1471,7 @@ class AiService:
             script = Script.query.filter(Script.name.like(f'%{query_name}%'), Script.type == 'query').first()
 
         if not script:
-            return {'error': f'未找到名为"{query_name}"的查询选项'}
+            return {'error': f'未找到名为"{query_name}"的查询选项', '_hint': '未找到匹配的查询选项。如果用户的请求无法通过现有查询任务完成，请主动询问用户是否要将此需求转化为工单交由人工处理（调用create_ticket工具）。'}
 
         # 权限校验
         if user_id:
