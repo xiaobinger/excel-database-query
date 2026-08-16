@@ -299,11 +299,14 @@
         </div>
 
         <!-- 添加评论 -->
-        <div class="comment-input-area">
+        <div v-if="detailData.status !== 'closed'" class="comment-input-area">
           <MarkdownEditor v-model="commentText" :upload-fn="uploadAttachment" :placeholder="commentPlaceholder" :height="120" :toolbar="true" />
           <el-button type="primary" :loading="commenting" :disabled="!commentText.trim()" @click="submitComment" style="margin-top: 8px">
             <i class="fas fa-paper-plane"></i> 发表评论
           </el-button>
+        </div>
+        <div v-else class="comment-closed-tip">
+          <i class="fas fa-lock"></i> 工单已结束，无法发表评论
         </div>
       </div>
     </el-dialog>
@@ -1375,5 +1378,20 @@ onUnmounted(() => {
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px dashed #dcdfe6;
+}
+
+/* 工单已结束提示 */
+.comment-closed-tip {
+  margin-top: 12px;
+  padding: 12px 16px;
+  border-top: 1px dashed #dcdfe6;
+  color: #909399;
+  font-size: 13px;
+  text-align: center;
+}
+
+.comment-closed-tip i {
+  margin-right: 6px;
+  color: #c0c4cc;
 }
 </style>

@@ -966,6 +966,10 @@ def add_comment(ticket_id):
     if not _can_access(ticket, current_user):
         return jsonify({'success': False, 'message': '无权评论此工单'}), 403
 
+    # 工单已结束，禁止评论
+    if ticket.status == STATUS_CLOSED:
+        return jsonify({'success': False, 'message': '工单已结束，无法发表评论'}), 400
+
     data = request.get_json() or {}
     content = (data.get('content') or '').strip()
     if not content:
