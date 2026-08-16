@@ -280,6 +280,8 @@ const tickets = {
   addComment: (id, data) => http.post(`/tickets/${id}/comments`, data),
   delete: (id) => http.delete(`/tickets/${id}`),
   assignees: () => http.get('/tickets/assignees'),
+  aiAgents: () => http.get('/tickets/ai-agents'),
+  retryAi: (id) => http.post(`/tickets/${id}/retry-ai`),
   upload: (formData) => http.post('/tickets/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   stats: () => http.get('/tickets/stats'),
 }

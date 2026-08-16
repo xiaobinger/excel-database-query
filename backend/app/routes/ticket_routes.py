@@ -4,20 +4,29 @@
   - 管理员：可见所有工单，可执行任意操作（含关闭）
   - 普通用户：仅可见自己提交的工单 或 指派给自己的工单
   - 状态流转操作按角色限制（见各接口注释）
+
+AI指派：
+  - 工单可指派给AI（assignee_type='ai'），由AI自动处理
+  - AI处理成功 → processed，AI处理失败 → pending_assignment（待指派）
+  - 待指派状态下提交人可重新指派给具体的人（reassign）
 """
 import os
 import uuid
+import threading
+import logging
 from datetime import datetime
 
-from flask import Blueprint, request, jsonify, current_app, g
+from flask import Blueprint, request, jsonify, current_app
 
 from app import db
 from app.models.ticket import Ticket, TicketComment
 from app.models.user import User
 from app.models.business_system import BusinessSystem
+from app.models.ai_agent import AiAgent
+from app.models.ai_config import AiConfig
 from app.utils.auth import login_required, admin_required, get_current_user
-from app.utils.helpers import beijing_isoformat
 
+logger = logging.getLogger(__name__)
 ticket_bp = Blueprint('ticket', __name__, url_prefix='/api/tickets')
 
 # 状态常量
@@ -26,9 +35,10 @@ STATUS_RECEIVED = 'received'
 STATUS_PROCESSING = 'processing'
 STATUS_REJECTED = 'rejected'
 STATUS_PROCESSED = 'processed'
+STATUS_PENDING_ASSIGNMENT = 'pending_assignment'
 STATUS_CLOSED = 'closed'
 
-ACTIVE_STATUSES = (STATUS_SUBMITTED, STATUS_RECEIVED, STATUS_PROCESSING, STATUS_PROCESSED, STATUS_REJECTED)
+ACTIVE_STATUSES = (STATUS_SUBMITTED, STATUS_RECEIVED, STATUS_PROCESSING, STATUS_PROCESSED, STATUS_REJECTED, STATUS_PENDING_ASSIGNMENT)
 
 # 状态标签映射
 STATUS_LABELS = {
@@ -37,6 +47,7 @@ STATUS_LABELS = {
     STATUS_PROCESSING: '处理中',
     STATUS_REJECTED: '拒绝',
     STATUS_PROCESSED: '已处理',
+    STATUS_PENDING_ASSIGNMENT: '待指派',
     STATUS_CLOSED: '结束',
 }
 
@@ -50,8 +61,12 @@ STATUS_PROGRESS = {
     STATUS_PROCESSING: 65,
     STATUS_REJECTED: 30,
     STATUS_PROCESSED: 85,
+    STATUS_PENDING_ASSIGNMENT: 15,
     STATUS_CLOSED: 100,
 }
+
+# AI处理线程池
+_ticket_ai_threads = {}
 
 
 def _generate_ticket_no():
@@ -67,30 +82,132 @@ def _can_access(ticket, user):
         return False
     if user.is_admin():
         return True
-    return ticket.created_by == user.id or ticket.assignee_id == user.id
+    return ticket.created_by == user.id or (ticket.assignee_type == 'user' and ticket.assignee_id == user.id)
 
 
 def _is_assignee(ticket, user):
-    return user and ticket.assignee_id == user.id
+    return user and ticket.assignee_type == 'user' and ticket.assignee_id == user.id
 
 
 def _is_creator(ticket, user):
     return user and ticket.created_by == user.id
 
 
-def _add_comment(ticket, user_id, content, action='comment'):
+def _add_comment(ticket, user_id, content, action='comment', is_ai=False):
     """添加评论记录"""
     if not content:
         return None
     comment = TicketComment(
         ticket_id=ticket.id,
-        user_id=user_id,
+        user_id=user_id if not is_ai else None,
         content=content,
         action=action,
+        is_ai=is_ai,
     )
     db.session.add(comment)
     return comment
 
+
+# ── AI处理工单 ──────────────────────────────────────────────
+
+def _process_ticket_with_ai_async(ticket_id, app):
+    """后台线程：用AI处理工单"""
+    with app.app_context():
+        try:
+            ticket = Ticket.query.get(ticket_id)
+            if not ticket:
+                return
+
+            # 状态改为处理中
+            ticket.status = STATUS_PROCESSING
+            ticket.received_at = datetime.utcnow()
+            db.session.commit()
+
+            # 获取Agent配置
+            agent = AiAgent.query.get(ticket.assignee_agent_id) if ticket.assignee_agent_id else None
+            # 获取默认AI配置
+            ai_config = AiConfig.query.filter_by(is_active=True).first()
+            if not ai_config:
+                raise Exception('未找到可用的AI模型配置')
+
+            # 构建系统提示词
+            system_prompt = agent.system_prompt if agent and agent.system_prompt else (
+                '你是一个工单处理助手。用户会提交工单描述问题或需求。'
+                '请根据工单内容尝试给出解决方案或处理结果。\n\n'
+                '重要规则：\n'
+                '- 如果你能直接给出解决方案（如解答问题、提供操作指引），请详细回复，回复以【已处理】开头。\n'
+                '- 如果你无法直接处理（如需要人工操作数据库、需要物理操作、需要权限审批等），'
+                '请说明原因，回复以【待人工处理】开头。\n'
+                '- 回复使用中文，支持Markdown格式。'
+            )
+
+            # 获取业务系统名称作为上下文
+            system_name = ticket.business_system.name if ticket.business_system else '未指定'
+
+            messages = [
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': f'## 工单编号: {ticket.ticket_no}\n## 标题: {ticket.title}\n## 涉及系统: {system_name}\n\n## 工单内容:\n{ticket.content}'},
+            ]
+
+            # 调用LLM
+            from app.services.ai_service import AiService
+            content, tokens, p_tokens, c_tokens, cache_create, cache_read = AiService.chat(ai_config, messages)
+
+            if not content or not content.strip():
+                raise Exception('AI返回空内容')
+
+            content = content.strip()
+
+            # 判断AI是否成功处理
+            is_handled = content.startswith('【已处理】') or not content.startswith('【待人工处理】')
+            # 默认如果AI没有明确表示无法处理，就认为已处理
+            if content.startswith('【待人工处理】'):
+                is_handled = False
+                # 去掉标记前缀
+                ai_result = content[len('【待人工处理】'):].strip()
+            else:
+                ai_result = content[len('【已处理】'):].strip() if content.startswith('【已处理】') else content
+
+            ticket.ai_result = ai_result
+
+            if is_handled:
+                # AI处理成功 → 已处理
+                ticket.status = STATUS_PROCESSED
+                ticket.processed_at = datetime.utcnow()
+                _add_comment(ticket, None, ai_result, 'ai_process', is_ai=True)
+                _add_comment(ticket, None, f'AI已完成处理，等待提交人核实', 'status_change', is_ai=True)
+            else:
+                # AI处理失败 → 待指派
+                ticket.status = STATUS_PENDING_ASSIGNMENT
+                _add_comment(ticket, None, ai_result, 'ai_process', is_ai=True)
+                _add_comment(ticket, None, f'AI无法直接处理此工单，状态已转为「待指派」，请提交人重新指派给具体的人来人工介入', 'status_change', is_ai=True)
+
+            db.session.commit()
+            logger.info(f'工单 {ticket.ticket_no} AI处理完成，结果状态: {ticket.status}')
+
+        except Exception as e:
+            logger.error(f'工单AI处理失败 ticket_id={ticket_id}: {e}', exc_info=True)
+            try:
+                with app.app_context():
+                    ticket = Ticket.query.get(ticket_id)
+                    if ticket:
+                        ticket.status = STATUS_PENDING_ASSIGNMENT
+                        ticket.ai_result = f'AI处理异常: {str(e)}'
+                        _add_comment(ticket, None, f'AI处理过程中发生异常: {str(e)}', 'status_change', is_ai=True)
+                        db.session.commit()
+            except:
+                pass
+
+
+def _trigger_ai_processing(ticket):
+    """触发AI后台处理工单"""
+    app = current_app._get_current_object()
+    t = threading.Thread(target=_process_ticket_with_ai_async, args=(ticket.id, app), daemon=True)
+    _ticket_ai_threads[ticket.id] = t
+    t.start()
+
+
+# ── 路由 ──────────────────────────────────────────────────
 
 @ticket_bp.route('', methods=['GET'])
 @login_required
@@ -174,29 +291,21 @@ def create_ticket():
     """创建工单
 
     任何登录用户均可提交工单。
-    必填：title, content, assignee_id
+    必填：title, content
+    指派（二选一）：
+      - assignee_type='user' + assignee_id（指派给具体用户）
+      - assignee_type='ai' + assignee_agent_id（指派给AI，可选，默认使用默认Agent）
     可选：business_system_id
     """
     data = request.get_json() or {}
     title = (data.get('title') or '').strip()
     content = (data.get('content') or '').strip()
-    assignee_id = data.get('assignee_id')
+    assignee_type = (data.get('assignee_type') or 'user').strip()
 
     if not title:
         return jsonify({'success': False, 'message': '标题不能为空'}), 400
     if not content:
         return jsonify({'success': False, 'message': '工单内容不能为空'}), 400
-    if not assignee_id:
-        return jsonify({'success': False, 'message': '请选择指派人'}), 400
-
-    try:
-        assignee_id = int(assignee_id)
-    except (TypeError, ValueError):
-        return jsonify({'success': False, 'message': '指派人ID格式错误'}), 400
-
-    assignee = User.query.get(assignee_id)
-    if not assignee or not assignee.is_active:
-        return jsonify({'success': False, 'message': '指派人不存在或已禁用'}), 400
 
     business_system_id = data.get('business_system_id')
     if business_system_id:
@@ -208,18 +317,61 @@ def create_ticket():
     current_user = get_current_user()
     now = datetime.utcnow()
 
+    # 处理指派
+    assignee_id = None
+    assignee_agent_id = None
+
+    if assignee_type == 'ai':
+        # 指派给AI
+        assignee_agent_id = data.get('assignee_agent_id')
+        if assignee_agent_id:
+            try:
+                assignee_agent_id = int(assignee_agent_id)
+            except (TypeError, ValueError):
+                assignee_agent_id = None
+
+        # 未指定Agent则用默认Agent
+        if not assignee_agent_id:
+            agent = AiAgent.query.filter_by(is_active=True, is_default=True).first()
+            if not agent:
+                agent = AiAgent.query.filter_by(is_active=True).first()
+            if agent:
+                assignee_agent_id = agent.id
+            else:
+                return jsonify({'success': False, 'message': '未找到可用的AI Agent'}), 400
+    else:
+        # 指派给具体用户
+        assignee_id = data.get('assignee_id')
+        if not assignee_id:
+            return jsonify({'success': False, 'message': '请选择指派人'}), 400
+        try:
+            assignee_id = int(assignee_id)
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'message': '指派人ID格式错误'}), 400
+
+        assignee = User.query.get(assignee_id)
+        if not assignee or not assignee.is_active:
+            return jsonify({'success': False, 'message': '指派人不存在或已禁用'}), 400
+
     ticket = Ticket(
         ticket_no=_generate_ticket_no(),
         title=title,
         content=content,
         business_system_id=business_system_id,
+        assignee_type=assignee_type,
         assignee_id=assignee_id,
+        assignee_agent_id=assignee_agent_id,
         created_by=current_user.id,
         status=STATUS_SUBMITTED,
         submitted_at=now,
     )
     db.session.add(ticket)
     db.session.commit()
+
+    # 如果指派给AI，自动触发AI处理
+    if assignee_type == 'ai':
+        _trigger_ai_processing(ticket)
+        return jsonify({'success': True, 'data': ticket.to_dict(), 'message': '工单已提交，AI正在处理中'})
 
     return jsonify({'success': True, 'data': ticket.to_dict(), 'message': '工单已提交'})
 
@@ -237,9 +389,10 @@ def update_status(ticket_id):
       confirm   提交人核实通过       processed → closed
       reopen    提交人重新发起       processed → submitted
       appeal    提交人申诉重启（需reason） rejected → submitted
+      reassign  提交人重新指派       pending_assignment → submitted（需 assignee_id 或 assignee_type='ai'）
       close     管理员关闭           any → closed
 
-    请求体：{ action: str, reason?: str, comment?: str }
+    请求体：{ action: str, reason?: str, comment?: str, assignee_id?: int, assignee_type?: str }
     """
     ticket = Ticket.query.get(ticket_id)
     if not ticket:
@@ -268,6 +421,7 @@ def update_status(ticket_id):
         'confirm': ([STATUS_PROCESSED], STATUS_CLOSED, 'creator', False, 'status_change'),
         'reopen': ([STATUS_PROCESSED], STATUS_SUBMITTED, 'creator', False, 'status_change'),
         'appeal': ([STATUS_REJECTED], STATUS_SUBMITTED, 'creator', True, 'appeal'),
+        'reassign': ([STATUS_PENDING_ASSIGNMENT], STATUS_SUBMITTED, 'creator', False, 'status_change'),
         'close': (list(STATUS_LABELS.keys()), STATUS_CLOSED, 'admin', False, 'status_change'),
     }
 
@@ -279,7 +433,7 @@ def update_status(ticket_id):
     # 角色校验
     if role == 'assignee' and not _is_assignee(ticket, current_user):
         return jsonify({'success': False, 'message': '仅指派人可执行此操作'}), 403
-    if role == 'creator' and not _is_creator(ticket, current_user):
+    if role == 'creator' and not (_is_creator(ticket, current_user) or current_user.is_admin()):
         return jsonify({'success': False, 'message': '仅提交人可执行此操作'}), 403
     if role == 'admin' and not current_user.is_admin():
         return jsonify({'success': False, 'message': '仅管理员可执行此操作'}), 403
@@ -294,6 +448,58 @@ def update_status(ticket_id):
     # 必填原因校验
     if requires_reason and not reason:
         return jsonify({'success': False, 'message': '此操作必须填写原因'}), 400
+
+    # 重新指派特殊处理
+    if action == 'reassign':
+        new_assignee_type = (data.get('assignee_type') or 'user').strip()
+        new_assignee_id = data.get('assignee_id')
+        new_assignee_agent_id = data.get('assignee_agent_id')
+
+        if new_assignee_type == 'ai':
+            if not new_assignee_agent_id:
+                agent = AiAgent.query.filter_by(is_active=True, is_default=True).first()
+                if not agent:
+                    agent = AiAgent.query.filter_by(is_active=True).first()
+                if agent:
+                    new_assignee_agent_id = agent.id
+            ticket.assignee_type = 'ai'
+            ticket.assignee_id = None
+            ticket.assignee_agent_id = new_assignee_agent_id
+        else:
+            if not new_assignee_id:
+                return jsonify({'success': False, 'message': '请选择新的指派人'}), 400
+            try:
+                new_assignee_id = int(new_assignee_id)
+            except (TypeError, ValueError):
+                return jsonify({'success': False, 'message': '指派人ID格式错误'}), 400
+            assignee = User.query.get(new_assignee_id)
+            if not assignee or not assignee.is_active:
+                return jsonify({'success': False, 'message': '指派人不存在或已禁用'}), 400
+            ticket.assignee_type = 'user'
+            ticket.assignee_id = new_assignee_id
+            ticket.assignee_agent_id = None
+
+        ticket.status = STATUS_SUBMITTED
+        ticket.submitted_at = now
+        ticket.received_at = None
+        ticket.processed_at = None
+        ticket.closed_at = None
+        ticket.reject_reason = None
+        ticket.appeal_reason = None
+
+        _add_comment(ticket, current_user.id, comment_text or '提交人重新指派了工单', 'status_change')
+
+        db.session.commit()
+
+        # 如果重新指派给AI，触发AI处理
+        if new_assignee_type == 'ai':
+            _trigger_ai_processing(ticket)
+
+        return jsonify({
+            'success': True,
+            'data': ticket.to_dict(include_comments=True),
+            'message': '工单已重新指派' + ('，AI正在处理中' if new_assignee_type == 'ai' else '')
+        })
 
     # 执行流转
     ticket.status = to_status
@@ -358,6 +564,33 @@ def add_comment(ticket_id):
     return jsonify({'success': True, 'data': comment.to_dict(), 'message': '评论已添加'})
 
 
+@ticket_bp.route('/<int:ticket_id>/retry-ai', methods=['POST'])
+@login_required
+def retry_ai_processing(ticket_id):
+    """重新触发AI处理（仅待指派状态的工单，且当前指派给AI）"""
+    ticket = Ticket.query.get(ticket_id)
+    if not ticket:
+        return jsonify({'success': False, 'message': '工单不存在'}), 404
+
+    current_user = get_current_user()
+    if not _can_access(ticket, current_user):
+        return jsonify({'success': False, 'message': '无权操作此工单'}), 403
+
+    if ticket.status != STATUS_PENDING_ASSIGNMENT:
+        return jsonify({'success': False, 'message': '仅待指派状态的工单可重新触发AI处理'}), 400
+
+    if ticket.assignee_type != 'ai':
+        return jsonify({'success': False, 'message': '仅指派给AI的工单可重新触发AI处理'}), 400
+
+    # 重新触发
+    ticket.status = STATUS_SUBMITTED
+    ticket.submitted_at = datetime.utcnow()
+    db.session.commit()
+    _trigger_ai_processing(ticket)
+
+    return jsonify({'success': True, 'message': 'AI正在重新处理中'})
+
+
 @ticket_bp.route('/<int:ticket_id>', methods=['DELETE'])
 @admin_required
 def delete_ticket(ticket_id):
@@ -386,6 +619,23 @@ def list_assignees():
             'display_name': u.display_name or u.username,
         }
         for u in users
+    ]
+    return jsonify({'success': True, 'data': data})
+
+
+@ticket_bp.route('/ai-agents', methods=['GET'])
+@login_required
+def list_ai_agents():
+    """获取可指派的AI Agent列表"""
+    agents = AiAgent.query.filter_by(is_active=True).order_by(AiAgent.is_default.desc()).all()
+    data = [
+        {
+            'id': a.id,
+            'name': a.name,
+            'description': a.description or '',
+            'is_default': a.is_default,
+        }
+        for a in agents
     ]
     return jsonify({'success': True, 'data': data})
 
@@ -464,7 +714,8 @@ def get_stats():
     for status, label in STATUS_LABELS.items():
         by_status[status] = query.filter_by(status=status).count()
 
-    active_count = sum(by_status.get(s, 0) for s in [STATUS_SUBMITTED, STATUS_RECEIVED, STATUS_PROCESSING, STATUS_PROCESSED])
+    active_count = sum(by_status.get(s, 0) for s in
+                       [STATUS_SUBMITTED, STATUS_RECEIVED, STATUS_PROCESSING, STATUS_PROCESSED, STATUS_PENDING_ASSIGNMENT])
 
     return jsonify({
         'success': True,
@@ -475,3 +726,65 @@ def get_stats():
             'status_labels': STATUS_LABELS,
         }
     })
+
+
+# ── 供AI工具调用的工单创建服务方法 ──────────────────────────
+
+def create_ticket_from_ai(title, content, assignee_type='user', assignee_id=None,
+                           assignee_agent_id=None, business_system_id=None,
+                           created_by=None):
+    """AI工具调用的工单创建方法（非路由，供ai_service调用）
+
+    返回 ticket 对象或 None
+    """
+    if not title or not content:
+        return None
+
+    if business_system_id:
+        try:
+            business_system_id = int(business_system_id)
+        except (TypeError, ValueError):
+            business_system_id = None
+
+    assignee_id_val = None
+    assignee_agent_id_val = None
+
+    if assignee_type == 'ai':
+        if assignee_agent_id:
+            try:
+                assignee_agent_id_val = int(assignee_agent_id)
+            except (TypeError, ValueError):
+                assignee_agent_id_val = None
+        if not assignee_agent_id_val:
+            agent = AiAgent.query.filter_by(is_active=True, is_default=True).first()
+            if not agent:
+                agent = AiAgent.query.filter_by(is_active=True).first()
+            if agent:
+                assignee_agent_id_val = agent.id
+    else:
+        if assignee_id:
+            try:
+                assignee_id_val = int(assignee_id)
+            except (TypeError, ValueError):
+                assignee_id_val = None
+
+    ticket = Ticket(
+        ticket_no=_generate_ticket_no(),
+        title=title.strip(),
+        content=content.strip(),
+        business_system_id=business_system_id,
+        assignee_type=assignee_type,
+        assignee_id=assignee_id_val,
+        assignee_agent_id=assignee_agent_id_val,
+        created_by=created_by,
+        status=STATUS_SUBMITTED,
+        submitted_at=datetime.utcnow(),
+    )
+    db.session.add(ticket)
+    db.session.commit()
+
+    # 如果指派给AI，自动触发AI处理
+    if assignee_type == 'ai':
+        _trigger_ai_processing(ticket)
+
+    return ticket

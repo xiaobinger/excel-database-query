@@ -29,9 +29,12 @@
             <span>{{ row.creator_name || row.creator_username || '-' }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="assignee_name" label="指派人" width="120" show-overflow-tooltip>
+        <el-table-column prop="assignee_name" label="指派人" width="130" show-overflow-tooltip>
           <template #default="{ row }">
-            <span v-if="row.assignee_name">{{ row.assignee_name }}</span>
+            <span v-if="row.assignee_type === 'ai'" style="color: #722ed1">
+              <i class="fas fa-robot"></i> {{ row.assignee_name || 'AI助手' }}
+            </span>
+            <span v-else-if="row.assignee_name">{{ row.assignee_name }}</span>
             <span v-else style="color: #c0c4cc">未指派</span>
           </template>
         </el-table-column>
@@ -88,10 +91,22 @@
             <el-option v-for="s in businessSystems" :key="s.id" :label="s.name" :value="s.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="指派给" prop="assignee_id">
+        <el-form-item label="指派类型" prop="assignee_type">
+          <el-radio-group v-model="createForm.assignee_type">
+            <el-radio-button label="user">指派给具体人</el-radio-button>
+            <el-radio-button label="ai">指派给AI</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="createForm.assignee_type === 'user'" label="指派给" prop="assignee_id">
           <el-select v-model="createForm.assignee_id" placeholder="选择处理人" filterable style="width: 100%">
             <el-option v-for="u in assignees" :key="u.id" :label="u.display_name" :value="u.id" />
           </el-select>
+        </el-form-item>
+        <el-form-item v-else label="AI Agent" prop="assignee_agent_id">
+          <el-select v-model="createForm.assignee_agent_id" placeholder="选择AI Agent（留空使用默认）" clearable filterable style="width: 100%">
+            <el-option v-for="a in aiAgents" :key="a.id" :label="a.name + (a.is_default ? '（默认）' : '')" :value="a.id" />
+          </el-select>
+          <div class="form-tip"><i class="fas fa-info-circle"></i> 指派给AI后，AI将自动处理该工单。处理失败会转为"待指派"状态。</div>
         </el-form-item>
         <el-form-item label="工单内容" prop="content">
           <MarkdownEditor v-model="createForm.content" :upload-fn="uploadAttachment" placeholder="详细描述工单内容，支持图片、视频和 Markdown 格式" :height="280" />
@@ -118,6 +133,10 @@
             <i class="fas fa-ban"></i> 工单已被拒绝：
             <span v-if="detailData.reject_reason">{{ detailData.reject_reason }}</span>
           </div>
+          <div v-if="detailData.status === 'pending_assignment'" class="pending-banner">
+            <i class="fas fa-exclamation-triangle"></i> AI处理失败，工单待重新指派：
+            <span v-if="detailData.assignee_type === 'ai'">请重新指派给具体的人进行人工介入处理</span>
+          </div>
         </div>
 
         <el-descriptions :column="2" border size="small" style="margin-top: 16px">
@@ -127,7 +146,12 @@
           </el-descriptions-item>
           <el-descriptions-item label="标题" :span="2">{{ detailData.title || '-' }}</el-descriptions-item>
           <el-descriptions-item label="提交人">{{ detailData.creator_name || detailData.creator_username || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="指派人">{{ detailData.assignee_name || detailData.assignee_username || '未指派' }}</el-descriptions-item>
+          <el-descriptions-item label="指派人">
+            <span v-if="detailData.assignee_type === 'ai'" style="color: #722ed1">
+              <i class="fas fa-robot"></i> {{ detailData.assignee_name || 'AI助手' }}
+            </span>
+            <span v-else>{{ detailData.assignee_name || detailData.assignee_username || '未指派' }}</span>
+          </el-descriptions-item>
           <el-descriptions-item label="涉及系统">
             <el-tag v-if="detailData.business_system_name" size="small" effect="plain">{{ detailData.business_system_name }}</el-tag>
             <span v-else>-</span>
@@ -138,6 +162,12 @@
         <!-- 工单内容 -->
         <el-divider content-position="left">工单内容</el-divider>
         <div class="ticket-content" v-html="renderMarkdown(detailData.content)"></div>
+
+        <!-- AI处理结果 -->
+        <div v-if="detailData.ai_result" class="reason-block ai-result">
+          <div class="reason-title"><i class="fas fa-robot"></i> AI处理结果</div>
+          <div class="reason-content" v-html="renderMarkdown(detailData.ai_result)"></div>
+        </div>
 
         <!-- 拒绝/申诉信息 -->
         <div v-if="detailData.reject_reason" class="reason-block reject">
@@ -178,7 +208,19 @@
             <el-button v-if="detailData.status === 'rejected'" type="primary" @click="openReasonDialog('appeal')">
               <i class="fas fa-gavel"></i> 申诉重启
             </el-button>
+            <!-- 待指派：提交人重新指派 -->
+            <el-button v-if="detailData.status === 'pending_assignment'" type="primary" @click="openReassignDialog">
+              <i class="fas fa-user-plus"></i> 重新指派
+            </el-button>
           </template>
+          <!-- 管理员也可重新指派 -->
+          <el-button v-if="isAdmin && detailData.status === 'pending_assignment' && !isCreator" type="primary" @click="openReassignDialog">
+            <i class="fas fa-user-plus"></i> 重新指派
+          </el-button>
+          <!-- 重试AI处理（指派给AI且处于待指派/已提交状态） -->
+          <el-button v-if="detailData.assignee_type === 'ai' && detailData.status === 'pending_assignment'" type="warning" plain @click="handleRetryAi">
+            <i class="fas fa-redo"></i> 重试AI处理
+          </el-button>
           <!-- 管理员操作 -->
           <el-button v-if="isAdmin && detailData.status !== 'closed'" type="info" @click="handleAction('close')">
             <i class="fas fa-times-circle"></i> 关闭工单
@@ -233,6 +275,32 @@
         <el-button type="primary" :loading="actionLoading" @click="submitReason">确认</el-button>
       </template>
     </el-dialog>
+
+    <!-- 重新指派对话框 -->
+    <el-dialog v-model="reassignVisible" title="重新指派工单" width="520px" append-to-body destroy-on-close>
+      <el-form :model="reassignForm" label-width="90px">
+        <el-form-item label="指派类型">
+          <el-radio-group v-model="reassignForm.assignee_type">
+            <el-radio-button label="user">指派给具体人</el-radio-button>
+            <el-radio-button label="ai">指派给AI</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="reassignForm.assignee_type === 'user'" label="指派给" required>
+          <el-select v-model="reassignForm.assignee_id" placeholder="选择处理人" filterable style="width: 100%">
+            <el-option v-for="u in assignees" :key="u.id" :label="u.display_name" :value="u.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-else label="AI Agent">
+          <el-select v-model="reassignForm.assignee_agent_id" placeholder="选择AI Agent（留空使用默认）" clearable filterable style="width: 100%">
+            <el-option v-for="a in aiAgents" :key="a.id" :label="a.name + (a.is_default ? '（默认）' : '')" :value="a.id" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="reassignVisible = false">取消</el-button>
+        <el-button type="primary" :loading="actionLoading" @click="submitReassign">确认指派</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -254,6 +322,7 @@ const statusLabels = {
   processing: '处理中',
   rejected: '拒绝',
   processed: '已处理',
+  pending_assignment: '待指派',
   closed: '结束',
 }
 
@@ -264,6 +333,7 @@ const statusTagType = (status) => {
     processing: 'warning',
     rejected: 'danger',
     processed: 'success',
+    pending_assignment: 'danger',
     closed: '',
   }
   return map[status] || 'info'
@@ -300,20 +370,20 @@ async function fetchTickets() {
 const createVisible = ref(false)
 const submitting = ref(false)
 const createFormRef = ref(null)
-const createForm = ref({ title: '', content: '', assignee_id: null, business_system_id: null })
+const createForm = ref({ title: '', content: '', assignee_type: 'user', assignee_id: null, assignee_agent_id: null, business_system_id: null })
 const createRules = {
   title: [{ required: true, message: '请输入标题', trigger: 'blur' }],
   content: [{ required: true, message: '请输入工单内容', trigger: 'blur' }],
-  assignee_id: [{ required: true, message: '请选择指派人', trigger: 'change' }],
 }
 const assignees = ref([])
 const businessSystems = ref([])
+const aiAgents = ref([])
 
 async function openCreateDialog() {
-  createForm.value = { title: '', content: '', assignee_id: null, business_system_id: null }
+  createForm.value = { title: '', content: '', assignee_type: 'user', assignee_id: null, assignee_agent_id: null, business_system_id: null }
   createVisible.value = true
   // 并行加载选项数据
-  Promise.all([fetchAssignees(), fetchBusinessSystems()])
+  Promise.all([fetchAssignees(), fetchBusinessSystems(), fetchAiAgents()])
 }
 
 async function fetchAssignees() {
@@ -333,13 +403,33 @@ async function fetchBusinessSystems() {
   } catch {}
 }
 
+async function fetchAiAgents() {
+  if (aiAgents.value.length > 0) return
+  try {
+    const res = await api.tickets.aiAgents()
+    aiAgents.value = res.data || res || []
+  } catch {}
+}
+
 async function submitCreate() {
   if (!createFormRef.value) return
+  // 根据指派类型校验
+  if (createForm.value.assignee_type === 'user' && !createForm.value.assignee_id) {
+    ElMessage.warning('请选择指派人')
+    return
+  }
   await createFormRef.value.validate(async (valid) => {
     if (!valid) return
     submitting.value = true
     try {
-      await api.tickets.create(createForm.value)
+      // 构造提交数据（按指派类型清理字段）
+      const payload = { ...createForm.value }
+      if (payload.assignee_type === 'ai') {
+        delete payload.assignee_id
+      } else {
+        delete payload.assignee_agent_id
+      }
+      await api.tickets.create(payload)
       ElMessage.success('工单已提交')
       createVisible.value = false
       fetchTickets()
@@ -367,6 +457,7 @@ const currentStep = computed(() => {
   if (s === 'processed') return 2
   if (s === 'closed') return 3
   if (s === 'rejected') return 0
+  if (s === 'pending_assignment') return 0
   return 0
 })
 
@@ -454,6 +545,66 @@ async function submitReason() {
     ElMessage.success(res.message || '操作成功')
     reasonVisible.value = false
     detailData.value = res.data || detailData.value
+    fetchTickets()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '操作失败')
+  } finally {
+    actionLoading.value = false
+  }
+}
+
+// 重新指派对话框
+const reassignVisible = ref(false)
+const reassignForm = ref({ assignee_type: 'user', assignee_id: null, assignee_agent_id: null })
+
+async function openReassignDialog() {
+  reassignForm.value = { assignee_type: 'user', assignee_id: null, assignee_agent_id: null }
+  reassignVisible.value = true
+  // 加载指派人和AI Agent选项
+  Promise.all([fetchAssignees(), fetchAiAgents()])
+}
+
+async function submitReassign() {
+  if (reassignForm.value.assignee_type === 'user' && !reassignForm.value.assignee_id) {
+    ElMessage.warning('请选择指派人')
+    return
+  }
+  actionLoading.value = true
+  try {
+    const payload = { action: 'reassign', ...reassignForm.value }
+    if (payload.assignee_type === 'ai') {
+      delete payload.assignee_id
+    } else {
+      delete payload.assignee_agent_id
+    }
+    const res = await api.tickets.updateStatus(detailData.value.id, payload)
+    ElMessage.success(res.message || '已重新指派')
+    reassignVisible.value = false
+    detailData.value = res.data || detailData.value
+    fetchTickets()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '操作失败')
+  } finally {
+    actionLoading.value = false
+  }
+}
+
+// 重试AI处理
+async function handleRetryAi() {
+  try {
+    await ElMessageBox.confirm('确定要重新触发AI处理该工单吗？', '确认', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'info',
+    })
+  } catch {
+    return
+  }
+  actionLoading.value = true
+  try {
+    const res = await api.tickets.retryAi(detailData.value.id)
+    ElMessage.success(res.message || 'AI处理已重新触发')
+    refreshDetail()
     fetchTickets()
   } catch (e) {
     ElMessage.error(e?.response?.data?.message || '操作失败')
@@ -597,6 +748,33 @@ onMounted(() => {
   margin-right: 6px;
 }
 
+.pending-banner {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: #fff7e6;
+  border: 1px solid #ffe7ba;
+  border-radius: 6px;
+  color: #fa8c16;
+  font-size: 13px;
+}
+
+.pending-banner i {
+  margin-right: 6px;
+}
+
+/* 表单提示 */
+.form-tip {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.5;
+}
+
+.form-tip i {
+  margin-right: 4px;
+  color: #409eff;
+}
+
 /* 工单内容 */
 .ticket-content {
   padding: 12px 16px;
@@ -654,6 +832,11 @@ onMounted(() => {
   border: 1px solid #faecd8;
 }
 
+.reason-block.ai-result {
+  background: #f6f0ff;
+  border: 1px solid #d9d2ec;
+}
+
 .reason-title {
   font-weight: 600;
   margin-bottom: 6px;
@@ -666,6 +849,10 @@ onMounted(() => {
 
 .reason-block.appeal .reason-title {
   color: #e6a23c;
+}
+
+.reason-block.ai-result .reason-title {
+  color: #722ed1;
 }
 
 .reason-content {

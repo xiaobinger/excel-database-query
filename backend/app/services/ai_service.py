@@ -326,6 +326,44 @@ AI_TOOLS = [
                 "required": ["org_no", "start_time", "end_time", "description"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_ticket",
+            "description": "当用户希望创建工单、提交工单、报修、反馈问题时调用此工具。也可在AI无法完成用户任务时，征得用户同意后将任务转化为工单。需要提取工单标题、内容和指派信息。如果用户未说明指派给谁，必须在回复中询问用户。指派给AI时assignee_type传'ai'，指派给具体人时传'user'并需要assignee_id。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "工单标题，简明扼要概括问题（不超过50字）"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "工单内容，详细描述问题或需求，支持Markdown格式"
+                    },
+                    "assignee_type": {
+                        "type": "string",
+                        "enum": ["user", "ai"],
+                        "description": "指派类型：user=指派给具体用户，ai=指派给AI自动处理"
+                    },
+                    "assignee_name": {
+                        "type": "string",
+                        "description": "指派人的用户名或显示名（assignee_type=user时必填），如'admin'或'张三'。不确定时可留空并在回复中询问用户"
+                    },
+                    "business_system_name": {
+                        "type": "string",
+                        "description": "涉及的业务系统名称关键词（可选），如'海科'、'支付通'等"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "用户原始需求简要描述，用于工单记录"
+                    }
+                },
+                "required": ["title", "content", "assignee_type", "description"]
+            }
+        }
     }
 ]
 
@@ -731,6 +769,8 @@ class AiService:
             return AiService._tool_fetch_url(args)
         elif tool_name == 'request_profit_share':
             return AiService._tool_request_profit_share(args, user_id)
+        elif tool_name == 'create_ticket':
+            return AiService._tool_create_ticket(args, user_id)
         else:
             return {'error': f'未知工具: {tool_name}'}
 
@@ -1711,6 +1751,184 @@ AI回复：{ai_response[:500] if ai_response else ''}
             'description': description or f'代理商 {org_no} 分润导出 {start_time} ~ {end_time}',
             'confirm_message': f'即将执行分润导出：\n• 代理商编号：{org_no}\n• 交易时间：{start_time} ~ {end_time}\n• 数据库：{database_display_name}\n\n系统将逐笔订单计算各级代理分润并导出 Excel。',
         }
+
+    @staticmethod
+    def _tool_create_ticket(args: dict, user_id: int = None) -> dict:
+        """处理创建工单请求：解析参数、校验指派人/AI Agent、创建工单
+
+        场景：
+          1. 用户直接要求创建工单
+          2. AI无法完成用户任务时，征得用户同意后将任务转化为工单
+          3. 缺失指派人信息时返回询问提示，由AI在回复中向用户询问
+        """
+        from app.models.user import User
+        from app.models.business_system import BusinessSystem
+        from app.models.ai_agent import AiAgent
+        from app.routes.ticket_routes import create_ticket_from_ai
+
+        title = (args.get('title') or '').strip()
+        content = (args.get('content') or '').strip()
+        assignee_type = (args.get('assignee_type') or 'user').strip().lower()
+        assignee_name = (args.get('assignee_name') or '').strip()
+        business_system_name = (args.get('business_system_name') or '').strip()
+        description = (args.get('description') or '').strip()
+
+        # 基础参数校验
+        if not title:
+            return {
+                'error': '工单标题不能为空',
+                'action_type': 'create_ticket',
+                'missing_params': ['title'],
+                'ask_user': '请提供工单标题（简明扼要概括问题，不超过50字）',
+            }
+        if not content:
+            return {
+                'error': '工单内容不能为空',
+                'action_type': 'create_ticket',
+                'missing_params': ['content'],
+                'ask_user': '请详细描述工单内容（问题或需求）',
+            }
+        if assignee_type not in ('user', 'ai'):
+            return {
+                'error': "指派类型只能为 'user' 或 'ai'",
+                'action_type': 'create_ticket',
+                'missing_params': ['assignee_type'],
+                'ask_user': '请明确指派类型：指派给具体人请回复"指派给某人"，指派给AI请回复"指派给AI"',
+            }
+
+        # 必须有提交人
+        if not user_id:
+            return {
+                'error': '无法识别当前用户，不能创建工单',
+                'action_type': 'create_ticket',
+            }
+
+        assignee_id = None
+        assignee_agent_id = None
+        assignee_display = None
+
+        if assignee_type == 'user':
+            # 指派给具体用户：必须有 assignee_name
+            if not assignee_name:
+                return {
+                    'error': '指派给具体用户时必须提供指派人姓名或用户名',
+                    'action_type': 'create_ticket',
+                    'missing_params': ['assignee_name'],
+                    'ask_user': '请告知要将工单指派给谁（可提供用户名或姓名）',
+                }
+
+            # 按 username 精确匹配，其次按 display_name 匹配
+            user = User.query.filter_by(username=assignee_name, is_active=True).first()
+            if not user:
+                user = User.query.filter_by(display_name=assignee_name, is_active=True).first()
+            if not user:
+                # 模糊匹配 display_name
+                user = User.query.filter(
+                    User.display_name.like(f'%{assignee_name}%'),
+                    User.is_active.is_(True),
+                ).first()
+
+            if not user:
+                return {
+                    'error': f'未找到匹配的指派人: {assignee_name}',
+                    'action_type': 'create_ticket',
+                    'missing_params': ['assignee_name'],
+                    'ask_user': f'未找到用户"{assignee_name}"，请确认指派人的用户名或姓名后重新告知',
+                }
+
+            assignee_id = user.id
+            assignee_display = user.display_name or user.username
+        else:
+            # 指派给AI：可选 assignee_name 匹配 Agent 名称，未指定则用默认 Agent
+            if assignee_name:
+                agent = AiAgent.query.filter(
+                    AiAgent.name.like(f'%{assignee_name}%'),
+                    AiAgent.is_active.is_(True),
+                ).first()
+                if agent:
+                    assignee_agent_id = agent.id
+                    assignee_display = agent.name
+            if not assignee_agent_id:
+                agent = AiAgent.query.filter_by(is_active=True, is_default=True).first()
+                if not agent:
+                    agent = AiAgent.query.filter_by(is_active=True).first()
+                if not agent:
+                    return {
+                        'error': '未找到可用的AI Agent，无法指派给AI',
+                        'action_type': 'create_ticket',
+                        'ask_user': '当前系统未配置可用的AI Agent，请改为指派给具体的人',
+                    }
+                assignee_agent_id = agent.id
+                assignee_display = agent.name
+
+        # 匹配业务系统
+        business_system_id = None
+        business_system_display = None
+        if business_system_name:
+            bs = BusinessSystem.query.filter(
+                BusinessSystem.name.like(f'%{business_system_name}%')
+            ).first()
+            if bs:
+                business_system_id = bs.id
+                business_system_display = bs.name
+
+        # 创建工单
+        try:
+            ticket = create_ticket_from_ai(
+                title=title,
+                content=content,
+                assignee_type=assignee_type,
+                assignee_id=assignee_id,
+                assignee_agent_id=assignee_agent_id,
+                business_system_id=business_system_id,
+                created_by=user_id,
+            )
+        except Exception as e:
+            logger.exception('AI创建工单失败')
+            return {
+                'error': f'创建工单失败: {str(e)}',
+                'action_type': 'create_ticket',
+            }
+
+        if not ticket:
+            return {
+                'error': '创建工单失败',
+                'action_type': 'create_ticket',
+            }
+
+        # 构造返回结果（供前端渲染工单卡片）
+        result = {
+            'action_type': 'create_ticket',
+            'ticket_id': ticket.id,
+            'ticket_no': ticket.ticket_no,
+            'title': ticket.title,
+            'content': ticket.content or '',
+            'assignee_type': ticket.assignee_type,
+            'assignee_name': assignee_display,
+            'business_system_name': business_system_display,
+            'status': ticket.status,
+            'status_label': '已提交',
+            'created_at': ticket.created_at.strftime('%Y-%m-%d %H:%M:%S') if ticket.created_at else None,
+        }
+
+        if assignee_type == 'ai':
+            result['confirm_message'] = (
+                f'工单已创建并指派给AI（{assignee_display}），AI正在处理中。\n'
+                f'• 工单编号：{ticket.ticket_no}\n'
+                f'• 标题：{ticket.title}\n'
+                f'• 状态：处理中\n\n'
+                f'AI处理完成后会自动更新工单状态，请稍后在工单管理页面查看结果。'
+            )
+        else:
+            result['confirm_message'] = (
+                f'工单已创建并指派给 {assignee_display}。\n'
+                f'• 工单编号：{ticket.ticket_no}\n'
+                f'• 标题：{ticket.title}\n'
+                f'• 状态：已提交\n\n'
+                f'指派人会在工单管理页面收到通知。'
+            )
+
+        return result
 
     @staticmethod
     def _tool_fetch_url(args: dict) -> dict:

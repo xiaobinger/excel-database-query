@@ -73,7 +73,7 @@
             <div class="message-avatar">
               <i :class="msg.role === 'user' ? 'fas fa-user' : 'fas fa-robot'"></i>
             </div>
-            <div class="message-content" :class="{ 'full-width': msg._type === 'tool' || msg._type === 'file' || msg._type === 'lookup' }">
+            <div class="message-content" :class="{ 'full-width': msg._type === 'tool' || msg._type === 'file' || msg._type === 'lookup' || msg._type === 'ticket' }">
               <!-- 消息发送时间 -->
               <div v-if="!msg._streaming && formatMsgTime(msg.created_at)" class="message-time">{{ formatMsgTime(msg.created_at) }}</div>
               <!-- 删除按钮（悬浮显示，执行中的任务不显示删除按钮） -->
@@ -481,6 +481,39 @@
                       <i class="fas fa-exclamation-triangle"></i> {{ msg._error_msg || '查询执行失败' }}
                     </div>
                   </div>
+                </div>
+              </template>
+              <!-- 工单创建卡片 -->
+              <template v-else-if="msg._type === 'ticket'">
+                <div class="tool-card ticket-card done">
+                  <div class="tool-card-header">
+                    <i class="fas fa-ticket-alt tool-icon"></i>
+                    <span class="tool-title">工单已创建</span>
+                    <span class="ticket-no-tag">{{ msg.tool_data?.ticket_no }}</span>
+                  </div>
+                  <div class="tool-card-body">
+                    <div class="ticket-info-row">
+                      <span class="ticket-info-label">标题：</span>
+                      <span class="ticket-info-value">{{ msg.tool_data?.title }}</span>
+                    </div>
+                    <div class="ticket-info-row">
+                      <span class="ticket-info-label">指派给：</span>
+                      <span class="ticket-info-value">
+                        <i v-if="msg.tool_data?.assignee_type === 'ai'" class="fas fa-robot" style="color: #722ed1"></i>
+                        {{ msg.tool_data?.assignee_name }}
+                      </span>
+                    </div>
+                    <div v-if="msg.tool_data?.business_system_name" class="ticket-info-row">
+                      <span class="ticket-info-label">涉及系统：</span>
+                      <span class="ticket-info-value">{{ msg.tool_data?.business_system_name }}</span>
+                    </div>
+                    <div class="ticket-info-row">
+                      <span class="ticket-info-label">状态：</span>
+                      <el-tag v-if="msg.tool_data?.assignee_type === 'ai'" type="warning" size="small">AI处理中</el-tag>
+                      <el-tag v-else type="info" size="small">{{ msg.tool_data?.status_label || '已提交' }}</el-tag>
+                    </div>
+                  </div>
+                  <div v-if="msg.content" class="ticket-confirm-msg">{{ msg.content }}</div>
                 </div>
               </template>
             </div>
@@ -1439,6 +1472,11 @@ async function reloadCurrentMessages() {
         if (meta._type === 'tool') {
           base._type = 'tool'
           base.tool_data = meta.tool_data
+        } else if (meta._type === 'ticket') {
+          base._type = 'ticket'
+          base._done = true
+          base.tool_data = meta.tool_data
+          base.content = m.content || meta.tool_data?.confirm_message || ''
         }
       }
       return base
@@ -1719,6 +1757,11 @@ async function selectChat(chatId) {
         base._done = meta._done || false
         base._failed = meta._failed || false
         if (meta._error_msg) base._error_msg = meta._error_msg
+      } else if (meta._type === 'ticket') {
+        base._type = 'ticket'
+        base._done = true
+        base.tool_data = meta.tool_data || {}
+        base.content = m.content || meta.tool_data?.confirm_message || ''
       }
       // 恢复思考内容
       if (meta._thinking) {
@@ -2349,6 +2392,25 @@ async function handleToolResults(toolResults) {
   if (!toolResults || toolResults.length === 0) return
   for (const tr of toolResults) {
     const result = tr.result
+    // 工单创建：成功显示已创建卡片，失败/缺失参数由AI自然语言询问用户（不创建卡片）
+    if (result && result.action_type === 'create_ticket') {
+      if (result.error || !result.ticket_id) {
+        // 缺失参数或创建失败：结果返回给AI，由AI根据ask_user向用户询问，不创建卡片
+        continue
+      }
+      // 工单创建成功：显示已创建卡片
+      const ticketMsg = {
+        id: tr.message_id || Date.now() + Math.random(),
+        role: 'assistant',
+        content: result.confirm_message || `工单已创建：${result.ticket_no}`,
+        _type: 'ticket',
+        _done: true,
+        tool_data: result,
+      }
+      messages.value.push(ticketMsg)
+      saveMessageState(ticketMsg)
+      continue
+    }
     if (result && (result.action_type === 'export' || result.action_type === 'query' || result.action_type === 'system_task' || result.action_type === 'lookup' || result.action_type === 'profit_share')) {
       // 系统任务：API自动执行的结果由AI二次回复直接反馈，不创建卡片
       if (result.action_type === 'system_task' && result.auto_executed) {
@@ -2789,6 +2851,12 @@ async function saveMessageState(msg) {
   if (msg._type === 'lookup') {
     metadata._type = 'lookup'
     metadata.tool_data = msg.tool_data || {}
+  }
+  // 保存ticket类型的元数据
+  if (msg._type === 'ticket') {
+    metadata._type = 'ticket'
+    metadata.tool_data = msg.tool_data || {}
+    metadata._done = true
   }
   // 保存思考内容的元数据
   if (msg._thinking) {
@@ -6284,6 +6352,62 @@ onMounted(() => {
 
 .lookup-error i {
   margin-right: 4px;
+}
+
+/* ===== 工单卡片样式 ===== */
+.ticket-card .tool-card-header {
+  background: linear-gradient(135deg, #f6f0ff 0%, #ece4ff 100%);
+}
+
+.ticket-card .tool-icon {
+  color: #722ed1;
+}
+
+.ticket-no-tag {
+  margin-left: auto;
+  padding: 2px 10px;
+  background: #722ed1;
+  color: #fff;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: 'Courier New', monospace;
+}
+
+.ticket-info-row {
+  display: flex;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 13px;
+  border-bottom: 1px dashed #f0f0f0;
+}
+
+.ticket-info-row:last-child {
+  border-bottom: none;
+}
+
+.ticket-info-label {
+  color: #909399;
+  min-width: 70px;
+  flex-shrink: 0;
+}
+
+.ticket-info-value {
+  color: #303133;
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.ticket-confirm-msg {
+  margin-top: 10px;
+  padding: 10px 14px;
+  background: #f6ffed;
+  border: 1px solid #b7eb8f;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #52c41a;
+  line-height: 1.6;
+  white-space: pre-wrap;
 }
 
 /* ===== 深度思考样式 ===== */
