@@ -331,7 +331,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "create_ticket",
-            "description": "当用户希望创建工单、提交工单、报修、反馈问题时调用此工具。也可在AI无法完成用户任务时，征得用户同意后将任务转化为工单。需要提取工单标题、内容和指派信息。如果用户未说明指派给谁，必须在回复中询问用户。指派给AI时assignee_type传'ai'，指派给具体人时传'user'并需要assignee_id。",
+            "description": "当用户希望创建工单、提交工单、报修、反馈问题时调用此工具。也可在AI无法完成用户任务时，征得用户同意后将任务转化为工单。需要提取工单标题、内容和指派信息。重要：指派对象必须由用户明确指定，绝不能默认指派给AI。只有当用户明确说出'指派给AI'、'让AI处理'等表述时才填assignee_type=ai；当用户给出具体人名时填assignee_type=user并填assignee_name。如果用户没有明确说明指派给谁，请不要填写assignee_type字段，系统会返回询问提示，你再向用户询问。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -346,7 +346,7 @@ AI_TOOLS = [
                     "assignee_type": {
                         "type": "string",
                         "enum": ["user", "ai"],
-                        "description": "指派类型：user=指派给具体用户，ai=指派给AI自动处理"
+                        "description": "指派类型，必须由用户明确指示：user=指派给具体用户，ai=指派给AI自动处理。用户未明确指派对象时不要填写此字段"
                     },
                     "assignee_name": {
                         "type": "string",
@@ -361,7 +361,7 @@ AI_TOOLS = [
                         "description": "用户原始需求简要描述，用于工单记录"
                     }
                 },
-                "required": ["title", "content", "assignee_type", "description"]
+                "required": ["title", "content", "description"]
             }
         }
     }
@@ -1768,7 +1768,7 @@ AI回复：{ai_response[:500] if ai_response else ''}
 
         title = (args.get('title') or '').strip()
         content = (args.get('content') or '').strip()
-        assignee_type = (args.get('assignee_type') or 'user').strip().lower()
+        assignee_type = (args.get('assignee_type') or '').strip().lower()
         assignee_name = (args.get('assignee_name') or '').strip()
         business_system_name = (args.get('business_system_name') or '').strip()
         description = (args.get('description') or '').strip()
@@ -1787,6 +1787,14 @@ AI回复：{ai_response[:500] if ai_response else ''}
                 'action_type': 'create_ticket',
                 'missing_params': ['content'],
                 'ask_user': '请详细描述工单内容（问题或需求）',
+            }
+        # 指派对象必须由用户明确指定，不能默认
+        if not assignee_type:
+            return {
+                'error': '未指定指派对象，不能默认指派',
+                'action_type': 'create_ticket',
+                'missing_params': ['assignee_type'],
+                'ask_user': '请问这个工单要指派给谁？可以指派给具体的人（请提供用户名或姓名），也可以指派给AI自动处理（回复"指派给AI"）',
             }
         if assignee_type not in ('user', 'ai'):
             return {
