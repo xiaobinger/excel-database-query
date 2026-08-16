@@ -44,9 +44,13 @@
             <span v-else style="color: #c0c4cc">-</span>
           </template>
         </el-table-column>
-        <el-table-column prop="status" label="状态" width="110" align="center">
+        <el-table-column prop="status" label="状态" width="130" align="center">
           <template #default="{ row }">
-            <el-tag :type="statusTagType(row.status)" size="small">{{ statusLabels[row.status] || row.status }}</el-tag>
+            <!-- AI处理中：带动画的特殊标签 -->
+            <span v-if="row.assignee_type === 'ai' && row.status === 'processing'" class="ai-status-tag">
+              <i class="fas fa-robot fa-spin"></i> AI处理中
+            </span>
+            <el-tag v-else :type="statusTagType(row.status)" size="small">{{ statusLabels[row.status] || row.status }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="submitted_at" label="提交时间" width="170" show-overflow-tooltip />
@@ -122,7 +126,7 @@
     </el-dialog>
 
     <!-- 工单详情对话框 -->
-    <el-dialog v-model="detailVisible" :title="`工单详情 - ${detailData.ticket_no || ''}`" width="900px" destroy-on-close top="3vh">
+    <el-dialog v-model="detailVisible" :title="`工单详情 - ${detailData.ticket_no || ''}`" width="900px" destroy-on-close top="3vh" @close="stopAiPolling">
       <div class="detail-content" v-loading="detailLoading">
         <!-- 状态进度条 -->
         <div class="status-progress">
@@ -139,6 +143,19 @@
           <div v-if="detailData.status === 'pending_assignment'" class="pending-banner">
             <i class="fas fa-exclamation-triangle"></i> AI处理失败，工单待重新指派：
             <span v-if="detailData.assignee_type === 'ai'">请重新指派给具体的人进行人工介入处理</span>
+          </div>
+          <!-- AI处理中提示 -->
+          <div v-if="isAiProcessing" class="ai-processing-banner">
+            <i class="fas fa-robot fa-spin"></i>
+            <div class="ai-processing-info">
+              <div class="ai-processing-title">AI正在处理中，请稍候...</div>
+              <div class="ai-processing-meta">
+                <span v-if="aiElapsedText" class="ai-processing-elapsed">
+                  <i class="fas fa-clock"></i> 已处理：{{ aiElapsedText }}
+                </span>
+                <span class="ai-processing-hint">页面会自动刷新，处理完成后会通知您</span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -311,7 +328,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import api from '../api'
 import { useAppStore } from '../stores'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -354,21 +371,68 @@ const pageSize = ref(20)
 const statusFilter = ref('')
 const keyword = ref('')
 
-async function fetchTickets() {
-  loading.value = true
+// 列表中是否有AI处理中的工单（用于自动轮询刷新）
+const hasAiProcessing = computed(() =>
+  tickets.value.some(t => t.assignee_type === 'ai' && t.status === 'processing')
+)
+
+// 列表自动轮询定时器（仅当有AI处理中的工单时启动）
+let listPollingTimer = null
+function startListPolling() {
+  stopListPolling()
+  listPollingTimer = setInterval(() => {
+    if (!hasAiProcessing.value) {
+      stopListPolling()
+      return
+    }
+    fetchTickets(true) // 静默刷新
+  }, 5000)
+}
+function stopListPolling() {
+  if (listPollingTimer) {
+    clearInterval(listPollingTimer)
+    listPollingTimer = null
+  }
+}
+
+async function fetchTickets(silent = false) {
+  if (!silent) loading.value = true
   try {
     const params = { page: currentPage.value, per_page: pageSize.value }
     if (statusFilter.value) params.status = statusFilter.value
     if (keyword.value.trim()) params.keyword = keyword.value.trim()
     const res = await api.tickets.list(params)
     const data = res.data || res || {}
+    const oldList = tickets.value
     tickets.value = Array.isArray(data) ? data : (data.data || [])
     total.value = data.total || tickets.value.length
+    // 静默刷新时：检测是否有工单从AI处理中变为已完成，给出提示
+    if (silent && oldList.length) {
+      const oldAiProcessing = new Set(
+        oldList.filter(t => t.assignee_type === 'ai' && t.status === 'processing').map(t => t.id)
+      )
+      const changed = tickets.value.filter(t => oldAiProcessing.has(t.id))
+      for (const t of changed) {
+        if (t.status === 'processed') {
+          ElMessage.success(`工单 ${t.ticket_no} AI已处理完成`)
+        } else if (t.status === 'pending_assignment') {
+          ElMessage.warning(`工单 ${t.ticket_no} AI处理失败，已转为待指派`)
+        }
+      }
+    }
+    // 根据是否有AI处理中的工单，启动或停止列表轮询
+    if (hasAiProcessing.value) {
+      startListPolling()
+    } else {
+      stopListPolling()
+    }
   } catch {
-    tickets.value = []
-    total.value = 0
+    if (!silent) {
+      tickets.value = []
+      total.value = 0
+    }
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
   }
 }
 
@@ -455,9 +519,52 @@ async function submitCreate() {
 const detailVisible = ref(false)
 const detailLoading = ref(false)
 const detailData = ref({})
+// AI处理中轮询定时器
+let aiPollingTimer = null
+// AI处理时长计时器（每秒更新，用于显示已处理时长）
+let aiElapsedTimer = null
+const aiElapsedSeconds = ref(0)
+
+// 计算AI已处理时长（基于received_at）
+const aiElapsedText = computed(() => {
+  const secs = aiElapsedSeconds.value
+  if (secs <= 0) return ''
+  if (secs < 60) return `${secs}秒`
+  const m = Math.floor(secs / 60)
+  const s = secs % 60
+  return `${m}分${s.toString().padStart(2, '0')}秒`
+})
+
+function startAiElapsedTimer() {
+  stopAiElapsedTimer()
+  // 根据received_at初始化已处理时长（后端返回北京时间ISO格式）
+  const receivedAt = detailData.value.received_at
+  if (receivedAt) {
+    const start = new Date(receivedAt).getTime()
+    const now = Date.now()
+    aiElapsedSeconds.value = isNaN(start) ? 0 : Math.max(0, Math.floor((now - start) / 1000))
+  } else {
+    aiElapsedSeconds.value = 0
+  }
+  aiElapsedTimer = setInterval(() => {
+    aiElapsedSeconds.value += 1
+  }, 1000)
+}
+
+function stopAiElapsedTimer() {
+  if (aiElapsedTimer) {
+    clearInterval(aiElapsedTimer)
+    aiElapsedTimer = null
+  }
+  aiElapsedSeconds.value = 0
+}
 
 const isAssignee = computed(() => detailData.value.assignee_id === store.user?.id)
 const isCreator = computed(() => detailData.value.created_by === store.user?.id)
+// 是否AI处理中（用于显示进度提示和轮询）
+const isAiProcessing = computed(() =>
+  detailData.value.assignee_type === 'ai' && detailData.value.status === 'processing'
+)
 
 // 进度条当前步骤
 const currentStep = computed(() => {
@@ -471,14 +578,55 @@ const currentStep = computed(() => {
   return 0
 })
 
+// 启动AI处理轮询
+function startAiPolling() {
+  stopAiPolling()
+  startAiElapsedTimer()
+  aiPollingTimer = setInterval(async () => {
+    if (!detailData.value.id || !detailVisible.value) {
+      stopAiPolling()
+      return
+    }
+    try {
+      const res = await api.tickets.get(detailData.value.id)
+      const newData = res.data || res || {}
+      detailData.value = newData
+      // AI处理完成（状态不再是processing），停止轮询并刷新列表
+      if (!(newData.assignee_type === 'ai' && newData.status === 'processing')) {
+        stopAiPolling()
+        fetchTickets()
+        if (newData.status === 'processed') {
+          ElMessage.success('AI已处理完成')
+        } else if (newData.status === 'pending_assignment') {
+          ElMessage.warning('AI处理失败，工单已转为待指派状态')
+        }
+      }
+    } catch {}
+  }, 3000)
+}
+
+// 停止AI处理轮询
+function stopAiPolling() {
+  if (aiPollingTimer) {
+    clearInterval(aiPollingTimer)
+    aiPollingTimer = null
+  }
+  stopAiElapsedTimer()
+}
+
 async function openDetail(row) {
   detailVisible.value = true
   detailLoading.value = true
   detailData.value = {}
   commentText.value = ''
+  stopAiPolling()
   try {
     const res = await api.tickets.get(row.id)
     detailData.value = res.data || res || {}
+    // 如果是AI处理中，启动轮询
+    if (isAiProcessing.value) {
+      startAiPolling()
+    }
   } catch (e) {
     ElMessage.error('加载详情失败')
   } finally {
@@ -491,6 +639,12 @@ async function refreshDetail() {
   try {
     const res = await api.tickets.get(detailData.value.id)
     detailData.value = res.data || res || {}
+    // 如果是AI处理中，启动轮询
+    if (isAiProcessing.value) {
+      startAiPolling()
+    } else {
+      stopAiPolling()
+    }
   } catch {}
 }
 
@@ -695,6 +849,11 @@ function renderMarkdown(text) {
 onMounted(() => {
   fetchTickets()
 })
+
+onUnmounted(() => {
+  stopAiPolling()
+  stopListPolling()
+})
 </script>
 
 <style scoped>
@@ -770,6 +929,85 @@ onMounted(() => {
 
 .pending-banner i {
   margin-right: 6px;
+}
+
+/* AI处理中提示 */
+.ai-processing-banner {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: linear-gradient(90deg, #f6f0ff 0%, #ece4ff 100%);
+  border: 1px solid #d9d2ec;
+  border-radius: 6px;
+  color: #722ed1;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+}
+
+.ai-processing-banner > i {
+  margin-right: 10px;
+  font-size: 18px;
+}
+
+.ai-processing-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ai-processing-title {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.ai-processing-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.ai-processing-elapsed {
+  color: #9254de;
+  font-weight: 500;
+}
+
+.ai-processing-elapsed i {
+  margin-right: 4px;
+}
+
+.ai-processing-hint {
+  color: #9254de;
+  opacity: 0.8;
+}
+
+@keyframes fa-spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.ai-processing-banner .fa-spin {
+  animation: fa-spin 2s infinite linear;
+}
+
+/* 列表中AI处理中状态标签 */
+.ai-status-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #722ed1;
+  background: linear-gradient(90deg, #f6f0ff 0%, #ece4ff 100%);
+  border: 1px solid #d9d2ec;
+  white-space: nowrap;
+}
+
+.ai-status-tag .fa-spin {
+  animation: fa-spin 2s infinite linear;
 }
 
 /* 表单提示 */

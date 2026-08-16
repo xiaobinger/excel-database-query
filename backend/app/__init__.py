@@ -48,6 +48,7 @@ def create_app(config_name='default'):
         _auto_migrate(app)
         _init_default_admin(app)
         _init_connection_pool(app)
+        _recover_stale_ai_tickets(app)
 
     _start_auto_export_scheduler(app)
 
@@ -382,3 +383,52 @@ def _init_connection_pool(app):
         pool.initialize(app)
     except Exception as e:
         app.logger.warning(f'连接池初始化失败（将在首次请求时建立连接）: {e}')
+
+
+def _recover_stale_ai_tickets(app):
+    """恢复因服务重启而卡在processing状态的AI工单
+
+    当服务重启时，正在处理AI工单的daemon线程会被kill，
+    导致工单永远卡在processing状态。此函数在启动时检查这些工单，
+    将其转为pending_assignment状态，提醒用户重新指派。
+    只在实际应用进程（非reloader主进程）中执行。
+    """
+    import os
+    if app.debug and os.environ.get('WERKZEUG_RUN_MAIN') is None:
+        # reloader主进程，跳过
+        return
+
+    try:
+        from app.models.ticket import Ticket, TicketComment
+        from datetime import datetime
+        # 查找所有AI处理中的工单
+        stale_tickets = Ticket.query.filter_by(
+            assignee_type='ai', status='processing'
+        ).all()
+        if not stale_tickets:
+            return
+
+        app.logger.info(f'发现 {len(stale_tickets)} 个卡在processing状态的AI工单，正在恢复...')
+        now = datetime.utcnow()
+        for ticket in stale_tickets:
+            # 计算已处理时长，超过2分钟未完成的视为僵尸工单
+            elapsed = (now - ticket.received_at).total_seconds() if ticket.received_at else 999999
+            if elapsed > 120:
+                ticket.status = 'pending_assignment'
+                if not ticket.ai_result:
+                    ticket.ai_result = 'AI处理因服务重启中断，请重新指派或重试AI处理'
+                comment = TicketComment(
+                    ticket_id=ticket.id,
+                    content='检测到AI处理因服务重启中断，工单已自动转为待指派状态。可点击"重试AI处理"重新触发，或重新指派给具体的人。',
+                    action='status_change',
+                    is_ai=True,
+                )
+                db.session.add(comment)
+                app.logger.info(f'工单 {ticket.ticket_no} 已恢复为pending_assignment（已处理{int(elapsed)}秒）')
+        db.session.commit()
+    except Exception as e:
+        app.logger.warning(f'恢复僵尸AI工单失败: {e}')
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
