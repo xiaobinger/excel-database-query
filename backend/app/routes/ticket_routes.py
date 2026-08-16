@@ -1393,6 +1393,36 @@ def get_analytics():
     )
     duration_rows = duration_query.all()
 
+    # AI Agent 统计：按 assignee_agent_id 聚合（指派给AI的工单）
+    ai_assignee_filter = Ticket.assignee_type == 'ai'
+    ai_assigned_rows = _aggregate_by_user(processed_base, Ticket.assignee_agent_id, ai_assignee_filter).all()
+    ai_completed_rows = _aggregate_by_user(
+        processed_base, Ticket.assignee_agent_id,
+        db.and_(ai_assignee_filter, Ticket.status.in_([STATUS_PROCESSED, STATUS_CLOSED]))
+    ).all()
+    # AI 待确认工单数
+    ai_pending_rows = _aggregate_by_user(
+        processed_base, Ticket.assignee_agent_id,
+        db.and_(ai_assignee_filter, Ticket.status == STATUS_PENDING_CONFIRMATION)
+    ).all()
+    # AI 失败转待指派工单数
+    ai_failed_rows = _aggregate_by_user(
+        processed_base, Ticket.assignee_agent_id,
+        db.and_(ai_assignee_filter, Ticket.status == STATUS_PENDING_ASSIGNMENT)
+    ).all()
+    # AI 处理时长明细
+    ai_duration_query = processed_base.filter(
+        ai_assignee_filter,
+        Ticket.assignee_agent_id.isnot(None),
+        Ticket.processed_at.isnot(None),
+    ).with_entities(
+        Ticket.assignee_agent_id.label('agent_id'),
+        Ticket.received_at,
+        Ticket.submitted_at,
+        Ticket.processed_at,
+    )
+    ai_duration_rows = ai_duration_query.all()
+
     # 汇总到用户维度
     user_map = {}  # user_id -> {submitted, assigned, completed, avg_duration, durations}
 
@@ -1411,6 +1441,24 @@ def get_analytics():
             delta_sec = (row.processed_at - start_time).total_seconds()
             if delta_sec > 0:
                 user_map.setdefault(uid, {}).setdefault('durations', []).append(delta_sec)
+
+    # AI Agent 维度汇总
+    agent_map = {}  # agent_id -> {assigned, completed, pending, failed, durations}
+    for row in ai_assigned_rows:
+        agent_map.setdefault(row.user_id, {})['assigned'] = row.count
+    for row in ai_completed_rows:
+        agent_map.setdefault(row.user_id, {})['completed'] = row.count
+    for row in ai_pending_rows:
+        agent_map.setdefault(row.user_id, {})['pending'] = row.count
+    for row in ai_failed_rows:
+        agent_map.setdefault(row.user_id, {})['failed'] = row.count
+    for row in ai_duration_rows:
+        aid = row.agent_id
+        start_time = row.received_at or row.submitted_at
+        if start_time and row.processed_at:
+            delta_sec = (row.processed_at - start_time).total_seconds()
+            if delta_sec > 0:
+                agent_map.setdefault(aid, {}).setdefault('durations', []).append(delta_sec)
 
     # 获取用户信息
     user_ids = list(user_map.keys())
@@ -1454,14 +1502,62 @@ def get_analytics():
     # 按提交数降序
     user_stats.sort(key=lambda x: x['submitted_count'], reverse=True)
 
-    # 总览
+    # 组装 AI Agent 统计数据
+    agent_ids = list(agent_map.keys())
+    agents_info = {}
+    if agent_ids:
+        agents = AiAgent.query.filter(AiAgent.id.in_(agent_ids)).all()
+        for a in agents:
+            agents_info[a.id] = {
+                'name': a.name,
+                'is_default': a.is_default,
+            }
+
+    ai_stats = []
+    for aid, stats in agent_map.items():
+        assigned = stats.get('assigned', 0)
+        completed = stats.get('completed', 0)
+        pending = stats.get('pending', 0)
+        failed = stats.get('failed', 0)
+        durations = stats.get('durations', [])
+        info = agents_info.get(aid, {})
+        # AI完成占比 = 完成数 / 指派数
+        completion_rate = round(completed / assigned * 100, 2) if assigned > 0 else 0
+        # AI平均处理时长（小时）
+        avg_hours = round(sum(durations) / len(durations) / 3600, 2) if durations else 0
+        ai_stats.append({
+            'agent_id': aid,
+            'agent_name': info.get('name', f'Agent#{aid}'),
+            'is_default': info.get('is_default', False),
+            'assigned_count': assigned,
+            'completed_count': completed,
+            'pending_count': pending,
+            'failed_count': failed,
+            'completion_rate': completion_rate,
+            'avg_duration_hours': avg_hours,
+            'processed_count': len(durations),
+        })
+
+    # AI 按指派数降序
+    ai_stats.sort(key=lambda x: x['assigned_count'], reverse=True)
+
+    # 总览（含AI）
     total_submitted = sum(u['submitted_count'] for u in user_stats)
-    total_assigned = sum(u['assigned_count'] for u in user_stats)
-    total_completed = sum(u['completed_count'] for u in user_stats)
+    total_assigned = sum(u['assigned_count'] for u in user_stats) + sum(a['assigned_count'] for a in ai_stats)
+    total_completed = sum(u['completed_count'] for u in user_stats) + sum(a['completed_count'] for a in ai_stats)
     overall_completion_rate = round(total_completed / total_assigned * 100, 2) if total_assigned > 0 else 0
-    # 全局平均处理时长
+    # 全局平均处理时长（含AI）
     all_durations = [u['avg_duration_hours'] for u in user_stats if u['avg_duration_hours'] > 0]
+    all_durations.extend([a['avg_duration_hours'] for a in ai_stats if a['avg_duration_hours'] > 0])
     overall_avg_hours = round(sum(all_durations) / len(all_durations), 2) if all_durations else 0
+    # AI 总览
+    ai_total_assigned = sum(a['assigned_count'] for a in ai_stats)
+    ai_total_completed = sum(a['completed_count'] for a in ai_stats)
+    ai_total_pending = sum(a['pending_count'] for a in ai_stats)
+    ai_total_failed = sum(a['failed_count'] for a in ai_stats)
+    ai_completion_rate = round(ai_total_completed / ai_total_assigned * 100, 2) if ai_total_assigned > 0 else 0
+    ai_durations = [a['avg_duration_hours'] for a in ai_stats if a['avg_duration_hours'] > 0]
+    ai_avg_hours = round(sum(ai_durations) / len(ai_durations), 2) if ai_durations else 0
 
     return jsonify({
         'success': True,
@@ -1473,6 +1569,7 @@ def get_analytics():
             'end_date': request.args.get('end_date'),
             'periods': periods,
             'user_stats': user_stats,
+            'ai_stats': ai_stats,
             'summary': {
                 'total_submitted': total_submitted,
                 'total_assigned': total_assigned,
@@ -1480,6 +1577,13 @@ def get_analytics():
                 'overall_completion_rate': overall_completion_rate,
                 'overall_avg_duration_hours': overall_avg_hours,
                 'user_count': len(user_stats),
+                'ai_total_assigned': ai_total_assigned,
+                'ai_total_completed': ai_total_completed,
+                'ai_total_pending': ai_total_pending,
+                'ai_total_failed': ai_total_failed,
+                'ai_completion_rate': ai_completion_rate,
+                'ai_avg_duration_hours': ai_avg_hours,
+                'ai_agent_count': len(ai_stats),
             },
             'status_labels': STATUS_LABELS,
         }

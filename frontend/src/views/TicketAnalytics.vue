@@ -108,6 +108,74 @@
         </div>
       </el-card>
 
+      <!-- AI 统计模块 -->
+      <el-card shadow="never" class="ai-stats-card" v-if="aiStats.length > 0 || summary.ai_total_assigned > 0">
+        <template #header>
+          <div class="table-header">
+            <span><i class="fas fa-robot"></i> AI Agent 处理统计</span>
+            <div class="ai-summary-inline">
+              <span class="ai-summary-item">指派 <b>{{ summary.ai_total_assigned || 0 }}</b></span>
+              <span class="ai-summary-item">完成 <b style="color: #67c23a">{{ summary.ai_total_completed || 0 }}</b></span>
+              <span class="ai-summary-item">待确认 <b style="color: #e6a23c">{{ summary.ai_total_pending || 0 }}</b></span>
+              <span class="ai-summary-item">失败 <b style="color: #f56c6c">{{ summary.ai_total_failed || 0 }}</b></span>
+              <span class="ai-summary-item">完成率 <b>{{ summary.ai_completion_rate || 0 }}%</b></span>
+              <span class="ai-summary-item">平均耗时 <b>{{ formatDuration(summary.ai_avg_duration_hours || 0) }}</b></span>
+            </div>
+          </div>
+        </template>
+        <el-table :data="aiStats" stripe style="width: 100%">
+          <el-table-column type="index" label="#" width="55" align="center" />
+          <el-table-column prop="agent_name" label="AI Agent" min-width="160" show-overflow-tooltip>
+            <template #default="{ row }">
+              <i class="fas fa-robot" style="color: #722ed1; margin-right: 6px"></i>
+              {{ row.agent_name }}
+              <el-tag v-if="row.is_default" type="success" size="small" effect="plain" style="margin-left: 6px">默认</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="assigned_count" label="指派数" width="90" align="center" sortable>
+            <template #default="{ row }">
+              <el-tag type="primary" size="small">{{ row.assigned_count }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="completed_count" label="完成数" width="90" align="center" sortable>
+            <template #default="{ row }">
+              <el-tag type="success" size="small">{{ row.completed_count }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="pending_count" label="待确认" width="90" align="center" sortable>
+            <template #default="{ row }">
+              <el-tag type="warning" size="small">{{ row.pending_count }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="failed_count" label="失败数" width="90" align="center" sortable>
+            <template #default="{ row }">
+              <el-tag type="danger" size="small" v-if="row.failed_count > 0">{{ row.failed_count }}</el-tag>
+              <span v-else style="color: #c0c4cc">0</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="completion_rate" label="完成占比" width="180" align="center" sortable>
+            <template #default="{ row }">
+              <div class="rate-progress">
+                <el-progress
+                  :percentage="Math.min(row.completion_rate, 100)"
+                  :color="getRateColor(row.completion_rate)"
+                  :stroke-width="14"
+                  :text-inside="true"
+                />
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="avg_duration_hours" label="平均处理时长" width="130" align="center" sortable>
+            <template #default="{ row }">
+              <span v-if="row.avg_duration_hours > 0" :style="{ color: getDurationColor(row.avg_duration_hours) }">
+                <i class="fas fa-clock"></i> {{ formatDuration(row.avg_duration_hours) }}
+              </span>
+              <span v-else style="color: #c0c4cc">-</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-card>
+
       <!-- 用户统计表格 -->
       <el-card shadow="never" class="table-card">
         <template #header>
@@ -187,6 +255,7 @@ const dateRange = ref([])
 const summary = ref({})
 const periods = ref([])
 const userStats = ref([])
+const aiStats = ref([])
 const dataLabel = ref('月份')
 
 const dateShortcuts = [
@@ -261,6 +330,7 @@ async function fetchData() {
     summary.value = data.summary || {}
     periods.value = data.periods || []
     userStats.value = data.user_stats || []
+    aiStats.value = data.ai_stats || []
     dataLabel.value = data.date_label || '月份'
   } catch (e) {
     ElMessage.error(e?.response?.data?.message || '获取统计数据失败')
@@ -446,6 +516,25 @@ onMounted(() => {
 
 .table-card {
   margin-bottom: 0;
+}
+
+.ai-stats-card {
+  margin-bottom: 16px;
+  border-left: 3px solid #722ed1;
+}
+
+.ai-summary-inline {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: #606266;
+}
+
+.ai-summary-item b {
+  margin-left: 4px;
+  font-weight: 600;
 }
 
 .table-header {
