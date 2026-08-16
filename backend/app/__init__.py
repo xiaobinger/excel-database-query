@@ -46,6 +46,7 @@ def create_app(config_name='default'):
         from app.models.ticket import Ticket, TicketComment
         db.create_all()
         _auto_migrate(app)
+        _migrate_ticket_comments_nullable(app)
         _init_default_admin(app)
         _init_connection_pool(app)
         _recover_stale_ai_tickets(app)
@@ -292,6 +293,50 @@ def _auto_migrate(app):
                 except Exception as e:
                     db.session.rollback()
                     app.logger.warning(f'Migration failed for {table_name}.{column.name}: {e}')
+
+
+def _migrate_ticket_comments_nullable(app):
+    """修复ticket_comments.user_id列约束为允许NULL
+
+    旧表结构中user_id为NOT NULL，但AI生成的评论没有user_id，
+    需要将列约束改为nullable。_auto_migrate只处理新增列，不修改约束，需单独处理。
+    只在实际应用进程（非reloader主进程）中执行。
+    """
+    import os
+    if app.debug and os.environ.get('WERKZEUG_RUN_MAIN') is None:
+        return
+
+    try:
+        from sqlalchemy import inspect, text
+        inspector = inspect(db.engine)
+        if not inspector.has_table('ticket_comments'):
+            return
+
+        # 检查user_id列是否为NOT NULL
+        columns = inspector.get_columns('ticket_comments')
+        user_id_col = next((c for c in columns if c['name'] == 'user_id'), None)
+        if not user_id_col:
+            return
+
+        # nullable为None或False表示NOT NULL，需要修改
+        if user_id_col.get('nullable', True) is False:
+            dialect = db.engine.dialect.name
+            if dialect == 'mysql':
+                db.session.execute(text('ALTER TABLE ticket_comments MODIFY COLUMN user_id INT NULL'))
+            elif dialect == 'postgresql':
+                db.session.execute(text('ALTER TABLE ticket_comments ALTER COLUMN user_id DROP NOT NULL'))
+            else:
+                # SQLite不支持修改列约束，跳过（SQLite默认列nullable，一般不会有此问题）
+                app.logger.info(f'Migration: dialect={dialect}不支持修改列约束，跳过ticket_comments.user_id')
+                return
+            db.session.commit()
+            app.logger.info('Migration: ticket_comments.user_id 已修改为允许NULL')
+    except Exception as e:
+        app.logger.warning(f'迁移ticket_comments.user_id nullable失败: {e}')
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
 
 
 def _init_default_admin(app):

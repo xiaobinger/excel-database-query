@@ -189,12 +189,21 @@ def _process_ticket_with_ai_async(ticket_id, app):
             logger.error(f'工单AI处理失败 ticket_id={ticket_id}: {e}', exc_info=True)
             try:
                 with app.app_context():
+                    # 先rollback清除失败的事务
+                    db.session.rollback()
                     ticket = Ticket.query.get(ticket_id)
                     if ticket:
                         ticket.status = STATUS_PENDING_ASSIGNMENT
                         ticket.ai_result = f'AI处理异常: {str(e)}'
-                        _add_comment(ticket, None, f'AI处理过程中发生异常: {str(e)}', 'status_change', is_ai=True)
+                        # 先保存工单状态（确保状态一定能保存）
                         db.session.commit()
+                        # 再尝试添加评论（失败不影响工单状态）
+                        try:
+                            _add_comment(ticket, None, f'AI处理过程中发生异常: {str(e)}', 'status_change', is_ai=True)
+                            db.session.commit()
+                        except Exception as ce:
+                            logger.warning(f'工单异常评论添加失败 ticket_id={ticket_id}: {ce}')
+                            db.session.rollback()
             except:
                 pass
 
