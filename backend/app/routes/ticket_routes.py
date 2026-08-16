@@ -1281,7 +1281,7 @@ def get_analytics():
       end_date   结束日期 YYYY-MM-DD（含）
       date_field 时间字段：submitted(按提交时间，默认)/processed(按处理完成时间)
     """
-    from sqlalchemy import func, literal_column
+    from sqlalchemy import func
 
     current_user = get_current_user()
     is_admin = bool(current_user and current_user.is_admin())
@@ -1358,18 +1358,11 @@ def get_analytics():
     # 3) 处理完成数（被指派且状态为 processed/closed）
     # 4) 平均处理时长（processed_at - received_at，按 assignee_id 聚合）
 
-    def _aggregate_by_user(base_q, group_col, extra_filters=None, avg_duration=False):
+    def _aggregate_by_user(base_q, group_col, extra_filters=None):
         """按指定列聚合统计"""
         q = base_q.filter(group_col.isnot(None))
         if extra_filters is not None:
             q = q.filter(extra_filters)
-        if avg_duration:
-            duration = func.timestampdiff(literal_column('SECOND'), Ticket.received_at, Ticket.processed_at)
-            return q.with_entities(
-                group_col.label('user_id'),
-                func.count(Ticket.id).label('count'),
-                func.avg(duration).label('avg_duration'),
-            ).group_by(group_col)
         return q.with_entities(
             group_col.label('user_id'),
             func.count(Ticket.id).label('count'),
@@ -1386,15 +1379,22 @@ def get_analytics():
         processed_base, Ticket.assignee_id,
         db.and_(user_assignee_filter, Ticket.status.in_([STATUS_PROCESSED, STATUS_CLOSED]))
     ).all()
-    # 平均处理时长统计
-    duration_rows = _aggregate_by_user(
-        processed_base, Ticket.assignee_id,
-        db.and_(user_assignee_filter, Ticket.received_at.isnot(None), Ticket.processed_at.isnot(None)),
-        avg_duration=True
-    ).all()
+    # 平均处理时长统计：查询每个用户处理完成的工单明细，Python端计算平均时长
+    # 优先用 received_at → processed_at（实际处理耗时），无法获取时用 submitted_at → processed_at
+    duration_query = processed_base.filter(
+        user_assignee_filter,
+        Ticket.assignee_id.isnot(None),
+        Ticket.processed_at.isnot(None),
+    ).with_entities(
+        Ticket.assignee_id.label('user_id'),
+        Ticket.received_at,
+        Ticket.submitted_at,
+        Ticket.processed_at,
+    )
+    duration_rows = duration_query.all()
 
     # 汇总到用户维度
-    user_map = {}  # user_id -> {submitted, assigned, completed, avg_duration}
+    user_map = {}  # user_id -> {submitted, assigned, completed, avg_duration, durations}
 
     for row in submitted_rows:
         user_map.setdefault(row.user_id, {})['submitted'] = row.count
@@ -1402,10 +1402,15 @@ def get_analytics():
         user_map.setdefault(row.user_id, {})['assigned'] = row.count
     for row in completed_rows:
         user_map.setdefault(row.user_id, {})['completed'] = row.count
+    # 平均处理时长：收集每个用户的处理耗时（秒），后续统一计算平均值
     for row in duration_rows:
-        avg_sec = float(row.avg_duration) if row.avg_duration else 0
-        user_map.setdefault(row.user_id, {})['avg_duration_sec'] = avg_sec
-        user_map[row.user_id]['processed_count'] = row.count
+        uid = row.user_id
+        # 优先用 received_at → processed_at，无法获取时用 submitted_at → processed_at
+        start_time = row.received_at or row.submitted_at
+        if start_time and row.processed_at:
+            delta_sec = (row.processed_at - start_time).total_seconds()
+            if delta_sec > 0:
+                user_map.setdefault(uid, {}).setdefault('durations', []).append(delta_sec)
 
     # 获取用户信息
     user_ids = list(user_map.keys())
@@ -1428,12 +1433,12 @@ def get_analytics():
         submitted = stats.get('submitted', 0)
         assigned = stats.get('assigned', 0)
         completed = stats.get('completed', 0)
-        avg_sec = stats.get('avg_duration_sec', 0)
+        durations = stats.get('durations', [])
         info = users_info.get(uid, {})
         # 完成占比 = 完成数 / 被指派数
         completion_rate = round(completed / assigned * 100, 2) if assigned > 0 else 0
-        # 平均处理时长（小时）
-        avg_hours = round(avg_sec / 3600, 2) if avg_sec > 0 else 0
+        # 平均处理时长（小时）：用收集到的耗时列表计算平均值
+        avg_hours = round(sum(durations) / len(durations) / 3600, 2) if durations else 0
         user_stats.append({
             'user_id': uid,
             'username': info.get('username', f'用户{uid}'),
@@ -1443,7 +1448,7 @@ def get_analytics():
             'completed_count': completed,
             'completion_rate': completion_rate,
             'avg_duration_hours': avg_hours,
-            'processed_count': stats.get('processed_count', 0),
+            'processed_count': len(durations),
         })
 
     # 按提交数降序
