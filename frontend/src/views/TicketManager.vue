@@ -11,7 +11,7 @@
             <el-input v-model="keyword" placeholder="搜索工单编号/标题" clearable style="width: 220px" @keyup.enter="fetchTickets" @clear="fetchTickets">
               <template #prefix><i class="fas fa-search"></i></template>
             </el-input>
-            <el-button type="primary" @click="openCreateDialog">
+            <el-button type="primary" v-hasPermi="['ticket:create']" @click="openCreateDialog">
               <i class="fas fa-plus"></i> 提交工单
             </el-button>
             <el-button @click="fetchTickets">
@@ -237,33 +237,33 @@
             <el-button v-if="detailData.status === 'processed'" type="success" @click="handleAction('confirm')">
               <i class="fas fa-check-circle"></i> 核实通过
             </el-button>
-            <el-button v-if="detailData.status === 'processed'" type="warning" @click="openReassignDialog('reopen')">
+            <el-button v-if="detailData.status === 'processed'" type="warning" v-hasPermi="['ticket:reassign']" @click="openReassignDialog('reopen')">
               <i class="fas fa-redo"></i> 重新发起
             </el-button>
             <el-button v-if="detailData.status === 'rejected'" type="primary" @click="openReasonDialog('appeal')">
               <i class="fas fa-gavel"></i> 申诉重启
             </el-button>
             <!-- 待指派：提交人重新指派 -->
-            <el-button v-if="detailData.status === 'pending_assignment'" type="primary" @click="openReassignDialog('reassign')">
+            <el-button v-if="detailData.status === 'pending_assignment'" type="primary" v-hasPermi="['ticket:reassign']" @click="openReassignDialog('reassign')">
               <i class="fas fa-user-plus"></i> 重新指派
             </el-button>
             <!-- 待确认：提交人确认执行或取消 -->
-            <el-button v-if="detailData.status === 'pending_confirmation'" type="success" @click="handleConfirmAction">
+            <el-button v-if="detailData.status === 'pending_confirmation'" type="success" v-hasPermi="['ticket:confirm_action']" @click="handleConfirmAction">
               <i class="fas fa-check-circle"></i> 确认执行
             </el-button>
-            <el-button v-if="detailData.status === 'pending_confirmation'" type="warning" @click="handleCancelAction">
+            <el-button v-if="detailData.status === 'pending_confirmation'" type="warning" v-hasPermi="['ticket:confirm_action']" @click="handleCancelAction">
               <i class="fas fa-times-circle"></i> 取消执行
             </el-button>
-            <el-button v-if="detailData.status === 'pending_confirmation'" type="primary" @click="openReassignDialog('reassign')">
+            <el-button v-if="detailData.status === 'pending_confirmation'" type="primary" v-hasPermi="['ticket:reassign']" @click="openReassignDialog('reassign')">
               <i class="fas fa-user-plus"></i> 重新指派
             </el-button>
           </template>
           <!-- 管理员也可重新指派 -->
-          <el-button v-if="isAdmin && detailData.status === 'pending_assignment' && !isCreator" type="primary" @click="openReassignDialog('reassign')">
+          <el-button v-if="isAdmin && detailData.status === 'pending_assignment' && !isCreator" type="primary" v-hasPermi="['ticket:reassign']" @click="openReassignDialog('reassign')">
             <i class="fas fa-user-plus"></i> 重新指派
           </el-button>
           <!-- 重试AI处理（指派给AI且处于待指派/已提交状态） -->
-          <el-button v-if="detailData.assignee_type === 'ai' && detailData.status === 'pending_assignment'" type="warning" plain @click="handleRetryAi">
+          <el-button v-if="detailData.assignee_type === 'ai' && detailData.status === 'pending_assignment'" type="warning" plain v-hasPermi="['ticket:retry_ai']" @click="handleRetryAi">
             <i class="fas fa-redo"></i> 重试AI处理
           </el-button>
           <!-- 管理员操作 -->

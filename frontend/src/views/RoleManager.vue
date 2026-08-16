@@ -230,6 +230,7 @@ const menuPermLabels = {
   scripts: '脚本管理',
   query: '查询执行',
   export_exec: '导出任务',
+  profit_share: '分润导出',
   auto_export: '自动导出',
   system: '系统配置',
   history: '执行历史',
@@ -241,7 +242,9 @@ const menuPermLabels = {
   agent_manager: 'Agent管理',
   cache_stats: '缓存统计',
   business_systems: '业务系统',
-  system_tasks: '系统任务'
+  system_tasks: '系统任务',
+  tickets: '工单管理',
+  system_map: '系统地图'
 }
 
 const buttonPermLabels = {
@@ -282,7 +285,11 @@ const buttonPermLabels = {
   'system_task:delete': '删除系统任务',
   'system_task:execute': '执行系统任务',
   'system_task:view_log': '查看执行记录',
-  'system_task:delete_log': '删除执行记录'
+  'system_task:delete_log': '删除执行记录',
+  'ticket:create': '提交工单',
+  'ticket:reassign': '重新指派/重新发起',
+  'ticket:retry_ai': '重试AI处理',
+  'ticket:confirm_action': '确认/取消执行数据变更'
 }
 
 const availableAgents = ref([])
@@ -307,7 +314,9 @@ const menuOptions = [
   { value: 'skills', label: 'Skills' },
   { value: 'agent_manager', label: 'Agent管理' },
   { value: 'cache_stats', label: '缓存统计' },
-  { value: 'business_systems', label: '业务系统' }
+  { value: 'business_systems', label: '业务系统' },
+  { value: 'tickets', label: '工单管理' },
+  { value: 'system_map', label: '系统地图' }
 ]
 
 const buttonPermGroups = [
@@ -402,6 +411,15 @@ const buttonPermGroups = [
       { value: 'agent:create', label: '新建' },
       { value: 'agent:edit', label: '编辑' },
       { value: 'agent:delete', label: '删除' }
+    ]
+  },
+  {
+    label: '工单管理',
+    items: [
+      { value: 'ticket:create', label: '提交工单' },
+      { value: 'ticket:reassign', label: '重新指派/重新发起' },
+      { value: 'ticket:retry_ai', label: '重试AI处理' },
+      { value: 'ticket:confirm_action', label: '确认/取消执行数据变更' }
     ]
   }
 ]
