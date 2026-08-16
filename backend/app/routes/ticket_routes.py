@@ -1281,8 +1281,7 @@ def get_analytics():
       end_date   结束日期 YYYY-MM-DD（含）
       date_field 时间字段：submitted(按提交时间，默认)/processed(按处理完成时间)
     """
-    from sqlalchemy import func, case
-    from datetime import timedelta
+    from sqlalchemy import func, literal_column
 
     current_user = get_current_user()
     is_admin = bool(current_user and current_user.is_admin())
@@ -1310,18 +1309,26 @@ def get_analytics():
     end_date = _parse_date(request.args.get('end_date'), end_of_day=True)
 
     # 时间字段选择
+    # submitted: 趋势图按提交时间分组；processed: 趋势图按处理完成时间分组
     time_col = Ticket.submitted_at if date_field == 'submitted' else Ticket.processed_at
 
-    # 基础查询：根据时间范围过滤（UTC存储，北京时间展示，统计按北京时间分组）
-    base_query = Ticket.query
-    if start_date:
-        base_query = base_query.filter(time_col >= start_date)
-    if end_date:
-        base_query = base_query.filter(time_col <= end_date)
-    if time_col is Ticket.submitted_at:
-        base_query = base_query.filter(Ticket.submitted_at.isnot(None))
-    else:
-        base_query = base_query.filter(Ticket.processed_at.isnot(None))
+    def _apply_time_filter(query, col):
+        """对查询应用时间范围过滤"""
+        q = query.filter(col.isnot(None))
+        if start_date:
+            q = q.filter(col >= start_date)
+        if end_date:
+            q = q.filter(col <= end_date)
+        return q
+
+    # 趋势图基础查询：按选定时间字段过滤
+    period_base = _apply_time_filter(Ticket.query, time_col)
+
+    # 用户统计基础查询：
+    # - 提交数：始终按 submitted_at 过滤时间范围
+    # - 处理相关统计：按选定时间字段过滤（与趋势图一致）
+    submitted_base = _apply_time_filter(Ticket.query, Ticket.submitted_at)
+    processed_base = _apply_time_filter(Ticket.query, time_col)
 
     # 按维度分组的时间表达式（北京时间 = UTC + 8h）
     if dimension == 'day':
@@ -1335,10 +1342,10 @@ def get_analytics():
         date_label = '月份'
 
     # 时段维度汇总（总览）
-    period_query = base_query.with_entities(
+    period_query = period_base.with_entities(
         time_expr.label('period'),
         func.count(Ticket.id).label('count'),
-    ).group_by('period').order_by('period')
+    ).group_by(time_expr).order_by(time_expr)
 
     period_rows = period_query.all()
     periods = []
@@ -1351,48 +1358,38 @@ def get_analytics():
     # 3) 处理完成数（被指派且状态为 processed/closed）
     # 4) 平均处理时长（processed_at - received_at，按 assignee_id 聚合）
 
-    def _build_user_query(group_col, status_filter=None, avg_duration=False):
-        """构建按用户聚合的统计查询"""
-        q = base_query.filter(Ticket.assignee_type == 'user') if group_col == Ticket.assignee_id else base_query
-        if status_filter:
-            q = q.filter(status_filter)
+    def _aggregate_by_user(base_q, group_col, extra_filters=None, avg_duration=False):
+        """按指定列聚合统计"""
+        q = base_q.filter(group_col.isnot(None))
+        if extra_filters is not None:
+            q = q.filter(extra_filters)
         if avg_duration:
-            # 处理时长（小时），仅统计 received_at 和 processed_at 都有的工单
-            q = q.filter(Ticket.received_at.isnot(None), Ticket.processed_at.isnot(None))
-            duration = func.timestampdiff(func.text('SECOND'), Ticket.received_at, Ticket.processed_at)
+            duration = func.timestampdiff(literal_column('SECOND'), Ticket.received_at, Ticket.processed_at)
             return q.with_entities(
                 group_col.label('user_id'),
                 func.count(Ticket.id).label('count'),
                 func.avg(duration).label('avg_duration'),
-            ).filter(group_col.isnot(None)).group_by(group_col)
+            ).group_by(group_col)
         return q.with_entities(
             group_col.label('user_id'),
             func.count(Ticket.id).label('count'),
-        ).filter(group_col.isnot(None)).group_by(group_col)
+        ).group_by(group_col)
 
-    # 提交数统计
-    submitted_rows = _build_user_query(Ticket.created_by).all()
-    # 处理数统计（被指派且已接收过）
-    assigned_rows = _build_user_query(
-        Ticket.assignee_id,
-        Ticket.assignee_type == 'user'
-    ).all()
+    user_assignee_filter = Ticket.assignee_type == 'user'
+
+    # 提交数统计（按 created_by，用 submitted_base）
+    submitted_rows = _aggregate_by_user(submitted_base, Ticket.created_by).all()
+    # 处理数统计（被指派给具体人，用 processed_base）
+    assigned_rows = _aggregate_by_user(processed_base, Ticket.assignee_id, user_assignee_filter).all()
     # 完成数统计（被指派且状态为已处理/已结束）
-    completed_rows = _build_user_query(
-        Ticket.assignee_id,
-        db.and_(
-            Ticket.assignee_type == 'user',
-            Ticket.status.in_([STATUS_PROCESSED, STATUS_CLOSED])
-        )
+    completed_rows = _aggregate_by_user(
+        processed_base, Ticket.assignee_id,
+        db.and_(user_assignee_filter, Ticket.status.in_([STATUS_PROCESSED, STATUS_CLOSED]))
     ).all()
     # 平均处理时长统计
-    duration_rows = _build_user_query(
-        Ticket.assignee_id,
-        db.and_(
-            Ticket.assignee_type == 'user',
-            Ticket.received_at.isnot(None),
-            Ticket.processed_at.isnot(None)
-        ),
+    duration_rows = _aggregate_by_user(
+        processed_base, Ticket.assignee_id,
+        db.and_(user_assignee_filter, Ticket.received_at.isnot(None), Ticket.processed_at.isnot(None)),
         avg_duration=True
     ).all()
 
