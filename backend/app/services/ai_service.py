@@ -331,7 +331,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "create_ticket",
-            "description": "当用户希望创建工单、提交工单、报修、反馈问题时调用此工具。也可在AI无法完成用户任务时，征得用户同意后将任务转化为工单。需要提取工单标题、内容和指派信息。重要：指派对象必须由用户明确指定，绝不能默认指派给AI。只有当用户明确说出'指派给AI'、'让AI处理'等表述时才填assignee_type=ai；当用户给出具体人名时填assignee_type=user并填assignee_name。如果用户没有明确说明指派给谁，请不要填写assignee_type字段，系统会返回询问提示，你再向用户询问。",
+            "description": "当用户希望创建工单、提交工单、报修、反馈问题时调用此工具。也可在AI无法完成用户任务时，征得用户同意后将任务转化为工单。需要提取工单标题、内容和指派信息。重要：指派对象必须由用户明确指定，绝不能默认指派给AI。只有当用户明确说出'指派给AI'、'让AI处理'等表述时才填assignee_type=ai；当用户给出具体人名时填assignee_type=user并填assignee_name。如果用户没有明确说明指派给谁，请不要填写assignee_type字段，系统会返回询问提示，你再向用户询问。同样，涉及的业务系统也必须由用户明确指出，如果用户未说明涉及的系统，请不要填写business_system_name字段，系统会返回询问提示，你再向用户询问。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -354,7 +354,7 @@ AI_TOOLS = [
                     },
                     "business_system_name": {
                         "type": "string",
-                        "description": "涉及的业务系统名称关键词（可选），如'海科'、'支付通'等"
+                        "description": "涉及的业务系统名称关键词，必须由用户明确指出。如用户说'海科系统'则填'海科'。用户未说明涉及的系统时不要填写此字段"
                     },
                     "description": {
                         "type": "string",
@@ -1785,29 +1785,32 @@ AI回复：{ai_response[:500] if ai_response else ''}
         business_system_name = (args.get('business_system_name') or '').strip()
         description = (args.get('description') or '').strip()
 
-        # 基础参数校验
+        # 基础参数校验：合并缺失项一次性询问用户，避免多轮对话
+        missing_params = []
+        ask_messages = []
         if not title:
-            return {
-                'error': '工单标题不能为空',
-                'action_type': 'create_ticket',
-                'missing_params': ['title'],
-                'ask_user': '请提供工单标题（简明扼要概括问题，不超过50字）',
-            }
+            missing_params.append('title')
+            ask_messages.append('请提供工单标题（简明扼要概括问题，不超过50字）')
         if not content:
-            return {
-                'error': '工单内容不能为空',
-                'action_type': 'create_ticket',
-                'missing_params': ['content'],
-                'ask_user': '请详细描述工单内容（问题或需求）',
-            }
+            missing_params.append('content')
+            ask_messages.append('请详细描述工单内容（问题或需求）')
         # 指派对象必须由用户明确指定，不能默认
         if not assignee_type:
+            missing_params.append('assignee_type')
+            ask_messages.append('请问这个工单要指派给谁？可以指派给具体的人（请提供用户名或姓名），也可以指派给AI自动处理（回复"指派给AI"）')
+        # 涉及的业务系统也必须由用户明确指定（包括明确表示"不涉及"）
+        if not business_system_name:
+            missing_params.append('business_system_name')
+            ask_messages.append('请问这个工单涉及哪个业务系统？如不涉及任何系统请回复"不涉及"')
+
+        if missing_params:
             return {
-                'error': '未指定指派对象，不能默认指派',
+                'error': '缺少必要参数，需要向用户询问',
                 'action_type': 'create_ticket',
-                'missing_params': ['assignee_type'],
-                'ask_user': '请问这个工单要指派给谁？可以指派给具体的人（请提供用户名或姓名），也可以指派给AI自动处理（回复"指派给AI"）',
+                'missing_params': missing_params,
+                'ask_user': '\n'.join(ask_messages),
             }
+
         if assignee_type not in ('user', 'ai'):
             return {
                 'error': "指派类型只能为 'user' 或 'ai'",
@@ -1894,13 +1897,18 @@ AI回复：{ai_response[:500] if ai_response else ''}
         # 匹配业务系统
         business_system_id = None
         business_system_display = None
-        if business_system_name:
+        # 用户明确表示不涉及业务系统的关键词
+        no_system_keywords = {'无', '不涉及', '不需要', '没有', 'none', 'n/a', '不关联', '暂无', '无系统'}
+        if business_system_name and business_system_name.lower() not in no_system_keywords:
             bs = BusinessSystem.query.filter(
                 BusinessSystem.name.like(f'%{business_system_name}%')
             ).first()
             if bs:
                 business_system_id = bs.id
                 business_system_display = bs.name
+            else:
+                # 用户提供了系统名称但匹配不到，记录原始值供前端展示
+                business_system_display = business_system_name
 
         # 创建工单
         try:
