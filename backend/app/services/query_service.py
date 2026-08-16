@@ -922,8 +922,20 @@ class QueryService:
         recent_list = []
         for task in recent_tasks:
             task_dict = task.to_dict()
+            # 识别分润导出任务
+            params = task.get_params_values() or {}
+            is_profit_share = params.get('task_type') == 'profit_share' or (
+                task.type == 'export'
+                and not task.get_script_ids_json()
+                and not task.script_id
+                and 'org_no' in params
+            )
+            task_dict['is_profit_share'] = is_profit_share
             script = Script.query.get(task.script_id) if task.script_id else None
-            task_dict['script_name'] = script.name if script else '未知'
+            if is_profit_share:
+                task_dict['script_name'] = f'分润导出({params.get("org_no", "")})'
+            else:
+                task_dict['script_name'] = script.name if script else '未知'
             task_dict['script_tag'] = script.tag if script else ''
             db_names = []
             for db_id in task.get_database_ids():

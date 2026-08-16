@@ -51,7 +51,8 @@
       <el-table :data="recentTasks" stripe style="width: 100%" v-loading="loading" @row-click="goToDetail">
         <el-table-column prop="script_tag" label="查询选项" min-width="160" show-overflow-tooltip>
           <template #default="{ row }">
-            <el-tag v-if="row.script_tag" size="small" effect="plain">{{ row.script_tag }}</el-tag>
+            <el-tag v-if="isProfitShare(row)" type="success" size="small" effect="dark">分润导出</el-tag>
+            <el-tag v-else-if="row.script_tag" size="small" effect="plain">{{ row.script_tag }}</el-tag>
             <span v-else>{{ row.script_name || '-' }}</span>
           </template>
         </el-table-column>
@@ -103,7 +104,8 @@
         <el-descriptions :column="2" border size="small">
           <el-descriptions-item label="任务ID">{{ detailData.task_id || '-' }}</el-descriptions-item>
           <el-descriptions-item label="查询选项">
-            <el-tag v-if="detailData.script_tag" size="small" effect="plain">{{ detailData.script_tag }}</el-tag>
+            <el-tag v-if="isProfitShare(detailData)" type="success" size="small" effect="dark">分润导出</el-tag>
+            <el-tag v-else-if="detailData.script_tag" size="small" effect="plain">{{ detailData.script_tag }}</el-tag>
             <span v-else>{{ detailData.script_name || '-' }}</span>
           </el-descriptions-item>
           <el-descriptions-item label="状态">
@@ -220,6 +222,11 @@ function progressStatus(status) {
   if (status === 'completed') return 'success'
   if (status === 'failed') return 'exception'
   return undefined
+}
+
+// 是否分润导出任务
+function isProfitShare(row) {
+  return row?.is_profit_share || row?.params_values?.task_type === 'profit_share'
 }
 
 function levelLabel(level) {
