@@ -771,7 +771,7 @@ def update_status(ticket_id):
       reopen         提交人重新发起       processed → submitted
       appeal         提交人申诉重启（需reason） rejected → submitted
       reassign       提交人重新指派       pending_assignment → submitted（需 assignee_id 或 assignee_type='ai'）
-      transfer_to_ai 被指派人移交给AI     received/processing → submitted（需 assignee_type='ai'）
+      transfer       被指派人移交工单     received/processing → submitted（需 assignee_id 或 assignee_type='ai'）
       close          管理员关闭           any → closed
 
     请求体：{ action: str, reason?: str, comment?: str, assignee_id?: int, assignee_type?: str }
@@ -804,7 +804,7 @@ def update_status(ticket_id):
         'reopen': ([STATUS_PROCESSED], STATUS_SUBMITTED, 'creator', False, 'status_change'),
         'appeal': ([STATUS_REJECTED], STATUS_SUBMITTED, 'creator', True, 'appeal'),
         'reassign': ([STATUS_PENDING_ASSIGNMENT, STATUS_PENDING_CONFIRMATION], STATUS_SUBMITTED, 'creator', False, 'status_change'),
-        'transfer_to_ai': ([STATUS_RECEIVED, STATUS_PROCESSING], STATUS_SUBMITTED, 'assignee', False, 'status_change'),
+        'transfer': ([STATUS_RECEIVED, STATUS_PROCESSING], STATUS_SUBMITTED, 'assignee', False, 'status_change'),
         'close': (list(STATUS_LABELS.keys()), STATUS_CLOSED, 'admin', False, 'status_change'),
     }
 
@@ -832,15 +832,11 @@ def update_status(ticket_id):
     if requires_reason and not reason:
         return jsonify({'success': False, 'message': '此操作必须填写原因'}), 400
 
-    # 重新指派 / 重新发起 / 移交AI 特殊处理（都需要重新指派）
-    if action in ('reassign', 'reopen', 'transfer_to_ai'):
+    # 重新指派 / 重新发起 / 移交工单 特殊处理（都需要重新指派）
+    if action in ('reassign', 'reopen', 'transfer'):
         new_assignee_type = (data.get('assignee_type') or '').strip()
         new_assignee_id = data.get('assignee_id')
         new_assignee_agent_id = data.get('assignee_agent_id')
-
-        # transfer_to_ai 强制指派给AI
-        if action == 'transfer_to_ai':
-            new_assignee_type = 'ai'
 
         # reopen时如果未提供指派类型，默认保留原指派
         if action == 'reopen' and not new_assignee_type:
@@ -850,6 +846,13 @@ def update_status(ticket_id):
             new_assignee_agent_id = ticket.assignee_agent_id
         elif not new_assignee_type:
             new_assignee_type = 'user'
+
+        # transfer 必须指定新的指派对象，不能移交给原指派人自己
+        if action == 'transfer':
+            if new_assignee_type == 'user' and new_assignee_id and int(new_assignee_id) == ticket.assignee_id:
+                return jsonify({'success': False, 'message': '不能移交给当前指派人自己'}), 400
+            if new_assignee_type == ticket.assignee_type and new_assignee_agent_id and int(new_assignee_agent_id) == (ticket.assignee_agent_id or 0):
+                return jsonify({'success': False, 'message': '不能移交给当前指派的AI Agent'}), 400
 
         if new_assignee_type == 'ai':
             if new_assignee_agent_id:
@@ -902,8 +905,11 @@ def update_status(ticket_id):
 
         if action == 'reassign':
             action_msg = '提交人重新指派了工单'
-        elif action == 'transfer_to_ai':
-            action_msg = '被指派人将工单移交给AI处理'
+        elif action == 'transfer':
+            if new_assignee_type == 'ai':
+                action_msg = '被指派人将工单移交给AI处理'
+            else:
+                action_msg = '被指派人将工单移交给其他人处理'
         else:
             action_msg = '提交人重新发起了工单'
 
@@ -917,8 +923,8 @@ def update_status(ticket_id):
 
         if action == 'reassign':
             msg = '工单已重新指派'
-        elif action == 'transfer_to_ai':
-            msg = '工单已移交给AI'
+        elif action == 'transfer':
+            msg = '工单已移交' + ('给AI' if new_assignee_type == 'ai' else '')
         else:
             msg = '工单已重新发起'
         return jsonify({
@@ -1257,6 +1263,222 @@ def get_stats():
             'total': total,
             'active': active_count,
             'by_status': by_status,
+            'status_labels': STATUS_LABELS,
+        }
+    })
+
+
+@ticket_bp.route('/analytics', methods=['GET'])
+@login_required
+def get_analytics():
+    """工单统计分析
+
+    支持按天/月/年维度统计每个用户的工单提交数、处理数、完成数、完成占比、平均处理时长。
+
+    查询参数：
+      dimension  维度：day/month/year，默认 month
+      start_date 起始日期 YYYY-MM-DD（含）
+      end_date   结束日期 YYYY-MM-DD（含）
+      date_field 时间字段：submitted(按提交时间，默认)/processed(按处理完成时间)
+    """
+    from sqlalchemy import func, case
+    from datetime import timedelta
+
+    current_user = get_current_user()
+    is_admin = bool(current_user and current_user.is_admin())
+
+    dimension = (request.args.get('dimension') or 'month').strip().lower()
+    if dimension not in ('day', 'month', 'year'):
+        dimension = 'month'
+    date_field = (request.args.get('date_field') or 'submitted').strip().lower()
+    if date_field not in ('submitted', 'processed'):
+        date_field = 'submitted'
+
+    # 时间范围解析
+    def _parse_date(s, end_of_day=False):
+        if not s:
+            return None
+        try:
+            d = datetime.strptime(s, '%Y-%m-%d')
+            if end_of_day:
+                d = d.replace(hour=23, minute=59, second=59)
+            return d
+        except ValueError:
+            return None
+
+    start_date = _parse_date(request.args.get('start_date'))
+    end_date = _parse_date(request.args.get('end_date'), end_of_day=True)
+
+    # 时间字段选择
+    time_col = Ticket.submitted_at if date_field == 'submitted' else Ticket.processed_at
+
+    # 基础查询：根据时间范围过滤（UTC存储，北京时间展示，统计按北京时间分组）
+    base_query = Ticket.query
+    if start_date:
+        base_query = base_query.filter(time_col >= start_date)
+    if end_date:
+        base_query = base_query.filter(time_col <= end_date)
+    if time_col is Ticket.submitted_at:
+        base_query = base_query.filter(Ticket.submitted_at.isnot(None))
+    else:
+        base_query = base_query.filter(Ticket.processed_at.isnot(None))
+
+    # 按维度分组的时间表达式（北京时间 = UTC + 8h）
+    if dimension == 'day':
+        time_expr = func.date(func.convert_tz(time_col, '+00:00', '+08:00'))
+        date_label = '日期'
+    elif dimension == 'year':
+        time_expr = func.year(func.convert_tz(time_col, '+00:00', '+08:00'))
+        date_label = '年份'
+    else:
+        time_expr = func.date_format(func.convert_tz(time_col, '+00:00', '+08:00'), '%Y-%m')
+        date_label = '月份'
+
+    # 时段维度汇总（总览）
+    period_query = base_query.with_entities(
+        time_expr.label('period'),
+        func.count(Ticket.id).label('count'),
+    ).group_by('period').order_by('period')
+
+    period_rows = period_query.all()
+    periods = []
+    for row in period_rows:
+        periods.append({'period': str(row.period), 'count': row.count})
+
+    # 各用户统计
+    # 1) 提交数（按 created_by）
+    # 2) 被指派处理数（按 assignee_id，仅指派给具体人的工单）
+    # 3) 处理完成数（被指派且状态为 processed/closed）
+    # 4) 平均处理时长（processed_at - received_at，按 assignee_id 聚合）
+
+    def _build_user_query(group_col, status_filter=None, avg_duration=False):
+        """构建按用户聚合的统计查询"""
+        q = base_query.filter(Ticket.assignee_type == 'user') if group_col == Ticket.assignee_id else base_query
+        if status_filter:
+            q = q.filter(status_filter)
+        if avg_duration:
+            # 处理时长（小时），仅统计 received_at 和 processed_at 都有的工单
+            q = q.filter(Ticket.received_at.isnot(None), Ticket.processed_at.isnot(None))
+            duration = func.timestampdiff(func.text('SECOND'), Ticket.received_at, Ticket.processed_at)
+            return q.with_entities(
+                group_col.label('user_id'),
+                func.count(Ticket.id).label('count'),
+                func.avg(duration).label('avg_duration'),
+            ).filter(group_col.isnot(None)).group_by(group_col)
+        return q.with_entities(
+            group_col.label('user_id'),
+            func.count(Ticket.id).label('count'),
+        ).filter(group_col.isnot(None)).group_by(group_col)
+
+    # 提交数统计
+    submitted_rows = _build_user_query(Ticket.created_by).all()
+    # 处理数统计（被指派且已接收过）
+    assigned_rows = _build_user_query(
+        Ticket.assignee_id,
+        Ticket.assignee_type == 'user'
+    ).all()
+    # 完成数统计（被指派且状态为已处理/已结束）
+    completed_rows = _build_user_query(
+        Ticket.assignee_id,
+        db.and_(
+            Ticket.assignee_type == 'user',
+            Ticket.status.in_([STATUS_PROCESSED, STATUS_CLOSED])
+        )
+    ).all()
+    # 平均处理时长统计
+    duration_rows = _build_user_query(
+        Ticket.assignee_id,
+        db.and_(
+            Ticket.assignee_type == 'user',
+            Ticket.received_at.isnot(None),
+            Ticket.processed_at.isnot(None)
+        ),
+        avg_duration=True
+    ).all()
+
+    # 汇总到用户维度
+    user_map = {}  # user_id -> {submitted, assigned, completed, avg_duration}
+
+    for row in submitted_rows:
+        user_map.setdefault(row.user_id, {})['submitted'] = row.count
+    for row in assigned_rows:
+        user_map.setdefault(row.user_id, {})['assigned'] = row.count
+    for row in completed_rows:
+        user_map.setdefault(row.user_id, {})['completed'] = row.count
+    for row in duration_rows:
+        avg_sec = float(row.avg_duration) if row.avg_duration else 0
+        user_map.setdefault(row.user_id, {})['avg_duration_sec'] = avg_sec
+        user_map[row.user_id]['processed_count'] = row.count
+
+    # 获取用户信息
+    user_ids = list(user_map.keys())
+    users_info = {}
+    if user_ids:
+        users = User.query.filter(User.id.in_(user_ids)).all()
+        for u in users:
+            users_info[u.id] = {
+                'username': u.username,
+                'display_name': u.display_name or u.username,
+            }
+
+    # 非管理员只看自己的统计
+    if not is_admin and current_user:
+        user_map = {k: v for k, v in user_map.items() if k == current_user.id}
+
+    # 组装返回数据
+    user_stats = []
+    for uid, stats in user_map.items():
+        submitted = stats.get('submitted', 0)
+        assigned = stats.get('assigned', 0)
+        completed = stats.get('completed', 0)
+        avg_sec = stats.get('avg_duration_sec', 0)
+        info = users_info.get(uid, {})
+        # 完成占比 = 完成数 / 被指派数
+        completion_rate = round(completed / assigned * 100, 2) if assigned > 0 else 0
+        # 平均处理时长（小时）
+        avg_hours = round(avg_sec / 3600, 2) if avg_sec > 0 else 0
+        user_stats.append({
+            'user_id': uid,
+            'username': info.get('username', f'用户{uid}'),
+            'display_name': info.get('display_name', f'用户{uid}'),
+            'submitted_count': submitted,
+            'assigned_count': assigned,
+            'completed_count': completed,
+            'completion_rate': completion_rate,
+            'avg_duration_hours': avg_hours,
+            'processed_count': stats.get('processed_count', 0),
+        })
+
+    # 按提交数降序
+    user_stats.sort(key=lambda x: x['submitted_count'], reverse=True)
+
+    # 总览
+    total_submitted = sum(u['submitted_count'] for u in user_stats)
+    total_assigned = sum(u['assigned_count'] for u in user_stats)
+    total_completed = sum(u['completed_count'] for u in user_stats)
+    overall_completion_rate = round(total_completed / total_assigned * 100, 2) if total_assigned > 0 else 0
+    # 全局平均处理时长
+    all_durations = [u['avg_duration_hours'] for u in user_stats if u['avg_duration_hours'] > 0]
+    overall_avg_hours = round(sum(all_durations) / len(all_durations), 2) if all_durations else 0
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'dimension': dimension,
+            'date_field': date_field,
+            'date_label': date_label,
+            'start_date': request.args.get('start_date'),
+            'end_date': request.args.get('end_date'),
+            'periods': periods,
+            'user_stats': user_stats,
+            'summary': {
+                'total_submitted': total_submitted,
+                'total_assigned': total_assigned,
+                'total_completed': total_completed,
+                'overall_completion_rate': overall_completion_rate,
+                'overall_avg_duration_hours': overall_avg_hours,
+                'user_count': len(user_stats),
+            },
             'status_labels': STATUS_LABELS,
         }
     })

@@ -288,6 +288,7 @@ const tickets = {
   cancelAction: (id) => http.post(`/tickets/${id}/cancel-action`),
   upload: (formData) => http.post('/tickets/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   stats: () => http.get('/tickets/stats'),
+  analytics: (params) => http.get('/tickets/analytics', { params }),
 }
 
 export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, business, systemTask, lookup, profitShare, tickets }

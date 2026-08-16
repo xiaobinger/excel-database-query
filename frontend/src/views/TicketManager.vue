@@ -231,9 +231,9 @@
             <el-button v-if="['submitted', 'received'].includes(detailData.status)" type="danger" @click="openReasonDialog('reject')">
               <i class="fas fa-ban"></i> 拒绝
             </el-button>
-            <!-- 被指派人移交给AI处理（已接收/处理中状态，且当前指派给具体人） -->
-            <el-button v-if="detailData.assignee_type === 'user' && ['received', 'processing'].includes(detailData.status)" type="primary" plain v-hasPermi="['ticket:reassign']" @click="openReassignDialog('transfer_to_ai')">
-              <i class="fas fa-robot"></i> 移交AI处理
+            <!-- 被指派人移交工单（已接收/处理中状态，且当前指派给具体人） -->
+            <el-button v-if="detailData.assignee_type === 'user' && ['received', 'processing'].includes(detailData.status)" type="primary" plain v-hasPermi="['ticket:reassign']" @click="openReassignDialog('transfer')">
+              <i class="fas fa-share"></i> 移交工单
             </el-button>
           </template>
           <!-- 提交人操作 -->
@@ -328,21 +328,22 @@
       </template>
     </el-dialog>
 
-    <!-- 重新指派/重新发起/移交AI 对话框 -->
+    <!-- 重新指派/重新发起/移交工单 对话框 -->
     <el-dialog v-model="reassignVisible" :title="reassignDialogTitle" width="520px" append-to-body destroy-on-close>
       <el-form :model="reassignForm" label-width="90px">
-        <el-form-item v-if="reassignAction !== 'transfer_to_ai'" label="指派类型">
+        <div v-if="reassignAction === 'transfer'" class="form-tip" style="margin-bottom: 12px">
+          <i class="fas fa-info-circle"></i> 移交后工单将重新进入"已提交"状态，由新指派人接收处理。
+          <span v-if="reassignForm.assignee_type === 'ai'">移交给AI后将自动处理，处理失败会转为"待指派"状态。</span>
+        </div>
+        <el-form-item label="指派类型">
           <el-radio-group v-model="reassignForm.assignee_type">
             <el-radio-button label="user">指派给具体人</el-radio-button>
             <el-radio-button label="ai">指派给AI</el-radio-button>
           </el-radio-group>
         </el-form-item>
-        <div v-else class="form-tip" style="margin-bottom: 12px">
-          <i class="fas fa-info-circle"></i> 移交后工单将由AI自动处理，处理失败会转为"待指派"状态。
-        </div>
         <el-form-item v-if="reassignForm.assignee_type === 'user'" label="指派给" required>
           <el-select v-model="reassignForm.assignee_id" placeholder="选择处理人" filterable style="width: 100%">
-            <el-option v-for="u in assignees" :key="u.id" :label="u.display_name" :value="u.id" />
+            <el-option v-for="u in assignees" :key="u.id" :label="u.display_name" :value="u.id" :disabled="reassignAction === 'transfer' && u.id === detailData.assignee_id" />
           </el-select>
         </el-form-item>
         <el-form-item v-else label="AI Agent">
@@ -765,7 +766,7 @@ const reassignAction = ref('reassign')
 
 const reassignDialogTitle = computed(() => {
   if (reassignAction.value === 'reopen') return '重新发起工单'
-  if (reassignAction.value === 'transfer_to_ai') return '移交AI处理'
+  if (reassignAction.value === 'transfer') return '移交工单'
   return '重新指派工单'
 })
 
@@ -773,12 +774,15 @@ async function openReassignDialog(action = 'reassign') {
   reassignAction.value = action
   // 默认填充当前指派信息，方便用户修改
   const cur = detailData.value
-  // transfer_to_ai 强制指派类型为 ai
-  const forceAi = action === 'transfer_to_ai'
   reassignForm.value = {
-    assignee_type: forceAi ? 'ai' : (cur.assignee_type || 'user'),
-    assignee_id: (!forceAi && cur.assignee_type !== 'ai') ? cur.assignee_id : null,
-    assignee_agent_id: (forceAi || cur.assignee_type === 'ai') ? cur.assignee_agent_id : null,
+    assignee_type: cur.assignee_type || 'user',
+    assignee_id: cur.assignee_type !== 'ai' ? cur.assignee_id : null,
+    assignee_agent_id: cur.assignee_type === 'ai' ? cur.assignee_agent_id : null,
+  }
+  // 移交工单时，清空原指派人，强制选择新的指派对象
+  if (action === 'transfer') {
+    reassignForm.value.assignee_id = null
+    reassignForm.value.assignee_agent_id = null
   }
   reassignVisible.value = true
   // 加载指派人和AI Agent选项

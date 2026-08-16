@@ -244,6 +244,7 @@ const menuPermLabels = {
   business_systems: '业务系统',
   system_tasks: '系统任务',
   tickets: '工单管理',
+  ticket_analytics: '工单统计',
   system_map: '系统地图'
 }
 
@@ -316,6 +317,7 @@ const menuOptions = [
   { value: 'cache_stats', label: '缓存统计' },
   { value: 'business_systems', label: '业务系统' },
   { value: 'tickets', label: '工单管理' },
+  { value: 'ticket_analytics', label: '工单统计' },
   { value: 'system_map', label: '系统地图' }
 ]
 

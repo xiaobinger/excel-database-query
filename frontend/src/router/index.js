@@ -32,6 +32,7 @@ const routes = [
       { path: 'business', name: 'BusinessSystems', component: () => import('../views/BusinessSystems.vue'), meta: { menu: 'business_systems', title: '业务系统' } },
       { path: 'system-tasks', name: 'SystemTasks', component: () => import('../views/SystemTaskManager.vue'), meta: { menu: 'system_tasks', title: '系统任务' } },
       { path: 'tickets', name: 'Tickets', component: () => import('../views/TicketManager.vue'), meta: { menu: 'tickets', title: '工单管理' } },
+      { path: 'ticket-analytics', name: 'TicketAnalytics', component: () => import('../views/TicketAnalytics.vue'), meta: { menu: 'ticket_analytics', title: '工单统计' } },
       { path: 'system-map', name: 'SystemMap', component: () => import('../views/SystemMap.vue'), meta: { menu: 'system_map', title: '系统地图' } }
     ]
   }
