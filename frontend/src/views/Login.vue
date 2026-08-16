@@ -4,7 +4,7 @@
       <div class="login-card">
         <div class="login-header">
           <i class="fas fa-database login-logo"></i>
-          <h1 class="login-title">Excel查询工具</h1>
+          <h1 class="login-title">综合运营管理系统</h1>
           <p class="login-subtitle">请登录您的账号</p>
         </div>
         <el-form ref="formRef" :model="form" :rules="rules" @keyup.enter="handleLogin">

@@ -184,7 +184,7 @@ def test_email():
     user = smtp_user.config_value
     password = smtp_password.get_encrypted_value()
     use_ssl = smtp_ssl.config_value.lower() in ('true', '1', 'yes') if smtp_ssl and smtp_ssl.config_value else True
-    sender_name = from_name.config_value if from_name and from_name.config_value else 'Excel Query System'
+    sender_name = from_name.config_value if from_name and from_name.config_value else '综合运营管理系统'
     sender_address = from_address.config_value if from_address and from_address.config_value else user
 
     try:

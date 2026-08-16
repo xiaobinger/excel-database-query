@@ -3,7 +3,7 @@
     <el-aside :width="isCollapsed ? '64px' : '220px'" class="layout-aside">
       <div class="logo-area">
         <i class="fas fa-database logo-icon"></i>
-        <span v-show="!isCollapsed" class="logo-text">Excel查询工具</span>
+        <span v-show="!isCollapsed" class="logo-text">综合运营管理系统</span>
       </div>
       <el-menu
         :default-active="activeMenu"
