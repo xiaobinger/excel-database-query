@@ -99,6 +99,11 @@
           </keep-alive>
         </router-view>
       </el-main>
+      <el-footer class="layout-footer">
+        <span>Copyright © 2024-{{ currentYear }} Power By XiaoBinger</span>
+        <span class="footer-divider">|</span>
+        <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">粤ICP备2026000000号</a>
+      </el-footer>
     </el-container>
 
     <el-dialog
@@ -160,6 +165,7 @@ function toggleCollapse() {
 }
 
 const activeMenu = computed(() => route.path)
+const currentYear = new Date().getFullYear()
 
 const displayName = computed(() => {
   return store.user?.display_name || store.user?.username || ''
@@ -450,5 +456,32 @@ onUnmounted(() => {
   background-color: var(--main-bg);
   padding: 20px;
   overflow-y: auto;
+}
+
+.layout-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 36px;
+  background-color: var(--header-bg, #fff);
+  border-top: 1px solid var(--border-color, #e4e7ed);
+  font-size: 12px;
+  color: #909399;
+  padding: 0 20px;
+}
+
+.layout-footer a {
+  color: #909399;
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.layout-footer a:hover {
+  color: #409eff;
+}
+
+.footer-divider {
+  color: #c0c4cc;
 }
 </style>
