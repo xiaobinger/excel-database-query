@@ -154,8 +154,6 @@ const system = {
   getMenuConfig: () => http.get('/system/menu-config'),
   saveMenuConfig: (data) => http.put('/system/menu-config', { menu_config: data }),
   getMenuItems: () => http.get('/system/menu-items'),
-  getApiBaseUrls: () => http.get('/system/api-base-urls'),
-  saveApiBaseUrls: (data) => http.put('/system/api-base-urls', data),
 }
 
 const download = {
@@ -262,6 +260,8 @@ const systemTask = {
   batchDeleteExecutions: (ids) => http.post('/system-tasks/executions/batch-delete', { ids }),
   deleteAllExecutions: () => http.delete('/system-tasks/executions/all'),
   streamExecution: (executionId) => `/api/system-tasks/executions/${executionId}/stream`,
+  getEnums: () => http.get('/system-tasks/enums'),
+  saveEnums: (data) => http.put('/system-tasks/enums', data),
 }
 
 const lookup = {

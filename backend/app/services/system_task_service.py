@@ -367,7 +367,7 @@ class SystemTaskService:
         if not system_task.api_url:
             raise ValueError('API地址未配置')
 
-        url = SystemTaskService._resolve_api_url(system_task, execution)
+        url = system_task.api_url
         method = (system_task.api_method or 'POST').upper()
         headers = system_task.get_api_headers()
         timeout = system_task.api_timeout or 30
@@ -742,47 +742,6 @@ class SystemTaskService:
                 current[idx] = value
 
     @staticmethod
-    def _resolve_api_url(system_task: SystemTask, execution: SystemTaskExecution = None) -> str:
-        """解析API任务的最终URL：若配置了全局BaseUrl则拼接，否则直接使用api_url"""
-        base_url_name = (system_task.api_base_url_name or '').strip()
-        api_url = system_task.api_url or ''
-
-        if not base_url_name:
-            return api_url
-
-        # 从系统配置读取全局BaseUrl列表
-        from app.models.system_config import SystemConfig
-        config = SystemConfig.query.filter_by(config_key='api_base_urls').first()
-        base_urls = []
-        if config and config.config_value:
-            try:
-                data = json.loads(config.config_value)
-                if isinstance(data, list):
-                    base_urls = data
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        matched = next((b for b in base_urls if b.get('name') == base_url_name), None)
-        if not matched:
-            msg = f'全局BaseUrl[{base_url_name}]未找到，使用原始API地址'
-            if execution:
-                execution.add_log(f'⚠️ {msg}')
-                db.session.commit()
-            return api_url
-
-        base = matched.get('url', '').rstrip('/')
-        # 若api_url已是完整URL（http/https开头），则不拼接
-        if api_url.lower().startswith(('http://', 'https://')):
-            final_url = api_url
-        else:
-            final_url = f"{base}/{api_url.lstrip('/')}"
-
-        if execution:
-            execution.add_log(f'使用全局BaseUrl[{matched.get("label") or base_url_name}]: {base}')
-            db.session.commit()
-        return final_url
-
-    @staticmethod
     def execute_api_sync(system_task: SystemTask, params_values: Dict[str, Any], user_id: int = None) -> Dict[str, Any]:
         """同步执行API类型系统任务，直接返回执行结果（用于AI自动执行场景）
 
@@ -806,7 +765,7 @@ class SystemTaskService:
         db.session.add(execution)
         db.session.commit()
 
-        url = SystemTaskService._resolve_api_url(system_task, execution)
+        url = system_task.api_url
         method = (system_task.api_method or 'POST').upper()
         headers = system_task.get_api_headers()
         timeout = system_task.api_timeout or 30

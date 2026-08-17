@@ -24,7 +24,6 @@ class SystemTask(db.Model):
     api_headers = db.Column(db.Text, comment='请求头(JSON)')
     api_body = db.Column(db.Text, comment='请求体模板(JSON或字符串)')
     api_timeout = db.Column(db.Integer, default=30, comment='API超时时间(秒)')
-    api_base_url_name = db.Column(db.String(100), comment='全局BaseUrl名称(引用系统配置中的api_base_urls)，为空则不拼接')
 
     # Local script related
     script_type = db.Column(db.String(20), comment='本地脚本类型: python/shell/bat/powershell等')
@@ -121,7 +120,6 @@ class SystemTask(db.Model):
             'api_headers': self.get_api_headers(),
             'api_body': self.api_body,
             'api_timeout': self.api_timeout,
-            'api_base_url_name': self.api_base_url_name,
             'script_type': self.script_type,
             'script_path': self.script_path,
             'script_timeout': self.script_timeout,

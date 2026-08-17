@@ -8,6 +8,9 @@
             <el-button type="info" plain @click="goToScripts">
               <i class="fas fa-code"></i> 管理SQL脚本
             </el-button>
+            <el-button type="warning" plain @click="openEnumsDialog">
+              <i class="fas fa-list-ul"></i> 枚举参数
+            </el-button>
             <el-button v-if="store.hasButtonPermission('system_task:create')" type="primary" @click="openDialog()">
               <i class="fas fa-plus"></i> 新建任务
             </el-button>
@@ -229,19 +232,6 @@
 
         <!-- API Config -->
         <template v-if="form.task_type === 'api'">
-          <el-form-item label="全局BaseUrl">
-            <el-select v-model="form.api_base_url_name" placeholder="不使用(留空)" clearable style="width: 100%">
-              <el-option
-                v-for="b in apiBaseUrlOptions"
-                :key="b.name"
-                :label="`${b.label} (${b.name})`"
-                :value="b.name"
-              />
-            </el-select>
-            <div style="color: #909399; font-size: 12px; margin-top: 4px">
-              选择后，实际请求URL = 全局BaseUrl + API地址；若API地址已是完整http(s)URL则忽略BaseUrl。可在「系统配置 - API BaseUrl」中管理
-            </div>
-          </el-form-item>
           <el-form-item label="请求方式" prop="api_method">
             <el-select v-model="form.api_method" placeholder="请选择请求方式" style="width: 120px">
               <el-option value="GET" label="GET" />
@@ -251,7 +241,7 @@
             </el-select>
           </el-form-item>
           <el-form-item label="API地址" prop="api_url">
-            <el-input v-model="form.api_url" placeholder="https://api.example.com/endpoint 或 /api/endpoint" />
+            <el-input v-model="form.api_url" placeholder="https://api.example.com/endpoint" />
           </el-form-item>
           <el-form-item label="请求头">
             <el-input v-model="apiHeadersText" type="textarea" :rows="3" placeholder='{"Content-Type": "application/json"}' />
@@ -289,7 +279,7 @@
         <template v-if="form.task_type === 'api' || form.task_type === 'script'">
           <el-form-item label="参数配置">
             <div class="param-hint" style="margin-bottom: 8px; color: #909399; font-size: 12px;">
-              枚举类型参数常用于环境切换：在API地址中使用 <code v-pre>{{param_name}}</code> 占位符引用参数值，枚举的 value 即可作为不同环境的 BaseUrl
+              枚举类型参数常用于环境切换：在API地址中使用 <code v-pre>{{param_name}}</code> 占位符引用参数值，枚举的 value 即可作为不同环境的 BaseUrl。可在「枚举参数」中预设可复用的枚举列表。
             </div>
             <div v-for="(param, idx) in form.params_config" :key="idx" class="param-row">
               <el-input v-model="param.name" placeholder="参数名" style="width: 140px" />
@@ -303,18 +293,34 @@
               <el-button type="danger" text @click="removeParam(idx)">
                 <i class="fas fa-trash"></i>
               </el-button>
-              <!-- 枚举选项编辑器 -->
+              <!-- 枚举选项配置 -->
               <div v-if="param.type === 'enum'" class="param-enum-options" style="width: 100%; margin-top: 6px; padding-left: 8px; border-left: 2px solid #e4e7ed;">
-                <div v-for="(opt, optIdx) in param.options" :key="optIdx" class="param-row" style="margin-bottom: 4px;">
-                  <el-input v-model="opt.label" placeholder="显示名称(如:生产环境)" style="width: 180px" />
-                  <el-input v-model="opt.value" placeholder="实际值(如:https://prod.api.com)" style="flex: 1" />
-                  <el-button type="danger" text @click="param.options.splice(optIdx, 1)">
-                    <i class="fas fa-times"></i>
-                  </el-button>
+                <div class="param-row" style="margin-bottom: 6px;">
+                  <el-select v-model="param.enum_ref" placeholder="引用全局枚举(可选)" clearable style="width: 280px" @change="onEnumRefChange(param)">
+                    <el-option
+                      v-for="e in globalEnums"
+                      :key="e.name"
+                      :label="`${e.label} (${e.name})`"
+                      :value="e.name"
+                    />
+                  </el-select>
+                  <span v-if="param.enum_ref" style="color: #67c23a; font-size: 12px; margin-left: 8px;">
+                    <i class="fas fa-link"></i> 引用全局枚举，选项自动同步
+                  </span>
                 </div>
-                <el-button type="primary" text size="small" @click="addEnumOption(param)">
-                  <i class="fas fa-plus"></i> 添加枚举项
-                </el-button>
+                <!-- 自定义枚举选项（仅当未引用全局枚举时显示） -->
+                <template v-if="!param.enum_ref">
+                  <div v-for="(opt, optIdx) in param.options" :key="optIdx" class="param-row" style="margin-bottom: 4px;">
+                    <el-input v-model="opt.label" placeholder="显示名称(如:生产环境)" style="width: 180px" />
+                    <el-input v-model="opt.value" placeholder="实际值(如:https://prod.api.com)" style="flex: 1" />
+                    <el-button type="danger" text @click="param.options.splice(optIdx, 1)">
+                      <i class="fas fa-times"></i>
+                    </el-button>
+                  </div>
+                  <el-button type="primary" text size="small" @click="addEnumOption(param)">
+                    <i class="fas fa-plus"></i> 添加枚举项
+                  </el-button>
+                </template>
               </div>
             </div>
             <el-button type="primary" text @click="addParam">
@@ -554,6 +560,42 @@
         </div>
       </div>
     </el-dialog>
+
+    <!-- 枚举参数管理对话框 -->
+    <el-dialog v-model="enumsDialogVisible" title="枚举参数管理" width="780px" :close-on-click-modal="false">
+      <p style="color: #909399; margin-bottom: 16px; font-size: 12px;">
+        <i class="fas fa-info-circle"></i>
+        此处定义的枚举参数可被任意 API 类型系统任务引用。每个枚举包含一组选项（显示名称+实际值），常用于多环境 BaseUrl 切换等场景。
+      </p>
+      <div v-for="(enumItem, idx) in globalEnumsEditList" :key="idx" class="enum-block" style="border: 1px solid #e4e7ed; border-radius: 4px; padding: 12px; margin-bottom: 12px;">
+        <div class="param-row" style="margin-bottom: 8px;">
+          <el-input v-model="enumItem.name" placeholder="枚举名称(唯一,如:env)" style="width: 200px" />
+          <el-input v-model="enumItem.label" placeholder="显示名称(如:环境)" style="width: 200px" />
+          <el-button type="danger" text @click="globalEnumsEditList.splice(idx, 1)">
+            <i class="fas fa-trash"></i> 删除枚举
+          </el-button>
+        </div>
+        <div style="padding-left: 8px; border-left: 2px solid #e4e7ed;">
+          <div v-for="(opt, optIdx) in enumItem.options" :key="optIdx" class="param-row" style="margin-bottom: 4px;">
+            <el-input v-model="opt.label" placeholder="显示名称(如:生产环境)" style="width: 200px" />
+            <el-input v-model="opt.value" placeholder="实际值(如:https://prod.api.com)" style="flex: 1" />
+            <el-button type="danger" text @click="enumItem.options.splice(optIdx, 1)">
+              <i class="fas fa-times"></i>
+            </el-button>
+          </div>
+          <el-button type="primary" text size="small" @click="enumItem.options.push({ label: '', value: '' })">
+            <i class="fas fa-plus"></i> 添加选项
+          </el-button>
+        </div>
+      </div>
+      <el-button type="primary" plain @click="globalEnumsEditList.push({ name: '', label: '', options: [{ label: '', value: '' }] })">
+        <i class="fas fa-plus"></i> 添加枚举
+      </el-button>
+      <template #footer>
+        <el-button @click="enumsDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="savingEnums" @click="handleSaveEnums">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -592,7 +634,17 @@ const executeDatabaseId = ref(null)
 
 const currentTaskParamsConfig = computed(() => {
   if (!currentTask.value) return []
-  return getTaskParamsConfig(currentTask.value)
+  const params = getTaskParamsConfig(currentTask.value)
+  // 对enum类型参数：若引用了全局枚举，从globalEnums加载options
+  return params.map(p => {
+    if (p.type === 'enum' && p.enum_ref) {
+      const refEnum = globalEnums.value.find(e => e.name === p.enum_ref)
+      if (refEnum && refEnum.options) {
+        return { ...p, options: refEnum.options }
+      }
+    }
+    return p
+  })
 })
 
 // 所有必填参数是否已填写（SQL类型任务所有参数必填，enum类型参数必填）
@@ -639,7 +691,6 @@ const defaultForm = {
   api_headers: {},
   api_body: '',
   api_timeout: 30,
-  api_base_url_name: '',
   params_config: [],
   response_mapping: [],
   sign_enabled: false,
@@ -653,9 +704,6 @@ const defaultForm = {
   script_timeout: 60,
   script_env: {},
 }
-
-// 全局BaseUrl选项（供API任务编辑表单下拉选择）
-const apiBaseUrlOptions = ref([])
 
 const form = reactive({ ...defaultForm })
 
@@ -710,7 +758,7 @@ function logLevelType(level) {
 
 function addParam() {
   if (!form.params_config) form.params_config = []
-  form.params_config.push({ name: '', label: '', type: 'text', options: [] })
+  form.params_config.push({ name: '', label: '', type: 'text', options: [], enum_ref: '' })
 }
 
 function removeParam(idx) {
@@ -720,6 +768,13 @@ function removeParam(idx) {
 function addEnumOption(param) {
   if (!param.options) param.options = []
   param.options.push({ label: '', value: '' })
+}
+
+// 切换全局枚举引用时，清空自定义options（引用模式下以全局枚举为准）
+function onEnumRefChange(param) {
+  if (param.enum_ref) {
+    param.options = []
+  }
 }
 
 function addResponseMapping() {
@@ -808,9 +863,12 @@ function openDialog(row) {
       api_headers: row.api_headers || {},
       api_body: row.api_body || '',
       api_timeout: row.api_timeout || 30,
-      api_base_url_name: row.api_base_url_name || '',
       params_config: row.params_config && row.params_config.length > 0
-        ? JSON.parse(JSON.stringify(row.params_config)).map(p => ({ ...p, options: p.options || [] }))
+        ? JSON.parse(JSON.stringify(row.params_config)).map(p => ({
+            ...p,
+            options: p.options || [],
+            enum_ref: p.enum_ref || '',
+          }))
         : [],
       response_mapping: (row.response_mapping && row.response_mapping.length > 0)
         ? row.response_mapping.map(m => ({
@@ -854,7 +912,6 @@ async function handleSubmit() {
       api_url: form.api_url,
       api_body: form.api_body,
       api_timeout: form.api_timeout,
-      api_base_url_name: form.api_base_url_name || '',
       sign_enabled: form.sign_enabled,
       sign_key: form.sign_key,
       sign_method: form.sign_method,
@@ -1143,15 +1200,52 @@ onMounted(() => {
   fetchList()
   fetchScripts()
   fetchDatabases()
-  fetchApiBaseUrls()
+  fetchGlobalEnums()
 })
 
-async function fetchApiBaseUrls() {
+// ── 全局枚举参数管理 ──────────────────────────────────────
+const globalEnums = ref([])  // 供参数配置引用的枚举列表
+const globalEnumsEditList = ref([])  // 管理Dialog中的编辑副本
+const enumsDialogVisible = ref(false)
+const savingEnums = ref(false)
+
+async function fetchGlobalEnums() {
   try {
-    const res = await api.system.getApiBaseUrls()
-    apiBaseUrlOptions.value = res.data || []
+    const res = await api.systemTask.getEnums()
+    globalEnums.value = res.data || []
   } catch (e) {
-    console.error('fetchApiBaseUrls error', e)
+    console.error('fetchGlobalEnums error', e)
+  }
+}
+
+function openEnumsDialog() {
+  // 深拷贝一份用于编辑
+  globalEnumsEditList.value = JSON.parse(JSON.stringify(globalEnums.value || []))
+  // 保证每个枚举都有options数组
+  globalEnumsEditList.value.forEach(e => {
+    if (!e.options) e.options = []
+  })
+  enumsDialogVisible.value = true
+}
+
+async function handleSaveEnums() {
+  // 校验名称唯一
+  const valid = globalEnumsEditList.value.filter(e => e.name.trim() && e.label.trim() && e.options.length > 0)
+  const names = valid.map(e => e.name.trim())
+  if (new Set(names).size !== names.length) {
+    ElMessage.error('存在重复的枚举名称，请确保名称唯一')
+    return
+  }
+  savingEnums.value = true
+  try {
+    const res = await api.systemTask.saveEnums({ enums: valid })
+    globalEnums.value = res.data || []
+    ElMessage.success('枚举参数已保存')
+    enumsDialogVisible.value = false
+  } catch (e) {
+    ElMessage.error('保存失败')
+  } finally {
+    savingEnums.value = false
   }
 }
 </script>

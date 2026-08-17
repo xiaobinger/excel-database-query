@@ -966,10 +966,6 @@ class AiService:
                     'script_type': t.script_type or 'python',
                     'script_path': t.script_path or '',
                 }
-            # API任务的BaseUrl引用信息
-            base_url_info = None
-            if (t.task_type or 'sql') == 'api' and t.api_base_url_name:
-                base_url_info = {'name': t.api_base_url_name}
             result.append({
                 'id': t.id,
                 'name': t.name,
@@ -979,7 +975,6 @@ class AiService:
                 'databases': databases_info,
                 'response_mapping': response_mapping_info,
                 'script_info': script_info,
-                'base_url': base_url_info,
             })
         resp = {'tasks': result, 'total': len(result)}
         if len(result) == 0:
@@ -1075,10 +1070,22 @@ class AiService:
 
         # 枚举参数值转换：AI传入的可能是label（如"生产环境"），需转换为对应的value（如base_url）
         if params and task_params:
+            # 预加载全局枚举参数（供enum_ref引用）
+            global_enums_map = {}
+            for p in task_params:
+                if p.get('type') == 'enum' and p.get('enum_ref') and p['enum_ref'] not in global_enums_map:
+                    ref_enum = AiService._load_global_enum(p['enum_ref'])
+                    if ref_enum:
+                        global_enums_map[p['enum_ref']] = ref_enum.get('options', [])
+
             for p in task_params:
                 if p.get('type') == 'enum' and p.get('name') in params:
                     raw_val = str(params[p['name']])
-                    options = p.get('options') or []
+                    # 若引用了全局枚举，优先使用全局枚举的options
+                    if p.get('enum_ref') and p['enum_ref'] in global_enums_map:
+                        options = global_enums_map[p['enum_ref']]
+                    else:
+                        options = p.get('options') or []
                     # 先精确匹配value
                     matched_opt = next((o for o in options if str(o.get('value', '')) == raw_val), None)
                     if not matched_opt:
@@ -1216,6 +1223,23 @@ class AiService:
         }
 
     @staticmethod
+    def _load_global_enum(enum_name: str) -> dict:
+        """从系统配置加载指定名称的全局枚举参数"""
+        if not enum_name:
+            return None
+        from app.models.system_config import SystemConfig
+        config = SystemConfig.query.filter_by(config_key='system_task_enums').first()
+        if not config or not config.config_value:
+            return None
+        try:
+            data = json.loads(config.config_value)
+            if isinstance(data, list):
+                return next((e for e in data if e.get('name') == enum_name), None)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return None
+
+    @staticmethod
     def _build_missing_params_hint(task_params: list, params: dict, needs_db: bool, databases_info: list) -> str:
         """构建缺失参数提示，帮助AI询问用户补充信息"""
         missing = []
@@ -1225,7 +1249,12 @@ class AiService:
             if val in (None, ''):
                 label = p.get('label') or name
                 if p.get('type') == 'enum':
-                    options = p.get('options') or []
+                    # 若引用全局枚举，从全局加载options
+                    if p.get('enum_ref'):
+                        ref_enum = AiService._load_global_enum(p['enum_ref'])
+                        options = ref_enum.get('options', []) if ref_enum else []
+                    else:
+                        options = p.get('options') or []
                     opt_labels = [o.get('label') or o.get('value') for o in options]
                     missing.append(f"{label}（可选值: {'、'.join(opt_labels) if opt_labels else '未配置'}）")
                 else:

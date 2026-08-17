@@ -3,10 +3,11 @@ import time
 from flask import Blueprint, request, jsonify, Response, stream_with_context, current_app
 from app import db
 from app.models.system_task import SystemTask, SystemTaskExecution
+from app.models.system_config import SystemConfig
 from app.models.script import Script
 from app.models.database import DatabaseConnection
 from app.services.system_task_service import SystemTaskService
-from app.utils.auth import login_required, get_current_user
+from app.utils.auth import login_required, get_current_user, admin_required
 from app.utils.behavior_tracker import track_behavior
 
 system_task_bp = Blueprint('system_task', __name__, url_prefix='/api/system-tasks')
@@ -88,7 +89,6 @@ def create_system_task():
         api_url=data.get('api_url', ''),
         api_body=data.get('api_body', ''),
         api_timeout=data.get('api_timeout', 30),
-        api_base_url_name=data.get('api_base_url_name') or None,
         script_type=data.get('script_type', 'python'),
         script_path=data.get('script_path', ''),
         script_timeout=data.get('script_timeout', 60),
@@ -148,14 +148,14 @@ def update_system_task(task_id):
 
     simple_fields = [
         'name', 'description', 'task_type', 'script_id', 'database_connection_id',
-        'api_method', 'api_url', 'api_body', 'api_timeout', 'api_base_url_name',
+        'api_method', 'api_url', 'api_body', 'api_timeout',
         'script_type', 'script_path', 'script_timeout',
         'sign_enabled', 'sign_key', 'sign_method', 'sign_param_name', 'sign_append_type',
         'is_enabled'
     ]
     for key in simple_fields:
         if key in data:
-            setattr(task, key, data[key] if data[key] != '' or key != 'api_base_url_name' else None)
+            setattr(task, key, data[key])
 
     if 'database_ids' in data:
         task.set_database_ids(data['database_ids'])
@@ -475,3 +475,77 @@ def delete_all_executions():
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 400
+
+
+# ── 全局枚举参数管理（可在任意API类型系统任务中复用） ──────────────
+
+ENUMS_CONFIG_KEY = 'system_task_enums'
+
+
+def _get_enums_config():
+    """读取全局枚举参数列表"""
+    config = SystemConfig.query.filter_by(config_key=ENUMS_CONFIG_KEY).first()
+    if config and config.config_value:
+        try:
+            data = json.loads(config.config_value)
+            if isinstance(data, list):
+                return data
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return []
+
+
+@system_task_bp.route('/enums', methods=['GET'])
+@login_required
+def get_enums():
+    """获取全局枚举参数列表（登录用户可读，供任务参数配置引用）"""
+    return jsonify({'success': True, 'data': _get_enums_config()})
+
+
+@system_task_bp.route('/enums', methods=['PUT'])
+@admin_required
+def update_enums():
+    """保存全局枚举参数列表（仅管理员）"""
+    data = request.get_json()
+    if not data or 'enums' not in data:
+        return jsonify({'success': False, 'message': '请求数据为空'}), 400
+
+    enums = data.get('enums')
+    if not isinstance(enums, list):
+        return jsonify({'success': False, 'message': '枚举列表必须是数组'}), 400
+
+    # 校验每项：name 唯一，label 必填，options 非空
+    normalized = []
+    seen_names = set()
+    for item in enums:
+        if not isinstance(item, dict):
+            continue
+        name = (item.get('name') or '').strip()
+        label = (item.get('label') or '').strip()
+        options = item.get('options') or []
+        if not name or not label or not options:
+            continue
+        if name in seen_names:
+            continue
+        seen_names.add(name)
+        # 规整 options
+        opts = []
+        for o in options:
+            if not isinstance(o, dict):
+                continue
+            o_label = (o.get('label') or '').strip()
+            o_value = (o.get('value') or '').strip()
+            if o_label and o_value:
+                opts.append({'label': o_label, 'value': o_value})
+        if not opts:
+            continue
+        normalized.append({'name': name, 'label': label, 'options': opts})
+
+    config = SystemConfig.query.filter_by(config_key=ENUMS_CONFIG_KEY).first()
+    if not config:
+        config = SystemConfig(config_key=ENUMS_CONFIG_KEY, description='系统任务全局枚举参数')
+        db.session.add(config)
+    config.config_value = json.dumps(normalized, ensure_ascii=False)
+    db.session.commit()
+
+    return jsonify({'success': True, 'message': '枚举参数已保存', 'data': normalized})
