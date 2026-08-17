@@ -1268,7 +1268,9 @@ async function handleCancelExecution(executionId) {
     await api.systemTask.cancelExecution(executionId)
     ElMessage.success('任务已终止')
     fetchExecutions()
-  } catch {
+  } catch (e) {
+    // 错误提示已由 http 拦截器统一弹出，这里仅记录便于调试
+    console.error('终止任务失败:', e)
   }
 }
 

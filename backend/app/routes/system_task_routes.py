@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 from flask import Blueprint, request, jsonify, Response, stream_with_context, current_app
 from app import db
@@ -9,6 +10,8 @@ from app.models.database import DatabaseConnection
 from app.services.system_task_service import SystemTaskService
 from app.utils.auth import login_required, get_current_user, admin_required
 from app.utils.behavior_tracker import track_behavior
+
+logger = logging.getLogger(__name__)
 
 system_task_bp = Blueprint('system_task', __name__, url_prefix='/api/system-tasks')
 
@@ -341,10 +344,18 @@ def get_execution(execution_id):
 @system_task_bp.route('/executions/<execution_id>/cancel', methods=['POST'])
 @login_required
 def cancel_execution(execution_id):
-    result = SystemTaskService.cancel_execution(execution_id)
-    if result:
-        return jsonify({'success': True, 'message': '任务已取消'})
-    return jsonify({'success': False, 'message': '无法取消任务'}), 400
+    try:
+        result = SystemTaskService.cancel_execution(execution_id)
+        if result:
+            return jsonify({'success': True, 'message': '任务已取消'})
+        return jsonify({'success': False, 'message': '无法取消任务（任务可能已完成或不存在）'}), 400
+    except Exception as e:
+        logger.error(f'取消任务异常: {e}', exc_info=True)
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        return jsonify({'success': False, 'message': f'取消任务失败: {str(e)}'}), 500
 
 
 @system_task_bp.route('/executions/<execution_id>/stream', methods=['GET'])

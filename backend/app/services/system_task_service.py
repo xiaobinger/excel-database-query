@@ -1116,30 +1116,53 @@ class SystemTaskService:
         execution = SystemTaskExecution.query.filter_by(execution_id=execution_id).first()
         if not execution:
             return False
-        if execution.status in ('pending', 'running'):
-            # 设置取消标志
-            cancel_event = _execution_cancel_events.get(execution_id)
-            if cancel_event:
-                cancel_event.set()
+        if execution.status not in ('pending', 'running'):
+            return False
 
-            # 尝试终止线程
-            thread = _execution_threads.get(execution_id)
-            if thread and thread.is_alive():
-                try:
-                    import ctypes
-                    tid = ctypes.c_long(thread.ident)
-                    ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, ctypes.py_object(SystemExit))
-                except Exception as e:
-                    logger.warning(f'终止系统任务线程失败: {e}')
+        # 设置取消标志（通知子线程在下一个检查点退出）
+        cancel_event = _execution_cancel_events.get(execution_id)
+        if cancel_event:
+            cancel_event.set()
 
+        # 尝试异步终止线程（注入 SystemExit）
+        thread = _execution_threads.get(execution_id)
+        if thread and thread.is_alive():
+            try:
+                import ctypes
+                tid = ctypes.c_long(thread.ident)
+                ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, ctypes.py_object(SystemExit))
+            except Exception as e:
+                logger.warning(f'终止系统任务线程失败: {e}')
+
+        # 更新执行记录状态（带异常保护，避免 commit 失败导致 500）
+        try:
             execution.status = 'manual_cancelled'
             execution.completed_at = datetime.utcnow()
             execution.add_log('任务已被手动终止', 'warning')
             db.session.commit()
-            update_execution_progress(execution_id, 100, '任务已被手动终止', 'warning')
+        except Exception as e:
+            logger.error(f'更新任务取消状态失败 (commit): {e}', exc_info=True)
+            db.session.rollback()
+            # rollback 后重新加载对象并再次尝试设置状态
+            try:
+                db.session.expire_all()
+                execution = SystemTaskExecution.query.filter_by(execution_id=execution_id).first()
+                if execution:
+                    execution.status = 'manual_cancelled'
+                    execution.completed_at = datetime.utcnow()
+                    execution.add_log('任务已被手动终止', 'warning')
+                    db.session.commit()
+            except Exception as e2:
+                logger.error(f'重试更新任务取消状态仍失败: {e2}', exc_info=True)
+                db.session.rollback()
+                raise
 
-            # 清理线程引用
-            _execution_threads.pop(execution_id, None)
-            _execution_cancel_events.pop(execution_id, None)
-            return True
-        return False
+        try:
+            update_execution_progress(execution_id, 100, '任务已被手动终止', 'warning')
+        except Exception as e:
+            logger.warning(f'更新取消进度失败: {e}')
+
+        # 清理线程引用
+        _execution_threads.pop(execution_id, None)
+        _execution_cancel_events.pop(execution_id, None)
+        return True
