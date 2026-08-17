@@ -275,17 +275,34 @@
         <!-- Params Config (for API and Script tasks) -->
         <template v-if="form.task_type === 'api' || form.task_type === 'script'">
           <el-form-item label="参数配置">
+            <div class="param-hint" style="margin-bottom: 8px; color: #909399; font-size: 12px;">
+              枚举类型参数常用于环境切换：在API地址中使用 <code>{{ '{{param_name}}' }}</code> 占位符引用参数值，枚举的 value 即可作为不同环境的 BaseUrl
+            </div>
             <div v-for="(param, idx) in form.params_config" :key="idx" class="param-row">
               <el-input v-model="param.name" placeholder="参数名" style="width: 140px" />
               <el-input v-model="param.label" placeholder="显示名称" style="width: 140px" />
-              <el-select v-model="param.type" placeholder="类型" style="width: 100px">
+              <el-select v-model="param.type" placeholder="类型" style="width: 110px">
                 <el-option value="text" label="文本" />
                 <el-option value="number" label="数字" />
                 <el-option value="textarea" label="多行文本" />
+                <el-option value="enum" label="枚举" />
               </el-select>
               <el-button type="danger" text @click="removeParam(idx)">
                 <i class="fas fa-trash"></i>
               </el-button>
+              <!-- 枚举选项编辑器 -->
+              <div v-if="param.type === 'enum'" class="param-enum-options" style="width: 100%; margin-top: 6px; padding-left: 8px; border-left: 2px solid #e4e7ed;">
+                <div v-for="(opt, optIdx) in param.options" :key="optIdx" class="param-row" style="margin-bottom: 4px;">
+                  <el-input v-model="opt.label" placeholder="显示名称(如:生产环境)" style="width: 180px" />
+                  <el-input v-model="opt.value" placeholder="实际值(如:https://prod.api.com)" style="flex: 1" />
+                  <el-button type="danger" text @click="param.options.splice(optIdx, 1)">
+                    <i class="fas fa-times"></i>
+                  </el-button>
+                </div>
+                <el-button type="primary" text size="small" @click="addEnumOption(param)">
+                  <i class="fas fa-plus"></i> 添加枚举项
+                </el-button>
+              </div>
             </div>
             <el-button type="primary" text @click="addParam">
               <i class="fas fa-plus"></i> 添加参数
@@ -395,8 +412,21 @@
             <template #label>
               <span v-if="currentTask.task_type === 'sql' || param.required" style="color: #f56c6c">* </span>{{ param.label || param.name }}
             </template>
+            <el-select
+              v-if="param.type === 'enum'"
+              v-model="executeParams[param.name]"
+              :placeholder="`请选择 ${param.label || param.name}`"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="opt in (param.options || [])"
+                :key="opt.value"
+                :label="opt.label || opt.value"
+                :value="opt.value"
+              />
+            </el-select>
             <el-input
-              v-if="param.type === 'textarea'"
+              v-else-if="param.type === 'textarea'"
               v-model="executeParams[param.name]"
               type="textarea"
               :rows="3"
@@ -552,7 +582,7 @@ const currentTaskParamsConfig = computed(() => {
   return getTaskParamsConfig(currentTask.value)
 })
 
-// 所有必填参数是否已填写（SQL类型任务所有参数必填）
+// 所有必填参数是否已填写（SQL类型任务所有参数必填，enum类型参数必填）
 const allParamsFilled = computed(() => {
   if (!currentTask.value) return false
   const params = currentTaskParamsConfig.value
@@ -563,8 +593,8 @@ const allParamsFilled = computed(() => {
       return v !== undefined && v !== null && v !== ''
     })
   }
-  // API类型按required字段判断
-  return params.filter(p => p.required).every(p => {
+  // API类型：required字段 或 enum类型 视为必填
+  return params.filter(p => p.required || p.type === 'enum').every(p => {
     const v = executeParams[p.name]
     return v !== undefined && v !== null && v !== ''
   })
@@ -663,11 +693,16 @@ function logLevelType(level) {
 
 function addParam() {
   if (!form.params_config) form.params_config = []
-  form.params_config.push({ name: '', label: '', type: 'text' })
+  form.params_config.push({ name: '', label: '', type: 'text', options: [] })
 }
 
 function removeParam(idx) {
   form.params_config.splice(idx, 1)
+}
+
+function addEnumOption(param) {
+  if (!param.options) param.options = []
+  param.options.push({ label: '', value: '' })
 }
 
 function addResponseMapping() {
@@ -756,7 +791,9 @@ function openDialog(row) {
       api_headers: row.api_headers || {},
       api_body: row.api_body || '',
       api_timeout: row.api_timeout || 30,
-      params_config: row.params_config && row.params_config.length > 0 ? JSON.parse(JSON.stringify(row.params_config)) : [],
+      params_config: row.params_config && row.params_config.length > 0
+        ? JSON.parse(JSON.stringify(row.params_config)).map(p => ({ ...p, options: p.options || [] }))
+        : [],
       response_mapping: (row.response_mapping && row.response_mapping.length > 0)
         ? row.response_mapping.map(m => ({
             field: m.field || '',

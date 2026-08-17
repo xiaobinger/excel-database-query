@@ -176,7 +176,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "request_system_task",
-            "description": "当用户明确要执行系统任务（运维类任务）时调用此工具。系统任务与导出任务、查询任务完全不同，只有运维类操作才属于系统任务。需要指定系统任务名称和参数值。注意：1、必须从用户的自然语言描述中提取所有可能的参数值填入params对象；2、params的键名必须使用list_system_tasks返回的参数配置中的name字段值，不要自己编造参数名；3、如果之前没有调用list_system_tasks，请先调用以获取正确的参数名；4、如果任务关联了多个数据库连接，请从用户描述中提取数据库名称填入database_name；5、API类型任务参数齐全时会自动执行，结果中包含mapping_summary（映射摘要）字段，请直接根据映射摘要用自然语言告诉用户执行结果；6、如果用户同时要求对多个对象执行同样的API任务（如解绑多个SN），请在同一次回复中同时调用多个request_system_task，每个调用对应一个对象，系统会自动并行执行，你只需汇总所有结果用列表形式反馈给用户。",
+            "description": "当用户明确要执行系统任务（运维类任务）时调用此工具。系统任务与导出任务、查询任务完全不同，只有运维类操作才属于系统任务。需要指定系统任务名称和参数值。注意：1、必须从用户的自然语言描述中提取所有可能的参数值填入params对象；2、params的键名必须使用list_system_tasks返回的参数配置中的name字段值，不要自己编造参数名；3、如果之前没有调用list_system_tasks，请先调用以获取正确的参数名；4、如果任务关联了多个数据库连接，请从用户描述中提取数据库名称填入database_name；5、API类型任务参数齐全时会自动执行，结果中包含mapping_summary（映射摘要）字段，请直接根据映射摘要用自然语言告诉用户执行结果；6、如果用户同时要求对多个对象执行同样的API任务（如解绑多个SN），请在同一次回复中同时调用多个request_system_task，每个调用对应一个对象，系统会自动并行执行，你只需汇总所有结果用列表形式反馈给用户；7、对于type=enum的枚举参数（常用于环境切换），params中传入options里的label或value均可，若用户未明确指定环境，必须主动询问用户选择哪个环境后再调用。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -186,7 +186,7 @@ AI_TOOLS = [
                     },
                     "params": {
                         "type": "object",
-                        "description": "参数键值对。键必须是系统任务参数配置中的name字段值（如device_sn、user_id等），值为用户提供的参数值。如果不知道参数名，请先调用list_system_tasks查看参数配置。",
+                        "description": "参数键值对。键必须是系统任务参数配置中的name字段值（如device_sn、user_id等），值为用户提供的参数值。对于enum枚举类型参数（如环境），传入options中的label或value均可；若用户未指定枚举值，必须先询问用户。如果不知道参数名，请先调用list_system_tasks查看参数配置。",
                         "additionalProperties": {"type": "string"}
                     },
                     "database_name": {
@@ -1068,6 +1068,29 @@ class AiService:
                         mapped_params[key] = val
             params = mapped_params
 
+        # 枚举参数值转换：AI传入的可能是label（如"生产环境"），需转换为对应的value（如base_url）
+        if params and task_params:
+            for p in task_params:
+                if p.get('type') == 'enum' and p.get('name') in params:
+                    raw_val = str(params[p['name']])
+                    options = p.get('options') or []
+                    # 先精确匹配value
+                    matched_opt = next((o for o in options if str(o.get('value', '')) == raw_val), None)
+                    if not matched_opt:
+                        # 再精确匹配label
+                        matched_opt = next((o for o in options if str(o.get('label', '')) == raw_val), None)
+                    if not matched_opt:
+                        # 模糊匹配label（包含关系，忽略大小写）
+                        raw_val_lower = raw_val.lower()
+                        matched_opt = next((o for o in options
+                                            if raw_val_lower in str(o.get('label', '')).lower()
+                                            or str(o.get('label', '')).lower() in raw_val_lower), None)
+                    if matched_opt:
+                        params[p['name']] = matched_opt.get('value', raw_val)
+                    else:
+                        # 未匹配到任何选项，清空值以触发"参数不全"逻辑，让AI询问用户
+                        params[p['name']] = ''
+
         if params:
             for p in task_params:
                 if p.get('enum_mode') == 'neq' and p.get('neq_value') and p.get('name') in params:
@@ -1183,8 +1206,32 @@ class AiService:
             'databases': databases_info,
             'database_id': matched_db_id,
             'response_mapping': response_mapping_info,
-            'confirm_message': f'AI 准备执行系统任务：{task.name}'
+            'confirm_message': f'AI 准备执行系统任务：{task.name}',
+            '_hint': AiService._build_missing_params_hint(task_params, params, needs_dbSelection, databases_info),
         }
+
+    @staticmethod
+    def _build_missing_params_hint(task_params: list, params: dict, needs_db: bool, databases_info: list) -> str:
+        """构建缺失参数提示，帮助AI询问用户补充信息"""
+        missing = []
+        for p in (task_params or []):
+            name = p.get('name')
+            val = params.get(name) if params else None
+            if val in (None, ''):
+                label = p.get('label') or name
+                if p.get('type') == 'enum':
+                    options = p.get('options') or []
+                    opt_labels = [o.get('label') or o.get('value') for o in options]
+                    missing.append(f"{label}（可选值: {'、'.join(opt_labels) if opt_labels else '未配置'}）")
+                else:
+                    missing.append(label)
+        hints = []
+        if missing:
+            hints.append('请向用户确认以下参数后再次调用：' + '、'.join(missing))
+        if needs_db:
+            db_names = '、'.join(d.get('name', '') for d in databases_info)
+            hints.append(f'请向用户确认目标数据库（可选: {db_names}）')
+        return '；'.join(hints) if hints else ''
 
     @staticmethod
     def _tool_list_lookup_options(args: dict, user_id: int = None) -> dict:
