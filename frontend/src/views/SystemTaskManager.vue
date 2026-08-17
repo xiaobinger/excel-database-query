@@ -276,7 +276,7 @@
         <template v-if="form.task_type === 'api' || form.task_type === 'script'">
           <el-form-item label="参数配置">
             <div class="param-hint" style="margin-bottom: 8px; color: #909399; font-size: 12px;">
-              枚举类型参数常用于环境切换：在API地址中使用 <code>{{ '{{param_name}}' }}</code> 占位符引用参数值，枚举的 value 即可作为不同环境的 BaseUrl
+              枚举类型参数常用于环境切换：在API地址中使用 <code v-pre>{{param_name}}</code> 占位符引用参数值，枚举的 value 即可作为不同环境的 BaseUrl
             </div>
             <div v-for="(param, idx) in form.params_config" :key="idx" class="param-row">
               <el-input v-model="param.name" placeholder="参数名" style="width: 140px" />
