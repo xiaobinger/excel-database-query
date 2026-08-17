@@ -244,7 +244,39 @@
             <el-input v-model="form.api_url" placeholder="https://api.example.com/endpoint" />
           </el-form-item>
           <el-form-item label="请求头">
-            <el-input v-model="apiHeadersText" type="textarea" :rows="3" placeholder='{"Content-Type": "application/json"}' />
+            <div style="width: 100%">
+              <div style="margin-bottom: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                <span style="color: #909399; font-size: 12px;">快速选择:</span>
+                <el-button size="small" :type="isContentType('application/json') ? 'primary' : 'info'" text @click="presetHeader('json')">JSON</el-button>
+                <el-button size="small" :type="isContentType('application/x-www-form-urlencoded') ? 'primary' : 'info'" text @click="presetHeader('form')">表单</el-button>
+                <el-button size="small" :type="isContentType('multipart/form-data') ? 'primary' : 'info'" text @click="presetHeader('multipart')">Multipart表单</el-button>
+                <el-button size="small" type="warning" text @click="presetHeader('none')">无</el-button>
+              </div>
+              <div v-for="(h, idx) in headerEntries" :key="idx" class="param-row" style="margin-bottom: 4px;">
+                <el-input v-model="h.key" placeholder="Header名(如:Content-Type)" style="width: 220px" @input="syncHeadersFromEntries" />
+                <el-input v-model="h.value" placeholder="值(如:application/json)" style="flex: 1" @input="syncHeadersFromEntries" />
+                <el-button type="danger" text @click="headerEntries.splice(idx, 1); syncHeadersFromEntries()">
+                  <i class="fas fa-times"></i>
+                </el-button>
+              </div>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <el-button type="primary" text size="small" @click="headerEntries.push({ key: '', value: '' })">
+                  <i class="fas fa-plus"></i> 添加请求头
+                </el-button>
+                <el-button type="info" text size="small" @click="showRawHeaders = !showRawHeaders">
+                  <i class="fas fa-code"></i> {{ showRawHeaders ? '隐藏' : '查看' }}原始JSON
+                </el-button>
+              </div>
+              <el-input
+                v-if="showRawHeaders"
+                v-model="apiHeadersText"
+                type="textarea"
+                :rows="3"
+                placeholder='{"Content-Type": "application/json"}'
+                style="margin-top: 8px"
+                @input="syncEntriesFromHeaders"
+              />
+            </div>
           </el-form-item>
           <el-form-item label="请求体模板">
             <el-input v-model="form.api_body" type="textarea" :rows="4" placeholder='请求体模板，可使用 {{param_name}} 作为参数占位符' />
@@ -720,6 +752,54 @@ const apiHeadersText = computed({
   }
 })
 
+// 请求头 key-value 编辑
+const headerEntries = ref([])
+const showRawHeaders = ref(false)
+
+// 从 form.api_headers 同步到 headerEntries
+function syncEntriesFromHeaders() {
+  try {
+    const obj = form.api_headers || {}
+    headerEntries.value = Object.keys(obj).map(k => ({ key: k, value: String(obj[k]) }))
+  } catch {
+    headerEntries.value = []
+  }
+}
+
+// 从 headerEntries 同步到 form.api_headers
+function syncHeadersFromEntries() {
+  const obj = {}
+  headerEntries.value.forEach(h => {
+    if (h.key.trim()) obj[h.key.trim()] = h.value
+  })
+  form.api_headers = obj
+}
+
+// 判断当前 Content-Type 是否匹配
+function isContentType(type) {
+  const ct = (form.api_headers || {})['Content-Type'] || ''
+  return ct.toLowerCase().includes(type.toLowerCase())
+}
+
+// 快速选择预设请求头
+function presetHeader(preset) {
+  const existing = JSON.parse(JSON.stringify(form.api_headers || {}))
+  if (preset === 'none') {
+    delete existing['Content-Type']
+    form.api_headers = existing
+    syncEntriesFromHeaders()
+    return
+  }
+  const ctMap = {
+    json: 'application/json',
+    form: 'application/x-www-form-urlencoded',
+    multipart: 'multipart/form-data',
+  }
+  existing['Content-Type'] = ctMap[preset]
+  form.api_headers = existing
+  syncEntriesFromHeaders()
+}
+
 const scriptEnvText = computed({
   get() {
     return form.script_env ? JSON.stringify(form.script_env, null, 2) : ''
@@ -894,6 +974,8 @@ function openDialog(row) {
     editId.value = null
     Object.assign(form, { ...defaultForm, params_config: [], response_mapping: [] })
   }
+  syncEntriesFromHeaders()
+  showRawHeaders.value = false
   dialogVisible.value = true
 }
 

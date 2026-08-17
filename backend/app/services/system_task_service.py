@@ -461,10 +461,21 @@ class SystemTaskService:
             elif method == 'PUT':
                 if isinstance(request_body, dict):
                     resp = requests.put(url, headers=headers, json=request_body, timeout=timeout)
-                else:
+                elif request_body:
                     resp = requests.put(url, headers=headers, data=request_body, timeout=timeout)
+                elif request_params:
+                    # body为空且有params，作为form data发送
+                    resp = requests.put(url, headers=headers, data=request_params, timeout=timeout)
+                else:
+                    resp = requests.put(url, headers=headers, timeout=timeout)
             elif method == 'DELETE':
-                resp = requests.delete(url, headers=headers, params=request_params, timeout=timeout)
+                # DELETE通常用query params，但若有body则用body
+                if isinstance(request_body, dict):
+                    resp = requests.delete(url, headers=headers, json=request_body, timeout=timeout)
+                elif request_body:
+                    resp = requests.delete(url, headers=headers, data=request_body, timeout=timeout)
+                else:
+                    resp = requests.delete(url, headers=headers, params=request_params, timeout=timeout)
             else:
                 raise ValueError(f'不支持的HTTP方法: {method}')
 
@@ -842,10 +853,21 @@ class SystemTaskService:
             elif method == 'PUT':
                 if isinstance(request_body, dict):
                     resp = requests.put(url, headers=headers, json=request_body, timeout=timeout)
-                else:
+                elif request_body:
                     resp = requests.put(url, headers=headers, data=request_body, timeout=timeout)
+                elif request_params:
+                    # body为空且有params，作为form data发送
+                    resp = requests.put(url, headers=headers, data=request_params, timeout=timeout)
+                else:
+                    resp = requests.put(url, headers=headers, timeout=timeout)
             elif method == 'DELETE':
-                resp = requests.delete(url, headers=headers, params=request_params, timeout=timeout)
+                # DELETE通常用query params，但若有body则用body
+                if isinstance(request_body, dict):
+                    resp = requests.delete(url, headers=headers, json=request_body, timeout=timeout)
+                elif request_body:
+                    resp = requests.delete(url, headers=headers, data=request_body, timeout=timeout)
+                else:
+                    resp = requests.delete(url, headers=headers, params=request_params, timeout=timeout)
             else:
                 return {'error': f'不支持的HTTP方法: {method}', 'success': False}
 
