@@ -376,12 +376,16 @@ class SystemTaskService:
         request_params = dict(params_values) if params_values else {}
         body = system_task.api_body or ''
 
+        # 已用于URL/body占位符替换的参数名集合（这些参数不应再作为query/form重复附加）
+        used_param_keys = set()
+
         # Replace placeholders in body {{param}}
         if body and params_values:
             for key, val in params_values.items():
                 placeholder = f'{{{{{key}}}}}'
                 if placeholder in body:
                     body = body.replace(placeholder, str(val))
+                    used_param_keys.add(key)
 
         # Replace placeholders in url
         if params_values:
@@ -389,6 +393,11 @@ class SystemTaskService:
                 placeholder = f'{{{{{key}}}}}'
                 if placeholder in url:
                     url = url.replace(placeholder, str(val))
+                    used_param_keys.add(key)
+
+        # 从request_params中移除已用于URL/body替换的参数，避免重复附加
+        for key in used_param_keys:
+            request_params.pop(key, None)
 
         execution.progress = 30
         execution.add_log(f'准备请求: {method} {url}')
@@ -785,12 +794,16 @@ class SystemTaskService:
         request_params = dict(params_values) if params_values else {}
         body = system_task.api_body or ''
 
+        # 已用于URL/body占位符替换的参数名集合（这些参数不应再作为query/form重复附加）
+        used_param_keys = set()
+
         # Replace placeholders in body {{param}}
         if body and params_values:
             for key, val in params_values.items():
                 placeholder = f'{{{{{key}}}}}'
                 if placeholder in body:
                     body = body.replace(placeholder, str(val))
+                    used_param_keys.add(key)
 
         # Replace placeholders in url
         if params_values:
@@ -798,6 +811,11 @@ class SystemTaskService:
                 placeholder = f'{{{{{key}}}}}'
                 if placeholder in url:
                     url = url.replace(placeholder, str(val))
+                    used_param_keys.add(key)
+
+        # 从request_params中移除已用于URL/body替换的参数，避免重复附加
+        for key in used_param_keys:
+            request_params.pop(key, None)
 
         # Signing
         if system_task.sign_enabled and system_task.sign_key:
