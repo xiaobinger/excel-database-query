@@ -948,9 +948,16 @@ async function cancelExport() {
       cancelButtonText: '取消',
       type: 'warning'
     })
+  } catch {
+    // 用户点击了取消按钮，无需处理
+    return
+  }
+  try {
     await api.export.cancel(taskId.value)
     ElMessage.success('任务已终止')
-  } catch {
+  } catch (e) {
+    // 错误提示已由 http 拦截器统一弹出，这里仅记录便于调试
+    console.error('终止导出任务失败:', e)
   }
 }
 

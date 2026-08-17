@@ -452,7 +452,9 @@ async function handleTerminate(row) {
     }
     ElMessage.success('任务已终止')
     fetchTasks()
-  } catch {
+  } catch (e) {
+    // 错误提示已由 http 拦截器统一弹出，这里仅记录便于调试
+    console.error('终止任务失败:', e)
   }
 }
 
@@ -477,7 +479,9 @@ async function handleTerminateFromDetail() {
     ElMessage.success('任务已终止')
     detailVisible.value = false
     fetchTasks()
-  } catch {
+  } catch (e) {
+    // 错误提示已由 http 拦截器统一弹出，这里仅记录便于调试
+    console.error('终止任务失败:', e)
   }
 }
 

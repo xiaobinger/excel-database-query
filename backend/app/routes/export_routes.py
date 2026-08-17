@@ -1,6 +1,7 @@
 import os
 import json
 import uuid
+import logging
 from datetime import datetime
 from flask import Blueprint, request, jsonify, current_app, Response, stream_with_context
 from app import db
@@ -12,6 +13,8 @@ from app.utils.auth import login_required, get_current_user
 from app.utils.behavior_tracker import track_behavior
 from app.utils.error_sanitizer import sanitize_error_for_user
 import time
+
+logger = logging.getLogger(__name__)
 
 export_bp = Blueprint('export', __name__, url_prefix='/api/export')
 
@@ -162,37 +165,65 @@ def stream_export_status(task_id):
 
 
 @export_bp.route('/cancel/<task_id>', methods=['POST'])
+@login_required
 def cancel_export(task_id):
-    task = QueryTask.query.filter_by(task_id=task_id, type='export').first()
-    if not task:
-        return jsonify({'success': False, 'message': '任务不存在'}), 404
-    if task.status in ('pending', 'running'):
-        # 设置取消标志并终止线程
+    try:
+        task = QueryTask.query.filter_by(task_id=task_id, type='export').first()
+        if not task:
+            return jsonify({'success': False, 'message': '任务不存在'}), 404
+        if task.status not in ('pending', 'running'):
+            return jsonify({'success': False, 'message': '无法终止任务（任务可能已完成或不存在）'}), 400
+
+        # 设置取消标志（通知子线程在下一个检查点退出）
         from app.services.export_service import _task_cancel_events, _task_threads
         cancel_event = _task_cancel_events.get(task_id)
         if cancel_event:
             cancel_event.set()
 
+        # 异步终止线程（注入 SystemExit）
         thread = _task_threads.get(task_id)
         if thread and thread.is_alive():
             try:
                 import ctypes
                 tid = ctypes.c_long(thread.ident)
                 ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, ctypes.py_object(SystemExit))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f'终止导出任务线程失败 (task_id={task_id}): {e}')
 
-        task.status = 'manual_cancelled'
-        task.completed_at = datetime.utcnow()
-        task.add_log('任务已被手动终止', 'warning')
-        db.session.commit()
+        # 更新任务状态（带异常保护，避免 commit 失败导致 500）
+        try:
+            task.status = 'manual_cancelled'
+            task.completed_at = datetime.utcnow()
+            task.add_log('任务已被手动终止', 'warning')
+            db.session.commit()
+        except Exception as e:
+            logger.error(f'更新导出任务取消状态失败 (commit, task_id={task_id}): {e}', exc_info=True)
+            db.session.rollback()
+            try:
+                db.session.expire_all()
+                task = QueryTask.query.filter_by(task_id=task_id, type='export').first()
+                if task:
+                    task.status = 'manual_cancelled'
+                    task.completed_at = datetime.utcnow()
+                    task.add_log('任务已被手动终止', 'warning')
+                    db.session.commit()
+            except Exception as e2:
+                logger.error(f'重试更新导出任务取消状态仍失败 (task_id={task_id}): {e2}', exc_info=True)
+                db.session.rollback()
+                raise
 
         # 清理线程引用
         _task_threads.pop(task_id, None)
         _task_cancel_events.pop(task_id, None)
 
         return jsonify({'success': True, 'message': '任务已终止'})
-    return jsonify({'success': False, 'message': '无法终止任务'}), 400
+    except Exception as e:
+        logger.error(f'取消导出任务异常 (task_id={task_id}): {e}', exc_info=True)
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        return jsonify({'success': False, 'message': f'取消任务失败: {str(e)}'}), 500
 
 
 @export_bp.route('/tasks', methods=['GET'])
