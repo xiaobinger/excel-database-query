@@ -966,6 +966,10 @@ class AiService:
                     'script_type': t.script_type or 'python',
                     'script_path': t.script_path or '',
                 }
+            # API任务的BaseUrl引用信息
+            base_url_info = None
+            if (t.task_type or 'sql') == 'api' and t.api_base_url_name:
+                base_url_info = {'name': t.api_base_url_name}
             result.append({
                 'id': t.id,
                 'name': t.name,
@@ -975,6 +979,7 @@ class AiService:
                 'databases': databases_info,
                 'response_mapping': response_mapping_info,
                 'script_info': script_info,
+                'base_url': base_url_info,
             })
         resp = {'tasks': result, 'total': len(result)}
         if len(result) == 0:

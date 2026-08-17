@@ -154,6 +154,8 @@ const system = {
   getMenuConfig: () => http.get('/system/menu-config'),
   saveMenuConfig: (data) => http.put('/system/menu-config', { menu_config: data }),
   getMenuItems: () => http.get('/system/menu-items'),
+  getApiBaseUrls: () => http.get('/system/api-base-urls'),
+  saveApiBaseUrls: (data) => http.put('/system/api-base-urls', data),
 }
 
 const download = {

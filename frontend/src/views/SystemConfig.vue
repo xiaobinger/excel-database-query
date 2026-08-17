@@ -279,6 +279,47 @@
             </el-dialog>
           </div>
         </el-tab-pane>
+
+        <el-tab-pane label="API BaseUrl" name="base_urls">
+          <div class="baseurl-section" style="margin-top: 16px">
+            <p style="color: #909399; margin-bottom: 16px;">
+              <i class="fas fa-info-circle"></i>
+              配置全局 API BaseUrl，可在 API 类型的系统任务中引用，便于多环境切换复用。每个 BaseUrl 需指定唯一名称、显示名称和实际地址。
+            </p>
+            <el-table :data="baseUrls" stripe style="width: 100%">
+              <el-table-column label="名称" width="180">
+                <template #default="{ row }">
+                  <el-input v-model="row.name" placeholder="如: prod" size="small" />
+                </template>
+              </el-table-column>
+              <el-table-column label="显示名称" width="200">
+                <template #default="{ row }">
+                  <el-input v-model="row.label" placeholder="如: 生产环境" size="small" />
+                </template>
+              </el-table-column>
+              <el-table-column label="实际地址" min-width="280">
+                <template #default="{ row }">
+                  <el-input v-model="row.url" placeholder="https://api.example.com" size="small" />
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="80" align="center">
+                <template #default="{ $index }">
+                  <el-button type="danger" text size="small" @click="baseUrls.splice($index, 1)">
+                    <i class="fas fa-trash"></i>
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div style="margin-top: 12px;">
+              <el-button type="primary" text size="small" @click="baseUrls.push({ name: '', label: '', url: '' })">
+                <i class="fas fa-plus"></i> 添加 BaseUrl
+              </el-button>
+              <el-button type="success" size="small" :loading="savingBaseUrls" @click="handleSaveBaseUrls">
+                <i class="fas fa-save"></i> 保存配置
+              </el-button>
+            </div>
+          </div>
+        </el-tab-pane>
       </el-tabs>
     </el-card>
   </div>
@@ -319,6 +360,10 @@ const synonymGroups = ref([])
 const savingSynonym = ref(false)
 const addingWordIndex = ref(-1)
 const newWord = ref('')
+
+// API BaseUrl 全局配置
+const baseUrls = ref([])
+const savingBaseUrls = ref(false)
 const addWordInputRef = ref(null)
 
 async function fetchConfig() {
@@ -602,7 +647,39 @@ onMounted(() => {
   fetchConfig()
   fetchAiConfigs()
   fetchStrategy()
+  fetchBaseUrls()
 })
+
+// API BaseUrl 全局配置
+async function fetchBaseUrls() {
+  try {
+    const res = await api.system.getApiBaseUrls()
+    baseUrls.value = (res.data || []).map(b => ({ name: b.name || '', label: b.label || '', url: b.url || '' }))
+    if (baseUrls.value.length === 0) baseUrls.value.push({ name: '', label: '', url: '' })
+  } catch (e) {
+    console.error('fetchBaseUrls error', e)
+  }
+}
+
+async function handleSaveBaseUrls() {
+  // 校验名称唯一性
+  const valid = baseUrls.value.filter(b => b.name.trim() && b.url.trim())
+  const names = valid.map(b => b.name.trim())
+  if (new Set(names).size !== names.length) {
+    ElMessage.error('存在重复的名称，请确保名称唯一')
+    return
+  }
+  savingBaseUrls.value = true
+  try {
+    await api.system.saveApiBaseUrls({ base_urls: valid })
+    ElMessage.success('BaseUrl 配置已保存')
+    baseUrls.value = valid.length > 0 ? valid : [{ name: '', label: '', url: '' }]
+  } catch (e) {
+    ElMessage.error('保存失败')
+  } finally {
+    savingBaseUrls.value = false
+  }
+}
 
 // AI Strategy
 const strategyDialogVisible = ref(false)

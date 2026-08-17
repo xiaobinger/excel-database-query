@@ -259,3 +259,60 @@ def update_menu_config():
 def get_menu_items():
     """获取所有可用菜单项（供系统地图选择，仅管理员）"""
     return jsonify({'success': True, 'data': ALL_MENU_ITEMS})
+
+
+# ── 全局 API BaseUrl 配置 ──────────────────────────────────────
+
+API_BASE_URLS_KEY = 'api_base_urls'
+
+
+@system_bp.route('/api-base-urls', methods=['GET'])
+@login_required
+def get_api_base_urls():
+    """获取全局API BaseUrl列表（登录用户可访问，供任务编辑表单下拉选择）"""
+    config = SystemConfig.query.filter_by(config_key=API_BASE_URLS_KEY).first()
+    if config and config.config_value:
+        try:
+            data = json.loads(config.config_value)
+            if isinstance(data, list):
+                return jsonify({'success': True, 'data': data})
+        except json.JSONDecodeError:
+            pass
+    return jsonify({'success': True, 'data': []})
+
+
+@system_bp.route('/api-base-urls', methods=['PUT'])
+@admin_required
+def update_api_base_urls():
+    """保存全局API BaseUrl列表（仅管理员）"""
+    data = request.get_json()
+    if not data or 'base_urls' not in data:
+        return jsonify({'success': False, 'message': '请求数据为空'}), 400
+
+    base_urls = data.get('base_urls')
+    if not isinstance(base_urls, list):
+        return jsonify({'success': False, 'message': 'BaseUrl列表必须是数组'}), 400
+
+    # 校验每项必须包含 name 和 url，label 可选
+    normalized = []
+    for item in base_urls:
+        if not isinstance(item, dict):
+            continue
+        name = (item.get('name') or '').strip()
+        url = (item.get('url') or '').strip()
+        if not name or not url:
+            continue
+        normalized.append({
+            'name': name,
+            'label': (item.get('label') or '').strip() or name,
+            'url': url,
+        })
+
+    config = SystemConfig.query.filter_by(config_key=API_BASE_URLS_KEY).first()
+    if not config:
+        config = SystemConfig(config_key=API_BASE_URLS_KEY, description='全局API BaseUrl列表')
+        db.session.add(config)
+    config.config_value = json.dumps(normalized, ensure_ascii=False)
+    db.session.commit()
+
+    return jsonify({'success': True, 'message': 'BaseUrl配置已更新', 'data': normalized})

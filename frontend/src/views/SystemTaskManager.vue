@@ -229,6 +229,19 @@
 
         <!-- API Config -->
         <template v-if="form.task_type === 'api'">
+          <el-form-item label="全局BaseUrl">
+            <el-select v-model="form.api_base_url_name" placeholder="不使用(留空)" clearable style="width: 100%">
+              <el-option
+                v-for="b in apiBaseUrlOptions"
+                :key="b.name"
+                :label="`${b.label} (${b.name})`"
+                :value="b.name"
+              />
+            </el-select>
+            <div style="color: #909399; font-size: 12px; margin-top: 4px">
+              选择后，实际请求URL = 全局BaseUrl + API地址；若API地址已是完整http(s)URL则忽略BaseUrl。可在「系统配置 - API BaseUrl」中管理
+            </div>
+          </el-form-item>
           <el-form-item label="请求方式" prop="api_method">
             <el-select v-model="form.api_method" placeholder="请选择请求方式" style="width: 120px">
               <el-option value="GET" label="GET" />
@@ -238,7 +251,7 @@
             </el-select>
           </el-form-item>
           <el-form-item label="API地址" prop="api_url">
-            <el-input v-model="form.api_url" placeholder="https://api.example.com/endpoint" />
+            <el-input v-model="form.api_url" placeholder="https://api.example.com/endpoint 或 /api/endpoint" />
           </el-form-item>
           <el-form-item label="请求头">
             <el-input v-model="apiHeadersText" type="textarea" :rows="3" placeholder='{"Content-Type": "application/json"}' />
@@ -626,6 +639,7 @@ const defaultForm = {
   api_headers: {},
   api_body: '',
   api_timeout: 30,
+  api_base_url_name: '',
   params_config: [],
   response_mapping: [],
   sign_enabled: false,
@@ -639,6 +653,9 @@ const defaultForm = {
   script_timeout: 60,
   script_env: {},
 }
+
+// 全局BaseUrl选项（供API任务编辑表单下拉选择）
+const apiBaseUrlOptions = ref([])
 
 const form = reactive({ ...defaultForm })
 
@@ -791,6 +808,7 @@ function openDialog(row) {
       api_headers: row.api_headers || {},
       api_body: row.api_body || '',
       api_timeout: row.api_timeout || 30,
+      api_base_url_name: row.api_base_url_name || '',
       params_config: row.params_config && row.params_config.length > 0
         ? JSON.parse(JSON.stringify(row.params_config)).map(p => ({ ...p, options: p.options || [] }))
         : [],
@@ -836,6 +854,7 @@ async function handleSubmit() {
       api_url: form.api_url,
       api_body: form.api_body,
       api_timeout: form.api_timeout,
+      api_base_url_name: form.api_base_url_name || '',
       sign_enabled: form.sign_enabled,
       sign_key: form.sign_key,
       sign_method: form.sign_method,
@@ -1124,7 +1143,17 @@ onMounted(() => {
   fetchList()
   fetchScripts()
   fetchDatabases()
+  fetchApiBaseUrls()
 })
+
+async function fetchApiBaseUrls() {
+  try {
+    const res = await api.system.getApiBaseUrls()
+    apiBaseUrlOptions.value = res.data || []
+  } catch (e) {
+    console.error('fetchApiBaseUrls error', e)
+  }
+}
 </script>
 
 <style scoped>
