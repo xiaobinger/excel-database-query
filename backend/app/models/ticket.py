@@ -127,6 +127,8 @@ class TicketComment(db.Model):
     content = db.Column(db.Text, comment='评论内容(Markdown富文本)')
     action = db.Column(db.String(20), default='comment', comment='动作: comment/reject/appeal/status_change/ai_process')
     is_ai = db.Column(db.Boolean, default=False, comment='是否AI生成')
+    attachment_path = db.Column(db.String(500), comment='附件文件路径')
+    attachment_name = db.Column(db.String(200), comment='附件文件名')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     user = db.relationship('User', foreign_keys=[user_id], lazy='joined')
@@ -141,6 +143,8 @@ class TicketComment(db.Model):
             'content': self.content or '',
             'action': self.action,
             'is_ai': self.is_ai,
+            'attachment_path': self.attachment_path,
+            'attachment_name': self.attachment_name,
             'created_at': beijing_isoformat(self.created_at),
         }
 

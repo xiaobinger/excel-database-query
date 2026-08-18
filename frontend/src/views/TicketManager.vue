@@ -298,6 +298,12 @@
                 <span class="comment-time">{{ c.created_at }}</span>
               </div>
               <div class="comment-content" v-html="renderMarkdown(c.content)"></div>
+              <div v-if="c.attachment_path" class="comment-attachment">
+                <i class="fas fa-paperclip"></i>
+                <a :href="attachmentDownloadUrl(detailData.id, c.id)" target="_blank">
+                  {{ c.attachment_name || '下载附件' }}
+                </a>
+              </div>
             </div>
           </div>
         </div>
@@ -974,6 +980,11 @@ function renderMarkdown(text) {
   }
 }
 
+// 评论附件下载链接
+function attachmentDownloadUrl(ticketId, commentId) {
+  return `/api/tickets/${ticketId}/comments/${commentId}/attachment`
+}
+
 onMounted(() => {
   fetchTickets()
 })
@@ -1390,6 +1401,26 @@ onUnmounted(() => {
   border-radius: 4px;
   overflow-x: auto;
   font-size: 12px;
+}
+
+.comment-attachment {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: #f0f9eb;
+  border: 1px solid #e1f3d8;
+  border-radius: 4px;
+  font-size: 13px;
+}
+.comment-attachment i {
+  color: #67c23a;
+  margin-right: 6px;
+}
+.comment-attachment a {
+  color: #409eff;
+  text-decoration: none;
+}
+.comment-attachment a:hover {
+  text-decoration: underline;
 }
 
 /* 评论输入区 */

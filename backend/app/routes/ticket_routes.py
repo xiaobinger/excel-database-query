@@ -97,9 +97,9 @@ def _is_creator(ticket, user):
     return user and ticket.created_by == user.id
 
 
-def _add_comment(ticket, user_id, content, action='comment', is_ai=False):
+def _add_comment(ticket, user_id, content, action='comment', is_ai=False, attachment_path=None, attachment_name=None):
     """添加评论记录"""
-    if not content:
+    if not content and not attachment_path:
         return None
     comment = TicketComment(
         ticket_id=ticket.id,
@@ -107,12 +107,127 @@ def _add_comment(ticket, user_id, content, action='comment', is_ai=False):
         content=content,
         action=action,
         is_ai=is_ai,
+        attachment_path=attachment_path,
+        attachment_name=attachment_name,
     )
     db.session.add(comment)
     return comment
 
 
 # ── AI处理工单 ──────────────────────────────────────────────
+
+def _execute_export_for_ticket(ticket, result, tool_log_text, app):
+    """在工单上下文中实际执行导出任务"""
+    from app.services.export_service import ExportService
+    script_id = result.get('script_id')
+    params = result.get('params', {})
+    all_checked = result.get('all_checked', {})
+    output_format = result.get('output_format', 'sheets')
+    output_dir = app.config['OUTPUT_FOLDER']
+    os.makedirs(output_dir, exist_ok=True)
+
+    task = ExportService.create_export_task(
+        script_ids=[script_id],
+        params_values=params,
+        output_format=output_format,
+        created_by=ticket.created_by,
+    )
+
+    def on_complete(task_id, status):
+        with app.app_context():
+            t = Ticket.query.get(ticket.id)
+            if not t:
+                return
+            task_status = ExportService.get_task_status(task_id)
+            output_file = task_status.get('output_file') if task_status else None
+            if status == 'completed' and output_file:
+                file_name = os.path.basename(output_file)
+                _add_comment(t, None,
+                    f'导出任务已完成，请下载附件：{file_name}\n\n---\n**处理过程：**\n{tool_log_text}',
+                    'ai_process', is_ai=True,
+                    attachment_path=output_file, attachment_name=file_name)
+                t.ai_result = f'导出任务已完成，结果文件：{file_name}'
+            else:
+                _add_comment(t, None,
+                    f'导出任务执行失败\n\n---\n**处理过程：**\n{tool_log_text}',
+                    'ai_process', is_ai=True)
+                t.ai_result = '导出任务执行失败'
+            t.status = STATUS_PROCESSED
+            t.processed_at = datetime.utcnow()
+            _add_comment(t, None, '任务执行完成，等待提交人核实', 'status_change', is_ai=True)
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+            logger.info(f'工单 {t.ticket_no} 导出任务完成，状态: {status}')
+
+    ExportService.execute_export_async(
+        task_id=task.task_id,
+        script_ids=[script_id],
+        params_values=params,
+        output_dir=output_dir,
+        output_format=output_format,
+        all_checked=all_checked,
+        on_complete=on_complete,
+    )
+
+
+def _execute_profit_share_for_ticket(ticket, result, tool_log_text, app):
+    """在工单上下文中实际执行分润导出任务"""
+    from app.services.profit_share_service import ProfitShareService
+    org_no = result.get('org_no')
+    start_time = result.get('start_time')
+    end_time = result.get('end_time')
+    database_connection_id = result.get('database_connection_id')
+    output_dir = app.config['OUTPUT_FOLDER']
+    os.makedirs(output_dir, exist_ok=True)
+
+    task = ProfitShareService.create_task(
+        org_no=org_no,
+        start_time=start_time,
+        end_time=end_time,
+        database_connection_id=database_connection_id,
+        created_by=ticket.created_by,
+    )
+
+    def on_complete(task_id, status):
+        with app.app_context():
+            t = Ticket.query.get(ticket.id)
+            if not t:
+                return
+            task_status = ProfitShareService.get_task_status(task_id)
+            output_file = task_status.get('output_file') if task_status else None
+            if status == 'completed' and output_file:
+                file_name = os.path.basename(output_file)
+                _add_comment(t, None,
+                    f'分润导出任务已完成，请下载附件：{file_name}\n\n---\n**处理过程：**\n{tool_log_text}',
+                    'ai_process', is_ai=True,
+                    attachment_path=output_file, attachment_name=file_name)
+                t.ai_result = f'分润导出任务已完成，结果文件：{file_name}'
+            else:
+                _add_comment(t, None,
+                    f'分润导出任务执行失败\n\n---\n**处理过程：**\n{tool_log_text}',
+                    'ai_process', is_ai=True)
+                t.ai_result = '分润导出任务执行失败'
+            t.status = STATUS_PROCESSED
+            t.processed_at = datetime.utcnow()
+            _add_comment(t, None, '任务执行完成，等待提交人核实', 'status_change', is_ai=True)
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+            logger.info(f'工单 {t.ticket_no} 分润导出任务完成，状态: {status}')
+
+    ProfitShareService.execute_async(
+        task_id=task.task_id,
+        org_no=org_no,
+        start_time=start_time,
+        end_time=end_time,
+        database_connection_id=database_connection_id,
+        output_dir=output_dir,
+        on_complete=on_complete,
+    )
+
 
 def _process_ticket_with_ai_async(ticket_id, app):
     """后台线程：用AI处理工单（支持工具调用，可匹配系统的导出/查询/系统任务等）"""
@@ -270,9 +385,33 @@ def _process_ticket_with_ai_async(ticket_id, app):
                     logger.info(f'工单 {ticket.ticket_no} AI处理暂停，需用户确认执行SQL系统任务: {pending_system_task["task_name"]}')
                     return
 
-                # 如果触发了操作型工具，不需要继续循环（任务已创建）
+                # 如果触发了操作型工具
                 if action_triggered:
-                    # 构建工具结果消息，让AI生成一次归总回复
+                    tool_log_text = '\n\n'.join(tool_log) if tool_log else ''
+
+                    # 收集触发的操作型工具详情
+                    action_detail = None
+                    for tr in tool_results:
+                        r = tr['result']
+                        if isinstance(r, dict):
+                            if r.get('action_type') == 'export' and not r.get('error'):
+                                action_detail = {'type': 'export', 'result': r}
+                                break
+                            elif r.get('action_type') == 'profit_share' and not r.get('error'):
+                                action_detail = {'type': 'profit_share', 'result': r}
+                                break
+
+                    if action_detail:
+                        # 实际执行导出/分润任务，由回调处理后续
+                        _add_comment(ticket, None, f'AI正在执行任务...\n\n---\n**处理过程：**\n{tool_log_text}', 'ai_process', is_ai=True)
+                        db.session.commit()
+                        if action_detail['type'] == 'export':
+                            _execute_export_for_ticket(ticket, action_detail['result'], tool_log_text, app)
+                        elif action_detail['type'] == 'profit_share':
+                            _execute_profit_share_for_ticket(ticket, action_detail['result'], tool_log_text, app)
+                        return  # 后台任务已启动，回调处理后续
+
+                    # 其他操作型工具（query/system_task），仍按原逻辑获取AI总结
                     messages.append({
                         'role': 'assistant',
                         'content': content,
@@ -284,7 +423,6 @@ def _process_ticket_with_ai_async(ticket_id, app):
                             'tool_call_id': tr['tool_call_id'],
                             'content': json.dumps(tr['result'], ensure_ascii=False),
                         })
-                    # 请求AI归总结果（不带工具，避免再次调用）
                     try:
                         summary_content, _, _, _, _, _ = AiService.chat_with_failover(messages, use_tools=False)
                         final_content = summary_content or ''
@@ -1249,6 +1387,30 @@ def serve_file(filename):
     from flask import send_from_directory
     upload_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'tickets')
     return send_from_directory(upload_dir, filename)
+
+
+@ticket_bp.route('/<int:ticket_id>/comments/<int:comment_id>/attachment', methods=['GET'])
+@login_required
+def download_comment_attachment(ticket_id, comment_id):
+    """下载工单评论中的附件（导出结果文件等）"""
+    from flask import send_file
+    ticket = Ticket.query.get(ticket_id)
+    if not ticket:
+        return jsonify({'success': False, 'message': '工单不存在'}), 404
+    current_user = get_current_user()
+    if not _can_access(ticket, current_user):
+        return jsonify({'success': False, 'message': '无权访问'}), 403
+
+    comment = TicketComment.query.filter_by(id=comment_id, ticket_id=ticket_id).first()
+    if not comment or not comment.attachment_path:
+        return jsonify({'success': False, 'message': '附件不存在'}), 404
+
+    file_path = comment.attachment_path
+    if not os.path.exists(file_path):
+        return jsonify({'success': False, 'message': '文件已被删除或移动'}), 404
+
+    download_name = comment.attachment_name or os.path.basename(file_path)
+    return send_file(file_path, as_attachment=True, download_name=download_name)
 
 
 @ticket_bp.route('/stats', methods=['GET'])
