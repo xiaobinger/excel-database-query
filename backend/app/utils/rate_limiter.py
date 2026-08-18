@@ -1,7 +1,8 @@
-"""Simple in-memory rate limiter for login protection."""
+"""Rate limiter for login protection. Account lock state persisted in DB."""
 import time
 import threading
 from collections import defaultdict
+from datetime import datetime
 
 
 class RateLimiter:
@@ -9,10 +10,8 @@ class RateLimiter:
 
     def __init__(self, lockout_seconds=300):
         self._lock = threading.Lock()
-        # {(ip, username): [(timestamp, success), ...]}
+        # {(ip or account_key): [(timestamp, success), ...]}
         self._attempts = defaultdict(list)
-        # {username: lock_until_timestamp}
-        self._locked_accounts = {}
 
         # Config
         self.max_attempts_per_ip = 10       # per minute per IP
@@ -21,7 +20,7 @@ class RateLimiter:
         self.lockout_seconds = lockout_seconds
 
     def _cleanup(self):
-        """Remove expired entries."""
+        """Remove expired attempt entries."""
         now = time.time()
         cutoff = now - self.window_seconds
         with self._lock:
@@ -29,19 +28,40 @@ class RateLimiter:
                 self._attempts[key] = [a for a in self._attempts[key] if a[0] > cutoff]
                 if not self._attempts[key]:
                     del self._attempts[key]
-            # Cleanup expired lockouts
-            for username in list(self._locked_accounts.keys()):
-                if self._locked_accounts[username] < now:
-                    del self._locked_accounts[username]
 
     def is_account_locked(self, username: str) -> bool:
-        """Check if an account is temporarily locked."""
-        self._cleanup()
-        with self._lock:
-            lock_until = self._locked_accounts.get(username)
-            if lock_until and lock_until > time.time():
-                return True
+        """Check if an account is locked (from DB)."""
+        from app import db
+        from app.models.user import User
+        user = User.query.filter_by(username=username).first()
+        if user and user.lock_until and user.lock_until > datetime.utcnow():
+            return True
         return False
+
+    def _lock_account(self, username: str):
+        """Persist account lock to DB."""
+        from app import db
+        from app.models.user import User
+        from datetime import timedelta
+        user = User.query.filter_by(username=username).first()
+        if user:
+            user.lock_until = datetime.utcnow() + timedelta(seconds=self.lockout_seconds)
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+
+    def _unlock_account(self, username: str):
+        """Clear account lock in DB."""
+        from app import db
+        from app.models.user import User
+        user = User.query.filter_by(username=username).first()
+        if user and user.lock_until:
+            user.lock_until = None
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
 
     def check_rate_limit(self, ip: str, username: str) -> tuple[bool, str]:
         """
@@ -51,20 +71,21 @@ class RateLimiter:
         self._cleanup()
         now = time.time()
 
-        with self._lock:
-            # Check account lockout
-            if username in self._locked_accounts:
-                if self._locked_accounts[username] > now:
-                    remaining = int(self._locked_accounts[username] - now)
-                    return False, f'Account locked due to too many failed attempts. Try again in {remaining} seconds.'
-                else:
-                    del self._locked_accounts[username]
+        # Check account lockout from DB
+        if self.is_account_locked(username):
+            from app import db
+            from app.models.user import User
+            user = User.query.filter_by(username=username).first()
+            if user and user.lock_until:
+                remaining = max(0, int((user.lock_until - datetime.utcnow()).total_seconds()))
+                return False, f'Account locked due to too many failed attempts. Try again in {remaining} seconds.'
 
+        with self._lock:
             # Check per-account rate limit
             account_key = f'account:{username}'
             account_attempts = [a for a in self._attempts[account_key] if a[0] > now - self.window_seconds]
             if len(account_attempts) >= self.max_attempts_per_account:
-                self._locked_accounts[username] = now + self.lockout_seconds
+                self._lock_account(username)
                 return False, f'Too many login attempts. Account locked for {self.lockout_seconds // 60} minutes.'
 
             # Check per-IP rate limit
@@ -76,11 +97,13 @@ class RateLimiter:
         return True, ''
 
     def record_attempt(self, ip: str, username: str, success: bool):
-        """Record a login attempt."""
+        """Record a login attempt. On success, clear any existing lock."""
         now = time.time()
         with self._lock:
             self._attempts[f'ip:{ip}'].append((now, success))
             self._attempts[f'account:{username}'].append((now, success))
+        if success:
+            self._unlock_account(username)
 
 
 # Global instance (lockout_seconds set via init_app after config loaded)

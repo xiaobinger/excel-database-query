@@ -16,6 +16,7 @@ class User(db.Model):
     phone = db.Column(db.String(20), comment='手机号')
     role_id = db.Column(db.Integer, db.ForeignKey('roles.id'))
     is_active = db.Column(db.Boolean, default=True)
+    lock_until = db.Column(db.DateTime, nullable=True, comment='账号锁定截止时间')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     script_ids = db.Column(db.Text, comment='available script id list (JSON)')
