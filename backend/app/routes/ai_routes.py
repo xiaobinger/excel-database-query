@@ -529,8 +529,12 @@ def retry_message(chat_id, message_id):
     if not user_msg:
         return jsonify({'success': False, 'message': '未找到对应的用户消息'}), 400
 
-    # 不删除任何消息，只返回用户消息内容供前端重新发送
-    return jsonify({'success': True, 'data': {'user_content': user_msg.content}})
+    # 不删除任何消息，只返回用户消息内容供前端重新发送（携带消息ID以复用原消息，不新建记录）
+    return jsonify({'success': True, 'data': {
+        'user_content': user_msg.content,
+        'user_message_id': user_msg.id,
+        'agent_id': user_msg.agent_id,
+    }})
 
 
 @ai_bp.route('/chats/<int:chat_id>/compress', methods=['POST'])
@@ -794,6 +798,15 @@ def send_message(chat_id):
     if not data or not data.get('content'):
         return jsonify({'success': False, 'message': '消息内容不能为空'}), 400
 
+    # 重新发送模式：复用已有用户消息重新触发AI处理，不新建用户消息记录
+    resend_msg = None
+    if data.get('resend_message_id'):
+        resend_msg = AiChatMessage.query.filter_by(
+            id=int(data['resend_message_id']), chat_id=chat_id, role='user').first()
+        if not resend_msg:
+            return jsonify({'success': False, 'message': '原用户消息不存在'}), 404
+        data['content'] = resend_msg.content
+
     start_time = time.time()
 
     # 获取agent_id：优先从请求data获取，其次从chat获取，最后回退到默认Agent
@@ -807,13 +820,17 @@ def send_message(chat_id):
         if not current_user.can_use_agent(int(agent_id)):
             return jsonify({'success': False, 'message': '无权使用该Agent'}), 403
 
-    user_message = AiChatMessage(
-        chat_id=chat_id,
-        agent_id=agent_id,
-        role='user',
-        content=data['content'],
-    )
-    db.session.add(user_message)
+    if resend_msg:
+        # 重新发送：复用原用户消息，不生成新消息
+        user_message = resend_msg
+    else:
+        user_message = AiChatMessage(
+            chat_id=chat_id,
+            agent_id=agent_id,
+            role='user',
+            content=data['content'],
+        )
+        db.session.add(user_message)
 
     # Update chat title from first message
     if not chat.title or chat.title == '新对话':
@@ -888,8 +905,11 @@ def send_message(chat_id):
         context = AiService.build_chat_context(current_user.id, chat_id, agent_id=agent_id)
 
         # Get chat history
-        history = AiChatMessage.query.filter_by(chat_id=chat_id, agent_id=agent_id)\
-            .order_by(AiChatMessage.created_at.asc()).all()
+        history_query = AiChatMessage.query.filter_by(chat_id=chat_id, agent_id=agent_id)
+        if resend_msg:
+            # 重新发送：仅使用原消息之前（含原消息）的上下文
+            history_query = history_query.filter(AiChatMessage.id <= resend_msg.id)
+        history = history_query.order_by(AiChatMessage.created_at.asc()).all()
         messages = []
         
         # 获取系统提示词：优先使用Agent的提示词，其次使用AI配置的system_prompt，最后使用默认提示词
@@ -1263,6 +1283,7 @@ def send_message(chat_id):
 
         # Build response payload
         response_payload = {
+            'user_message': user_message.to_dict(),
             'assistant_message': None,
             'tool_results': None,
         }
@@ -1441,6 +1462,15 @@ def send_message_stream(chat_id):
     if not data or not data.get('content'):
         return jsonify({'success': False, 'message': '消息内容不能为空'}), 400
 
+    # 重新发送模式：复用已有用户消息重新触发AI处理，不新建用户消息记录
+    resend_msg = None
+    if data.get('resend_message_id'):
+        resend_msg = AiChatMessage.query.filter_by(
+            id=int(data['resend_message_id']), chat_id=chat_id, role='user').first()
+        if not resend_msg:
+            return jsonify({'success': False, 'message': '原用户消息不存在'}), 404
+        data['content'] = resend_msg.content
+
     # 获取agent_id：优先从请求data获取，其次从chat获取，最后回退到默认Agent
     agent_id = data.get('agent_id') or chat.agent_id
     if not agent_id:
@@ -1452,13 +1482,17 @@ def send_message_stream(chat_id):
         if not current_user.can_use_agent(int(agent_id)):
             return jsonify({'success': False, 'message': '无权使用该Agent'}), 403
 
-    user_message = AiChatMessage(
-        chat_id=chat_id,
-        agent_id=agent_id,
-        role='user',
-        content=data['content'],
-    )
-    db.session.add(user_message)
+    if resend_msg:
+        # 重新发送：复用原用户消息，不生成新消息
+        user_message = resend_msg
+    else:
+        user_message = AiChatMessage(
+            chat_id=chat_id,
+            agent_id=agent_id,
+            role='user',
+            content=data['content'],
+        )
+        db.session.add(user_message)
 
     # 更新chat的agent_id（如果请求中指定了新的agent_id）
     if data.get('agent_id') and chat.agent_id != data.get('agent_id'):
@@ -1517,8 +1551,11 @@ def send_message_stream(chat_id):
     # 构建上下文
     try:
         context = AiService.build_chat_context(current_user.id, chat_id, agent_id=agent_id)
-        history = AiChatMessage.query.filter_by(chat_id=chat_id)\
-            .order_by(AiChatMessage.created_at.asc()).all()
+        history_query = AiChatMessage.query.filter_by(chat_id=chat_id)
+        if resend_msg:
+            # 重新发送：仅使用原消息之前（含原消息）的上下文
+            history_query = history_query.filter(AiChatMessage.id <= resend_msg.id)
+        history = history_query.order_by(AiChatMessage.created_at.asc()).all()
         messages = []
         
         # 获取系统提示词：优先使用Agent的提示词，其次使用AI配置的system_prompt，最后使用默认提示词
@@ -1584,6 +1621,7 @@ def send_message_stream(chat_id):
     user_id = current_user.id
     user_message_content = data['content']
     stream_agent_id = agent_id  # 保存agent_id供闭包使用
+    stream_user_message_id = user_message.id  # 用户消息ID（含重新发送场景），供前端同步
     # 根据Agent的enabled_tools过滤工具列表
     from app.services.ai_service import filter_tools
     stream_enabled_tools = agent.get_enabled_tools() if agent else None
@@ -2369,7 +2407,7 @@ def send_message_stream(chat_id):
                 _finished_streams[chat_id] = (stream_info, time.time())
 
             # 发送完成信号
-            yield f"data: {json.dumps({'type': 'done', 'message_id': msg_id, 'tokens': tokens_used, 'prompt_tokens': prompt_tokens_used, 'completion_tokens': completion_tokens_used, 'cache_creation_tokens': cache_creation_tokens_used, 'cache_read_tokens': cache_read_tokens_used, 'elapsed': elapsed}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'message_id': msg_id, 'user_message_id': stream_user_message_id, 'tokens': tokens_used, 'prompt_tokens': prompt_tokens_used, 'completion_tokens': completion_tokens_used, 'cache_creation_tokens': cache_creation_tokens_used, 'cache_read_tokens': cache_read_tokens_used, 'elapsed': elapsed}, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             logger.error(f'流式响应异常: {e}', exc_info=True)

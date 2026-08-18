@@ -76,10 +76,23 @@
             <div class="message-content" :class="{ 'full-width': msg._type === 'tool' || msg._type === 'file' || msg._type === 'lookup' || msg._type === 'ticket' }">
               <!-- 消息发送时间 -->
               <div v-if="!msg._streaming && formatMsgTime(msg.created_at)" class="message-time">{{ formatMsgTime(msg.created_at) }}</div>
-              <!-- 删除按钮（悬浮显示，执行中的任务不显示删除按钮） -->
+              <!-- 消息操作按钮（悬浮显示，执行中的任务不显示操作按钮） -->
               <div class="message-actions" v-show="msg._showActions && !msg._executing">
+                <!-- 复制按钮（有内容的消息均可复制） -->
+                <el-button v-if="msg.content" text size="small" class="msg-action-btn" title="复制内容" @click.stop="copyMessageContent(msg)">
+                  <i class="fas fa-copy"></i>
+                </el-button>
+                <!-- 重新发送按钮（仅用户文本消息，复用原消息仅重新触发AI处理） -->
+                <el-button
+                  v-if="msg.role === 'user' && msg.content && msg._type !== 'file'"
+                  text size="small" class="msg-action-btn" title="重新发送"
+                  :loading="msg._resending"
+                  @click.stop="resendUserMessage(msg)"
+                >
+                  <i v-if="!msg._resending" class="fas fa-redo"></i>
+                </el-button>
                 <el-dropdown v-if="isAdmin" trigger="click" @command="(cmd) => handleMsgDelete(cmd, msg)">
-                  <el-button text size="small" class="msg-action-btn" @click.stop>
+                  <el-button text size="small" class="msg-action-btn delete-btn" @click.stop>
                     <i class="fas fa-trash"></i>
                   </el-button>
                   <template #dropdown>
@@ -91,7 +104,7 @@
                     </el-dropdown-menu>
                   </template>
                 </el-dropdown>
-                <el-button v-else text size="small" class="msg-action-btn" @click="softDeleteMessage(msg)">
+                <el-button v-else text size="small" class="msg-action-btn delete-btn" @click="softDeleteMessage(msg)">
                   <i class="fas fa-trash"></i>
                 </el-button>
               </div>
@@ -2061,24 +2074,84 @@ async function clearCurrentChat() {
   } catch {}
 }
 
+// 复制消息内容（含降级方案，兼容http非安全上下文）
+function copyMessageContent(msg) {
+  const text = msg.content || ''
+  if (!text) return
+  const fallbackCopy = () => {
+    try {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+      ElMessage.success('内容已复制')
+    } catch {
+      ElMessage.error('复制失败，请手动复制')
+    }
+  }
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(() => {
+      ElMessage.success('内容已复制')
+    }).catch(fallbackCopy)
+  } else {
+    fallbackCopy()
+  }
+}
+
+// 重新发送用户消息：不生成新消息记录，仅复用原消息重新触发AI处理
+async function resendUserMessage(msg) {
+  if (msg.role !== 'user' || loading.value || msg._resending) return
+  if (!currentChatId.value || !msg.id) return
+  msg._resending = true
+  loading.value = true
+  try {
+    const modelConfig = selectedModel.value || activeModels.value[0] || null
+    const useStreaming = modelConfig ? modelConfig.enable_streaming !== false : true
+    const agentId = msg.agent_id || selectedAgent.value?.id || null
+    if (useStreaming) {
+      await sendStreamMessage(msg.content, null, agentId, { resendMessageId: msg.id })
+    } else {
+      const res = await api.ai.sendMessage(currentChatId.value, { content: msg.content, agent_id: agentId, resend_message_id: msg.id })
+      if (res.data?.assistant_message) {
+        messages.value.push(res.data.assistant_message)
+      }
+      if (res.data?.tool_results && res.data.tool_results.length > 0) {
+        await handleToolResults(res.data.tool_results)
+      }
+    }
+    await nextTick()
+    scrollToBottom()
+  } catch {
+    ElMessage.error('重新发送失败')
+  } finally {
+    msg._resending = false
+    loading.value = false
+  }
+}
+
 async function retryAiMessage(msg) {
   if (!currentChatId.value || loading.value) return
   try {
     msg._retrying = true
     const res = await api.ai.retryMessage(currentChatId.value, msg.id)
     if (res.data?.user_content) {
-      // 不删除任何消息，直接重新发送用户问题
+      // 不删除任何消息，复用原用户消息重新触发AI处理（不新建用户消息）
       loading.value = true
       // 使用原消息的agent_id，确保关联正确
-      const retryAgentId = msg.agent_id || selectedAgent.value?.id || null
+      const retryAgentId = res.data.agent_id || msg.agent_id || selectedAgent.value?.id || null
+      const retryMsgId = res.data.user_message_id || null
       try {
         // 根据模型配置决定是否使用流式输出
         const modelConfig = activeModels.value[0] || null
         const useStreaming = modelConfig ? modelConfig.enable_streaming !== false : true
         if (useStreaming) {
-          await sendStreamMessage(res.data.user_content, null, retryAgentId)
+          await sendStreamMessage(res.data.user_content, null, retryAgentId, { resendMessageId: retryMsgId })
         } else {
-          const sendRes = await api.ai.sendMessage(currentChatId.value, { content: res.data.user_content, agent_id: retryAgentId })
+          const sendRes = await api.ai.sendMessage(currentChatId.value, { content: res.data.user_content, agent_id: retryAgentId, resend_message_id: retryMsgId })
           if (sendRes.data?.assistant_message) {
             messages.value.push(sendRes.data.assistant_message)
           }
@@ -2354,10 +2427,15 @@ async function sendMessage() {
   try {
     if (useStreaming) {
       // 流式响应
-      await sendStreamMessage(content, currentModelId, currentAgentId)
+      await sendStreamMessage(content, currentModelId, currentAgentId, {
+        onUserMessageId: (id) => { if (id) userMsg.id = id }
+      })
     } else {
       // 普通响应
       const res = await api.ai.sendMessage(currentChatId.value, { content: content, ai_config_id: currentModelId, agent_id: currentAgentId })
+
+      // 同步真实用户消息ID（用于重新发送时复用原消息）
+      if (res.data?.user_message?.id) userMsg.id = res.data.user_message.id
 
       // Add AI text reply
       if (res.data?.assistant_message) {
@@ -2545,7 +2623,8 @@ async function handleToolResults(toolResults) {
 }
 
 // 流式发送消息
-async function sendStreamMessage(content, modelId, agentId) {
+async function sendStreamMessage(content, modelId, agentId, options = {}) {
+  const { resendMessageId = null, onUserMessageId = null } = options
   // 创建AI助手消息占位
   const streamMsg = reactive({
     id: Date.now(),
@@ -2564,7 +2643,9 @@ async function sendStreamMessage(content, modelId, agentId) {
   await nextTick()
   scrollToBottom()
 
-  const url = api.ai.sendMessageStream(currentChatId.value, { content, ai_config_id: modelId, agent_id: agentId })
+  const payload = { content, ai_config_id: modelId, agent_id: agentId }
+  if (resendMessageId) payload.resend_message_id = resendMessageId
+  const url = api.ai.sendMessageStream(currentChatId.value, payload)
   const token = localStorage.getItem('token')
 
   // 创建AbortController
@@ -2581,7 +2662,7 @@ async function sendStreamMessage(content, modelId, agentId) {
         'Accept': 'text/event-stream',
         'Cache-Control': 'no-cache',
       },
-      body: JSON.stringify({ content, ai_config_id: modelId, agent_id: agentId }),
+      body: JSON.stringify(payload),
       signal: controller.signal,
     })
 
@@ -2594,10 +2675,11 @@ async function sendStreamMessage(content, modelId, agentId) {
       const idx = messages.value.findIndex(m => m.id === streamMsg.id)
       if (idx > -1) messages.value.splice(idx, 1)
       try {
-        const res = await api.ai.sendMessage(currentChatId.value, { content, ai_config_id: modelId, agent_id: agentId })
+        const res = await api.ai.sendMessage(currentChatId.value, { content, ai_config_id: modelId, agent_id: agentId, resend_message_id: resendMessageId })
         if (res.data?.assistant_message) {
           messages.value.push(res.data.assistant_message)
         }
+        if (res.data?.user_message?.id && onUserMessageId) onUserMessageId(res.data.user_message.id)
         if (res.data?.tool_results && res.data.tool_results.length > 0) {
           await handleToolResults(res.data.tool_results)
         }
@@ -2614,10 +2696,11 @@ async function sendStreamMessage(content, modelId, agentId) {
       const idx = messages.value.findIndex(m => m.id === streamMsg.id)
       if (idx > -1) messages.value.splice(idx, 1)
       try {
-        const res = await api.ai.sendMessage(currentChatId.value, { content, ai_config_id: modelId, agent_id: agentId })
+        const res = await api.ai.sendMessage(currentChatId.value, { content, ai_config_id: modelId, agent_id: agentId, resend_message_id: resendMessageId })
         if (res.data?.assistant_message) {
           messages.value.push(res.data.assistant_message)
         }
+        if (res.data?.user_message?.id && onUserMessageId) onUserMessageId(res.data.user_message.id)
         if (res.data?.tool_results && res.data.tool_results.length > 0) {
           await handleToolResults(res.data.tool_results)
         }
@@ -2687,6 +2770,8 @@ async function sendStreamMessage(content, modelId, agentId) {
               streamMsg.cache_creation_tokens = event.cache_creation_tokens || 0
               streamMsg.cache_read_tokens = event.cache_read_tokens || 0
               streamMsg._elapsed = event.elapsed || 0
+              // 同步真实用户消息ID（用于重新发送时复用原消息）
+              if (event.user_message_id && onUserMessageId) onUserMessageId(event.user_message_id)
             } else if (event.type === 'error') {
               streamMsg._streaming = false
               streamMsg.content = event.content || 'AI服务调用失败'
@@ -2729,6 +2814,7 @@ async function sendStreamMessage(content, modelId, agentId) {
             streamMsg._prompt_tokens = event.prompt_tokens || 0
             streamMsg._completion_tokens = event.completion_tokens || 0
             streamMsg._elapsed = event.elapsed || 0
+            if (event.user_message_id && onUserMessageId) onUserMessageId(event.user_message_id)
           } else if (event.type === 'error') {
             streamMsg._streaming = false
             streamMsg.content = event.content || 'AI服务调用失败'
@@ -4789,6 +4875,10 @@ onMounted(() => {
 }
 
 .msg-action-btn:hover {
+  color: var(--primary-color, #409eff);
+}
+
+.msg-action-btn.delete-btn:hover {
   color: #f56c6c;
 }
 
