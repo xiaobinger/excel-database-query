@@ -177,7 +177,21 @@
                   <el-input v-model="aiConfigForm.api_key" type="password" show-password placeholder="API Key" />
                 </el-form-item>
                 <el-form-item label="模型名称" prop="model_name">
-                  <el-input v-model="aiConfigForm.model_name" placeholder="如: gpt-4o, glm-4, deepseek-chat" />
+                  <el-select
+                    v-model="aiConfigForm.model_name"
+                    filterable
+                    allow-create
+                    default-first-option
+                    placeholder="选择已有模型或输入新模型名称"
+                    style="width: 100%"
+                  >
+                    <el-option
+                      v-for="name in modelNames"
+                      :key="name"
+                      :label="name"
+                      :value="name"
+                    />
+                  </el-select>
                 </el-form-item>
                 <div style="display: flex; gap: 12px">
                   <el-form-item label="最大Tokens" style="flex: 1">
@@ -513,6 +527,8 @@ const defaultAiConfigForm = {
 
 const aiConfigForm = reactive({ ...defaultAiConfigForm })
 
+const modelNames = ref([])
+
 const aiConfigRules = {
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
   provider: [{ required: true, message: '请选择提供商', trigger: 'change' }],
@@ -526,6 +542,14 @@ async function fetchAiConfigs() {
   try {
     const res = await api.ai.getConfigs()
     aiConfigs.value = res.data || []
+  } catch {}
+  fetchModelNames()
+}
+
+async function fetchModelNames() {
+  try {
+    const res = await api.ai.getModelNames()
+    modelNames.value = res.data || []
   } catch {}
 }
 
