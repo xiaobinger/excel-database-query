@@ -109,7 +109,7 @@ function detectBrandKey(provider, apiBase, modelName) {
   if (s.includes('mistral')) return 'mistral'
   if (s.includes('ernie') || s.includes('wenxin') || s.includes('baidu')) return 'baidu'
   if (s.includes('minimax')) return 'minimax'
-  if (s.includes('xiaomi') || s.includes('milm')) return 'xiaomi'
+  if (s.includes('xiaomi') || s.includes('milm') || s.includes('mimo')) return 'xiaomi'
   if (s.includes('openrouter')) return 'openrouter'
   if (s.includes('ollama') || s.includes('localhost') || s.includes('127.0.0.1')) return 'ollama'
   if (s.includes('hunyuan')) return 'hunyuan'
