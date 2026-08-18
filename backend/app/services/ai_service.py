@@ -370,6 +370,48 @@ AI_TOOLS = [
 
 class AiService:
 
+    # CJK字符（含中文、全角符号等）正则，用于粗略token估算
+    _CJK_RE = re.compile(r'[\u3000-\u9fff\uf900-\ufaff\uff00-\uffef]')
+
+    @staticmethod
+    def estimate_tokens(text: str) -> int:
+        """粗略估算文本token数：CJK字符约1字符=1 token，其他约4字符=1 token"""
+        if not text:
+            return 0
+        cjk = len(AiService._CJK_RE.findall(text))
+        other = len(text) - cjk
+        return cjk + other // 4
+
+    @staticmethod
+    def truncate_history_by_tokens(history: list, system_prompt: str, context_window: int,
+                                   reserve_tokens: int) -> tuple:
+        """按上下文窗口大小截断历史消息，从最新往前保留，直到token预算耗尽
+
+        history: 正序消息对象列表（需有 content 属性）
+        system_prompt: 系统提示词（其token从窗口预算中扣除）
+        context_window: 模型上下文窗口大小(tokens)
+        reserve_tokens: 为模型输出预留的token数（max_tokens）
+        返回: (截断后的消息列表, 实际使用的token数)
+        """
+        if not history:
+            return [], 0
+        window = int(context_window or 128000)
+        reserve = int(reserve_tokens or 4096)
+        # 预留10%余量（工具定义、消息格式开销等）
+        budget = max(int((window - reserve) * 0.9), 2000) - AiService.estimate_tokens(system_prompt or '')
+
+        kept = []
+        used = 0
+        for msg in reversed(history):
+            content = getattr(msg, 'content', '') or ''
+            t = AiService.estimate_tokens(content)
+            if used + t > budget and kept:
+                break
+            kept.append(msg)
+            used += t
+        kept.reverse()
+        return kept, used
+
     @staticmethod
     def test_connection(config) -> dict:
         """测试AI配置连接"""

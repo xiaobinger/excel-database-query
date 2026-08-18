@@ -17,6 +17,7 @@ class AiConfig(db.Model):
     is_default = db.Column(db.Boolean, default=False, comment='是否默认配置')
     is_active = db.Column(db.Boolean, default=True, comment='是否启用')
     max_tokens = db.Column(db.Integer, default=4096, comment='最大token数')
+    context_window = db.Column(db.Integer, default=128000, comment='上下文窗口大小(tokens)，如128000、1000000')
     temperature = db.Column(db.Float, default=0.7, comment='温度参数')
     system_prompt = db.Column(db.Text, comment='系统提示词')
     description = db.Column(db.String(500), comment='描述')
@@ -79,6 +80,7 @@ class AiConfig(db.Model):
             'is_default': self.is_default,
             'is_active': self.is_active,
             'max_tokens': self.max_tokens,
+            'context_window': self.context_window or 128000,
             'temperature': self.temperature,
             'system_prompt': self.system_prompt,
             'description': self.description,

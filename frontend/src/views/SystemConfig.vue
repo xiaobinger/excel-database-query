@@ -233,6 +233,26 @@
                     <el-slider v-model="aiConfigForm.temperature" :min="0" :max="2" :step="0.1" show-input size="small" />
                   </el-form-item>
                 </div>
+                <el-form-item label="上下文窗口">
+                  <el-select
+                    v-model="aiConfigForm.context_window"
+                    filterable
+                    allow-create
+                    default-first-option
+                    placeholder="选择或输入模型上下文窗口大小"
+                    style="width: 100%"
+                  >
+                    <el-option label="8K (8,192 tokens)" :value="8192" />
+                    <el-option label="32K (32,768 tokens)" :value="32768" />
+                    <el-option label="64K (65,536 tokens)" :value="65536" />
+                    <el-option label="128K (131,072 tokens)" :value="131072" />
+                    <el-option label="256K (262,144 tokens)" :value="262144" />
+                    <el-option label="1M (1,048,576 tokens)" :value="1048576" />
+                  </el-select>
+                  <div style="width: 100%; color: #909399; font-size: 12px; line-height: 1.4; margin-top: 4px">
+                    模型支持的上下文窗口大小，历史消息按此自适应保留（窗口越大保留的历史越多）
+                  </div>
+                </el-form-item>
                 <el-form-item label="设为默认">
                   <el-switch v-model="aiConfigForm.is_default" active-text="是" inactive-text="否" />
                 </el-form-item>
@@ -549,6 +569,7 @@ const defaultAiConfigForm = {
   api_key: '',
   model_name: '',
   max_tokens: 4096,
+  context_window: 131072,
   temperature: 0.7,
   is_default: false,
   is_active: true,
@@ -618,6 +639,7 @@ function openAiConfigDialog(row) {
       api_key: '',
       model_name: row.model_name || '',
       max_tokens: row.max_tokens || 4096,
+      context_window: row.context_window || 131072,
       temperature: row.temperature ?? 0.7,
       is_default: row.is_default || false,
       is_active: row.is_active !== false,

@@ -93,6 +93,7 @@ def create_config():
             is_default=data.get('is_default', False),
             is_active=data.get('is_active', True),
             max_tokens=data.get('max_tokens', 4096),
+            context_window=int(data.get('context_window') or 128000),
             temperature=data.get('temperature', 0.7),
             system_prompt=data.get('system_prompt', ''),
             description=data.get('description', ''),
@@ -129,11 +130,13 @@ def update_config(config_id):
 
     try:
         simple_fields = ['name', 'provider', 'api_base', 'model_name', 'is_default',
-                         'is_active', 'max_tokens', 'temperature', 'system_prompt', 'description',
-                         'enable_thinking', 'enable_streaming']
+                         'is_active', 'max_tokens', 'context_window', 'temperature', 'system_prompt',
+                         'description', 'enable_thinking', 'enable_streaming']
         for key in simple_fields:
             if key in data:
                 setattr(config, key, data[key])
+        if config.context_window:
+            config.context_window = int(config.context_window)
 
         if 'api_key' in data and data['api_key']:
             config.set_api_key(data['api_key'])
@@ -941,10 +944,14 @@ def send_message(chat_id):
                     + TICKET_FALLBACK_RULE
                 messages.append({'role': 'system', 'content': sys_prompt})
 
-        # 截断历史消息：只保留最近50条，避免token膨胀
-        MAX_HISTORY = 50
-        if len(history) > MAX_HISTORY:
-            history = history[-MAX_HISTORY:]
+        # 按上下文窗口自适应截断历史：从最新往前保留，直到token预算耗尽
+        total_count = len(history)
+        history, used_tokens = AiService.truncate_history_by_tokens(
+            history,
+            messages[0]['content'] if messages else '',
+            ai_config.context_window if ai_config else 128000,
+            ai_config.max_tokens if ai_config else 4096)
+        logger.info(f'对话{chat_id} 上下文截断: 保留{len(history)}/{total_count}条, 估算{used_tokens} tokens')
 
         for msg in history:
             messages.append({'role': msg.role, 'content': msg.content})
@@ -1552,10 +1559,14 @@ def send_message_stream(chat_id):
                     + TICKET_FALLBACK_RULE
                 messages.append({'role': 'system', 'content': sys_prompt})
 
-        # 截断历史消息：只保留最近50条，避免token膨胀
-        MAX_HISTORY = 50
-        if len(history) > MAX_HISTORY:
-            history = history[-MAX_HISTORY:]
+        # 按上下文窗口自适应截断历史：从最新往前保留，直到token预算耗尽
+        total_count = len(history)
+        history, used_tokens = AiService.truncate_history_by_tokens(
+            history,
+            messages[0]['content'] if messages else '',
+            ai_config.context_window if ai_config else 128000,
+            ai_config.max_tokens if ai_config else 4096)
+        logger.info(f'对话{chat_id} 上下文截断: 保留{len(history)}/{total_count}条, 估算{used_tokens} tokens')
 
         for msg in history:
             messages.append({'role': msg.role, 'content': msg.content})
