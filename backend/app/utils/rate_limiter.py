@@ -7,7 +7,7 @@ from collections import defaultdict
 class RateLimiter:
     """Track login attempts per IP and per username to prevent brute force."""
 
-    def __init__(self):
+    def __init__(self, lockout_seconds=300):
         self._lock = threading.Lock()
         # {(ip, username): [(timestamp, success), ...]}
         self._attempts = defaultdict(list)
@@ -18,7 +18,7 @@ class RateLimiter:
         self.max_attempts_per_ip = 10       # per minute per IP
         self.max_attempts_per_account = 5   # per minute per account
         self.window_seconds = 60            # 1 minute sliding window
-        self.lockout_seconds = 900          # 15 minutes account lockout after max attempts
+        self.lockout_seconds = lockout_seconds
 
     def _cleanup(self):
         """Remove expired entries."""
@@ -83,5 +83,11 @@ class RateLimiter:
             self._attempts[f'account:{username}'].append((now, success))
 
 
-# Global instance
+# Global instance (lockout_seconds set via init_app after config loaded)
 login_rate_limiter = RateLimiter()
+
+
+def init_rate_limiter(app):
+    """Initialize rate limiter with app config."""
+    lockout_seconds = app.config.get('LOGIN_LOCKOUT_SECONDS', 300)
+    login_rate_limiter.lockout_seconds = lockout_seconds

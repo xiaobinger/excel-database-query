@@ -24,6 +24,7 @@ def create_app(config_name='default'):
     _register_security_headers(app)
     _ensure_directories(app)
     _start_file_cleanup(app)
+    _init_rate_limiter(app)
 
     with app.app_context():
         from app.models.ssh_config import SshConfig
@@ -278,6 +279,11 @@ def _ensure_directories(app):
 def _start_file_cleanup(app):
     from app.utils.file_cleanup import start_cleanup_scheduler
     start_cleanup_scheduler(app)
+
+
+def _init_rate_limiter(app):
+    from app.utils.rate_limiter import init_rate_limiter
+    init_rate_limiter(app)
 
 
 def _start_auto_export_scheduler(app):

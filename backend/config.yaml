@@ -18,6 +18,7 @@ security:
   secret_key: "excel-query-secret-key-2024"
   jwt_secret_key: "excel-query-jwt-secret-key-2024"
   encryption_key: "your-encryption-key-32-bytes-long!"
+  login_lockout_minutes: 5
 
 storage:
   upload_folder: "./uploads"

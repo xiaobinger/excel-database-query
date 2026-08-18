@@ -52,6 +52,7 @@ class Config:
     ALLOWED_UPLOAD_EXTENSIONS = set(_storage_conf.get('allowed_upload_extensions', ['xlsx', 'xls', 'csv']))
     ENCRYPTION_KEY = os.environ.get('ENCRYPTION_KEY') or _security_conf.get('encryption_key') or secrets.token_hex(16)
     LOG_LEVEL = _logging_conf.get('level', 'INFO')
+    LOGIN_LOCKOUT_SECONDS = _security_conf.get('login_lockout_minutes', 5) * 60
 
 
 class DevelopmentConfig(Config):
