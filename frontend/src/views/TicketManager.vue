@@ -300,7 +300,7 @@
               <div class="comment-content" v-html="renderMarkdown(c.content)"></div>
               <div v-if="c.attachment_path" class="comment-attachment">
                 <i class="fas fa-paperclip"></i>
-                <a :href="attachmentDownloadUrl(detailData.id, c.id)" target="_blank">
+                <a href="#" @click.prevent="downloadCommentAttachment(detailData.id, c.id, c.attachment_name)">
                   {{ c.attachment_name || '下载附件' }}
                 </a>
               </div>
@@ -980,9 +980,24 @@ function renderMarkdown(text) {
   }
 }
 
-// 评论附件下载链接
-function attachmentDownloadUrl(ticketId, commentId) {
-  return `/api/tickets/${ticketId}/comments/${commentId}/attachment`
+// 评论附件下载（通过axios带token下载）
+async function downloadCommentAttachment(ticketId, commentId, fileName) {
+  try {
+    const response = await api.get(`/tickets/${ticketId}/comments/${commentId}/attachment`, {
+      responseType: 'blob'
+    })
+    const url = window.URL.createObjectURL(new Blob([response]))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = fileName || 'download'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+  } catch (err) {
+    console.error('下载附件失败:', err)
+    ElMessage.error('下载附件失败')
+  }
 }
 
 onMounted(() => {
