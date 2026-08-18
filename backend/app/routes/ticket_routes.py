@@ -133,10 +133,16 @@ def _execute_export_for_ticket(ticket, result, tool_log_text, app):
         created_by=ticket.created_by,
     )
 
+    ticket_id = ticket.id
+
     def on_complete(task_id, status):
-        with app.app_context():
-            t = Ticket.query.get(ticket.id)
+        """回调在ExportService后台线程中执行，已有app_context"""
+        from app import db as _db
+        from app.models.ticket import Ticket as _Ticket, TicketComment as _TC
+        try:
+            t = _Ticket.query.get(ticket_id)
             if not t:
+                logger.error(f'工单{ticket_id}不存在，无法更新导出结果')
                 return
             task_status = ExportService.get_task_status(task_id)
             output_file = task_status.get('output_file') if task_status else None
@@ -155,11 +161,14 @@ def _execute_export_for_ticket(ticket, result, tool_log_text, app):
             t.status = STATUS_PROCESSED
             t.processed_at = datetime.utcnow()
             _add_comment(t, None, '任务执行完成，等待提交人核实', 'status_change', is_ai=True)
-            try:
-                db.session.commit()
-            except Exception:
-                db.session.rollback()
+            _db.session.commit()
             logger.info(f'工单 {t.ticket_no} 导出任务完成，状态: {status}')
+        except Exception as e:
+            logger.error(f'工单{ticket_id}导出回调异常: {e}', exc_info=True)
+            try:
+                _db.session.rollback()
+            except Exception:
+                pass
 
     ExportService.execute_export_async(
         task_id=task.task_id,
@@ -190,10 +199,16 @@ def _execute_profit_share_for_ticket(ticket, result, tool_log_text, app):
         created_by=ticket.created_by,
     )
 
+    ticket_id = ticket.id
+
     def on_complete(task_id, status):
-        with app.app_context():
-            t = Ticket.query.get(ticket.id)
+        """回调在ProfitShareService后台线程中执行，已有app_context"""
+        from app import db as _db
+        from app.models.ticket import Ticket as _Ticket, TicketComment as _TC
+        try:
+            t = _Ticket.query.get(ticket_id)
             if not t:
+                logger.error(f'工单{ticket_id}不存在，无法更新分润结果')
                 return
             task_status = ProfitShareService.get_task_status(task_id)
             output_file = task_status.get('output_file') if task_status else None
@@ -212,11 +227,14 @@ def _execute_profit_share_for_ticket(ticket, result, tool_log_text, app):
             t.status = STATUS_PROCESSED
             t.processed_at = datetime.utcnow()
             _add_comment(t, None, '任务执行完成，等待提交人核实', 'status_change', is_ai=True)
-            try:
-                db.session.commit()
-            except Exception:
-                db.session.rollback()
+            _db.session.commit()
             logger.info(f'工单 {t.ticket_no} 分润导出任务完成，状态: {status}')
+        except Exception as e:
+            logger.error(f'工单{ticket_id}分润回调异常: {e}', exc_info=True)
+            try:
+                _db.session.rollback()
+            except Exception:
+                pass
 
     ProfitShareService.execute_async(
         task_id=task.task_id,
