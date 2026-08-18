@@ -77,18 +77,6 @@ def get_active_models():
     })
 
 
-@ai_bp.route('/model-names', methods=['GET'])
-@permission_required('system')
-def get_model_names():
-    """获取所有已配置的模型名称（去重）"""
-    rows = AiConfig.query.with_entities(AiConfig.model_name).filter(
-        AiConfig.model_name.isnot(None),
-        AiConfig.model_name != ''
-    ).distinct().order_by(AiConfig.model_name).all()
-    names = [r[0] for r in rows if r[0]]
-    return jsonify({'success': True, 'data': names})
-
-
 @ai_bp.route('/configs', methods=['POST'])
 @permission_required('system')
 def create_config():
@@ -113,6 +101,9 @@ def create_config():
         )
         if data.get('api_key'):
             config.set_api_key(data['api_key'])
+
+        if 'models' in data:
+            config.set_models(data['models'])
 
         if config.is_default:
             AiConfig.query.filter_by(is_default=True).update({'is_default': False})
@@ -146,6 +137,9 @@ def update_config(config_id):
 
         if 'api_key' in data and data['api_key']:
             config.set_api_key(data['api_key'])
+
+        if 'models' in data:
+            config.set_models(data['models'])
 
         if config.is_default:
             AiConfig.query.filter(AiConfig.id != config_id, AiConfig.is_default == True).update({'is_default': False})

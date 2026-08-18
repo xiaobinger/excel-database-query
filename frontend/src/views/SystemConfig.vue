@@ -176,17 +176,49 @@
                 <el-form-item label="API密钥" prop="api_key">
                   <el-input v-model="aiConfigForm.api_key" type="password" show-password placeholder="API Key" />
                 </el-form-item>
-                <el-form-item label="模型名称" prop="model_name">
+                <el-form-item label="模型列表" prop="models">
+                  <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center">
+                    <el-tag
+                      v-for="(m, idx) in currentModels"
+                      :key="idx"
+                      closable
+                      :disable-transitions="false"
+                      @close="removeModel(idx)"
+                      style="margin-bottom: 4px"
+                    >
+                      {{ m }}
+                    </el-tag>
+                    <el-input
+                      v-if="showModelInput"
+                      ref="modelInputRef"
+                      v-model="newModelName"
+                      size="small"
+                      placeholder="输入模型名称"
+                      style="width: 160px"
+                      @keyup.enter="addModel"
+                      @blur="addModel"
+                    />
+                    <el-button
+                      v-else
+                      size="small"
+                      @click="showModelInput = true"
+                    >
+                      + 添加模型
+                    </el-button>
+                  </div>
+                </el-form-item>
+                <el-form-item label="当前模型" prop="model_name">
                   <el-select
                     v-model="aiConfigForm.model_name"
                     filterable
                     allow-create
                     default-first-option
-                    placeholder="选择已有模型或输入新模型名称"
+                    placeholder="从该配置的模型列表中选择"
                     style="width: 100%"
+                    @create="onCreateModel"
                   >
                     <el-option
-                      v-for="name in modelNames"
+                      v-for="name in currentModels"
                       :key="name"
                       :label="name"
                       :value="name"
@@ -527,7 +559,10 @@ const defaultAiConfigForm = {
 
 const aiConfigForm = reactive({ ...defaultAiConfigForm })
 
-const modelNames = ref([])
+const currentModels = ref([])
+const showModelInput = ref(false)
+const newModelName = ref('')
+const modelInputRef = ref(null)
 
 const aiConfigRules = {
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
@@ -543,20 +578,39 @@ async function fetchAiConfigs() {
     const res = await api.ai.getConfigs()
     aiConfigs.value = res.data || []
   } catch {}
-  fetchModelNames()
 }
 
-async function fetchModelNames() {
-  try {
-    const res = await api.ai.getModelNames()
-    modelNames.value = res.data || []
-  } catch {}
+function addModel() {
+  const name = newModelName.value.trim()
+  if (name && !currentModels.value.includes(name)) {
+    currentModels.value.push(name)
+  }
+  newModelName.value = ''
+  showModelInput.value = false
+}
+
+function removeModel(idx) {
+  const removed = currentModels.value[idx]
+  currentModels.value.splice(idx, 1)
+  // 如果删除的是当前选中的模型，清空选择
+  if (aiConfigForm.model_name === removed) {
+    aiConfigForm.model_name = ''
+  }
+}
+
+function onCreateModel(val) {
+  // el-select allow-create 触发，追加到模型列表
+  if (val && !currentModels.value.includes(val)) {
+    currentModels.value.push(val)
+  }
+  aiConfigForm.model_name = val
 }
 
 function openAiConfigDialog(row) {
   if (row) {
     isEditAiConfig.value = true
     editAiConfigId.value = row.id
+    currentModels.value = [...(row.models || [])]
     Object.assign(aiConfigForm, {
       name: row.name,
       provider: row.provider,
@@ -574,6 +628,7 @@ function openAiConfigDialog(row) {
   } else {
     isEditAiConfig.value = false
     editAiConfigId.value = null
+    currentModels.value = []
     Object.assign(aiConfigForm, { ...defaultAiConfigForm })
   }
   aiConfigDialogVisible.value = true
@@ -584,7 +639,7 @@ async function handleSaveAiConfig() {
   await aiConfigFormRef.value.validate()
   savingAiConfig.value = true
   try {
-    const payload = { ...aiConfigForm }
+    const payload = { ...aiConfigForm, models: currentModels.value }
     if (!payload.api_key) delete payload.api_key
     if (isEditAiConfig.value) {
       await api.ai.updateConfig(editAiConfigId.value, payload)

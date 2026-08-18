@@ -176,7 +176,6 @@ const tasks = {
 const ai = {
   getConfigs: () => http.get('/ai/configs'),
   getActiveModels: () => http.get('/ai/active-models'),
-  getModelNames: () => http.get('/ai/model-names'),
   createConfig: (data) => http.post('/ai/configs', data),
   updateConfig: (id, data) => http.put(`/ai/configs/${id}`, data),
   deleteConfig: (id) => http.delete(`/ai/configs/${id}`),

@@ -1,6 +1,7 @@
 from datetime import datetime
 from app import db
 from app.utils.helpers import beijing_isoformat
+import json
 
 
 class AiConfig(db.Model):
@@ -11,7 +12,8 @@ class AiConfig(db.Model):
     provider = db.Column(db.String(50), nullable=False, default='openai', comment='AI提供商: openai/zhipu/deepseek/custom')
     api_key = db.Column(db.Text, comment='API密钥(加密存储)')
     api_base = db.Column(db.String(500), comment='API基础URL')
-    model_name = db.Column(db.String(100), comment='模型名称')
+    model_name = db.Column(db.String(100), comment='当前选中的模型名称')
+    models = db.Column(db.Text, comment='该配置关联的模型列表(JSON数组)')
     is_default = db.Column(db.Boolean, default=False, comment='是否默认配置')
     is_active = db.Column(db.Boolean, default=True, comment='是否启用')
     max_tokens = db.Column(db.Integer, default=4096, comment='最大token数')
@@ -46,6 +48,26 @@ class AiConfig(db.Model):
         f = Fernet(base64.urlsafe_b64encode(key))
         return f.decrypt(self.api_key.encode('utf-8')).decode('utf-8')
 
+    def get_models(self) -> list:
+        """获取该配置关联的模型列表"""
+        if self.models:
+            try:
+                return json.loads(self.models)
+            except (json.JSONDecodeError, TypeError):
+                return []
+        return []
+
+    def set_models(self, model_list: list):
+        """设置该配置关联的模型列表"""
+        self.models = json.dumps(model_list) if model_list else json.dumps([])
+
+    def add_model(self, model_name: str):
+        """追加一个模型到列表"""
+        models = self.get_models()
+        if model_name and model_name not in models:
+            models.append(model_name)
+            self.set_models(models)
+
     def to_dict(self) -> dict:
         return {
             'id': self.id,
@@ -53,6 +75,7 @@ class AiConfig(db.Model):
             'provider': self.provider,
             'api_base': self.api_base,
             'model_name': self.model_name,
+            'models': self.get_models(),
             'is_default': self.is_default,
             'is_active': self.is_active,
             'max_tokens': self.max_tokens,
