@@ -32,14 +32,14 @@ def login():
     if not username or not password:
         return jsonify({'success': False, 'message': 'Username and password are required'}), 400
 
-    # Rate limiting check
+    # 账号锁定检查（优先于任何数据库查询，锁定后直接返回不校验密码）
+    if login_rate_limiter.is_account_locked(username):
+        return jsonify({'success': False, 'message': 'Account locked due to too many failed attempts. Please try again later.'}), 429
+
+    # 频率限制检查
     allowed, reason = login_rate_limiter.check_rate_limit(client_ip, username)
     if not allowed:
         return jsonify({'success': False, 'message': reason}), 429
-
-    # Check account lockout
-    if login_rate_limiter.is_account_locked(username):
-        return jsonify({'success': False, 'message': 'Account locked due to too many failed attempts. Please try again later.'}), 429
 
     user = User.query.filter_by(username=username).first()
     if not user:

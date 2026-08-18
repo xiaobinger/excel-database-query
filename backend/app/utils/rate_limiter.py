@@ -36,6 +36,7 @@ class RateLimiter:
 
     def is_account_locked(self, username: str) -> bool:
         """Check if an account is temporarily locked."""
+        self._cleanup()
         with self._lock:
             lock_until = self._locked_accounts.get(username)
             if lock_until and lock_until > time.time():
