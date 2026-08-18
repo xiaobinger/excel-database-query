@@ -125,7 +125,14 @@
 
             <el-table ref="tableRef" :data="aiConfigs" stripe style="width: 100%; margin-top: 16px" @selection-change="handleSelectionChange">
               <el-table-column type="selection" width="55" />
-              <el-table-column prop="name" label="名称" min-width="120" />
+              <el-table-column prop="name" label="名称" min-width="120">
+                <template #default="{ row }">
+                  <div style="display: flex; align-items: center; gap: 6px">
+                    <ProviderLogo :provider="row.provider" :api-base="row.api_base" :model-name="row.model_name" :size="16" />
+                    <span>{{ row.name }}</span>
+                  </div>
+                </template>
+              </el-table-column>
               <el-table-column prop="provider" label="提供商" width="120" align="center">
                 <template #default="{ row }">
                   <el-tag size="small">{{ providerLabel(row.provider) }}</el-tag>
@@ -354,6 +361,7 @@
 import { ref, reactive, onMounted, nextTick } from 'vue'
 import api from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import ProviderLogo from '../components/ProviderLogo.vue'
 
 const activeTab = ref('email')
 const saving = ref(false)

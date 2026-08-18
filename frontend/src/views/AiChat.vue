@@ -546,7 +546,7 @@
             <!-- Selected model tag -->
             <div v-if="selectedModel" class="model-tag-bar">
               <el-tag closable type="success" effect="dark" @close="removeSelectedModel">
-                <i class="fas fa-robot"></i> @{{ selectedModel.name }}
+                <ProviderLogo :provider="selectedModel.provider" :model-name="selectedModel.model_name" :size="13" style="margin-right: 4px" />@{{ selectedModel.name }}
                 <span style="opacity: 0.7; margin-left: 4px">{{ selectedModel.model_name }}</span>
                 <span v-if="selectedModel.enable_streaming" class="thinking-badge" title="流式输出">
                   <i class="fas fa-bolt"></i>
@@ -587,7 +587,7 @@
                     class="mention-item"
                     @mousedown.prevent="selectMentionModel(model)"
                   >
-                    <i class="fas fa-robot"></i>
+                    <ProviderLogo :provider="model.provider" :model-name="model.model_name" :size="16" />
                     <span class="mention-name">{{ model.name }}</span>
                     <span class="mention-model">{{ model.model_name }}</span>
                     <el-tag size="small" type="info" effect="plain" style="margin-left: 4px">{{ model.provider }}</el-tag>
@@ -620,7 +620,8 @@
               </el-dropdown>
               <el-dropdown v-if="canSwitchModel" trigger="click" @command="selectDropdownModel" class="model-dropdown">
                 <div class="model-dropdown-trigger" :class="{ 'model-selected': selectedModel }">
-                  <i class="fas fa-robot"></i>
+                  <ProviderLogo v-if="selectedModel" :provider="selectedModel.provider" :model-name="selectedModel.model_name" :size="15" />
+                  <i v-else class="fas fa-magic"></i>
                   <span class="model-dropdown-label">{{ selectedModel ? selectedModel.name : 'Auto' }}</span>
                   <i class="fas fa-chevron-down model-dropdown-arrow"></i>
                 </div>
@@ -635,7 +636,7 @@
                     </el-dropdown-item>
                     <el-dropdown-item v-for="model in activeModels" :key="model.id" :command="model.id" :class="{ 'is-active': selectedModel?.id === model.id }">
                       <div class="model-option">
-                        <i class="fas fa-robot"></i>
+                        <ProviderLogo :provider="model.provider" :model-name="model.model_name" :size="16" />
                         <span class="model-option-name">{{ model.name }}</span>
                         <span class="model-option-desc">{{ model.model_name }}</span>
                         <i v-if="model.enable_streaming" class="fas fa-bolt" style="color: #e6a23c; margin-left: 4px" title="流式输出"></i>
@@ -1272,6 +1273,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import { useAppStore } from '../stores'
 import { marked } from 'marked'
+import ProviderLogo from '../components/ProviderLogo.vue'
 import hljs from 'highlight.js'
 
 // 配置 marked
@@ -6168,6 +6170,13 @@ onActivated(() => {
 .model-tag-bar .el-tag {
   font-size: 12px;
   border-radius: 6px;
+}
+
+/* 绿色标签内的厂商logo加白底，保证深色logo可见 */
+.model-tag-bar .provider-logo {
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 4px;
+  padding: 2px;
 }
 
 .thinking-badge {
