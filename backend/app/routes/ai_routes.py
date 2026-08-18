@@ -1267,7 +1267,8 @@ def send_message(chat_id):
                                 'Authorization': f'Bearer {api_key2}',
                                 'Content-Type': 'application/json',
                             }
-                            response2 = requests.post(url2, headers=headers2, json=final_payload2, timeout=120)
+                            from app.services.ai_service import post_chat_completions
+                            response2 = post_chat_completions(url2, headers2, final_payload2, timeout=120)
                             response2.raise_for_status()
                             result3 = response2.json()
                             response_text = result3['choices'][0].get('message', {}).get('content', '') if result3.get('choices') else ''
@@ -1636,6 +1637,7 @@ def send_message_stream(chat_id):
     config_enable_thinking = ai_config.enable_thinking or False
 
     def generate():
+        from app.services.ai_service import post_chat_completions as _pcc
         full_content = ''
         thinking_content = ''
         tokens_used = 0
@@ -1693,7 +1695,7 @@ def send_message_stream(chat_id):
             if config_enable_streaming:
                 # 流式请求AI API
                 logger.info(f'流式请求开始: model={config_model_name}, url={url}')
-                resp = requests.post(url, headers=headers, json=payload, timeout=180, stream=True)
+                resp = _pcc(url, headers, payload, timeout=180, stream=True)
                 logger.info(f'流式请求响应状态: {resp.status_code}')
                 resp.raise_for_status()
                 # 确保使用UTF-8解码，避免中文乱码（部分API不返回charset头）
@@ -1767,7 +1769,7 @@ def send_message_stream(chat_id):
             else:
                 # 非流式请求AI API（enable_streaming=False）
                 logger.info(f'非流式请求开始: model={config_model_name}, url={url}')
-                resp = requests.post(url, headers=headers, json=payload, timeout=180)
+                resp = _pcc(url, headers, payload, timeout=180)
                 logger.info(f'非流式请求响应状态: {resp.status_code}')
                 resp.raise_for_status()
 
@@ -2052,7 +2054,7 @@ def send_message_stream(chat_id):
                     second_accumulated_tool_calls = {}
 
                     if config_enable_streaming:
-                        resp2 = requests.post(url, headers=headers, json=payload2, timeout=180, stream=True)
+                        resp2 = _pcc(url, headers, payload2, timeout=180, stream=True)
                         resp2.raise_for_status()
                         resp2.encoding = 'utf-8'
                         for line2 in resp2.iter_lines(decode_unicode=True):
@@ -2106,7 +2108,7 @@ def send_message_stream(chat_id):
                                 except json.JSONDecodeError:
                                     continue
                     else:
-                        resp2 = requests.post(url, headers=headers, json=payload2, timeout=180)
+                        resp2 = _pcc(url, headers, payload2, timeout=180)
                         resp2.raise_for_status()
                         result2 = resp2.json()
                         choices2 = result2.get('choices', [])
@@ -2276,7 +2278,7 @@ def send_message_stream(chat_id):
                                         'max_tokens': config_max_tokens,
                                         'temperature': config_temperature,
                                     }
-                                    resp3 = requests.post(url, headers=headers, json=payload3, timeout=120)
+                                    resp3 = _pcc(url, headers, payload3, timeout=120)
                                     resp3.raise_for_status()
                                     result3 = resp3.json()
                                     final_text = result3.get('choices', [{}])[0].get('message', {}).get('content', '')
@@ -2317,7 +2319,7 @@ def send_message_stream(chat_id):
                                         'max_tokens': config_max_tokens,
                                         'temperature': config_temperature,
                                     }
-                                    resp3 = requests.post(url, headers=headers, json=payload3, timeout=120)
+                                    resp3 = _pcc(url, headers, payload3, timeout=120)
                                     resp3.raise_for_status()
                                     result3 = resp3.json()
                                     final_text = result3.get('choices', [{}])[0].get('message', {}).get('content', '')
@@ -2409,6 +2411,16 @@ def send_message_stream(chat_id):
 
             # 发送完成信号
             yield f"data: {json.dumps({'type': 'done', 'message_id': msg_id, 'user_message_id': stream_user_message_id, 'tokens': tokens_used, 'prompt_tokens': prompt_tokens_used, 'completion_tokens': completion_tokens_used, 'cache_creation_tokens': cache_creation_tokens_used, 'cache_read_tokens': cache_read_tokens_used, 'elapsed': elapsed}, ensure_ascii=False)}\n\n"
+
+        except requests.exceptions.HTTPError as e:
+            # HTTP错误：透传API返回的具体错误信息（如400参数错误）
+            err_detail = str(e)
+            try:
+                err_detail = e.response.text[:300] or str(e)
+            except Exception:
+                pass
+            logger.error(f'流式请求HTTP错误: {err_detail}', exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'content': f'AI服务调用失败: {err_detail}'}, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             logger.error(f'流式响应异常: {e}', exc_info=True)

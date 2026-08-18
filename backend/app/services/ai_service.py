@@ -50,6 +50,25 @@ def filter_tools(enabled_tools: list) -> list:
     return [t for t in AI_TOOLS if t.get('function', {}).get('name') in enabled_set]
 
 
+def post_chat_completions(url: str, headers: dict, payload: dict, timeout: int = 120, stream: bool = False):
+    """发送chat/completions请求（统一入口）。
+
+    自动处理部分推理模型不接受自定义temperature的400错误
+    （如月之暗面kimi-k2.6仅允许temperature=1）：
+    遇到"invalid temperature"类错误时去掉temperature参数重试一次。
+    """
+    resp = requests.post(url, headers=headers, json=payload, timeout=timeout, stream=stream)
+    if resp.status_code == 400 and 'temperature' in (resp.text or ''):
+        err_body = resp.text[:300]
+        logger.warning(f'AI接口拒绝temperature参数({err_body})，移除后自动重试')
+        retry_payload = {k: v for k, v in payload.items() if k != 'temperature'}
+        resp.close()
+        resp = requests.post(url, headers=headers, json=retry_payload, timeout=timeout, stream=stream)
+    if resp.status_code >= 400:
+        logger.error(f'AI请求失败: HTTP {resp.status_code}, model={payload.get("model")}, url={url}, 响应: {resp.text[:500]}')
+    return resp
+
+
 # ============ Tool Definitions ============
 AI_TOOLS = [
     {
@@ -433,7 +452,7 @@ class AiService:
             'max_tokens': 10,
         }
 
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response = post_chat_completions(url, headers, payload, timeout=30)
         response.raise_for_status()
         result = response.json()
 
@@ -559,7 +578,7 @@ class AiService:
             'temperature': config.temperature if config.temperature is not None else 0.7,
         }
 
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        response = post_chat_completions(url, headers, payload, timeout=120)
         response.raise_for_status()
         result = response.json()
 
@@ -745,7 +764,7 @@ class AiService:
             'tool_choice': 'auto',
         }
 
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        response = post_chat_completions(url, headers, payload, timeout=120)
         response.raise_for_status()
         result = response.json()
 
