@@ -70,6 +70,7 @@ def get_active_models():
             {'id': c.id, 'name': c.name, 'model_name': c.model_name, 'provider': c.provider,
              'enable_thinking': c.enable_thinking or False,
              'enable_streaming': c.enable_streaming if c.enable_streaming is not None else True,
+             'context_window': c.context_window or 128000,
              'is_default': c.is_default or False}
             for c in allowed_models
         ],

@@ -1368,9 +1368,12 @@ function estimateTokens(text) {
 /** 当前生效模型（选中 or 第一个活跃 or 默认估算） */
 const effectiveModel = computed(() => selectedModel.value || activeModels.value[0] || null)
 
-/** 当前对话上下文窗口大小（token） */
+/** 当前对话上下文窗口大小（token）：优先使用AI配置中设置的context_window，未设置时按模型名称估算 */
 const contextWindow = computed(() => {
   const model = effectiveModel.value
+  if (model?.context_window && Number(model.context_window) > 0) {
+    return Number(model.context_window)
+  }
   return estimateContextWindow(model?.model_name)
 })
 
