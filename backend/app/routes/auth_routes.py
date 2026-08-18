@@ -3,8 +3,20 @@ from app import db
 from app.models.user import User
 from app.models.script import Script
 from app.utils.auth import generate_token, login_required, get_current_user
+from app.utils.rate_limiter import login_rate_limiter
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
+
+
+def _get_client_ip():
+    """Get real client IP considering proxy headers."""
+    xff = request.headers.get('X-Forwarded-For', '')
+    if xff:
+        return xff.split(',')[0].strip()
+    xri = request.headers.get('X-Real-IP', '')
+    if xri:
+        return xri.strip()
+    return request.remote_addr or '127.0.0.1'
 
 
 @auth_bp.route('/login', methods=['POST'])
@@ -15,19 +27,34 @@ def login():
 
     username = data.get('username', '')
     password = data.get('password', '')
+    client_ip = _get_client_ip()
 
     if not username or not password:
         return jsonify({'success': False, 'message': 'Username and password are required'}), 400
 
+    # Rate limiting check
+    allowed, reason = login_rate_limiter.check_rate_limit(client_ip, username)
+    if not allowed:
+        return jsonify({'success': False, 'message': reason}), 429
+
+    # Check account lockout
+    if login_rate_limiter.is_account_locked(username):
+        return jsonify({'success': False, 'message': 'Account locked due to too many failed attempts. Please try again later.'}), 429
+
     user = User.query.filter_by(username=username).first()
     if not user:
+        login_rate_limiter.record_attempt(client_ip, username, False)
         return jsonify({'success': False, 'message': 'Invalid username or password'}), 401
 
     if not user.is_active:
         return jsonify({'success': False, 'message': 'User is disabled'}), 401
 
     if not user.check_password(password):
+        login_rate_limiter.record_attempt(client_ip, username, False)
         return jsonify({'success': False, 'message': 'Invalid username or password'}), 401
+
+    # Successful login - record and continue
+    login_rate_limiter.record_attempt(client_ip, username, True)
 
     token = generate_token(user.id)
 

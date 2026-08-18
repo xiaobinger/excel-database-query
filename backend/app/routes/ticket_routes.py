@@ -1202,6 +1202,20 @@ def upload_attachment():
     if ext not in allowed_img and ext not in allowed_video:
         return jsonify({'success': False, 'message': f'不支持的文件类型: {ext}'}), 400
 
+    # MIME type validation (prevent extension spoofing)
+    import magic
+    file_content = file.read(2048)
+    file.seek(0)
+    try:
+        mime_type = magic.from_buffer(file_content, mime=True)
+        if ext in allowed_img and not mime_type.startswith('image/'):
+            return jsonify({'success': False, 'message': '文件内容与扩展名不匹配（非图片文件）'}), 400
+        if ext in allowed_video and not mime_type.startswith('video/'):
+            return jsonify({'success': False, 'message': '文件内容与扩展名不匹配（非视频文件）'}), 400
+    except Exception:
+        # If magic library is not available, skip MIME validation
+        pass
+
     # 保存到 uploads/tickets/
     upload_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'tickets')
     os.makedirs(upload_dir, exist_ok=True)
@@ -1229,6 +1243,7 @@ def upload_attachment():
 
 
 @ticket_bp.route('/files/<filename>', methods=['GET'])
+@login_required
 def serve_file(filename):
     """访问工单附件文件"""
     from flask import send_from_directory

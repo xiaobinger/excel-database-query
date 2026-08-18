@@ -164,6 +164,7 @@ def get_query_status(task_id):
 
 
 @query_bp.route('/stream/<task_id>', methods=['GET'])
+@login_required
 def stream_query_status(task_id):
     def generate():
         last_progress = -1
@@ -229,6 +230,7 @@ def stream_query_status(task_id):
 
 
 @query_bp.route('/cancel/<task_id>', methods=['POST'])
+@login_required
 def cancel_query(task_id):
     result = QueryService.cancel_task(task_id)
     if result:
@@ -306,6 +308,7 @@ def get_tasks():
 
 
 @query_bp.route('/tasks/<task_identifier>', methods=['DELETE'])
+@login_required
 def delete_task(task_identifier):
     task = QueryTask.query.filter(
         (QueryTask.id == task_identifier) | (QueryTask.task_id == task_identifier)
@@ -365,6 +368,7 @@ def delete_all_tasks():
 
 
 @query_bp.route('/retry/<task_id>', methods=['POST'])
+@login_required
 def retry_task(task_id):
     task = QueryTask.query.filter_by(task_id=task_id).first()
     if not task:
@@ -424,6 +428,7 @@ def retry_task(task_id):
 
 
 @query_bp.route('/upload-info', methods=['POST'])
+@login_required
 def get_upload_info():
     if 'file' not in request.files:
         return jsonify({'success': False, 'message': '未上传文件'}), 400
@@ -455,6 +460,7 @@ def get_upload_info():
 
 
 @query_bp.route('/validate-sql', methods=['POST'])
+@login_required
 def validate_sql():
     data = request.get_json()
     if not data or 'sql' not in data:
@@ -473,6 +479,7 @@ def validate_sql():
 
 
 @query_bp.route('/format-sql', methods=['POST'])
+@login_required
 def format_sql():
     data = request.get_json()
     if not data or 'sql' not in data:
@@ -497,6 +504,7 @@ def get_dashboard():
 
 
 @query_bp.route('/config', methods=['GET'])
+@login_required
 def get_client_config():
     from flask import current_app
     return jsonify({

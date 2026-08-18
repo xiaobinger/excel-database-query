@@ -107,7 +107,11 @@ const scripts = {
 const query = {
   execute: (formData) => http.post('/query/execute', formData),
   status: (taskId) => http.get(`/query/status/${taskId}`),
-  streamStatus: (taskId) => `/api/query/stream/${taskId}`,
+  streamStatus: (taskId) => {
+    const token = localStorage.getItem('token')
+    const sep = token ? `?token=${encodeURIComponent(token)}` : ''
+    return `/api/query/stream/${taskId}${sep}`
+  },
   cancel: (taskId) => http.post(`/query/cancel/${taskId}`),
   tasks: (params) => http.get('/query/tasks', { params: { ...params, per_page: params.page_size || params.per_page || 20 } }),
   deleteTask: (id) => http.delete(`/query/tasks/${id}`),
@@ -124,7 +128,11 @@ const query = {
 const exportApi = {
   execute: (data) => http.post('/export/execute', data),
   status: (taskId) => http.get(`/export/status/${taskId}`),
-  streamStatus: (taskId) => `/api/export/stream/${taskId}`,
+  streamStatus: (taskId) => {
+    const token = localStorage.getItem('token')
+    const sep = token ? `?token=${encodeURIComponent(token)}` : ''
+    return `/api/export/stream/${taskId}${sep}`
+  },
   cancel: (taskId) => http.post(`/export/cancel/${taskId}`),
   retry: (taskId) => http.post(`/export/retry/${taskId}`),
   deleteTask: (id) => http.delete(`/export/tasks/${id}`),
@@ -259,7 +267,11 @@ const systemTask = {
   deleteExecution: (executionId) => http.delete(`/system-tasks/executions/${executionId}`),
   batchDeleteExecutions: (ids) => http.post('/system-tasks/executions/batch-delete', { ids }),
   deleteAllExecutions: () => http.delete('/system-tasks/executions/all'),
-  streamExecution: (executionId) => `/api/system-tasks/executions/${executionId}/stream`,
+  streamExecution: (executionId) => {
+    const token = localStorage.getItem('token')
+    const sep = token ? `?token=${encodeURIComponent(token)}` : ''
+    return `/api/system-tasks/executions/${executionId}/stream${sep}`
+  },
   getEnums: () => http.get('/system-tasks/enums'),
   saveEnums: (data) => http.put('/system-tasks/enums', data),
 }
@@ -271,7 +283,11 @@ const lookup = {
 const profitShare = {
   execute: (data) => http.post('/profit-share/export', data),
   status: (taskId) => http.get(`/profit-share/status/${taskId}`),
-  streamStatus: (taskId) => `/api/profit-share/stream/${taskId}`,
+  streamStatus: (taskId) => {
+    const token = localStorage.getItem('token')
+    const sep = token ? `?token=${encodeURIComponent(token)}` : ''
+    return `/api/profit-share/stream/${taskId}${sep}`
+  },
   cancel: (taskId) => http.post(`/profit-share/cancel/${taskId}`),
   databases: () => http.get('/profit-share/databases'),
 }

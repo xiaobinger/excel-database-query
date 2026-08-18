@@ -100,6 +100,7 @@ def get_export_status(task_id):
 
 
 @export_bp.route('/stream/<task_id>', methods=['GET'])
+@login_required
 def stream_export_status(task_id):
     def generate():
         last_progress = -1
@@ -277,6 +278,7 @@ def get_export_tasks():
 
 
 @export_bp.route('/tasks/<task_identifier>', methods=['DELETE'])
+@login_required
 def delete_export_task(task_identifier):
     task = QueryTask.query.filter(
         (QueryTask.id == task_identifier) | (QueryTask.task_id == task_identifier),
@@ -337,6 +339,7 @@ def delete_all_export_tasks():
 
 
 @export_bp.route('/retry/<task_id>', methods=['POST'])
+@login_required
 def retry_export(task_id):
     task = QueryTask.query.filter_by(task_id=task_id, type='export').first()
     if not task:

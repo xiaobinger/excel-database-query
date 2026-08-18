@@ -359,6 +359,7 @@ def cancel_execution(execution_id):
 
 
 @system_task_bp.route('/executions/<execution_id>/stream', methods=['GET'])
+@login_required
 def stream_execution_status(execution_id):
     def generate():
         last_progress = -1

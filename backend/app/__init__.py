@@ -14,13 +14,14 @@ def create_app(config_name='default'):
     app = Flask(__name__)
     app.config.from_object(config_by_name[config_name])
 
-    CORS(app)
+    CORS(app, supports_credentials=True, origins=_get_allowed_origins(app))
 
     db.init_app(app)
 
     _setup_logging(app)
     _register_blueprints(app)
     _register_error_handlers(app)
+    _register_security_headers(app)
     _ensure_directories(app)
     _start_file_cleanup(app)
 
@@ -208,11 +209,63 @@ def _register_error_handlers(app):
 
     @app.errorhandler(500)
     def internal_error(e):
+        if app.config.get('DEBUG'):
+            return jsonify({'success': False, 'message': str(e)}), 500
         return jsonify({'success': False, 'message': '服务器内部错误'}), 500
 
     @app.errorhandler(413)
     def request_entity_too_large(e):
         return jsonify({'success': False, 'message': '文件过大'}), 413
+
+
+def _get_allowed_origins(app):
+    """Get CORS allowed origins from config or environment."""
+    import re
+    env_origins = os.environ.get('CORS_ORIGINS', '')
+    if env_origins:
+        return [o.strip() for o in env_origins.split(',') if o.strip()]
+
+    # During development, allow localhost origins
+    if app.config.get('DEBUG'):
+        return [
+            'http://localhost:3000',
+            'http://localhost:5173',
+            'http://localhost:8080',
+            'http://127.0.0.1:3000',
+            'http://127.0.0.1:5173',
+            'http://127.0.0.1:8080',
+        ]
+
+    # Production: use regex pattern for the frontend port range
+    return [re.compile(r'http://localhost:\d+'), re.compile(r'http://127\.0\.0\.1:\d+')]
+
+
+def _register_security_headers(app):
+    @app.after_request
+    def add_security_headers(response):
+        # Prevent MIME type sniffing
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        # Prevent clickjacking
+        response.headers['X-Frame-Options'] = 'DENY'
+        # Enable XSS filter in browsers
+        response.headers['X-XSS-Protection'] = '1; mode=block'
+        # Referrer policy
+        response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        # Content Security Policy
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob: https:; "
+            "font-src 'self' data:; "
+            "connect-src 'self' http: https:; "
+            "frame-ancestors 'none'"
+        )
+        # Permissions policy
+        response.headers['Permissions-Policy'] = (
+            'camera=(), microphone=(), geolocation=(), payment=()'
+        )
+        return response
 
 
 def _ensure_directories(app):
@@ -335,8 +388,8 @@ def _migrate_ticket_comments_nullable(app):
         app.logger.warning(f'迁移ticket_comments.user_id nullable失败: {e}')
         try:
             db.session.rollback()
-        except Exception:
-            pass
+        except Exception as e:
+            app.logger.warning(f'Rollback failed: {e}')
 
 
 def _init_default_admin(app):
@@ -399,15 +452,24 @@ def _init_default_admin(app):
 
     admin_user = User.query.filter_by(username='admin').first()
     if not admin_user:
+        import secrets
+        admin_password = secrets.token_urlsafe(16)
         admin_user = User(
             username='admin',
             display_name='管理员',
             role_id=admin_role.id,
             is_active=True,
         )
-        admin_user.set_password('admin123')
+        admin_user.set_password(admin_password)
         db.session.add(admin_user)
         db.session.commit()
+        print(f'\n{"="*60}')
+        print(f'  管理员账户已创建')
+        print(f'  用户名: admin')
+        print(f'  密码:   {admin_password}')
+        print(f'  请登录后立即修改密码！')
+        print(f'{"="*60}\n')
+        app.logger.warning(f'Admin account created - username: admin, password: {admin_password}')
 
 
 def _init_connection_pool(app):

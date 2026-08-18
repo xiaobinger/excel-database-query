@@ -30,11 +30,7 @@ def verify_token(token):
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        token = None
-        auth_header = request.headers.get('Authorization', '')
-        if auth_header.startswith('Bearer '):
-            token = auth_header[7:]
-
+        token = _extract_token_from_request()
         if not token:
             return jsonify({'success': False, 'message': 'Authentication required'}), 401
 
@@ -58,11 +54,7 @@ def login_required(f):
 def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        token = None
-        auth_header = request.headers.get('Authorization', '')
-        if auth_header.startswith('Bearer '):
-            token = auth_header[7:]
-
+        token = _extract_token_from_request()
         if not token:
             return jsonify({'success': False, 'message': 'Authentication required'}), 401
 
@@ -88,6 +80,21 @@ def admin_required(f):
     return decorated_function
 
 
+def _extract_token_from_request():
+    """Extract JWT token from Authorization header or query parameter (for SSE)."""
+    # 1. Try Authorization header
+    auth_header = request.headers.get('Authorization', '')
+    if auth_header.startswith('Bearer '):
+        return auth_header[7:]
+
+    # 2. Fallback to query parameter (used by EventSource SSE which can't set headers)
+    token = request.args.get('token', '')
+    if token:
+        return token
+
+    return None
+
+
 def get_current_user():
     user_id = getattr(g, 'user_id', None)
     if user_id:
@@ -101,11 +108,7 @@ def permission_required(menu_key: str):
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
-            token = None
-            auth_header = request.headers.get('Authorization', '')
-            if auth_header.startswith('Bearer '):
-                token = auth_header[7:]
-
+            token = _extract_token_from_request()
             if not token:
                 return jsonify({'success': False, 'message': 'Authentication required'}), 401
 

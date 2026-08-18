@@ -1,4 +1,5 @@
 import os
+import secrets
 from datetime import timedelta
 import yaml
 
@@ -29,7 +30,8 @@ DATABASE_URL = f'mysql+pymysql://{_db_user}:{_db_pass}@{_db_host}:{_db_port}/{_d
 
 
 class Config:
-    SECRET_KEY = os.environ.get('SECRET_KEY', _security_conf.get('secret_key', 'excel-query-secret-key-2024'))
+    # 密钥：优先级 环境变量 > config.yaml > 随机生成（生产环境启动时警告）
+    SECRET_KEY = os.environ.get('SECRET_KEY') or _security_conf.get('secret_key') or secrets.token_hex(32)
     SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL', DATABASE_URL)
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ENGINE_OPTIONS = {
@@ -38,7 +40,7 @@ class Config:
         'pool_pre_ping': True,
         'pool_recycle': _db_conf.get('pool_recycle', 3600),
     }
-    JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', _security_conf.get('jwt_secret_key', 'excel-query-secret-key-2024'))
+    JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY') or _security_conf.get('jwt_secret_key') or secrets.token_hex(32)
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=24)
 
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -48,7 +50,7 @@ class Config:
     MAX_CONTENT_LENGTH = _storage_conf.get('max_content_length_mb', 50) * 1024 * 1024
     FILE_RETENTION_HOURS = _storage_conf.get('file_retention_hours', 24)
     ALLOWED_UPLOAD_EXTENSIONS = set(_storage_conf.get('allowed_upload_extensions', ['xlsx', 'xls', 'csv']))
-    ENCRYPTION_KEY = os.environ.get('ENCRYPTION_KEY', _security_conf.get('encryption_key', 'encryption-key-32-bytes-long-change!'))
+    ENCRYPTION_KEY = os.environ.get('ENCRYPTION_KEY') or _security_conf.get('encryption_key') or secrets.token_hex(16)
     LOG_LEVEL = _logging_conf.get('level', 'INFO')
 
 
@@ -69,5 +71,5 @@ config_by_name = {
     'development': DevelopmentConfig,
     'production': ProductionConfig,
     'testing': TestingConfig,
-    'default': DevelopmentConfig,
+    'default': ProductionConfig,  # 默认使用生产配置
 }

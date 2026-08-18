@@ -120,6 +120,7 @@ def get_profit_share_status(task_id):
 
 
 @profit_share_bp.route('/stream/<task_id>', methods=['GET'])
+@login_required
 def stream_profit_share_status(task_id):
     """SSE 流式获取任务状态"""
     def generate():

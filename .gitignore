@@ -19,6 +19,9 @@ env/
 .env.local
 .env.production
 
+# 配置文件（含敏感信息，使用 config.yaml.example 作为模板）
+**/config.yaml
+
 # IDE
 .vscode/
 .idea/

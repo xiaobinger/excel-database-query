@@ -439,6 +439,12 @@ class SystemTaskService:
         db.session.commit()
         update_execution_progress(execution_id, 50, '发送API请求')
 
+        # SSRF protection: validate URL before making request
+        from app.utils.url_validator import validate_url
+        is_valid, reason = validate_url(url)
+        if not is_valid:
+            raise ValueError(f'SSRF protection: {reason}')
+
         # Parse body for JSON content-type
         request_body = body
         if headers.get('Content-Type', '').startswith('application/json') and body:

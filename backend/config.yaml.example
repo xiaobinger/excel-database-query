@@ -1,0 +1,46 @@
+server:
+  host: "0.0.0.0"
+  port: 5000
+  debug: false  # 生产环境请设为 false
+
+database:
+  host: "127.0.0.1"
+  port: 3306
+  name: "excel_query_db"
+  username: "root"
+  password: "CHANGE_ME"  # 请修改为实际数据库密码
+  charset: "utf8mb4"
+  pool_size: 5
+  max_overflow: 10
+  pool_recycle: 3600
+
+security:
+  # 请生成随机密钥替换以下值（可用命令: python -c "import secrets; print(secrets.token_hex(32))"）
+  secret_key: "CHANGE_ME_TO_RANDOM_64_CHARS"
+  jwt_secret_key: "CHANGE_ME_TO_RANDOM_64_CHARS"
+  encryption_key: "CHANGE_ME_TO_EXACT_32_BYTES_KEY"  # AES-256 需要32字节密钥
+
+storage:
+  upload_folder: "./uploads"
+  output_folder: "./outputs"
+  log_folder: "./logs"
+  max_content_length_mb: 50
+  file_retention_hours: 24
+  allowed_upload_extensions:
+    - "xlsx"
+    - "xls"
+    - "csv"
+
+logging:
+  level: "INFO"
+
+smart_match:
+  enabled: true
+  direct: true
+  rules:
+    - filename_keywords: ["中付"]
+      script_tags: ["融付商户通","融聚金宝"]
+      default_param_column: ["中付"]
+    - filename_keywords: ["续费","交易明细","流量卡交易数据"]
+      script_tags: ["交易匹配"]
+      default_param_column: ["SN"]

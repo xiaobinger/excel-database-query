@@ -73,7 +73,9 @@ class DatabaseConnector:
                     if _db_name:
                         try:
                             with conn.cursor() as cur:
-                                cur.execute('USE `%s`' % _db_name)
+                                # 安全地使用数据库名：转义反引号防止注入
+                                safe_db_name = _db_name.replace('`', '``')
+                                cur.execute(f'USE `{safe_db_name}`')
                         except Exception:
                             pass
                     return conn
