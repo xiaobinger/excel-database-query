@@ -1267,7 +1267,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, nextTick, onUnmounted, computed, watch } from 'vue'
+import { ref, reactive, onMounted, onActivated, nextTick, onUnmounted, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import { useAppStore } from '../stores'
@@ -4576,6 +4576,25 @@ onMounted(() => {
   fetchChats()
   fetchActiveModels()
   fetchAgents()
+})
+
+// 页面被keep-alive缓存，从系统配置等其他页面切回时自动刷新模型配置
+// 确保深度思考、流式输出等开关的变更即时生效，无需刷新整个页面
+let modelsActivatedOnce = false
+onActivated(() => {
+  // 首次激活时onMounted刚拉取过，跳过
+  if (!modelsActivatedOnce) {
+    modelsActivatedOnce = true
+    return
+  }
+  const prevSelectedId = selectedModel.value?.id || null
+  const hadModel = !!selectedModel.value
+  fetchActiveModels().then(() => {
+    if (hadModel && prevSelectedId) {
+      // 将选中模型重新关联到最新配置对象（其enable_thinking等属性可能已变更）
+      selectedModel.value = activeModels.value.find(m => m.id === prevSelectedId) || null
+    }
+  }).catch(() => {})
 })
 </script>
 
