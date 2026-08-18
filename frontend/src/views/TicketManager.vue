@@ -980,13 +980,19 @@ function renderMarkdown(text) {
   }
 }
 
-// 评论附件下载（通过axios带token下载）
+// 评论附件下载（通过fetch带token下载）
 async function downloadCommentAttachment(ticketId, commentId, fileName) {
   try {
-    const response = await api.get(`/tickets/${ticketId}/comments/${commentId}/attachment`, {
-      responseType: 'blob'
+    const token = localStorage.getItem('token')
+    const response = await fetch(`/api/tickets/${ticketId}/comments/${commentId}/attachment`, {
+      headers: { Authorization: `Bearer ${token}` }
     })
-    const url = window.URL.createObjectURL(new Blob([response]))
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.message || '下载失败')
+    }
+    const blob = await response.blob()
+    const url = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
     link.download = fileName || 'download'
@@ -996,7 +1002,7 @@ async function downloadCommentAttachment(ticketId, commentId, fileName) {
     window.URL.revokeObjectURL(url)
   } catch (err) {
     console.error('下载附件失败:', err)
-    ElMessage.error('下载附件失败')
+    ElMessage.error(err.message || '下载附件失败')
   }
 }
 
