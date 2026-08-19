@@ -37,6 +37,60 @@ _active_streams = {}
 _finished_streams = {}
 
 
+def _summarize_tool_card(meta):
+    """将工具卡片消息的metadata还原成模型可读的摘要文本，保持多轮对话的工具上下文"""
+    td = meta.get('tool_data', {}) or {}
+    if not isinstance(td, dict):
+        return ''
+    t = meta.get('_type')
+    if t == 'select_options':
+        items = meta.get('scripts', []) or []
+        names = [str(s.get('name', '')) for s in items[:8] if isinstance(s, dict)]
+        action = meta.get('action_type', '')
+        return f'系统找到{len(items)}个可选{action}选项：{"、".join(names)}，等待用户选择。'
+    action = td.get('action_type', '')
+    name = td.get('task_name') or td.get('script_name') or td.get('lookup_name') or ''
+    if t == 'lookup' or action == 'lookup':
+        err = td.get('error')
+        if err:
+            return f'已执行信息查询"{name}"，结果：失败（{str(err)[:120]}）。'
+        return f'已执行信息查询"{name}"，结果已通过卡片返回用户。'
+    if not action:
+        return ''
+    err = td.get('error')
+    if err:
+        return f'已请求执行{action}任务"{name}"，结果：失败（{str(err)[:120]}）。'
+    done = meta.get('_done') or td.get('_done')
+    status = '已完成' if done else '等待用户在卡片上确认执行'
+    return f'已请求执行{action}任务"{name}"（{status}）。'
+
+
+def _history_to_messages(history):
+    """将对话历史转换为API消息列表。
+    - 工具卡片消息（metadata含_type）还原成摘要文本，让模型感知历史工具调用，避免重复决策
+    - 空content的assistant消息跳过（无信息量，大量空消息会严重干扰模型行为）
+    """
+    result = []
+    for msg in history:
+        meta = None
+        if getattr(msg, 'msg_metadata', None):
+            try:
+                meta = json.loads(msg.msg_metadata)
+            except (ValueError, TypeError):
+                meta = None
+        content = msg.content or ''
+        if msg.role == 'assistant' and meta and meta.get('_type') in ('tool', 'select_options', 'lookup'):
+            summary = _summarize_tool_card(meta)
+            if summary:
+                result.append({'role': 'assistant', 'content': f'[系统工具记录] {summary}'})
+            continue
+        if not content.strip():
+            # 空消息（历史bug产生的空回复或空卡片）直接跳过
+            continue
+        result.append({'role': msg.role, 'content': content})
+    return result
+
+
 def _extract_cache_tokens(usage):
     """从API usage响应中提取缓存token信息"""
     if not usage or not isinstance(usage, dict):
@@ -975,8 +1029,7 @@ def send_message(chat_id):
             ai_config.max_tokens if ai_config else 4096)
         logger.info(f'对话{chat_id} 上下文截断: 保留{len(history)}/{total_count}条, 估算{used_tokens} tokens')
 
-        for msg in history:
-            messages.append({'role': msg.role, 'content': msg.content})
+        messages.extend(_history_to_messages(history))
 
         # Call AI with failover support (use override if @mention)
         # 根据Agent的enabled_tools过滤工具列表
@@ -987,6 +1040,24 @@ def send_message(chat_id):
             override_configs=ordered_configs if specified_config else None,
             tools=nonstream_filtered_tools)
         response_text = ai_response['content']
+
+        # 空响应检测：模型只输出了思考、无正文无工具调用，自动重试一次（引导模型直接行动）
+        if not response_text.strip() and not ai_response.get('tool_calls'):
+            logger.warning(
+                f'AI响应为空（无正文无工具调用），自动重试: chat_id={chat_id}, '
+                f'model={ai_response.get("model", "?")}')
+            messages.append({
+                'role': 'user',
+                'content': '（系统提示：你上一轮只输出了思考过程，没有产生任何回复内容或工具调用。'
+                           '请立即根据用户的需求直接调用合适的工具执行任务，或直接给出回复，不要再只思考。）',
+            })
+            ai_response = AiService.chat_with_failover(messages, use_tools=True,
+                override_configs=ordered_configs if specified_config else None,
+                tools=nonstream_filtered_tools)
+            response_text = ai_response['content']
+            if not response_text.strip() and not ai_response.get('tool_calls'):
+                response_text = '抱歉，本次请求未产生有效输出，请重试或换个模型。'
+                logger.error(f'AI重试后仍为空响应: chat_id={chat_id}')
         tool_calls = ai_response['tool_calls']
         tokens = ai_response['tokens']
         prompt_tokens = ai_response.get('prompt_tokens', 0)
@@ -1608,8 +1679,7 @@ def send_message_stream(chat_id):
             ai_config.max_tokens if ai_config else 4096)
         logger.info(f'对话{chat_id} 上下文截断: 保留{len(history)}/{total_count}条, 估算{used_tokens} tokens')
 
-        for msg in history:
-            messages.append({'role': msg.role, 'content': msg.content})
+        messages.extend(_history_to_messages(history))
 
     except Exception as e:
         logger.error(f'构建上下文失败: {e}', exc_info=True)
@@ -1682,138 +1752,166 @@ def send_message_stream(chat_id):
                 'Content-Type': 'application/json',
             }
 
-            # 应用缓存控制
-            from app.services.ai_service import _apply_cache_control
-            cached_messages = _apply_cache_control(messages, config_provider, api_base)
+            for _attempt in range(2):
+                # 每轮重置累积状态（空响应自动重试时丢弃上一轮的无效输出）
+                full_content = ''
+                thinking_content = ''
+                tokens_used = 0
+                prompt_tokens_used = 0
+                completion_tokens_used = 0
+                cache_creation_tokens_used = 0
+                cache_read_tokens_used = 0
+                accumulated_tool_calls = {}
+                finish_reason = None
 
-            payload = {
-                'model': config_model_name,
-                'messages': cached_messages,
-                'max_tokens': effective_max_tokens,
-                'temperature': config_temperature,
-                'stream': config_enable_streaming,
-            }
+                # 应用缓存控制
+                from app.services.ai_service import _apply_cache_control
+                cached_messages = _apply_cache_control(messages, config_provider, api_base)
 
-            # 添加工具定义（根据Agent的enabled_tools过滤）
-            payload['tools'] = stream_filtered_tools
-            payload['tool_choice'] = 'auto'
+                payload = {
+                    'model': config_model_name,
+                    'messages': cached_messages,
+                    'max_tokens': effective_max_tokens,
+                    'temperature': config_temperature,
+                    'stream': config_enable_streaming,
+                }
 
-            if config_enable_streaming:
-                # 流式请求AI API
-                logger.info(f'流式请求开始: model={config_model_name}, url={url}')
-                resp = _pcc(url, headers, payload, timeout=180, stream=True)
-                logger.info(f'流式请求响应状态: {resp.status_code}')
-                resp.raise_for_status()
-                # 确保使用UTF-8解码，避免中文乱码（部分API不返回charset头）
-                resp.encoding = 'utf-8'
+                # 添加工具定义（根据Agent的enabled_tools过滤）
+                payload['tools'] = stream_filtered_tools
+                payload['tool_choice'] = 'auto'
 
-                chunk_count = 0
-                for line in resp.iter_lines(decode_unicode=True):
-                    # 检查是否被用户终止
-                    if _active_streams.get(chat_id, {}).get('aborted'):
-                        logger.info(f'流式请求被用户终止: chat_id={chat_id}')
-                        break
-                    if not line:
-                        continue
-                    if line.startswith('data: '):
-                        data_str = line[6:]
-                        if data_str.strip() == '[DONE]':
-                            logger.info(f'流式请求完成，共处理 {chunk_count} 个数据块')
+                if config_enable_streaming:
+                    # 流式请求AI API
+                    logger.info(f'流式请求开始(attempt={_attempt + 1}): model={config_model_name}, url={url}')
+                    resp = _pcc(url, headers, payload, timeout=180, stream=True)
+                    logger.info(f'流式请求响应状态: {resp.status_code}')
+                    resp.raise_for_status()
+                    # 确保使用UTF-8解码，避免中文乱码（部分API不返回charset头）
+                    resp.encoding = 'utf-8'
+
+                    chunk_count = 0
+                    for line in resp.iter_lines(decode_unicode=True):
+                        # 检查是否被用户终止
+                        if _active_streams.get(chat_id, {}).get('aborted'):
+                            logger.info(f'流式请求被用户终止: chat_id={chat_id}')
                             break
-                        try:
-                            chunk = json.loads(data_str)
-                            choices = chunk.get('choices', [])
-                            if choices:
-                                if choices[0].get('finish_reason'):
-                                    finish_reason = choices[0]['finish_reason']
-                                delta = choices[0].get('delta', {})
-                                # 处理思考内容（reasoning_content 或 thinking）
-                                reasoning = delta.get('reasoning_content') or delta.get('thinking') or ''
-                                if reasoning:
-                                    thinking_content += reasoning
-                                    _active_streams[chat_id]['thinking'] = thinking_content
-                                    chunk_count += 1
-                                    if config_enable_thinking:
-                                        yield f"data: {json.dumps({'type': 'thinking', 'content': reasoning}, ensure_ascii=False)}\n\n"
-                                # 处理正文内容
-                                content_delta = delta.get('content', '') or ''
-                                if content_delta:
-                                    full_content += content_delta
-                                    _active_streams[chat_id]['content'] = full_content
-                                    chunk_count += 1
-                                    yield f"data: {json.dumps({'type': 'content', 'content': content_delta}, ensure_ascii=False)}\n\n"
-                                # 累积工具调用
-                                tool_calls_delta = delta.get('tool_calls')
-                                if tool_calls_delta:
-                                    for tc in tool_calls_delta:
-                                        idx = tc.get('index', 0)
-                                        if idx not in accumulated_tool_calls:
-                                            accumulated_tool_calls[idx] = {
-                                                'id': tc.get('id', ''),
-                                                'type': tc.get('type', 'function'),
-                                                'function': {'name': '', 'arguments': ''},
-                                            }
-                                        if tc.get('id'):
-                                            accumulated_tool_calls[idx]['id'] = tc['id']
-                                        if tc.get('type'):
-                                            accumulated_tool_calls[idx]['type'] = tc['type']
-                                        fn = tc.get('function', {})
-                                        if fn.get('name'):
-                                            accumulated_tool_calls[idx]['function']['name'] = fn['name']
-                                        if fn.get('arguments'):
-                                            accumulated_tool_calls[idx]['function']['arguments'] += fn['arguments']
-                                    _active_streams[chat_id]['tool_calls'] = {k: v for k, v in accumulated_tool_calls.items()}
-                            # token 统计
-                            if chunk.get('usage'):
-                                tokens_used = chunk['usage'].get('total_tokens', 0)
-                                prompt_tokens_used = chunk['usage'].get('prompt_tokens', 0)
-                                completion_tokens_used = chunk['usage'].get('completion_tokens', 0)
-                                _cc, _cr = _extract_cache_tokens(chunk['usage'])
-                                cache_creation_tokens_used = _cc
-                                cache_read_tokens_used = _cr
-                        except json.JSONDecodeError:
+                        if not line:
                             continue
+                        if line.startswith('data: '):
+                            data_str = line[6:]
+                            if data_str.strip() == '[DONE]':
+                                logger.info(f'流式请求完成，共处理 {chunk_count} 个数据块')
+                                break
+                            try:
+                                chunk = json.loads(data_str)
+                                choices = chunk.get('choices', [])
+                                if choices:
+                                    if choices[0].get('finish_reason'):
+                                        finish_reason = choices[0]['finish_reason']
+                                    delta = choices[0].get('delta', {})
+                                    # 处理思考内容（reasoning_content 或 thinking）
+                                    reasoning = delta.get('reasoning_content') or delta.get('thinking') or ''
+                                    if reasoning:
+                                        thinking_content += reasoning
+                                        _active_streams[chat_id]['thinking'] = thinking_content
+                                        chunk_count += 1
+                                        if config_enable_thinking:
+                                            yield f"data: {json.dumps({'type': 'thinking', 'content': reasoning}, ensure_ascii=False)}\n\n"
+                                    # 处理正文内容
+                                    content_delta = delta.get('content', '') or ''
+                                    if content_delta:
+                                        full_content += content_delta
+                                        _active_streams[chat_id]['content'] = full_content
+                                        chunk_count += 1
+                                        yield f"data: {json.dumps({'type': 'content', 'content': content_delta}, ensure_ascii=False)}\n\n"
+                                    # 累积工具调用
+                                    tool_calls_delta = delta.get('tool_calls')
+                                    if tool_calls_delta:
+                                        for tc in tool_calls_delta:
+                                            idx = tc.get('index', 0)
+                                            if idx not in accumulated_tool_calls:
+                                                accumulated_tool_calls[idx] = {
+                                                    'id': tc.get('id', ''),
+                                                    'type': tc.get('type', 'function'),
+                                                    'function': {'name': '', 'arguments': ''},
+                                                }
+                                            if tc.get('id'):
+                                                accumulated_tool_calls[idx]['id'] = tc['id']
+                                            if tc.get('type'):
+                                                accumulated_tool_calls[idx]['type'] = tc['type']
+                                            fn = tc.get('function', {})
+                                            if fn.get('name'):
+                                                accumulated_tool_calls[idx]['function']['name'] = fn['name']
+                                            if fn.get('arguments'):
+                                                accumulated_tool_calls[idx]['function']['arguments'] += fn['arguments']
+                                        _active_streams[chat_id]['tool_calls'] = {k: v for k, v in accumulated_tool_calls.items()}
+                                # token 统计
+                                if chunk.get('usage'):
+                                    tokens_used = chunk['usage'].get('total_tokens', 0)
+                                    prompt_tokens_used = chunk['usage'].get('prompt_tokens', 0)
+                                    completion_tokens_used = chunk['usage'].get('completion_tokens', 0)
+                                    _cc, _cr = _extract_cache_tokens(chunk['usage'])
+                                    cache_creation_tokens_used = _cc
+                                    cache_read_tokens_used = _cr
+                            except json.JSONDecodeError:
+                                continue
 
-            else:
-                # 非流式请求AI API（enable_streaming=False）
-                logger.info(f'非流式请求开始: model={config_model_name}, url={url}')
-                resp = _pcc(url, headers, payload, timeout=180)
-                logger.info(f'非流式请求响应状态: {resp.status_code}')
-                resp.raise_for_status()
+                else:
+                    # 非流式请求AI API（enable_streaming=False）
+                    logger.info(f'非流式请求开始(attempt={_attempt + 1}): model={config_model_name}, url={url}')
+                    resp = _pcc(url, headers, payload, timeout=180)
+                    logger.info(f'非流式请求响应状态: {resp.status_code}')
+                    resp.raise_for_status()
 
-                result = resp.json()
-                choices = result.get('choices', [])
-                if choices:
-                    finish_reason = choices[0].get('finish_reason')
-                    message = choices[0].get('message', {})
-                    # 处理思考内容
-                    reasoning = message.get('reasoning_content') or message.get('thinking') or ''
-                    if reasoning:
-                        thinking_content = reasoning
-                        if config_enable_thinking:
-                            yield f"data: {json.dumps({'type': 'thinking', 'content': reasoning}, ensure_ascii=False)}\n\n"
-                    # 处理正文内容
-                    content_text = message.get('content', '') or ''
-                    if content_text:
-                        full_content = content_text
-                        yield f"data: {json.dumps({'type': 'content', 'content': content_text}, ensure_ascii=False)}\n\n"
-                    # 处理工具调用
-                    tool_calls_resp = message.get('tool_calls', [])
-                    for tc in tool_calls_resp:
-                        idx = len(accumulated_tool_calls)
-                        accumulated_tool_calls[idx] = {
-                            'id': tc.get('id', ''),
-                            'type': tc.get('type', 'function'),
-                            'function': tc.get('function', {}),
-                        }
-                # token 统计
-                if result.get('usage'):
-                    tokens_used = result['usage'].get('total_tokens', 0)
-                    prompt_tokens_used = result['usage'].get('prompt_tokens', 0)
-                    completion_tokens_used = result['usage'].get('completion_tokens', 0)
-                    _cc, _cr = _extract_cache_tokens(result['usage'])
-                    cache_creation_tokens_used = _cc
-                    cache_read_tokens_used = _cr
+                    result = resp.json()
+                    choices = result.get('choices', [])
+                    if choices:
+                        finish_reason = choices[0].get('finish_reason')
+                        message = choices[0].get('message', {})
+                        # 处理思考内容
+                        reasoning = message.get('reasoning_content') or message.get('thinking') or ''
+                        if reasoning:
+                            thinking_content = reasoning
+                            if config_enable_thinking:
+                                yield f"data: {json.dumps({'type': 'thinking', 'content': reasoning}, ensure_ascii=False)}\n\n"
+                        # 处理正文内容
+                        content_text = message.get('content', '') or ''
+                        if content_text:
+                            full_content = content_text
+                            yield f"data: {json.dumps({'type': 'content', 'content': content_text}, ensure_ascii=False)}\n\n"
+                        # 处理工具调用
+                        tool_calls_resp = message.get('tool_calls', [])
+                        for tc in tool_calls_resp:
+                            idx = len(accumulated_tool_calls)
+                            accumulated_tool_calls[idx] = {
+                                'id': tc.get('id', ''),
+                                'type': tc.get('type', 'function'),
+                                'function': tc.get('function', {}),
+                            }
+                    # token 统计
+                    if result.get('usage'):
+                        tokens_used = result['usage'].get('total_tokens', 0)
+                        prompt_tokens_used = result['usage'].get('prompt_tokens', 0)
+                        completion_tokens_used = result['usage'].get('completion_tokens', 0)
+                        _cc, _cr = _extract_cache_tokens(result['usage'])
+                        cache_creation_tokens_used = _cc
+                        cache_read_tokens_used = _cr
+
+                # 空响应检测：模型只输出了思考、无正文无工具调用（模型行为异常/流中断），自动重试一次
+                if (_attempt == 0 and not full_content.strip() and not accumulated_tool_calls
+                        and not _active_streams.get(chat_id, {}).get('aborted')):
+                    logger.warning(
+                        f'AI响应为空（思考{len(thinking_content)}字符，无正文无工具调用），自动重试: '
+                        f'chat_id={chat_id}, model={config_model_name}, finish_reason={finish_reason}')
+                    yield f"data: {json.dumps({'type': 'content', 'content': '\n\n（本轮未产生输出，正在自动重试…）\n\n'}, ensure_ascii=False)}\n\n"
+                    # 追加重试引导，强制模型直接行动而不是只思考
+                    messages.append({
+                        'role': 'user',
+                        'content': '（系统提示：你上一轮只输出了思考过程，没有产生任何回复内容或工具调用。'
+                                   '请立即根据用户的需求直接调用合适的工具执行任务，或直接给出回复，不要再只思考。）',
+                    })
+                    continue
+                break
 
             # 检测输出截断：思考型模型的reasoning tokens计入max_tokens预算，超限会被硬截断
             if finish_reason == 'length':
@@ -2403,6 +2501,11 @@ def send_message_stream(chat_id):
                 elapsed = round(time.time() - start_time, 2)
                 if elapsed < 0.01:
                     elapsed = 0.01
+                # 重试后仍无任何输出：给用户明确提示而非保存一条空消息
+                if not full_content.strip() and not tool_results_list:
+                    logger.error(f'AI重试后仍为空响应，返回错误提示: chat_id={chat_id}, thinking_len={len(thinking_content)}')
+                    full_content = '抱歉，本次请求未产生有效输出（模型可能仅输出了思考过程）。请重试，或在AI配置中调大最大输出token数 / 关闭深度思考。'
+                    yield f"data: {json.dumps({'type': 'content', 'content': full_content}, ensure_ascii=False)}\n\n"
                 assistant_message = AiChatMessage(
                     chat_id=chat_id,
                     agent_id=stream_agent_id,
