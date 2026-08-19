@@ -1921,15 +1921,31 @@ def send_message_stream(chat_id):
                     f'tool_calls={len(accumulated_tool_calls)}')
                 yield f"data: {json.dumps({'type': 'truncated', 'content': f'⚠ AI输出因最大输出token数（{effective_max_tokens}）限制被截断，思考内容消耗了大部分额度。建议在AI配置中调大最大输出token数。'}, ensure_ascii=False)}\n\n"
 
-            # 处理工具调用
+            # ── 工具调用循环 ─────────────────────────────────────
+            # 执行工具 → 请求AI后续回复 → 再执行工具…直到：
+            #   1) AI给出最终文本回复（无工具调用）
+            #   2) 出现需要用户交互的卡片（确认卡片/选择卡片/查询结果卡片）
+            #   3) 达到轮次上限 / 用户终止 / 请求出错
+            # 关键：每轮请求都携带工具定义，AI可链式调用（如 list_system_tasks → request_system_task → 汇总结果）
             tool_results_list = []
+            any_card_created = False
+            request_failed = False
+            MAX_TOOL_ROUNDS = 8
+            round_num = 0
+            round_content = full_content  # 最近一轮AI回复文本（与工具调用一起回传API）
+
             if _active_streams.get(chat_id, {}).get('aborted'):
                 # 用户已终止请求，跳过工具调用
                 logger.info(f'工具调用前检测到终止: chat_id={chat_id}')
                 yield f"data: {json.dumps({'type': 'aborted', 'content': '任务已被用户手动终止'}, ensure_ascii=False)}\n\n"
-            elif accumulated_tool_calls:
-                _active_streams[chat_id]['status'] = 'tool_calling'
+            while (accumulated_tool_calls and round_num < MAX_TOOL_ROUNDS
+                   and not _active_streams.get(chat_id, {}).get('aborted')):
                 from app.services.ai_service import AiService
+                round_num += 1
+                _active_streams[chat_id]['status'] = 'tool_calling'
+                current_tool_results = []
+
+                # ── 1. 执行本轮工具调用 ──
                 for idx in sorted(accumulated_tool_calls.keys()):
                     tc = accumulated_tool_calls[idx]
                     func_name = tc['function']['name']
@@ -1945,20 +1961,20 @@ def send_message_stream(chat_id):
                         logger.warning(
                             f'工具调用参数JSON不完整（疑似被截断），跳过执行: {func_name}, '
                             f'finish_reason={finish_reason}, args_len={len(func_args or "")}')
-                        tool_results_list.append({
+                        current_tool_results.append({
                             'tool_call_id': tc['id'],
                             'name': func_name,
                             'result': {'error': '工具调用参数因最大输出token数限制被截断，JSON不完整。请精简参数后重新调用该工具。'},
                         })
                         continue
-                    logger.info(f'流式AI调用工具: {func_name}({func_args})')
+                    logger.info(f'流式AI第{round_num}轮调用工具: {func_name}({func_args})')
                     result = AiService.execute_tool_call(func_name, func_args, user_id)
                     # 解析参数供后续自动执行使用
                     try:
                         args = json.loads(func_args) if func_args else {}
                     except json.JSONDecodeError:
                         args = {}
-                    tool_results_list.append({
+                    current_tool_results.append({
                         'tool_call_id': tc['id'],
                         'name': func_name,
                         'result': result,
@@ -1983,7 +1999,7 @@ def send_message_stream(chat_id):
                             # 添加自动执行标记，告诉AI这是已完成的查询结果
                             auto_result['_auto_executed'] = True
                             auto_result['_hint'] = '此查询已自动执行完成，结果如下。请直接根据查询结果回答用户问题，不要再次调用request_lookup。'
-                            tool_results_list[-1] = {
+                            current_tool_results[-1] = {
                                 'tool_call_id': tc['id'],
                                 'name': 'request_lookup',
                                 'result': auto_result,
@@ -1999,12 +2015,14 @@ def send_message_stream(chat_id):
                             result['_select_mode'] = 'multi'
                             result['message'] = f'找到 {result["total"]} 个匹配的信息查询，请选择要使用的查询'
 
-                # 处理工具结果（与普通send相同的逻辑）
+                tool_results_list.extend(current_tool_results)
+
+                # ── 2. 保存卡片消息（信息查询结果卡/任务确认卡/选项选择卡）──
                 saved_tool_messages = []
                 try:
-                    for tr in tool_results_list:
+                    for tr in current_tool_results:
                         result = tr['result']
-                        # 信息查询：只有show_all_fields=true时才创建卡片，否则交给AI二次回复
+                        # 信息查询：只有show_all_fields=true时才创建卡片，否则交给AI后续轮次回复
                         if result and result.get('action_type') == 'lookup' and result.get('show_all_fields'):
                             lookup_meta = {
                                 '_type': 'lookup', 'tool_data': result,
@@ -2024,7 +2042,8 @@ def send_message_stream(chat_id):
                                 'result': result,
                                 'message_id': tool_msg.id,
                             })
-                        # 导出/查询/系统任务（API自动执行的不创建卡片，由AI二次回复反馈）
+                            any_card_created = True
+                        # 导出/查询/系统任务（API自动执行的不创建卡片，由AI后续轮次反馈）
                         elif result and not result.get('error') and result.get('action_type') in ('export', 'query', 'system_task', 'profit_share'):
                             if result.get('auto_executed'):
                                 # API自动执行的系统任务，不创建确认卡片
@@ -2044,6 +2063,7 @@ def send_message_stream(chat_id):
                                     'result': result,
                                     'message_id': tool_msg.id,
                                 })
+                                any_card_created = True
                         # 选项选择卡片
                         elif result and result.get('_select_mode'):
                             if tr['name'] == 'list_export_options':
@@ -2074,6 +2094,7 @@ def send_message_stream(chat_id):
                                 'result': result,
                                 'message_id': tool_msg.id,
                             })
+                            any_card_created = True
                         else:
                             saved_tool_messages.append(tr)
                 except Exception as db_err:
@@ -2086,92 +2107,81 @@ def send_message_stream(chat_id):
                 # 发送工具结果给前端
                 yield f"data: {json.dumps({'type': 'tool_results', 'tool_results': saved_tool_messages}, ensure_ascii=False)}\n\n"
 
-                # 检查是否需要AI二次回复
-                # 信息查询(request_lookup)：只有所有lookup都是show_all_fields=true时才跳过AI二次回复
-                # API系统任务自动执行(auto_executed)：走AI二次回复流程，让AI根据映射结果反馈用户
-                action_tools = {'request_export', 'request_query', 'request_system_task', 'request_profit_share'}
-                all_tool_calls = [accumulated_tool_calls[idx] for idx in sorted(accumulated_tool_calls.keys())]
-                has_action = any(tc['function']['name'] in action_tools for tc in all_tool_calls)
-                # 检查是否有自动执行的API系统任务（需要AI二次回复反馈结果）
-                has_auto_exec_system_task = any(
-                    tr.get('result', {}).get('auto_executed', False)
-                    for tr in tool_results_list
-                    if tr.get('result', {}).get('action_type') == 'system_task'
-                )
-                logger.info(f'流式路由-自动执行检测: has_auto_exec_system_task={has_auto_exec_system_task}, has_action={has_action}')
-                # 如果所有system_task都是auto_executed，则不算action
-                if has_auto_exec_system_task:
-                    all_system_task_auto = all(
-                        tr.get('result', {}).get('auto_executed', False)
-                        for tr in tool_results_list
-                        if tr.get('result', {}).get('action_type') == 'system_task'
-                    )
-                    if all_system_task_auto:
-                        has_action = False
-                lookup_tc_exists = any(tc['function']['name'] == 'request_lookup' for tc in all_tool_calls)
-                has_lookup_needs_reply = any(
-                    not tr.get('result', {}).get('show_all_fields', False)
-                    for tr in tool_results_list
-                    if tr.get('result', {}).get('action_type') == 'lookup'
-                ) if lookup_tc_exists else False
-                has_select = any(tr.get('result', {}).get('_select_mode') for tr in tool_results_list)
+                # ── 3. 出现等待用户交互的卡片：卡片即回复，结束循环 ──
+                if any_card_created:
+                    logger.info(f'流式路由-第{round_num}轮出现用户交互卡片，结束AI回复循环')
+                    break
 
-                if not has_action and not has_select and (has_lookup_needs_reply or has_auto_exec_system_task or not lookup_tc_exists):
-                    # 需要AI二次回复：1)有lookup需要归总结果；2)API系统任务自动执行需要反馈结果；3)非操作型工具需要AI回复
-                    logger.info(f'流式路由-进入AI二次回复: has_lookup_needs_reply={has_lookup_needs_reply}, has_auto_exec_system_task={has_auto_exec_system_task}, lookup_tc_exists={lookup_tc_exists}')
-                    tool_messages = []
-                    for tr in tool_results_list:
-                        result = tr.get('result', {})
-                        # 对auto_executed的系统任务结果精简，避免过大导致AI无法处理
-                        if result.get('auto_executed') and result.get('action_type') == 'system_task':
-                            concise_result = {
-                                'action_type': 'system_task',
-                                'task_name': result.get('task_name', ''),
-                                'auto_executed': True,
-                                'success': result.get('success', False),
-                                'status_code': result.get('status_code'),
-                                'mapping_summary': result.get('mapping_summary', ''),
-                                'mapping_info': result.get('mapping_info', ''),
-                            }
-                            if result.get('error'):
-                                concise_result['error'] = result['error']
-                            # 如果mapping_summary为空，附上简化的response
-                            if not result.get('mapping_summary') and isinstance(result.get('response'), dict):
-                                concise_result['response'] = result['response']
-                            tool_messages.append({
-                                'role': 'tool',
-                                'tool_call_id': tr['tool_call_id'],
-                                'content': json.dumps(concise_result, ensure_ascii=False),
-                            })
-                        else:
-                            tool_messages.append({
-                                'role': 'tool',
-                                'tool_call_id': tr['tool_call_id'],
-                                'content': json.dumps(result, ensure_ascii=False),
-                            })
-
-                    # 构建二次请求的消息列表
-                    messages.append({
-                        'role': 'assistant',
-                        'content': full_content,
-                        'tool_calls': [accumulated_tool_calls[idx] for idx in sorted(accumulated_tool_calls.keys())],
-                    })
-                    messages.extend(tool_messages)
-
-                    # 请求AI二次回复
-                    # 构建二次回复提示
-                    reply_hints = []
-                    if has_lookup_needs_reply:
-                        reply_hints.append('上面的信息查询已经执行完成并返回了结果。请根据查询结果回答用户问题。如果用户意图是条件性的（如满足条件则执行系统任务），请根据查询结果判断是否需要调用request_system_task等工具。不要重复调用request_lookup。')
-                    if has_auto_exec_system_task:
-                        reply_hints.append('上面的API系统任务已经自动执行完成并返回了结果。请根据mapping_summary（映射摘要）直接用自然语言告诉用户执行结果，如果多个任务请用列表汇总。不要重复调用request_system_task。')
-                    if reply_hints:
-                        messages.append({
-                            'role': 'system',
-                            'content': '\n'.join(reply_hints)
+                # ── 4. 构建下一轮请求消息（assistant工具调用 + 工具结果 + 引导提示）──
+                tool_messages = []
+                for tr in current_tool_results:
+                    result = tr.get('result', {})
+                    # 对auto_executed的系统任务结果精简，避免过大导致AI无法处理
+                    if result.get('auto_executed') and result.get('action_type') == 'system_task':
+                        concise_result = {
+                            'action_type': 'system_task',
+                            'task_name': result.get('task_name', ''),
+                            'auto_executed': True,
+                            'success': result.get('success', False),
+                            'status_code': result.get('status_code'),
+                            'mapping_summary': result.get('mapping_summary', ''),
+                            'mapping_info': result.get('mapping_info', ''),
+                        }
+                        if result.get('error'):
+                            concise_result['error'] = result['error']
+                        # 如果mapping_summary为空，附上简化的response
+                        if not result.get('mapping_summary') and isinstance(result.get('response'), dict):
+                            concise_result['response'] = result['response']
+                        tool_messages.append({
+                            'role': 'tool',
+                            'tool_call_id': tr['tool_call_id'],
+                            'content': json.dumps(concise_result, ensure_ascii=False),
+                        })
+                    else:
+                        tool_messages.append({
+                            'role': 'tool',
+                            'tool_call_id': tr['tool_call_id'],
+                            'content': json.dumps(result, ensure_ascii=False),
                         })
 
-                    payload2 = {
+                messages.append({
+                    'role': 'assistant',
+                    'content': round_content,
+                    'tool_calls': [accumulated_tool_calls[idx] for idx in sorted(accumulated_tool_calls.keys())],
+                })
+                messages.extend(tool_messages)
+
+                # 回复引导提示
+                reply_hints = []
+                has_lookup_needs_reply = any(
+                    not tr.get('result', {}).get('show_all_fields', False)
+                    for tr in current_tool_results
+                    if tr.get('result', {}).get('action_type') == 'lookup'
+                )
+                has_auto_exec_system_task = any(
+                    tr.get('result', {}).get('auto_executed', False)
+                    for tr in current_tool_results
+                    if tr.get('result', {}).get('action_type') == 'system_task'
+                )
+                if has_lookup_needs_reply:
+                    reply_hints.append('上面的信息查询已经执行完成并返回了结果。请根据查询结果回答用户问题。如果用户意图是条件性的（如满足条件则执行系统任务），请根据查询结果判断是否需要调用request_system_task等工具。不要重复调用request_lookup。')
+                if has_auto_exec_system_task:
+                    reply_hints.append('上面的API系统任务已经自动执行完成并返回了结果。请根据mapping_summary（映射摘要）直接用自然语言告诉用户执行结果，如果多个任务请用列表汇总。不要重复调用request_system_task。')
+                if reply_hints:
+                    messages.append({
+                        'role': 'system',
+                        'content': '\n'.join(reply_hints)
+                    })
+
+                # ── 5. 请求AI下一轮回复（携带工具定义允许链式调用；空响应自动重试一次）──
+                for _attempt_n in range(2):
+                    # 每轮重置本轮累积状态
+                    round_content = ''
+                    round_thinking = ''
+                    next_tool_calls = {}
+                    round_finish_reason = None
+
+                    payload_next = {
                         'model': config_model_name,
                         'messages': _apply_cache_control(messages, config_provider, api_base),
                         'max_tokens': effective_max_tokens,
@@ -2181,320 +2191,166 @@ def send_message_stream(chat_id):
                         'tool_choice': 'auto',
                     }
 
-                    second_full_content = ''
-                    second_thinking_content = ''
-                    second_accumulated_tool_calls = {}
-                    second_finish_reason = None
-
-                    if config_enable_streaming:
-                        resp2 = _pcc(url, headers, payload2, timeout=180, stream=True)
-                        resp2.raise_for_status()
-                        resp2.encoding = 'utf-8'
-                        for line2 in resp2.iter_lines(decode_unicode=True):
-                            if not line2:
-                                continue
-                            if line2.startswith('data: '):
-                                data_str2 = line2[6:]
-                                if data_str2.strip() == '[DONE]':
+                    try:
+                        if config_enable_streaming:
+                            logger.info(f'流式请求第{round_num + 1}轮开始(attempt={_attempt_n + 1}): model={config_model_name}')
+                            resp_n = _pcc(url, headers, payload_next, timeout=180, stream=True)
+                            resp_n.raise_for_status()
+                            resp_n.encoding = 'utf-8'
+                            for line_n in resp_n.iter_lines(decode_unicode=True):
+                                # 检查是否被用户终止
+                                if _active_streams.get(chat_id, {}).get('aborted'):
+                                    logger.info(f'流式请求被用户终止: chat_id={chat_id}')
                                     break
-                                try:
-                                    chunk2 = json.loads(data_str2)
-                                    choices2 = chunk2.get('choices', [])
-                                    if choices2:
-                                        if choices2[0].get('finish_reason'):
-                                            second_finish_reason = choices2[0]['finish_reason']
-                                        delta2 = choices2[0].get('delta', {})
-                                        reasoning2 = delta2.get('reasoning_content') or delta2.get('thinking') or ''
-                                        if reasoning2:
-                                            second_thinking_content += reasoning2
-                                            if config_enable_thinking:
-                                                yield f"data: {json.dumps({'type': 'thinking', 'content': reasoning2}, ensure_ascii=False)}\n\n"
-                                        content_delta2 = delta2.get('content', '') or ''
-                                        if content_delta2:
-                                            second_full_content += content_delta2
-                                            full_content += content_delta2
-                                            yield f"data: {json.dumps({'type': 'content', 'content': content_delta2}, ensure_ascii=False)}\n\n"
-                                        tool_calls_delta2 = delta2.get('tool_calls')
-                                        if tool_calls_delta2:
-                                            for tc2 in tool_calls_delta2:
-                                                idx2 = tc2.get('index', 0)
-                                                if idx2 not in second_accumulated_tool_calls:
-                                                    second_accumulated_tool_calls[idx2] = {
-                                                        'id': tc2.get('id', ''),
-                                                        'type': tc2.get('type', 'function'),
-                                                        'function': {'name': '', 'arguments': ''},
-                                                    }
-                                                if tc2.get('id'):
-                                                    second_accumulated_tool_calls[idx2]['id'] = tc2['id']
-                                                if tc2.get('type'):
-                                                    second_accumulated_tool_calls[idx2]['type'] = tc2['type']
-                                                fn2 = tc2.get('function', {})
-                                                if fn2.get('name'):
-                                                    second_accumulated_tool_calls[idx2]['function']['name'] = fn2['name']
-                                                if fn2.get('arguments'):
-                                                    second_accumulated_tool_calls[idx2]['function']['arguments'] += fn2['arguments']
-                                        if chunk2.get('usage'):
-                                            tokens_used = chunk2['usage'].get('total_tokens', 0)
-                                            prompt_tokens_used += chunk2['usage'].get('prompt_tokens', 0)
-                                            completion_tokens_used += chunk2['usage'].get('completion_tokens', 0)
-                                            _cc2, _cr2 = _extract_cache_tokens(chunk2['usage'])
-                                            cache_creation_tokens_used += _cc2
-                                            cache_read_tokens_used += _cr2
-                                except json.JSONDecodeError:
+                                if not line_n:
                                     continue
-                    else:
-                        resp2 = _pcc(url, headers, payload2, timeout=180)
-                        resp2.raise_for_status()
-                        result2 = resp2.json()
-                        choices2 = result2.get('choices', [])
-                        if choices2:
-                            second_finish_reason = choices2[0].get('finish_reason')
-                            msg2 = choices2[0].get('message', {})
-                            reasoning2 = msg2.get('reasoning_content') or msg2.get('thinking') or ''
-                            if reasoning2:
-                                second_thinking_content = reasoning2
-                                thinking_content += reasoning2
-                                if config_enable_thinking:
-                                    yield f"data: {json.dumps({'type': 'thinking', 'content': reasoning2}, ensure_ascii=False)}\n\n"
-                            content_text2 = msg2.get('content', '') or ''
-                            if content_text2:
-                                second_full_content = content_text2
-                                full_content += content_text2
-                                yield f"data: {json.dumps({'type': 'content', 'content': content_text2}, ensure_ascii=False)}\n\n"
-                            tool_calls_resp2 = msg2.get('tool_calls', [])
-                            for tc2 in tool_calls_resp2:
-                                idx2 = len(second_accumulated_tool_calls)
-                                second_accumulated_tool_calls[idx2] = {
-                                    'id': tc2.get('id', ''),
-                                    'type': tc2.get('type', 'function'),
-                                    'function': tc2.get('function', {}),
-                                }
-                        if result2.get('usage'):
-                            tokens_used = result2['usage'].get('total_tokens', 0)
-                            prompt_tokens_used += result2['usage'].get('prompt_tokens', 0)
-                            completion_tokens_used += result2['usage'].get('completion_tokens', 0)
-                            _cc2, _cr2 = _extract_cache_tokens(result2['usage'])
-                            cache_creation_tokens_used += _cc2
-                            cache_read_tokens_used += _cr2
+                                if line_n.startswith('data: '):
+                                    data_str_n = line_n[6:]
+                                    if data_str_n.strip() == '[DONE]':
+                                        break
+                                    try:
+                                        chunk_n = json.loads(data_str_n)
+                                        choices_n = chunk_n.get('choices', [])
+                                        if choices_n:
+                                            if choices_n[0].get('finish_reason'):
+                                                round_finish_reason = choices_n[0]['finish_reason']
+                                            delta_n = choices_n[0].get('delta', {})
+                                            # 思考内容
+                                            reasoning_n = delta_n.get('reasoning_content') or delta_n.get('thinking') or ''
+                                            if reasoning_n:
+                                                round_thinking += reasoning_n
+                                                if config_enable_thinking:
+                                                    yield f"data: {json.dumps({'type': 'thinking', 'content': reasoning_n}, ensure_ascii=False)}\n\n"
+                                            # 正文内容
+                                            content_delta_n = delta_n.get('content', '') or ''
+                                            if content_delta_n:
+                                                round_content += content_delta_n
+                                                yield f"data: {json.dumps({'type': 'content', 'content': content_delta_n}, ensure_ascii=False)}\n\n"
+                                            # 累积工具调用
+                                            tool_calls_delta_n = delta_n.get('tool_calls')
+                                            if tool_calls_delta_n:
+                                                for tc_n in tool_calls_delta_n:
+                                                    idx_n = tc_n.get('index', 0)
+                                                    if idx_n not in next_tool_calls:
+                                                        next_tool_calls[idx_n] = {
+                                                            'id': tc_n.get('id', ''),
+                                                            'type': tc_n.get('type', 'function'),
+                                                            'function': {'name': '', 'arguments': ''},
+                                                        }
+                                                    if tc_n.get('id'):
+                                                        next_tool_calls[idx_n]['id'] = tc_n['id']
+                                                    if tc_n.get('type'):
+                                                        next_tool_calls[idx_n]['type'] = tc_n['type']
+                                                    fn_n = tc_n.get('function', {})
+                                                    if fn_n.get('name'):
+                                                        next_tool_calls[idx_n]['function']['name'] = fn_n['name']
+                                                    if fn_n.get('arguments'):
+                                                        next_tool_calls[idx_n]['function']['arguments'] += fn_n['arguments']
+                                        # token统计
+                                        if chunk_n.get('usage'):
+                                            tokens_used += chunk_n['usage'].get('total_tokens', 0)
+                                            prompt_tokens_used += chunk_n['usage'].get('prompt_tokens', 0)
+                                            completion_tokens_used += chunk_n['usage'].get('completion_tokens', 0)
+                                            _ccn, _crn = _extract_cache_tokens(chunk_n['usage'])
+                                            cache_creation_tokens_used += _ccn
+                                            cache_read_tokens_used += _crn
+                                    except json.JSONDecodeError:
+                                        continue
+                        else:
+                            logger.info(f'非流式请求第{round_num + 1}轮开始(attempt={_attempt_n + 1}): model={config_model_name}')
+                            resp_n = _pcc(url, headers, payload_next, timeout=180)
+                            resp_n.raise_for_status()
+                            result_n = resp_n.json()
+                            choices_n = result_n.get('choices', [])
+                            if choices_n:
+                                round_finish_reason = choices_n[0].get('finish_reason')
+                                msg_n = choices_n[0].get('message', {})
+                                reasoning_n = msg_n.get('reasoning_content') or msg_n.get('thinking') or ''
+                                if reasoning_n:
+                                    round_thinking = reasoning_n
+                                    if config_enable_thinking:
+                                        yield f"data: {json.dumps({'type': 'thinking', 'content': reasoning_n}, ensure_ascii=False)}\n\n"
+                                content_text_n = msg_n.get('content', '') or ''
+                                if content_text_n:
+                                    round_content = content_text_n
+                                    yield f"data: {json.dumps({'type': 'content', 'content': content_text_n}, ensure_ascii=False)}\n\n"
+                                tool_calls_resp_n = msg_n.get('tool_calls', [])
+                                for tc_n in tool_calls_resp_n:
+                                    idx_n = len(next_tool_calls)
+                                    next_tool_calls[idx_n] = {
+                                        'id': tc_n.get('id', ''),
+                                        'type': tc_n.get('type', 'function'),
+                                        'function': tc_n.get('function', {}),
+                                    }
+                            if result_n.get('usage'):
+                                tokens_used += result_n['usage'].get('total_tokens', 0)
+                                prompt_tokens_used += result_n['usage'].get('prompt_tokens', 0)
+                                completion_tokens_used += result_n['usage'].get('completion_tokens', 0)
+                                _ccn, _crn = _extract_cache_tokens(result_n['usage'])
+                                cache_creation_tokens_used += _ccn
+                                cache_read_tokens_used += _crn
+                    except requests.exceptions.HTTPError as http_err_n:
+                        err_detail_n = str(http_err_n)
+                        try:
+                            err_detail_n = http_err_n.response.text[:300] or str(http_err_n)
+                        except Exception:
+                            pass
+                        logger.error(f'第{round_num + 1}轮AI请求HTTP错误: {err_detail_n}', exc_info=True)
+                        yield f"data: {json.dumps({'type': 'error', 'content': f'AI服务调用失败: {err_detail_n}'}, ensure_ascii=False)}\n\n"
+                        request_failed = True
+                        break
+                    except Exception as req_err_n:
+                        logger.error(f'第{round_num + 1}轮AI请求失败: {req_err_n}', exc_info=True)
+                        yield f"data: {json.dumps({'type': 'error', 'content': f'AI服务调用失败: {str(req_err_n)}'}, ensure_ascii=False)}\n\n"
+                        request_failed = True
+                        break
 
-                    # 检测二次回复输出截断
-                    if second_finish_reason == 'length':
+                    # 累积本轮输出到全局（供保存消息/断线恢复使用）
+                    full_content += round_content
+                    thinking_content += round_thinking
+                    if round_content:
+                        _active_streams[chat_id]['content'] = full_content
+                    if round_thinking:
+                        _active_streams[chat_id]['thinking'] = thinking_content
+
+                    # 检测本轮输出截断
+                    if round_finish_reason == 'length':
                         logger.warning(
-                            f'AI二次回复因max_tokens({effective_max_tokens})上限被截断: model={config_model_name}, '
-                            f'content_len={len(second_full_content)}')
+                            f'AI第{round_num + 1}轮输出因max_tokens({effective_max_tokens})上限被截断: model={config_model_name}, '
+                            f'content_len={len(round_content)}, tool_calls={len(next_tool_calls)}')
                         yield f"data: {json.dumps({'type': 'truncated', 'content': f'⚠ AI回复因最大输出token数（{effective_max_tokens}）限制被截断，建议在AI配置中调大最大输出token数。'}, ensure_ascii=False)}\n\n"
 
-                    # 处理二次回复中的工具调用
-                    if second_accumulated_tool_calls:
-                        second_tool_results_list = []
-                        for idx2 in sorted(second_accumulated_tool_calls.keys()):
-                            tc2 = second_accumulated_tool_calls[idx2]
-                            func_name2 = tc2['function']['name']
-                            func_args2 = tc2['function']['arguments']
-                            # 校验工具调用参数完整性：截断的JSON会导致工具执行失败
-                            args2_parse_ok = True
-                            if func_args2:
-                                try:
-                                    json.loads(func_args2)
-                                except json.JSONDecodeError:
-                                    args2_parse_ok = False
-                            if not args2_parse_ok:
-                                logger.warning(
-                                    f'二次回复工具调用参数JSON不完整（疑似被截断），跳过执行: {func_name2}, '
-                                    f'finish_reason={second_finish_reason}, args_len={len(func_args2 or "")}')
-                                second_tool_results_list.append({
-                                    'tool_call_id': tc2['id'],
-                                    'name': func_name2,
-                                    'result': {'error': '工具调用参数因最大输出token数限制被截断，JSON不完整。请精简参数后重新调用该工具。'},
-                                })
-                                continue
-                            logger.info(f'流式AI二次回复调用工具: {func_name2}({func_args2})')
-                            result2 = AiService.execute_tool_call(func_name2, func_args2, user_id)
-                            second_tool_results_list.append({
-                                'tool_call_id': tc2['id'],
-                                'name': func_name2,
-                                'result': result2,
-                            })
+                    # 空响应检测：无正文无工具调用时追加引导重试一次
+                    if (_attempt_n == 0 and not round_content.strip() and not next_tool_calls
+                            and not _active_streams.get(chat_id, {}).get('aborted')):
+                        logger.warning(
+                            f'AI第{round_num + 1}轮响应为空（思考{len(round_thinking)}字符），自动重试: '
+                            f'chat_id={chat_id}, model={config_model_name}, finish_reason={round_finish_reason}')
+                        yield f"data: {json.dumps({'type': 'content', 'content': '\n\n（本轮未产生输出，正在自动重试…）\n\n'}, ensure_ascii=False)}\n\n"
+                        messages.append({
+                            'role': 'user',
+                            'content': '（系统提示：你上一轮只输出了思考过程，没有产生任何回复内容或工具调用。'
+                                       '请立即根据用户的需求直接调用合适的工具执行任务，或直接给出回复，不要再只思考。）',
+                        })
+                        continue
+                    break
 
-                        # 保存二次工具消息
-                        second_saved_tool_messages = []
-                        try:
-                            for tr2 in second_tool_results_list:
-                                result2 = tr2['result']
-                                # 信息查询：只有show_all_fields=true时才创建卡片
-                                if result2 and result2.get('action_type') == 'lookup' and result2.get('show_all_fields'):
-                                    lookup_meta2 = {
-                                        '_type': 'lookup', 'tool_data': result2,
-                                        '_done': True, '_failed': bool(result2.get('error')),
-                                    }
-                                    if result2.get('error'):
-                                        lookup_meta2['_error_msg'] = result2['error']
-                                    tool_msg2 = AiChatMessage(
-                                        chat_id=chat_id, agent_id=stream_agent_id, role='assistant', content='',
-                                        msg_metadata=json.dumps(lookup_meta2, ensure_ascii=False),
-                                    )
-                                    db.session.add(tool_msg2)
-                                    db.session.flush()
-                                    second_saved_tool_messages.append({
-                                        'tool_call_id': tr2['tool_call_id'],
-                                        'name': tr2['name'],
-                                        'result': result2,
-                                        'message_id': tool_msg2.id,
-                                    })
-                                elif result2 and result2.get('action_type') == 'lookup':
-                                    # show_all_fields=false，不创建卡片，由AI三次回复自然语言回答
-                                    second_saved_tool_messages.append(tr2)
-                                elif result2 and not result2.get('error') and result2.get('action_type') in ('export', 'query', 'system_task', 'profit_share'):
-                                    if result2.get('auto_executed'):
-                                        # API自动执行的系统任务，不创建确认卡片
-                                        second_saved_tool_messages.append(tr2)
-                                    else:
-                                        tool_msg2 = AiChatMessage(
-                                            chat_id=chat_id, agent_id=stream_agent_id, role='assistant', content='',
-                                            msg_metadata=json.dumps({
-                                                '_type': 'tool', 'tool_data': result2,
-                                            }, ensure_ascii=False),
-                                        )
-                                        db.session.add(tool_msg2)
-                                        db.session.flush()
-                                        second_saved_tool_messages.append({
-                                            'tool_call_id': tr2['tool_call_id'],
-                                            'name': tr2['name'],
-                                            'result': result2,
-                                            'message_id': tool_msg2.id,
-                                        })
-                                elif result2 and result2.get('_select_mode'):
-                                    if tr2['name'] == 'list_export_options':
-                                        action_type2 = 'export'
-                                    elif tr2['name'] == 'list_query_options':
-                                        action_type2 = 'query'
-                                    elif tr2['name'] == 'list_system_tasks':
-                                        action_type2 = 'system_task'
-                                    elif tr2['name'] == 'list_lookup_options':
-                                        action_type2 = 'lookup'
-                                    else:
-                                        action_type2 = 'export'
-                                    tool_msg2 = AiChatMessage(
-                                        chat_id=chat_id, agent_id=stream_agent_id, role='assistant',
-                                        content=result2.get('message', ''),
-                                        msg_metadata=json.dumps({
-                                            '_type': 'select_options',
-                                            '_select_mode': result2['_select_mode'],
-                                            'scripts': result2.get('scripts', result2.get('tasks', [])),
-                                            'action_type': action_type2,
-                                        }, ensure_ascii=False),
-                                    )
-                                    db.session.add(tool_msg2)
-                                    db.session.flush()
-                                    second_saved_tool_messages.append({
-                                        'tool_call_id': tr2['tool_call_id'],
-                                        'name': tr2['name'],
-                                        'result': result2,
-                                        'message_id': tool_msg2.id,
-                                    })
-                                else:
-                                    second_saved_tool_messages.append(tr2)
-                        except Exception as db_err2:
-                            logger.error(f'流式响应保存二次工具消息失败: {db_err2}', exc_info=True)
-                            try:
-                                db.session.rollback()
-                            except:
-                                pass
+                if request_failed:
+                    break
 
-                        # 发送二次工具结果给前端
-                        yield f"data: {json.dumps({'type': 'tool_results', 'tool_results': second_saved_tool_messages}, ensure_ascii=False)}\n\n"
+                # 本轮无工具调用：AI已给出最终文本回复，结束循环
+                accumulated_tool_calls = next_tool_calls
+                _active_streams[chat_id]['tool_calls'] = {k: v for k, v in next_tool_calls.items()}
+                if not accumulated_tool_calls:
+                    logger.info(f'流式工具调用循环完成: 共{round_num}轮工具执行, 最终正文{len(full_content)}字符')
+                    break
 
-                        # 如果二次工具调用也是非操作型的，还需要AI三次回复
-                        second_all_tool_calls = [second_accumulated_tool_calls[idx2] for idx2 in sorted(second_accumulated_tool_calls.keys())]
-                        second_has_action = any(tc2['function']['name'] in action_tools for tc2 in second_all_tool_calls)
-                        second_has_select = any(tr2.get('result', {}).get('_select_mode') for tr2 in second_tool_results_list)
-                        second_lookup_tc_exists = any(tc2['function']['name'] == 'request_lookup' for tc2 in second_all_tool_calls)
-                        second_has_lookup_needs_reply = any(
-                            not tr2.get('result', {}).get('show_all_fields', False)
-                            for tr2 in second_tool_results_list
-                            if tr2.get('result', {}).get('action_type') == 'lookup'
-                        ) if second_lookup_tc_exists else False
+            # 达到轮次上限仍有未执行的工具调用
+            if (accumulated_tool_calls and round_num >= MAX_TOOL_ROUNDS and not request_failed
+                    and not _active_streams.get(chat_id, {}).get('aborted')):
+                logger.warning(f'工具调用轮次达上限({MAX_TOOL_ROUNDS})，剩余{len(accumulated_tool_calls)}个工具调用未执行: chat_id={chat_id}')
+                yield f"data: {json.dumps({'type': 'content', 'content': '\n\n⚠ 已达到工具调用轮次上限，部分操作未执行，请继续对话或新建对话重试。'}, ensure_ascii=False)}\n\n"
 
-                        if not second_has_action and not second_has_select and (second_has_lookup_needs_reply or not second_lookup_tc_exists):
-                            if second_has_lookup_needs_reply:
-                                # 有lookup需要归总，必须请求AI三次回复
-                                try:
-                                    tool_messages2 = []
-                                    for tr2 in second_tool_results_list:
-                                        tool_messages2.append({
-                                            'role': 'tool',
-                                            'tool_call_id': tr2['tool_call_id'],
-                                            'content': json.dumps(tr2['result'], ensure_ascii=False),
-                                        })
-                                    messages.append({
-                                        'role': 'assistant',
-                                        'content': second_full_content,
-                                        'tool_calls': [second_accumulated_tool_calls[idx2] for idx2 in sorted(second_accumulated_tool_calls.keys())],
-                                    })
-                                    messages.extend(tool_messages2)
-                                    payload3 = {
-                                        'model': config_model_name,
-                                        'messages': _apply_cache_control(messages, config_provider, api_base),
-                                        'max_tokens': config_max_tokens,
-                                        'temperature': config_temperature,
-                                    }
-                                    resp3 = _pcc(url, headers, payload3, timeout=120)
-                                    resp3.raise_for_status()
-                                    result3 = resp3.json()
-                                    final_text = result3.get('choices', [{}])[0].get('message', {}).get('content', '')
-                                    if final_text:
-                                        full_content += final_text
-                                        yield f"data: {json.dumps({'type': 'content', 'content': final_text}, ensure_ascii=False)}\n\n"
-                                    if result3.get('usage'):
-                                        tokens_used = result3['usage'].get('total_tokens', 0)
-                                        prompt_tokens_used += result3['usage'].get('prompt_tokens', 0)
-                                        completion_tokens_used += result3['usage'].get('completion_tokens', 0)
-                                        _cc3, _cr3 = _extract_cache_tokens(result3['usage'])
-                                        cache_creation_tokens_used += _cc3
-                                        cache_read_tokens_used += _cr3
-                                except Exception as e3:
-                                    logger.error(f'流式AI三次回复失败: {e3}', exc_info=True)
-                            elif second_full_content:
-                                # 非lookup工具调用，AI已经在二次回复中生成了文本，直接使用
-                                pass
-                            else:
-                                # 需要AI三次回复（简化处理：直接请求非流式）
-                                try:
-                                    tool_messages2 = []
-                                    for tr2 in second_tool_results_list:
-                                        tool_messages2.append({
-                                            'role': 'tool',
-                                            'tool_call_id': tr2['tool_call_id'],
-                                            'content': json.dumps(tr2['result'], ensure_ascii=False),
-                                        })
-                                    messages.append({
-                                        'role': 'assistant',
-                                        'content': second_full_content,
-                                        'tool_calls': [second_accumulated_tool_calls[idx2] for idx2 in sorted(second_accumulated_tool_calls.keys())],
-                                    })
-                                    messages.extend(tool_messages2)
-                                    payload3 = {
-                                        'model': config_model_name,
-                                        'messages': _apply_cache_control(messages, config_provider, api_base),
-                                        'max_tokens': config_max_tokens,
-                                        'temperature': config_temperature,
-                                    }
-                                    resp3 = _pcc(url, headers, payload3, timeout=120)
-                                    resp3.raise_for_status()
-                                    result3 = resp3.json()
-                                    final_text = result3.get('choices', [{}])[0].get('message', {}).get('content', '')
-                                    if final_text:
-                                        full_content += final_text
-                                        yield f"data: {json.dumps({'type': 'content', 'content': final_text}, ensure_ascii=False)}\n\n"
-                                    if result3.get('usage'):
-                                        tokens_used = result3['usage'].get('total_tokens', 0)
-                                        prompt_tokens_used += result3['usage'].get('prompt_tokens', 0)
-                                        completion_tokens_used += result3['usage'].get('completion_tokens', 0)
-                                        _cc3, _cr3 = _extract_cache_tokens(result3['usage'])
-                                        cache_creation_tokens_used += _cc3
-                                        cache_read_tokens_used += _cr3
-                                except Exception as e3:
-                                    logger.error(f'流式AI三次回复失败: {e3}', exc_info=True)
 
             # 流式结束，保存消息
             try:
@@ -2502,7 +2358,7 @@ def send_message_stream(chat_id):
                 if elapsed < 0.01:
                     elapsed = 0.01
                 # 重试后仍无任何输出：给用户明确提示而非保存一条空消息
-                if not full_content.strip() and not tool_results_list:
+                if not full_content.strip() and not any_card_created:
                     logger.error(f'AI重试后仍为空响应，返回错误提示: chat_id={chat_id}, thinking_len={len(thinking_content)}')
                     full_content = '抱歉，本次请求未产生有效输出（模型可能仅输出了思考过程）。请重试，或在AI配置中调大最大输出token数 / 关闭深度思考。'
                     yield f"data: {json.dumps({'type': 'content', 'content': full_content}, ensure_ascii=False)}\n\n"
