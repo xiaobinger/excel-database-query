@@ -3,7 +3,7 @@
     <svg v-if="brand.path" viewBox="0 0 24 24" :width="size" :height="size" :fill="brand.color" aria-hidden="true">
       <path :d="brand.path" />
     </svg>
-    <span v-else-if="brand.svg" class="logo-svg" :style="{ width: size + 'px', height: size + 'px' }" v-html="brand.svg"></span>
+    <span v-else-if="brand.svg" class="logo-svg" :class="{ 'logo-self-bg': brand.selfBg }" :style="{ width: size + 'px', height: size + 'px' }" v-html="brand.svg"></span>
     <span
       v-else
       class="logo-fallback"
@@ -89,18 +89,24 @@ const BRANDS = {
     color: '#ff6900',
     path: 'M12 0C8.016 0 4.756.255 2.493 2.516.23 4.776 0 8.033 0 12.012c0 3.98.23 7.235 2.494 9.497C4.757 23.77 8.017 24 12 24c3.983 0 7.243-.23 9.506-2.491C23.77 19.247 24 15.99 24 12.012c0-3.984-.233-7.243-2.502-9.504C19.234.252 15.978 0 12 0zM4.906 7.405h5.624c1.47 0 3.007.068 3.764.827.746.746.827 2.233.83 3.676v4.54a.15.15 0 0 1-.152.147h-1.947a.15.15 0 0 1-.152-.148V11.83c-.002-.806-.048-1.634-.464-2.051-.358-.36-1.026-.441-1.72-.458H7.158a.15.15 0 0 0-.151.147v6.98a.15.15 0 0 1-.152.148H4.906a.15.15 0 0 1-.15-.148V7.554a.15.15 0 0 1 .15-.149zm12.131 0h1.949a.15.15 0 0 1 .15.15v8.892a.15.15 0 0 1-.15.148h-1.949a.15.15 0 0 1-.151-.148V7.554a.15.15 0 0 1 .151-.149zM8.92 10.948h2.046c.083 0 .15.066.15.147v5.352a.15.15 0 0 1-.15.148H8.92a.15.15 0 0 1-.152-.148v-5.352a.15.15 0 0 1 .152-.147Z',
   },
-  // sub2api：官方logo为带渐变的完整SVG（github.com/Wei-Shaw/sub2api assets/logo.svg）
+  // sub2api：官方logo为带渐变的完整SVG（github.com/Wei-Shaw/sub2api assets/logo.svg），自带底色
   sub2api: {
     title: 'Sub2API 中转站',
+    selfBg: true,
     svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%" role="img" aria-hidden="true"><defs><linearGradient id="s2a-bg" x1="72" y1="44" x2="442" y2="478" gradientUnits="userSpaceOnUse"><stop stop-color="#142B56"/><stop offset=".52" stop-color="#0A1A39"/><stop offset="1" stop-color="#061127"/></linearGradient><radialGradient id="s2a-ambient" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(168 92) rotate(51) scale(342 382)"><stop stop-color="#3E68B0" stop-opacity=".28"/><stop offset="1" stop-color="#3E68B0" stop-opacity="0"/></radialGradient><linearGradient id="s2a-brand" x1="4" y1="4" x2="20" y2="20" gradientUnits="userSpaceOnUse"><stop stop-color="#79F4BD"/><stop offset=".48" stop-color="#39D9E7"/><stop offset="1" stop-color="#3875F6"/></linearGradient></defs><rect x="16" y="16" width="480" height="480" rx="120" fill="url(#s2a-bg)"/><rect x="16" y="16" width="480" height="480" rx="120" fill="url(#s2a-ambient)"/><rect x="16.75" y="16.75" width="478.5" height="478.5" rx="119.25" fill="none" stroke="#A5BFFF" stroke-opacity=".16" stroke-width="1.5"/><g transform="translate(52 52) scale(17)" fill="none" stroke="url(#s2a-brand)" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.7"><path d="m19.25 7.65-2.55-3.2a1.33 1.33 0 0 0-1.03-.5H8.58c-.34 0-.67.13-.91.37L4.15 7.65c-.93.88-.6 1.52.65 2.3l9.55 5.97"/><path d="m4.75 16.35 2.55 3.2c.25.31.63.5 1.03.5h7.09c.34 0 .67-.13.91-.37l3.52-3.33c.93-.88.6-1.52-.65-2.3L9.65 8.08"/></g></svg>`,
   },
-  // agnes：官方logo（platform.agnes-ai.com/images/biglogo.svg，黑底白色a字形符号）
+  // agnes：官方logo（platform.agnes-ai.com/images/biglogo.svg，黑底白色a字形符号），自带底色
   agnes: {
     title: 'Agnes AI',
+    selfBg: true,
     svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 284 284" width="100%" height="100%" aria-hidden="true"><path d="M141.65 283.3C219.881 283.3 283.3 219.881 283.3 141.65C283.3 63.4189 219.881 0 141.65 0C63.4189 0 0 63.4189 0 141.65C0 219.881 63.4189 283.3 141.65 283.3Z" fill="black"/><path d="M42.67 168.24C42.67 168.24 25.78 220.34 56.91 225.59C88.04 230.84 139.65 215.87 196.7 106.67C196.7 106.67 189.66 140.96 185.83 160.61C184.67 166.59 179.44 170.92 173.35 170.97L165.74 171.02C163.5 171.04 162.65 173.9 164.49 175.18C171.7 180.17 180.95 190.98 182.43 213.89C182.75 218.78 187.89 221.92 192.36 219.9C194.36 219 196.3 217.44 197.79 214.82C199.04 212.63 199.62 210.11 199.72 207.59L198.69 198.04C198.14 192.98 201.17 188.27 205.95 186.54C212.71 184.09 221.84 178.96 226.31 168.44C226.84 167.2 225.61 165.91 224.34 166.37C219.82 167.99 211.23 170.67 203.76 170.63C201.54 170.62 199.86 168.6 200.18 166.4L210.55 93.9502C211.15 89.7802 207.99 86.0002 203.78 85.9102C201.44 85.8602 198.61 86.1502 195.36 87.1202C188.09 89.2902 181.21 92.9602 177.44 100.2C159.64 134.44 74.4 237.07 42.67 168.24Z" fill="white"/><path d="M197.34 71.25C207.016 71.25 214.86 63.406 214.86 53.73C214.86 44.0539 207.016 36.21 197.34 36.21C187.664 36.21 179.82 44.0539 179.82 53.73C179.82 63.406 187.664 71.25 197.34 71.25Z" fill="white"/></svg>`,
   },
+  // 智谱：官方logo符号（zhipuai.cn/logo.svg 左侧Z形标识），品牌蓝取自bigmodel.cn平台favicon
+  zhipu: {
+    title: '智谱GLM',
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 31.5 26.55" width="100%" height="100%" aria-hidden="true"><path fill="#1E51FF" d="M16.5376 0.0307374L14.3326 3.13223C14.1617 3.37577 13.9331 3.57415 13.6667 3.71001C13.4004 3.84586 13.1045 3.91504 12.8048 3.9115H0.787598V0.015152H16.5376V0.0307374Z"/><path fill="#1E51FF" d="M31.5 0.0321655L12.6 26.5273H0L18.9 0.0321655H31.5Z"/><path fill="#1E51FF" d="M14.9624 26.5272L17.1832 23.4101C17.3564 23.1689 17.5856 22.9723 17.8513 22.8368C18.1171 22.7012 18.4119 22.6306 18.7109 22.6308H30.7124V26.5272H14.9624Z"/></svg>`,
+  },
   // 以下厂商暂无官方SVG，使用品牌色+单字回退
-  zhipu: { title: '智谱GLM', color: '#3859ff', label: '智' },
   grok: { title: 'xAI Grok', color: '#000000', label: 'X' },
   hunyuan: { title: '腾讯混元', color: '#0053e0', label: '腾' },
   doubao: { title: '豆包', color: '#00d4b7', label: '豆' },
