@@ -1898,6 +1898,9 @@ async function checkAndResumeStream(chatId) {
             if (event.message_id) {
               streamMsg.id = event.message_id
             }
+          } else if (event.type === 'truncated') {
+            // 输出因max_tokens上限被截断，追加提示
+            streamMsg.content += (streamMsg.content ? '\n\n' : '') + `*${event.content || 'AI输出因token上限被截断'}*`
           } else if (event.type === 'error') {
             streamMsg._streaming = false
             streamMsg.content = event.content || 'AI服务调用失败'
@@ -2777,6 +2780,9 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
               streamMsg._elapsed = event.elapsed || 0
               // 同步真实用户消息ID（用于重新发送时复用原消息）
               if (event.user_message_id && onUserMessageId) onUserMessageId(event.user_message_id)
+            } else if (event.type === 'truncated') {
+              // 输出因max_tokens上限被截断，追加提示
+              streamMsg.content += (streamMsg.content ? '\n\n' : '') + `*${event.content || 'AI输出因token上限被截断'}*`
             } else if (event.type === 'error') {
               streamMsg._streaming = false
               streamMsg.content = event.content || 'AI服务调用失败'

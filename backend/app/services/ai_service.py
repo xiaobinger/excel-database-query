@@ -755,10 +755,15 @@ class AiService:
             'Content-Type': 'application/json',
         }
 
+        # 思考型模型的reasoning tokens计入max_tokens预算，预算过小会被思考吃掉导致输出被截断
+        max_tokens_limit = config.max_tokens or 4096
+        if config.enable_thinking:
+            max_tokens_limit = max(max_tokens_limit, 16384)
+
         payload = {
             'model': config.model_name or 'gpt-3.5-turbo',
             'messages': messages,
-            'max_tokens': config.max_tokens or 4096,
+            'max_tokens': max_tokens_limit,
             'temperature': config.temperature if config.temperature is not None else 0.7,
             'tools': tools if tools is not None else AI_TOOLS,
             'tool_choice': 'auto',
@@ -770,6 +775,11 @@ class AiService:
 
         choice = result.get('choices', [{}])[0]
         message = choice.get('message', {})
+        finish_reason = choice.get('finish_reason')
+        if finish_reason == 'length':
+            logger.warning(
+                f'AI输出因max_tokens({max_tokens_limit})上限被截断: model={config.model_name}, '
+                f'content_len={len(message.get("content", "") or "")}, tool_calls={len(message.get("tool_calls", []) or [])}')
         content = message.get('content', '')
         tool_calls = message.get('tool_calls', [])
         usage = result.get('usage', {})
@@ -798,6 +808,7 @@ class AiService:
             'completion_tokens': completion_tokens,
             'cache_creation_tokens': cache_creation_tokens,
             'cache_read_tokens': cache_read_tokens,
+            'finish_reason': finish_reason,
         }
 
     @staticmethod

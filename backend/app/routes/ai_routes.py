@@ -1636,6 +1636,10 @@ def send_message_stream(chat_id):
     config_max_tokens = ai_config.max_tokens or 4096
     config_temperature = ai_config.temperature if ai_config.temperature is not None else 0.7
     config_enable_thinking = ai_config.enable_thinking or False
+    # 思考型模型的reasoning tokens计入max_tokens预算，预算过小会被思考吃掉导致输出/工具调用参数被截断
+    effective_max_tokens = max(config_max_tokens, 16384) if config_enable_thinking else config_max_tokens
+    if effective_max_tokens != config_max_tokens:
+        logger.info(f'深度思考模式max_tokens自适应提升: {config_max_tokens} -> {effective_max_tokens}, model={config_model_name}')
 
     def generate():
         from app.services.ai_service import post_chat_completions as _pcc
@@ -1647,6 +1651,7 @@ def send_message_stream(chat_id):
         cache_creation_tokens_used = 0
         cache_read_tokens_used = 0
         accumulated_tool_calls = {}  # {index: {id, function: {name, arguments}}}
+        finish_reason = None  # 记录finish_reason，检测输出被截断（length）
 
         # 注册活跃流（保存实时内容供断线重连恢复）
         request_id = str(uuid.uuid4())
@@ -1684,7 +1689,7 @@ def send_message_stream(chat_id):
             payload = {
                 'model': config_model_name,
                 'messages': cached_messages,
-                'max_tokens': config_max_tokens,
+                'max_tokens': effective_max_tokens,
                 'temperature': config_temperature,
                 'stream': config_enable_streaming,
             }
@@ -1719,6 +1724,8 @@ def send_message_stream(chat_id):
                             chunk = json.loads(data_str)
                             choices = chunk.get('choices', [])
                             if choices:
+                                if choices[0].get('finish_reason'):
+                                    finish_reason = choices[0]['finish_reason']
                                 delta = choices[0].get('delta', {})
                                 # 处理思考内容（reasoning_content 或 thinking）
                                 reasoning = delta.get('reasoning_content') or delta.get('thinking') or ''
@@ -1777,6 +1784,7 @@ def send_message_stream(chat_id):
                 result = resp.json()
                 choices = result.get('choices', [])
                 if choices:
+                    finish_reason = choices[0].get('finish_reason')
                     message = choices[0].get('message', {})
                     # 处理思考内容
                     reasoning = message.get('reasoning_content') or message.get('thinking') or ''
@@ -1807,6 +1815,14 @@ def send_message_stream(chat_id):
                     cache_creation_tokens_used = _cc
                     cache_read_tokens_used = _cr
 
+            # 检测输出截断：思考型模型的reasoning tokens计入max_tokens预算，超限会被硬截断
+            if finish_reason == 'length':
+                logger.warning(
+                    f'AI输出因max_tokens({effective_max_tokens})上限被截断: model={config_model_name}, '
+                    f'thinking_tokens={len(thinking_content)}, content_len={len(full_content)}, '
+                    f'tool_calls={len(accumulated_tool_calls)}')
+                yield f"data: {json.dumps({'type': 'truncated', 'content': f'⚠ AI输出因最大输出token数（{effective_max_tokens}）限制被截断，思考内容消耗了大部分额度。建议在AI配置中调大最大输出token数。'}, ensure_ascii=False)}\n\n"
+
             # 处理工具调用
             tool_results_list = []
             if _active_streams.get(chat_id, {}).get('aborted'):
@@ -1820,6 +1836,23 @@ def send_message_stream(chat_id):
                     tc = accumulated_tool_calls[idx]
                     func_name = tc['function']['name']
                     func_args = tc['function']['arguments']
+                    # 校验工具调用参数完整性：截断的JSON会导致工具执行失败
+                    args_parse_ok = True
+                    if func_args:
+                        try:
+                            json.loads(func_args)
+                        except json.JSONDecodeError:
+                            args_parse_ok = False
+                    if not args_parse_ok:
+                        logger.warning(
+                            f'工具调用参数JSON不完整（疑似被截断），跳过执行: {func_name}, '
+                            f'finish_reason={finish_reason}, args_len={len(func_args or "")}')
+                        tool_results_list.append({
+                            'tool_call_id': tc['id'],
+                            'name': func_name,
+                            'result': {'error': '工具调用参数因最大输出token数限制被截断，JSON不完整。请精简参数后重新调用该工具。'},
+                        })
+                        continue
                     logger.info(f'流式AI调用工具: {func_name}({func_args})')
                     result = AiService.execute_tool_call(func_name, func_args, user_id)
                     # 解析参数供后续自动执行使用
@@ -2043,7 +2076,7 @@ def send_message_stream(chat_id):
                     payload2 = {
                         'model': config_model_name,
                         'messages': _apply_cache_control(messages, config_provider, api_base),
-                        'max_tokens': config_max_tokens,
+                        'max_tokens': effective_max_tokens,
                         'temperature': config_temperature,
                         'stream': config_enable_streaming,
                         'tools': stream_filtered_tools,
@@ -2053,6 +2086,7 @@ def send_message_stream(chat_id):
                     second_full_content = ''
                     second_thinking_content = ''
                     second_accumulated_tool_calls = {}
+                    second_finish_reason = None
 
                     if config_enable_streaming:
                         resp2 = _pcc(url, headers, payload2, timeout=180, stream=True)
@@ -2069,6 +2103,8 @@ def send_message_stream(chat_id):
                                     chunk2 = json.loads(data_str2)
                                     choices2 = chunk2.get('choices', [])
                                     if choices2:
+                                        if choices2[0].get('finish_reason'):
+                                            second_finish_reason = choices2[0]['finish_reason']
                                         delta2 = choices2[0].get('delta', {})
                                         reasoning2 = delta2.get('reasoning_content') or delta2.get('thinking') or ''
                                         if reasoning2:
@@ -2114,6 +2150,7 @@ def send_message_stream(chat_id):
                         result2 = resp2.json()
                         choices2 = result2.get('choices', [])
                         if choices2:
+                            second_finish_reason = choices2[0].get('finish_reason')
                             msg2 = choices2[0].get('message', {})
                             reasoning2 = msg2.get('reasoning_content') or msg2.get('thinking') or ''
                             if reasoning2:
@@ -2142,6 +2179,13 @@ def send_message_stream(chat_id):
                             cache_creation_tokens_used += _cc2
                             cache_read_tokens_used += _cr2
 
+                    # 检测二次回复输出截断
+                    if second_finish_reason == 'length':
+                        logger.warning(
+                            f'AI二次回复因max_tokens({effective_max_tokens})上限被截断: model={config_model_name}, '
+                            f'content_len={len(second_full_content)}')
+                        yield f"data: {json.dumps({'type': 'truncated', 'content': f'⚠ AI回复因最大输出token数（{effective_max_tokens}）限制被截断，建议在AI配置中调大最大输出token数。'}, ensure_ascii=False)}\n\n"
+
                     # 处理二次回复中的工具调用
                     if second_accumulated_tool_calls:
                         second_tool_results_list = []
@@ -2149,6 +2193,23 @@ def send_message_stream(chat_id):
                             tc2 = second_accumulated_tool_calls[idx2]
                             func_name2 = tc2['function']['name']
                             func_args2 = tc2['function']['arguments']
+                            # 校验工具调用参数完整性：截断的JSON会导致工具执行失败
+                            args2_parse_ok = True
+                            if func_args2:
+                                try:
+                                    json.loads(func_args2)
+                                except json.JSONDecodeError:
+                                    args2_parse_ok = False
+                            if not args2_parse_ok:
+                                logger.warning(
+                                    f'二次回复工具调用参数JSON不完整（疑似被截断），跳过执行: {func_name2}, '
+                                    f'finish_reason={second_finish_reason}, args_len={len(func_args2 or "")}')
+                                second_tool_results_list.append({
+                                    'tool_call_id': tc2['id'],
+                                    'name': func_name2,
+                                    'result': {'error': '工具调用参数因最大输出token数限制被截断，JSON不完整。请精简参数后重新调用该工具。'},
+                                })
+                                continue
                             logger.info(f'流式AI二次回复调用工具: {func_name2}({func_args2})')
                             result2 = AiService.execute_tool_call(func_name2, func_args2, user_id)
                             second_tool_results_list.append({
