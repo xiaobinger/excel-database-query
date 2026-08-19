@@ -74,10 +74,10 @@ import zfUtils
 
 def parse_args():
     parser = argparse.ArgumentParser(description="中付设备绑定脚本")
-    parser.add_argument("--merchant-id", required=True, help="商户ID（同时用作 channel_merchant_no 和 data_json.merchantId）")
-    parser.add_argument("--terminal-id", required=True, help="终端ID（data_json.terminalId）")
-    parser.add_argument("--device-sn", required=True, help="设备序列号（data_json.deviceSN）")
-    parser.add_argument("--merchant-no", required=True, help="商户编号（merchant_no）")
+    parser.add_argument("--merchant_id", required=True, help="商户ID（同时用作 channel_merchant_no 和 data_json.merchantId）")
+    parser.add_argument("--terminal_id", required=True, help="终端ID（data_json.terminalId）")
+    parser.add_argument("--device_sn", required=True, help="设备序列号（data_json.deviceSN）")
+    parser.add_argument("--merchant_no", required=True, help="商户编号（merchant_no）")
     parser.add_argument("--channel", default="zf", choices=["zf", "zf_rj"], help="渠道类型，默认 zf")
     parser.add_argument("--method", default="bindDevice", help="接口方法，默认 bindDevice")
     parser.add_argument("--remark", default="中付A模式绑定", help="备注")
