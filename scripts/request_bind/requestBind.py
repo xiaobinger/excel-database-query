@@ -1,5 +1,74 @@
 import argparse
 import json
+import os
+import sys
+import subprocess
+from pathlib import Path
+
+
+def _bootstrap_venv():
+    mark = os.environ.get("VENV_BOOTSTRAPPED")
+    if mark == "1":
+        return
+
+    script_dir = Path(__file__).resolve().parent
+    scripts_dir = script_dir.parent
+    venv_dir = scripts_dir / ".venv"
+    req_file = script_dir / "requirements.txt"
+
+    if sys.platform == "win32":
+        venv_python = venv_dir / "Scripts" / "python.exe"
+    else:
+        venv_python = venv_dir / "bin" / "python"
+
+    need_install = False
+    if not venv_python.exists():
+        print("[bootstrap] 创建虚拟环境:", venv_dir)
+        subprocess.check_call([sys.executable, "-m", "venv", str(venv_dir)])
+        need_install = True
+
+    if not venv_python.exists():
+        print("[bootstrap] 错误：虚拟环境 Python 未找到:", venv_python)
+        sys.exit(1)
+
+    if req_file.exists():
+        print("[bootstrap] 检查并安装依赖 (requirements.txt)...")
+        result = subprocess.run(
+            [
+                str(venv_python),
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                "-r",
+                str(req_file),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            print("[bootstrap] 依赖安装失败:")
+            print(result.stdout)
+            print(result.stderr, file=sys.stderr)
+            sys.exit(1)
+        if need_install or result.stdout.strip():
+            print("[bootstrap] 依赖检查/安装完成")
+    else:
+        print("[bootstrap] 警告: 未找到 requirements.txt:", req_file)
+
+    print("[bootstrap] 使用虚拟环境重新执行脚本...")
+    env = os.environ.copy()
+    env["VENV_BOOTSTRAPPED"] = "1"
+    sys.exit(
+        subprocess.call(
+            [str(venv_python), str(Path(__file__).resolve())] + sys.argv[1:],
+            env=env,
+        )
+    )
+
+
+_bootstrap_venv()
+
 import zfUtils
 
 
