@@ -6179,6 +6179,12 @@ onActivated(() => {
   padding: 2px;
 }
 
+/* 自带完整底色的logo（如sub2api）无需白底 */
+.model-tag-bar .provider-logo:has(.logo-svg) {
+  background: transparent;
+  padding: 0;
+}
+
 .thinking-badge {
   margin-left: 6px;
   color: #a78bfa;

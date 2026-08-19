@@ -3,6 +3,7 @@
     <svg v-if="brand.path" viewBox="0 0 24 24" :width="size" :height="size" :fill="brand.color" aria-hidden="true">
       <path :d="brand.path" />
     </svg>
+    <span v-else-if="brand.svg" class="logo-svg" :style="{ width: size + 'px', height: size + 'px' }" v-html="brand.svg"></span>
     <span
       v-else
       class="logo-fallback"
@@ -88,6 +89,11 @@ const BRANDS = {
     color: '#ff6900',
     path: 'M12 0C8.016 0 4.756.255 2.493 2.516.23 4.776 0 8.033 0 12.012c0 3.98.23 7.235 2.494 9.497C4.757 23.77 8.017 24 12 24c3.983 0 7.243-.23 9.506-2.491C23.77 19.247 24 15.99 24 12.012c0-3.984-.233-7.243-2.502-9.504C19.234.252 15.978 0 12 0zM4.906 7.405h5.624c1.47 0 3.007.068 3.764.827.746.746.827 2.233.83 3.676v4.54a.15.15 0 0 1-.152.147h-1.947a.15.15 0 0 1-.152-.148V11.83c-.002-.806-.048-1.634-.464-2.051-.358-.36-1.026-.441-1.72-.458H7.158a.15.15 0 0 0-.151.147v6.98a.15.15 0 0 1-.152.148H4.906a.15.15 0 0 1-.15-.148V7.554a.15.15 0 0 1 .15-.149zm12.131 0h1.949a.15.15 0 0 1 .15.15v8.892a.15.15 0 0 1-.15.148h-1.949a.15.15 0 0 1-.151-.148V7.554a.15.15 0 0 1 .151-.149zM8.92 10.948h2.046c.083 0 .15.066.15.147v5.352a.15.15 0 0 1-.15.148H8.92a.15.15 0 0 1-.152-.148v-5.352a.15.15 0 0 1 .152-.147Z',
   },
+  // sub2api：官方logo为带渐变的完整SVG（github.com/Wei-Shaw/sub2api assets/logo.svg）
+  sub2api: {
+    title: 'Sub2API 中转站',
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%" role="img" aria-hidden="true"><defs><linearGradient id="s2a-bg" x1="72" y1="44" x2="442" y2="478" gradientUnits="userSpaceOnUse"><stop stop-color="#142B56"/><stop offset=".52" stop-color="#0A1A39"/><stop offset="1" stop-color="#061127"/></linearGradient><radialGradient id="s2a-ambient" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(168 92) rotate(51) scale(342 382)"><stop stop-color="#3E68B0" stop-opacity=".28"/><stop offset="1" stop-color="#3E68B0" stop-opacity="0"/></radialGradient><linearGradient id="s2a-brand" x1="4" y1="4" x2="20" y2="20" gradientUnits="userSpaceOnUse"><stop stop-color="#79F4BD"/><stop offset=".48" stop-color="#39D9E7"/><stop offset="1" stop-color="#3875F6"/></linearGradient></defs><rect x="16" y="16" width="480" height="480" rx="120" fill="url(#s2a-bg)"/><rect x="16" y="16" width="480" height="480" rx="120" fill="url(#s2a-ambient)"/><rect x="16.75" y="16.75" width="478.5" height="478.5" rx="119.25" fill="none" stroke="#A5BFFF" stroke-opacity=".16" stroke-width="1.5"/><g transform="translate(52 52) scale(17)" fill="none" stroke="url(#s2a-brand)" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.7"><path d="m19.25 7.65-2.55-3.2a1.33 1.33 0 0 0-1.03-.5H8.58c-.34 0-.67.13-.91.37L4.15 7.65c-.93.88-.6 1.52.65 2.3l9.55 5.97"/><path d="m4.75 16.35 2.55 3.2c.25.31.63.5 1.03.5h7.09c.34 0 .67-.13.91-.37l3.52-3.33c.93-.88.6-1.52-.65-2.3L9.65 8.08"/></g></svg>`,
+  },
   // 以下厂商暂无官方SVG，使用品牌色+单字回退
   zhipu: { title: '智谱GLM', color: '#3859ff', label: '智' },
   grok: { title: 'xAI Grok', color: '#000000', label: 'X' },
@@ -98,6 +104,7 @@ const BRANDS = {
 
 function detectBrandKey(provider, apiBase, modelName) {
   const s = `${provider || ''} ${apiBase || ''} ${modelName || ''}`.toLowerCase()
+  if (s.includes('sub2api')) return 'sub2api'
   if (s.includes('kimi') || s.includes('moonshot')) return 'kimi'
   if (s.includes('deepseek')) return 'deepseek'
   if (s.includes('glm') || s.includes('zhipu') || s.includes('bigmodel') || s.includes('chatglm')) return 'zhipu'
@@ -131,6 +138,16 @@ const brand = computed(() => {
   justify-content: center;
   vertical-align: middle;
   line-height: 1;
+}
+
+.logo-svg {
+  display: inline-flex;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.logo-svg svg {
+  display: block;
 }
 
 .logo-fallback {
