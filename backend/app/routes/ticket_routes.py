@@ -247,6 +247,105 @@ def _execute_profit_share_for_ticket(ticket, result, tool_log_text, app):
     )
 
 
+def _finish_ticket_with_failure(ticket, message, tool_log_text):
+    """查询等任务启动前校验失败：直接完结工单并记录失败原因"""
+    _add_comment(ticket, None,
+                 f'{message}\n\n---\n**处理过程：**\n{tool_log_text}',
+                 'ai_process', is_ai=True)
+    ticket.ai_result = message
+    ticket.status = STATUS_PROCESSED
+    ticket.processed_at = datetime.utcnow()
+    _add_comment(ticket, None, '任务执行完成，等待提交人核实', 'status_change', is_ai=True)
+    db.session.commit()
+
+
+def _execute_query_for_ticket(ticket, result, tool_log_text, app):
+    """在工单上下文中实际执行查询任务（以工单附件中的Excel文件为输入）"""
+    from app.services.query_service import QueryService
+    from app.models.script import Script
+
+    script_id = result.get('script_id')
+    script = Script.query.get(script_id) if script_id else None
+    if not script:
+        _finish_ticket_with_failure(ticket, '查询任务执行失败：未找到对应的查询选项', tool_log_text)
+        return
+
+    # 从工单附件中取第一个Excel文件作为查询输入
+    input_file = None
+    for att in (ticket.attachments or []):
+        if (att.file_name or '').lower().endswith(('.xlsx', '.xls')) and os.path.exists(att.file_path):
+            input_file = att.file_path
+            break
+    if not input_file:
+        _finish_ticket_with_failure(
+            ticket,
+            '查询任务执行失败：工单未携带Excel附件。查询任务需要以Excel附件中的主键列数据作为输入，'
+            '请提交人在工单中补充Excel附件后重新发起。',
+            tool_log_text)
+        return
+
+    db_connection_ids = script.get_database_ids() or []
+    output_dir = app.config['OUTPUT_FOLDER']
+    os.makedirs(output_dir, exist_ok=True)
+
+    task = QueryService.create_task(
+        script_id=script.id,
+        db_connection_ids=db_connection_ids,
+        input_file=input_file,
+    )
+
+    ticket_id = ticket.id
+
+    def on_complete(task_id, status):
+        """回调在QueryService后台线程中执行，已有app_context"""
+        from app import db as _db
+        from app.models.ticket import Ticket as _Ticket
+        try:
+            t = _Ticket.query.get(ticket_id)
+            if not t:
+                logger.error(f'工单{ticket_id}不存在，无法更新查询结果')
+                return
+            task_status = QueryService.get_task_status(task_id)
+            output_file = task_status.get('output_file') if task_status else None
+            if status == 'completed' and output_file:
+                file_name = os.path.basename(output_file)
+                _add_comment(t, None,
+                    f'查询任务已完成，请下载附件：{file_name}\n\n---\n**处理过程：**\n{tool_log_text}',
+                    'ai_process', is_ai=True,
+                    attachment_path=output_file, attachment_name=file_name)
+                t.ai_result = f'查询任务已完成，结果文件：{file_name}'
+            else:
+                err = (task_status or {}).get('error_message') or '未查询到数据'
+                _add_comment(t, None,
+                    f'查询任务执行失败：{err}\n\n---\n**处理过程：**\n{tool_log_text}',
+                    'ai_process', is_ai=True)
+                t.ai_result = f'查询任务执行失败：{err}'
+            t.status = STATUS_PROCESSED
+            t.processed_at = datetime.utcnow()
+            _add_comment(t, None, '任务执行完成，等待提交人核实', 'status_change', is_ai=True)
+            _db.session.commit()
+            logger.info(f'工单 {t.ticket_no} 查询任务完成，状态: {status}')
+        except Exception as e:
+            logger.error(f'工单{ticket_id}查询回调异常: {e}', exc_info=True)
+            try:
+                _db.session.rollback()
+            except Exception:
+                pass
+
+    QueryService.execute_query_async(
+        task_id=task.task_id,
+        script_id=script.id,
+        script_ids=[script.id],
+        db_connection_ids=db_connection_ids,
+        input_file=input_file,
+        output_dir=output_dir,
+        param_column=script.param_column or None,
+        new_sheet=script.new_sheet if script.new_sheet is not None else True,
+        primary_key=script.primary_key or '',
+        on_complete=on_complete,
+    )
+
+
 def _process_ticket_with_ai_async(ticket_id, app):
     """后台线程：用AI处理工单（支持工具调用，可匹配系统的导出/查询/系统任务等）"""
     with app.app_context():
@@ -423,16 +522,21 @@ def _process_ticket_with_ai_async(ticket_id, app):
                             if r.get('action_type') == 'export' and not r.get('error'):
                                 action_detail = {'type': 'export', 'result': r}
                                 break
+                            elif r.get('action_type') == 'query' and not r.get('error'):
+                                action_detail = {'type': 'query', 'result': r}
+                                break
                             elif r.get('action_type') == 'profit_share' and not r.get('error'):
                                 action_detail = {'type': 'profit_share', 'result': r}
                                 break
 
                     if action_detail:
-                        # 实际执行导出/分润任务，由回调处理后续
+                        # 实际执行导出/查询/分润任务，由回调处理后续
                         _add_comment(ticket, None, f'AI正在执行任务...\n\n---\n**处理过程：**\n{tool_log_text}', 'ai_process', is_ai=True)
                         db.session.commit()
                         if action_detail['type'] == 'export':
                             _execute_export_for_ticket(ticket, action_detail['result'], tool_log_text, app)
+                        elif action_detail['type'] == 'query':
+                            _execute_query_for_ticket(ticket, action_detail['result'], tool_log_text, app)
                         elif action_detail['type'] == 'profit_share':
                             _execute_profit_share_for_ticket(ticket, action_detail['result'], tool_log_text, app)
                         return  # 后台任务已启动，回调处理后续
@@ -569,6 +673,7 @@ def _build_ticket_ai_prompt(agent, system_name):
         '- 仔细分析工单内容，判断属于哪种任务类型，调用对应工具实际执行\n'
         '- 如果工单内容包含明确的参数（如商户号、订单号、SN号、日期等），直接调用 request_* 工具执行\n'
         '- 如果不确定具体任务名称，先调用 list_* 工具查找匹配项\n'
+        '- 重要：查询任务（query）以工单附件中的Excel文件为输入（按主键列批量查询）。如工单附件中有Excel文件且工单需求是批量查询匹配信息，请调用 request_query 并由系统自动执行；如工单没有Excel附件却需要执行查询任务，请直接说明需要提交人补充Excel附件，不要调用 request_query\n'
         '- API类型的系统任务参数齐全时会自动执行并返回结果，请根据mapping_summary（映射摘要）用自然语言说明执行结果\n'
         '- 如果用户的意图是条件性的（如"查一下这个SN的绑定状态，如果已绑定就解绑"），先调用 request_lookup 查询状态，再根据结果决定是否调用 request_system_task\n'
         '- 如果同时需要对多个对象执行同样的操作（如"解绑SN001、SN002"），请同时调用多个 request_system_task\n'

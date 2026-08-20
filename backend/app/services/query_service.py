@@ -62,14 +62,15 @@ class QueryService:
                             db_connection_ids: List[int], input_file: str, output_dir: str,
                             param_column: str = None, merge_strategy: str = 'concat',
                             new_sheet: bool = True, column_mapping: dict = None,
-                            primary_key: str = '', selected_sheets: List[str] = None):
+                            primary_key: str = '', selected_sheets: List[str] = None,
+                            on_complete=None):
         cancel_event = threading.Event()
         _task_cancel_events[task_id] = cancel_event
         thread = threading.Thread(
             target=QueryService._execute_query_background,
             args=(task_id, script_id, script_ids, db_connection_ids, input_file, output_dir,
                   param_column, merge_strategy, new_sheet, column_mapping, primary_key,
-                  cancel_event, selected_sheets),
+                  cancel_event, selected_sheets, on_complete),
             daemon=True
         )
         _task_threads[task_id] = thread
@@ -81,7 +82,7 @@ class QueryService:
                                   param_column: str = None, merge_strategy: str = 'concat',
                                   new_sheet: bool = True, column_mapping: dict = None,
                                   primary_key: str = '', cancel_event: threading.Event = None,
-                                  selected_sheets: List[str] = None):
+                                  selected_sheets: List[str] = None, on_complete=None):
         try:
             from app import create_app
             app = create_app()
@@ -351,6 +352,11 @@ class QueryService:
                     task.add_log('查询执行完成，但未查询到任何数据，未生成结果文件', 'warning')
                     db.session.commit()
                     update_task_progress(task_id, 100, '查询执行完成（无数据）')
+                    if on_complete:
+                        try:
+                            on_complete(task_id, 'completed')
+                        except Exception as cb_err:
+                            logger.error(f'查询任务完成回调异常: {cb_err}', exc_info=True)
                     return
 
                 task.status = 'completed'
@@ -362,6 +368,11 @@ class QueryService:
                 task.add_log(f'全部完成，结果已写入: {output_filename}')
                 db.session.commit()
                 update_task_progress(task_id, 100, '查询执行完成')
+                if on_complete:
+                    try:
+                        on_complete(task_id, 'completed')
+                    except Exception as cb_err:
+                        logger.error(f'查询任务完成回调异常: {cb_err}', exc_info=True)
 
             except Exception as e:
                 logger.error(f"查询执行失败: {str(e)}", exc_info=True)
@@ -372,6 +383,11 @@ class QueryService:
                 task.add_log(f'查询执行失败: {str(e)}', 'error')
                 db.session.commit()
                 update_task_progress(task_id, 100, f'查询执行失败: {str(e)}', 'error')
+                if on_complete:
+                    try:
+                        on_complete(task_id, 'failed')
+                    except Exception as cb_err:
+                        logger.error(f'查询任务失败回调异常: {cb_err}', exc_info=True)
 
     @staticmethod
     def _execute_on_database(conn_id: int, connector: DatabaseConnector, db_name: str,
