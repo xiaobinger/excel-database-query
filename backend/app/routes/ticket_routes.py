@@ -20,7 +20,7 @@ from datetime import datetime
 from flask import Blueprint, request, jsonify, current_app
 
 from app import db
-from app.models.ticket import Ticket, TicketComment
+from app.models.ticket import Ticket, TicketComment, TicketAttachment
 from app.models.user import User
 from app.models.business_system import BusinessSystem
 from app.models.ai_agent import AiAgent
@@ -273,9 +273,17 @@ def _process_ticket_with_ai_async(ticket_id, app):
             # 构建工单处理专用系统提示词（含工具说明）
             ticket_system_prompt = _build_ticket_ai_prompt(agent, system_name)
 
+            # 附件清单（告知AI工单携带的数据文件，处理人可在工单详情下载）
+            att_lines = ''
+            if ticket.attachments:
+                att_items = [f'- {a.file_name}（{a.file_size // 1024}KB）' for a in ticket.attachments]
+                att_lines = ('\n\n## 工单附件\n提交人随工单上传了以下数据文件（处理人可在工单详情页下载）：\n'
+                             + '\n'.join(att_items)
+                             + '\n如工单需求依赖附件中的数据（如按Excel主键批量查询），请在结果中说明需使用对应附件执行查询任务。')
+
             messages = [
                 {'role': 'system', 'content': ticket_system_prompt},
-                {'role': 'user', 'content': f'## 工单编号: {ticket.ticket_no}\n## 标题: {ticket.title}\n## 涉及系统: {system_name}\n\n## 工单内容:\n{ticket.content}'},
+                {'role': 'user', 'content': f'## 工单编号: {ticket.ticket_no}\n## 标题: {ticket.title}\n## 涉及系统: {system_name}\n\n## 工单内容:\n{ticket.content}{att_lines}'},
             ]
 
             from app.services.ai_service import AiService, filter_tools
@@ -905,6 +913,19 @@ def create_ticket():
     db.session.add(ticket)
     db.session.commit()
 
+    # 关联附件（仅允许关联本人上传且未关联工单的附件）
+    attachment_ids = data.get('attachment_ids') or []
+    if attachment_ids and isinstance(attachment_ids, list):
+        for att_id in attachment_ids:
+            try:
+                att_id = int(att_id)
+            except (TypeError, ValueError):
+                continue
+            att = TicketAttachment.query.get(att_id)
+            if att and att.ticket_id is None and att.uploaded_by == current_user.id:
+                att.ticket_id = ticket.id
+        db.session.commit()
+
     # 如果指派给AI，自动触发AI处理
     if assignee_type == 'ai':
         _trigger_ai_processing(ticket)
@@ -1405,6 +1426,105 @@ def serve_file(filename):
     from flask import send_from_directory
     upload_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'tickets')
     return send_from_directory(upload_dir, filename)
+
+
+# 工单附件允许的文件类型：数据文件 + 压缩包 + 文档 + 图片（排除可执行文件等危险类型）
+TICKET_ATTACHMENT_EXTS = {
+    '.xlsx', '.xls', '.csv', '.txt', '.json', '.xml',
+    '.zip', '.rar', '.7z', '.gz', '.tar',
+    '.pdf', '.doc', '.docx', '.md',
+    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp',
+}
+# 附件大小上限：50MB
+TICKET_ATTACHMENT_MAX_SIZE = 50 * 1024 * 1024
+
+
+@ticket_bp.route('/attachments/upload', methods=['POST'])
+@login_required
+def upload_ticket_attachment():
+    """上传工单附件（提交工单时携带的数据文件，暂存待工单创建后关联）
+
+    返回 { id, file_name, file_size }
+    """
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'message': '未上传文件'}), 400
+
+    file = request.files['file']
+    if not file.filename:
+        return jsonify({'success': False, 'message': '文件名为空'}), 400
+
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in TICKET_ATTACHMENT_EXTS:
+        return jsonify({'success': False, 'message': f'不支持的文件类型: {ext or "无扩展名"}，支持: Excel/CSV/文本/压缩包/文档/图片'}), 400
+
+    upload_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'tickets', 'attachments')
+    os.makedirs(upload_dir, exist_ok=True)
+
+    saved_name = f"att_{uuid.uuid4().hex[:12]}{ext}"
+    file_path = os.path.join(upload_dir, saved_name)
+    file.save(file_path)
+
+    size = os.path.getsize(file_path)
+    if size > TICKET_ATTACHMENT_MAX_SIZE:
+        os.remove(file_path)
+        return jsonify({'success': False, 'message': f'文件过大（{size // 1024 // 1024}MB），最大支持50MB'}), 400
+
+    current_user = get_current_user()
+    att = TicketAttachment(
+        ticket_id=None,
+        file_path=file_path,
+        file_name=file.filename,
+        file_size=size,
+        uploaded_by=current_user.id,
+    )
+    db.session.add(att)
+    db.session.commit()
+
+    return jsonify({'success': True, 'data': att.to_dict()})
+
+
+@ticket_bp.route('/attachments/<int:att_id>', methods=['DELETE'])
+@login_required
+def delete_ticket_attachment(att_id):
+    """删除暂存附件（仅上传者本人，且未关联到工单）"""
+    att = TicketAttachment.query.get(att_id)
+    if not att:
+        return jsonify({'success': False, 'message': '附件不存在'}), 404
+    current_user = get_current_user()
+    if att.uploaded_by != current_user.id and not current_user.is_admin():
+        return jsonify({'success': False, 'message': '只能删除自己上传的附件'}), 403
+    if att.ticket_id:
+        return jsonify({'success': False, 'message': '附件已关联到工单，无法删除'}), 400
+
+    try:
+        if os.path.exists(att.file_path):
+            os.remove(att.file_path)
+    except OSError:
+        pass
+    db.session.delete(att)
+    db.session.commit()
+    return jsonify({'success': True, 'message': '附件已删除'})
+
+
+@ticket_bp.route('/<int:ticket_id>/attachments/<int:att_id>/download', methods=['GET'])
+@login_required
+def download_ticket_attachment(ticket_id, att_id):
+    """下载工单附件（工单创建人/指派人/管理员可见）"""
+    from flask import send_file
+    ticket = Ticket.query.get(ticket_id)
+    if not ticket:
+        return jsonify({'success': False, 'message': '工单不存在'}), 404
+    current_user = get_current_user()
+    if not _can_access(ticket, current_user):
+        return jsonify({'success': False, 'message': '无权访问'}), 403
+
+    att = TicketAttachment.query.filter_by(id=att_id, ticket_id=ticket_id).first()
+    if not att:
+        return jsonify({'success': False, 'message': '附件不存在'}), 404
+    if not os.path.exists(att.file_path):
+        return jsonify({'success': False, 'message': '文件已被删除或移动'}), 404
+
+    return send_file(att.file_path, as_attachment=True, download_name=att.file_name)
 
 
 @ticket_bp.route('/<int:ticket_id>/comments/<int:comment_id>/attachment', methods=['GET'])

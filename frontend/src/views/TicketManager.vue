@@ -122,6 +122,23 @@
         <el-form-item label="工单内容" prop="content">
           <MarkdownEditor v-model="createForm.content" :upload-fn="uploadAttachment" placeholder="详细描述工单内容，支持图片、视频和 Markdown 格式" :height="280" />
         </el-form-item>
+        <el-form-item label="工单附件">
+          <el-upload
+            :file-list="attachmentFileList"
+            :auto-upload="true"
+            :http-request="customAttUpload"
+            :on-remove="handleAttRemove"
+            :show-file-list="true"
+            multiple
+          >
+            <el-button type="primary" plain>
+              <i class="fas fa-paperclip"></i> 上传附件
+            </el-button>
+            <template #tip>
+              <div class="el-upload__tip">支持 Excel/CSV/文本/压缩包/文档/图片，单个不超过50MB（如查询任务所需的Excel数据文件）</div>
+            </template>
+          </el-upload>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="createVisible = false">取消</el-button>
@@ -197,6 +214,18 @@
         <!-- 工单内容 -->
         <el-divider content-position="left">工单内容</el-divider>
         <div class="ticket-content" v-html="renderMarkdown(detailData.content)"></div>
+
+        <!-- 工单附件 -->
+        <template v-if="detailData.attachments && detailData.attachments.length">
+          <el-divider content-position="left">工单附件（{{ detailData.attachments.length }}）</el-divider>
+          <div class="ticket-attachments">
+            <div v-for="att in detailData.attachments" :key="att.id" class="attachment-item">
+              <i class="fas fa-file-alt"></i>
+              <a href="#" @click.prevent="downloadTicketAttachment(detailData.id, att.id, att.file_name)">{{ att.file_name }}</a>
+              <span class="attachment-meta">{{ formatFileSize(att.file_size) }} · {{ att.uploader_name }} · {{ (att.created_at || '').slice(0, 16).replace('T', ' ') }}</span>
+            </div>
+          </div>
+        </template>
 
         <!-- AI处理结果 -->
         <div v-if="detailData.ai_result" class="reason-block ai-result">
@@ -485,6 +514,9 @@ const createVisible = ref(false)
 const submitting = ref(false)
 const createFormRef = ref(null)
 const createForm = ref({ title: '', content: '', assignee_type: 'user', assignee_id: null, assignee_agent_id: null, business_system_id: null })
+// 工单附件：fileList供el-upload展示，ids为已上传的附件ID（提交时关联）
+const attachmentFileList = ref([])
+const attachmentIds = ref([])
 const createRules = {
   title: [{ required: true, message: '请输入标题', trigger: 'blur' }],
   content: [{ required: true, message: '请输入工单内容', trigger: 'blur' }],
@@ -496,9 +528,73 @@ const canSwitchAgent = ref(false)
 
 async function openCreateDialog() {
   createForm.value = { title: '', content: '', assignee_type: 'user', assignee_id: null, assignee_agent_id: null, business_system_id: null }
+  attachmentFileList.value = []
+  attachmentIds.value = []
   createVisible.value = true
   // 并行加载选项数据
   Promise.all([fetchAssignees(), fetchBusinessSystems(), fetchAiAgents()])
+}
+
+// 工单附件上传（选择文件即上传，暂存待提交时关联）
+async function customAttUpload(option) {
+  const formData = new FormData()
+  formData.append('file', option.file)
+  try {
+    const res = await api.tickets.uploadAttachment(formData)
+    const att = res.data || res
+    attachmentIds.value.push(att.id)
+    attachmentFileList.value.push({ name: att.file_name, uid: option.file.uid, attId: att.id })
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '附件上传失败')
+    attachmentFileList.value = attachmentFileList.value.filter(f => f.uid !== option.file.uid)
+  }
+}
+
+// 移除暂存附件（前端列表移除 + 后端删除）
+async function handleAttRemove(file) {
+  const attId = file.attId || (file.response?.data?.id)
+  attachmentFileList.value = attachmentFileList.value.filter(f => f.uid !== file.uid)
+  if (attId) {
+    attachmentIds.value = attachmentIds.value.filter(id => id !== attId)
+    try {
+      await api.tickets.deleteAttachment(attId)
+    } catch {
+      // 后端删除失败不阻断（提交时关联校验兜底）
+    }
+  }
+}
+
+// 工单附件下载（fetch带token下载）
+async function downloadTicketAttachment(ticketId, attId, fileName) {
+  try {
+    const token = localStorage.getItem('token')
+    const response = await fetch(`/api/tickets/${ticketId}/attachments/${attId}/download`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.message || '下载失败')
+    }
+    const blob = await response.blob()
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = fileName || 'download'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+  } catch (err) {
+    console.error('下载附件失败:', err)
+    ElMessage.error(err?.message || '下载附件失败')
+  }
+}
+
+function formatFileSize(size) {
+  if (size == null) return '-'
+  if (size < 1024) return `${size}B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)}KB`
+  return `${(size / 1024 / 1024).toFixed(1)}MB`
 }
 
 async function fetchAssignees() {
@@ -547,9 +643,14 @@ async function submitCreate() {
       } else {
         delete payload.assignee_agent_id
       }
+      if (attachmentIds.value.length) {
+        payload.attachment_ids = [...attachmentIds.value]
+      }
       await api.tickets.create(payload)
       ElMessage.success('工单已提交')
       createVisible.value = false
+      attachmentFileList.value = []
+      attachmentIds.value = []
       fetchTickets()
     } catch (e) {
       ElMessage.error(e?.response?.data?.message || '提交失败')
@@ -1442,6 +1543,37 @@ onUnmounted(() => {
 }
 .comment-attachment a:hover {
   text-decoration: underline;
+}
+
+/* 工单附件列表 */
+.ticket-attachments {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.attachment-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #f5f7fa;
+  border: 1px solid #ebeef5;
+  border-radius: 4px;
+  font-size: 13px;
+}
+.attachment-item i {
+  color: #409eff;
+}
+.attachment-item a {
+  color: #409eff;
+  text-decoration: none;
+}
+.attachment-item a:hover {
+  text-decoration: underline;
+}
+.attachment-meta {
+  color: #909399;
+  font-size: 12px;
 }
 
 /* 评论输入区 */

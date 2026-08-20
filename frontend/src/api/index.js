@@ -305,6 +305,8 @@ const tickets = {
   confirmAction: (id) => http.post(`/tickets/${id}/confirm-action`),
   cancelAction: (id) => http.post(`/tickets/${id}/cancel-action`),
   upload: (formData) => http.post('/tickets/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  uploadAttachment: (formData) => http.post('/tickets/attachments/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  deleteAttachment: (attId) => http.delete(`/tickets/attachments/${attId}`),
   stats: () => http.get('/tickets/stats'),
   analytics: (params) => http.get('/tickets/analytics', { params }),
 }

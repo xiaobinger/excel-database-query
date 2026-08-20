@@ -56,6 +56,8 @@ class Ticket(db.Model):
     business_system = db.relationship('BusinessSystem', foreign_keys=[business_system_id], lazy='joined')
     comments = db.relationship('TicketComment', backref='ticket', lazy='select', cascade='all, delete-orphan',
                                order_by='TicketComment.created_at.asc()')
+    attachments = db.relationship('TicketAttachment', backref='ticket', lazy='select', cascade='all, delete-orphan',
+                                  order_by='TicketAttachment.created_at.asc()')
 
     def get_pending_action(self) -> dict:
         """获取待确认执行的任务信息"""
@@ -112,6 +114,7 @@ class Ticket(db.Model):
         }
         if include_comments:
             data['comments'] = [c.to_dict() for c in (self.comments or [])]
+        data['attachments'] = [a.to_dict() for a in (self.attachments or [])]
         return data
 
     def __repr__(self):
@@ -150,3 +153,31 @@ class TicketComment(db.Model):
 
     def __repr__(self):
         return f'<TicketComment {self.id}>'
+
+
+class TicketAttachment(db.Model):
+    """工单附件（提交工单时上传的数据文件，如查询任务所需的Excel等）"""
+    __tablename__ = 'ticket_attachments'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    ticket_id = db.Column(db.Integer, db.ForeignKey('tickets.id'), comment='工单ID(未关联时为NULL，暂存待提交)')
+    file_path = db.Column(db.String(500), nullable=False, comment='文件存储路径')
+    file_name = db.Column(db.String(200), nullable=False, comment='原始文件名')
+    file_size = db.Column(db.Integer, default=0, comment='文件大小(字节)')
+    uploaded_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, comment='上传人ID')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    uploader = db.relationship('User', foreign_keys=[uploaded_by], lazy='joined')
+
+    def to_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'ticket_id': self.ticket_id,
+            'file_name': self.file_name,
+            'file_size': self.file_size,
+            'uploader_name': self.uploader.display_name or self.uploader.username if self.uploader else None,
+            'created_at': beijing_isoformat(self.created_at),
+        }
+
+    def __repr__(self):
+        return f'<TicketAttachment {self.id} {self.file_name}>'
