@@ -179,7 +179,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onActivated } from 'vue'
 import api from '../api'
 import { useAppStore } from '../stores'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -252,6 +252,10 @@ async function fetchAgents() {
 }
 
 function openDialog(row) {
+  // 兜底：下拉数据为空时按需拉取（如首次加载失败）
+  if (mcpServers.value.length === 0) {
+    fetchMcpServers()
+  }
   if (row) {
     isEdit.value = true
     editId.value = row.id
@@ -444,12 +448,28 @@ async function handleDeleteMemory(memoryId) {
   }
 }
 
-onMounted(() => {
-  fetchAgents()
-  // 加载MCP服务选项（仅启用的）
-  api.mcp.list().then(res => {
+// 加载MCP服务选项（仅启用的）
+function fetchMcpServers() {
+  return api.mcp.list().then(res => {
     mcpServers.value = (res.data || []).filter(s => s.is_active)
   }).catch(() => {})
+}
+
+// 页面被keep-alive缓存，从MCP服务管理等页面切回时自动刷新MCP选项，
+// 避免新增MCP后切回本页下拉仍为旧数据
+let mcpActivatedOnce = false
+onActivated(() => {
+  if (!mcpActivatedOnce) {
+    // 首次激活时onMounted刚拉取过，跳过
+    mcpActivatedOnce = true
+    return
+  }
+  fetchMcpServers()
+})
+
+onMounted(() => {
+  fetchAgents()
+  fetchMcpServers()
 })
 </script>
 
