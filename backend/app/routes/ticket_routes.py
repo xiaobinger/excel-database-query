@@ -388,9 +388,9 @@ def _process_ticket_with_ai_async(ticket_id, app):
             from app.services.ai_service import AiService, filter_tools
             from app.routes.ai_routes import TICKET_FALLBACK_RULE
 
-            # 根据Agent的enabled_tools过滤工具列表
-            enabled_tools = agent.get_enabled_tools() if agent else None
-            filtered_tools = filter_tools(enabled_tools)
+            # 获取Agent完整可用工具（内置工具过滤 + 被授予的MCP工具）
+            from app.services.ai_service import get_effective_tools
+            filtered_tools = get_effective_tools(agent)
 
             # 操作型工具：触发即视为已处理（任务已创建）
             action_tools = {'request_export', 'request_query', 'request_system_task', 'request_profit_share'}
@@ -423,7 +423,7 @@ def _process_ticket_with_ai_async(ticket_id, app):
                     func_args = tc.get('function', {}).get('arguments', '')
                     logger.info(f'工单{ticket.ticket_no} AI调用工具(轮次{round_idx+1}): {func_name}({func_args})')
 
-                    result = AiService.execute_tool_call(func_name, func_args, ticket.created_by)
+                    result = AiService.execute_tool_call(func_name, func_args, ticket.created_by, agent_id=agent.id if agent else None)
                     tool_results.append({
                         'tool_call_id': tc['id'],
                         'name': func_name,

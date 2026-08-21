@@ -50,6 +50,16 @@ def filter_tools(enabled_tools: list) -> list:
     return [t for t in AI_TOOLS if t.get('function', {}).get('name') in enabled_set]
 
 
+def get_effective_tools(agent) -> list:
+    """获取 agent 的完整可用工具列表：内置工具（按 enabled_tools 过滤）+ 被授予的 MCP 工具。
+
+    统一封装，供聊天（非流式/流式）与工单 AI 处理等链路使用。
+    """
+    from app.services.mcp_service import McpService
+    return filter_tools(agent.get_enabled_tools() if agent else None) \
+        + McpService.get_agent_mcp_tools(agent)
+
+
 def post_chat_completions(url: str, headers: dict, payload: dict, timeout: int = 120, stream: bool = False):
     """发送chat/completions请求（统一入口）。
 
@@ -812,12 +822,17 @@ class AiService:
         }
 
     @staticmethod
-    def execute_tool_call(tool_name: str, arguments_str: str, user_id: int = None) -> dict:
-        """执行AI请求的工具调用"""
+    def execute_tool_call(tool_name: str, arguments_str: str, user_id: int = None, agent_id: int = None) -> dict:
+        """执行AI请求的工具调用。agent_id用于MCP工具的授权复核。"""
         try:
             args = json.loads(arguments_str) if arguments_str else {}
         except json.JSONDecodeError:
             return {'error': f'参数解析失败: {arguments_str}'}
+
+        # MCP 工具（mcp__{server}__{tool}）转发到对应 MCP server（含授权复核）
+        if tool_name.startswith('mcp__'):
+            from app.services.mcp_service import McpService
+            return McpService.call_tool_by_prefixed_name(tool_name, args, agent_id=agent_id)
 
         if tool_name == 'list_export_options':
             return AiService._tool_list_export_options(args, user_id)

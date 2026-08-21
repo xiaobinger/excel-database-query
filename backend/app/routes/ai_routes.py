@@ -1033,9 +1033,8 @@ def send_message(chat_id):
 
         # Call AI with failover support (use override if @mention)
         # 根据Agent的enabled_tools过滤工具列表
-        from app.services.ai_service import filter_tools
-        nonstream_enabled_tools = agent.get_enabled_tools() if agent else None
-        nonstream_filtered_tools = filter_tools(nonstream_enabled_tools)
+        from app.services.ai_service import get_effective_tools
+        nonstream_filtered_tools = get_effective_tools(agent)
         ai_response = AiService.chat_with_failover(messages, use_tools=True,
             override_configs=ordered_configs if specified_config else None,
             tools=nonstream_filtered_tools)
@@ -1072,7 +1071,7 @@ def send_message(chat_id):
                 func_name = tc.get('function', {}).get('name', '')
                 func_args = tc.get('function', {}).get('arguments', '')
                 logger.info(f'AI调用工具: {func_name}({func_args})')
-                result = AiService.execute_tool_call(func_name, func_args, current_user.id)
+                result = AiService.execute_tool_call(func_name, func_args, current_user.id, agent_id=agent_id)
                 # 解析参数供后续自动执行使用
                 try:
                     args = json.loads(func_args) if func_args else {}
@@ -1257,7 +1256,8 @@ def send_message(chat_id):
                             'content': '\n'.join(reply_hints)
                         })
                     ai_response2 = AiService.chat_with_failover(messages, use_tools=True,
-                        override_configs=ordered_configs if specified_config else None)
+                        override_configs=ordered_configs if specified_config else None,
+                        tools=nonstream_filtered_tools)
                     response_text = ai_response2['content']
                     second_tool_calls = ai_response2['tool_calls']
                     tokens = ai_response2['tokens']
@@ -1274,7 +1274,7 @@ def send_message(chat_id):
                             func_name2 = tc2.get('function', {}).get('name', '')
                             func_args2 = tc2.get('function', {}).get('arguments', '')
                             logger.info(f'AI二次回复调用工具: {func_name2}({func_args2})')
-                            result2 = AiService.execute_tool_call(func_name2, func_args2, current_user.id)
+                            result2 = AiService.execute_tool_call(func_name2, func_args2, current_user.id, agent_id=agent_id)
                             second_tool_results.append({
                                 'tool_call_id': tc2['id'],
                                 'name': func_name2,
@@ -1696,9 +1696,8 @@ def send_message_stream(chat_id):
     stream_agent_id = agent_id  # 保存agent_id供闭包使用
     stream_user_message_id = user_message.id  # 用户消息ID（含重新发送场景），供前端同步
     # 根据Agent的enabled_tools过滤工具列表
-    from app.services.ai_service import filter_tools
-    stream_enabled_tools = agent.get_enabled_tools() if agent else None
-    stream_filtered_tools = filter_tools(stream_enabled_tools)
+    from app.services.ai_service import get_effective_tools
+    stream_filtered_tools = get_effective_tools(agent)
     config_api_key = ai_config.get_api_key()
     config_api_base = ai_config.api_base or 'https://api.openai.com/v1'
     config_provider = ai_config.provider or 'openai'
@@ -1968,7 +1967,7 @@ def send_message_stream(chat_id):
                         })
                         continue
                     logger.info(f'流式AI第{round_num}轮调用工具: {func_name}({func_args})')
-                    result = AiService.execute_tool_call(func_name, func_args, user_id)
+                    result = AiService.execute_tool_call(func_name, func_args, user_id, agent_id=stream_agent_id)
                     # 解析参数供后续自动执行使用
                     try:
                         args = json.loads(func_args) if func_args else {}

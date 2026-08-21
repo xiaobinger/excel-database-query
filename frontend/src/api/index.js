@@ -311,4 +311,16 @@ const tickets = {
   analytics: (params) => http.get('/tickets/analytics', { params }),
 }
 
-export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, business, systemTask, lookup, profitShare, tickets }
+const mcp = {
+  list: () => http.get('/mcp'),
+  create: (data) => http.post('/mcp', data),
+  update: (id, data) => http.put(`/mcp/${id}`, data),
+  delete: (id) => http.delete(`/mcp/${id}`),
+  batchDelete: (ids) => http.post('/mcp/batch-delete', { ids }),
+  test: (id) => http.post(`/mcp/${id}/test`),
+  refreshTools: (id) => http.post(`/mcp/${id}/refresh-tools`),
+  importJson: (data) => http.post('/mcp/import', data),
+  marketplace: () => http.get('/mcp/marketplace'),
+}
+
+export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, mcp, business, systemTask, lookup, profitShare, tickets }

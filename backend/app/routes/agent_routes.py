@@ -9,6 +9,48 @@ logger = logging.getLogger(__name__)
 agent_bp = Blueprint('agent', __name__, url_prefix='/api/agents')
 
 
+def _validate_mcp_server_ids(ids):
+    """校验授予的MCP Server ID列表，返回错误信息或None"""
+    from app.models.mcp_server import McpServer
+    if ids in (None, []):
+        return None
+    if not isinstance(ids, list):
+        return 'mcp_server_ids必须是列表'
+    try:
+        id_list = [int(i) for i in ids]
+    except (TypeError, ValueError):
+        return 'mcp_server_ids包含非法ID'
+    valid_ids = {s.id for s in McpServer.query.filter(McpServer.id.in_(id_list)).all()}
+    missing = [i for i in id_list if i not in valid_ids]
+    if missing:
+        return f'MCP Server不存在: {missing}'
+    return None
+
+
+def _refresh_newly_granted_tools(old_ids, new_ids):
+    """对新增授予且尚无工具缓存的MCP server自动刷新缓存（best-effort）。
+
+    工具注入只读 tools_cache，若不刷新则新授予的server工具为空，
+    管理员容易误以为配置失败。失败不影响授予操作，错误记入 server.last_error。
+    """
+    try:
+        from app.models.mcp_server import McpServer
+        from app.services.mcp_service import McpService
+        old_set = set(old_ids or [])
+        new_set = {int(i) for i in (new_ids or [])}
+        newly = new_set - old_set
+        if not newly:
+            return
+        for server in McpServer.query.filter(McpServer.id.in_(newly)).all():
+            if not server.get_tools_cache():
+                logger.info(f'Agent新授予MCP server {server.name}，自动刷新工具缓存')
+                McpService.refresh_tools_cache(server)
+    except Exception as e:
+        # 仅记录日志，不回滚：避免误伤调用方事务中的其他 pending 修改
+        # （refresh_tools_cache 内部已自行处理异常并记录 last_error）
+        logger.warning(f'自动刷新新授予MCP工具缓存失败: {e}')
+
+
 @agent_bp.route('', methods=['GET'])
 @login_required
 def get_agents():
@@ -80,6 +122,13 @@ def create_agent():
         # 设置启用的工具列表
         if 'enabled_tools' in data:
             agent.set_enabled_tools(data['enabled_tools'])
+        # 设置授予的MCP Server列表（并对新授予且无工具缓存的server尝试自动刷新）
+        if 'mcp_server_ids' in data:
+            err = _validate_mcp_server_ids(data['mcp_server_ids'])
+            if err:
+                return jsonify({'success': False, 'message': err}), 400
+            _refresh_newly_granted_tools(agent.get_mcp_server_ids(), data['mcp_server_ids'])
+            agent.set_mcp_server_ids(data['mcp_server_ids'])
         
         if agent.is_default:
             # 取消其他Agent的默认状态
@@ -117,6 +166,12 @@ def update_agent(agent_id):
             agent.is_active = data['is_active']
         if 'enabled_tools' in data:
             agent.set_enabled_tools(data['enabled_tools'])
+        if 'mcp_server_ids' in data:
+            err = _validate_mcp_server_ids(data['mcp_server_ids'])
+            if err:
+                return jsonify({'success': False, 'message': err}), 400
+            _refresh_newly_granted_tools(agent.get_mcp_server_ids(), data['mcp_server_ids'])
+            agent.set_mcp_server_ids(data['mcp_server_ids'])
         
         if data.get('is_default'):
             # 取消其他Agent的默认状态

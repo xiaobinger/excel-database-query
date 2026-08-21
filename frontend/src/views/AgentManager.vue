@@ -28,6 +28,12 @@
             <el-tag v-else size="small">{{ row.enabled_tools.length }}个</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="MCP" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.mcp_server_ids && row.mcp_server_ids.length" size="small" type="warning">{{ row.mcp_server_ids.length }}个</el-tag>
+            <span v-else style="color: #999; font-size: 12px">无</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="is_default" label="默认" width="80" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.is_default" type="success" size="small">默认</el-tag>
@@ -83,6 +89,14 @@
             <el-checkbox-group v-model="form.enabled_tools" :disabled="useAllTools" style="display: flex; flex-wrap: wrap; gap: 8px">
               <el-checkbox v-for="t in toolOptions" :key="t.name" :label="t.name">{{ t.label }}</el-checkbox>
             </el-checkbox-group>
+          </div>
+        </el-form-item>
+        <el-form-item label="MCP 服务">
+          <div style="width: 100%">
+            <el-select v-model="form.mcp_server_ids" multiple filterable clearable placeholder="选择授予此Agent的MCP服务（可选）" style="width: 100%">
+              <el-option v-for="s in mcpServers" :key="s.id" :label="`${s.name}（${s.tools_count || 0}个工具）`" :value="s.id" />
+            </el-select>
+            <div style="font-size: 12px; color: #999; line-height: 1.4; margin-top: 2px;">MCP工具将追加到Agent可用工具中，在AI对话和工单AI处理中可用（管理入口：MCP 服务）</div>
           </div>
         </el-form-item>
         <div style="display: flex; gap: 12px">
@@ -181,6 +195,7 @@ const agents = ref([])
 const selectedRows = ref([])
 const tableRef = ref(null)
 const useAllTools = ref(true)
+const mcpServers = ref([])
 
 // 记忆管理相关
 const memoryDialogVisible = ref(false)
@@ -213,6 +228,7 @@ const defaultForm = {
   description: '',
   system_prompt: '',
   enabled_tools: null,
+  mcp_server_ids: [],
   is_default: false,
   is_active: true,
 }
@@ -244,6 +260,7 @@ function openDialog(row) {
       description: row.description || '',
       system_prompt: row.system_prompt || '',
       enabled_tools: row.enabled_tools ? [...row.enabled_tools] : null,
+      mcp_server_ids: row.mcp_server_ids ? [...row.mcp_server_ids] : [],
       is_default: row.is_default,
       is_active: row.is_active,
     })
@@ -427,7 +444,13 @@ async function handleDeleteMemory(memoryId) {
   }
 }
 
-onMounted(fetchAgents)
+onMounted(() => {
+  fetchAgents()
+  // 加载MCP服务选项（仅启用的）
+  api.mcp.list().then(res => {
+    mcpServers.value = (res.data || []).filter(s => s.is_active)
+  }).catch(() => {})
+})
 </script>
 
 <style scoped>

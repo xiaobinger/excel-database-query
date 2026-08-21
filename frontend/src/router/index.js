@@ -28,6 +28,7 @@ const routes = [
       { path: 'ai-sessions', name: 'AiSessionManager', component: () => import('../views/AiSessionManager.vue'), meta: { menu: 'ai_sessions', title: 'AI会话管理' } },
       { path: 'skills', name: 'Skills', component: () => import('../views/SkillManager.vue'), meta: { menu: 'skills', title: 'Skills' } },
       { path: 'agents', name: 'Agents', component: () => import('../views/AgentManager.vue'), meta: { menu: 'agent_manager', title: 'Agent 管理' } },
+      { path: 'mcp-servers', name: 'McpServers', component: () => import('../views/McpServerManager.vue'), meta: { menu: 'mcp_servers', title: 'MCP 服务' } },
       { path: 'cache-stats', name: 'CacheStats', component: () => import('../views/CacheManager.vue'), meta: { menu: 'cache_stats', title: '缓存统计' } },
       { path: 'business', name: 'BusinessSystems', component: () => import('../views/BusinessSystems.vue'), meta: { menu: 'business_systems', title: '业务系统' } },
       { path: 'system-tasks', name: 'SystemTasks', component: () => import('../views/SystemTaskManager.vue'), meta: { menu: 'system_tasks', title: '系统任务' } },
