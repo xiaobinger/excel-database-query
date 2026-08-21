@@ -261,14 +261,20 @@ def list_logs():
     start_time = request.args.get('start_time', '').strip()
     if start_time:
         try:
-            query = query.filter(ApiCallLog.created_at >= datetime.fromisoformat(start_time))
-        except ValueError:
+            dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+            if dt.tzinfo is not None:
+                dt = dt.replace(tzinfo=None)  # DB存的是UTC naive时间
+            query = query.filter(ApiCallLog.created_at >= dt)
+        except (ValueError, TypeError):
             pass
     end_time = request.args.get('end_time', '').strip()
     if end_time:
         try:
-            query = query.filter(ApiCallLog.created_at <= datetime.fromisoformat(end_time))
-        except ValueError:
+            dt = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+            if dt.tzinfo is not None:
+                dt = dt.replace(tzinfo=None)
+            query = query.filter(ApiCallLog.created_at <= dt)
+        except (ValueError, TypeError):
             pass
 
     total = query.count()
