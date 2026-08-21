@@ -138,10 +138,24 @@ def _extract_usage(usage: dict):
     return prompt_tokens, completion_tokens, cache_creation, cache_read
 
 
+def _truncate_bytes(text: str, max_bytes: int) -> str:
+    """按字节安全截断字符串（避免从多字节UTF-8字符中间截断导致乱码）"""
+    if not text:
+        return text
+    encoded = text.encode('utf-8')
+    if len(encoded) <= max_bytes:
+        return text
+    # 按字节截断后回退到完整字符边界
+    return encoded[:max_bytes].decode('utf-8', errors='ignore')
+
+
 def _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
               messages, response_content, tokens, p_tokens, c_tokens, cc, cr,
               elapsed, is_success, error_msg=None):
-    """写调用记录（可在任意线程，自带 app context）"""
+    """写调用记录（可在任意线程，自带 app context）。
+
+    超长内容按字节安全截断；写入失败时降级（去掉内容重试）确保统计不丢。
+    """
     with app.app_context():
         try:
             from app.models.api_call_log import ApiCallLog
@@ -153,8 +167,8 @@ def _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
                 model_requested=model_requested,
                 model_used=model_used,
                 caller_ip=caller_ip,
-                messages=json.dumps(messages, ensure_ascii=False) if messages else None,
-                response_content=(response_content or '')[:100000] or None,
+                messages=_truncate_bytes(json.dumps(messages, ensure_ascii=False), 15 * 1024 * 1024) if messages else None,
+                response_content=_truncate_bytes(response_content, 15 * 1024 * 1024) or None,
                 tokens_used=tokens or 0,
                 prompt_tokens=p_tokens or 0,
                 completion_tokens=c_tokens or 0,
@@ -162,7 +176,7 @@ def _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
                 cache_read_tokens=cr or 0,
                 elapsed=round(elapsed, 2),
                 is_success=is_success,
-                error_msg=(error_msg or '')[:2000] or None,
+                error_msg=_truncate_bytes(error_msg, 2000) if error_msg else None,
             )
             db.session.add(log)
             # 更新最近使用时间
@@ -174,8 +188,36 @@ def _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
             logger.warning(f'写开放API调用记录失败: {e}')
             try:
                 db.session.rollback()
-            except Exception:
-                pass
+                # 降级：去掉大内容字段重试，保证统计/审计记录不丢
+                log = ApiCallLog(
+                    api_key_id=api_key.id,
+                    api_key_name=api_key.name,
+                    endpoint=endpoint,
+                    model_requested=model_requested,
+                    model_used=model_used,
+                    caller_ip=caller_ip,
+                    messages=None,
+                    response_content=None,
+                    tokens_used=tokens or 0,
+                    prompt_tokens=p_tokens or 0,
+                    completion_tokens=c_tokens or 0,
+                    cache_creation_tokens=cc or 0,
+                    cache_read_tokens=cr or 0,
+                    elapsed=round(elapsed, 2),
+                    is_success=is_success,
+                    error_msg=_truncate_bytes(f'{error_msg or ""}|日志降级保存（内容过大）: {e}', 2000),
+                )
+                db.session.add(log)
+                key_obj = ApiKey.query.get(api_key.id)
+                if key_obj:
+                    key_obj.last_used_at = datetime.utcnow()
+                db.session.commit()
+            except Exception as e2:
+                logger.warning(f'开放API调用记录降级保存也失败: {e2}')
+                try:
+                    db.session.rollback()
+                except Exception:
+                    pass
 
 
 def chat_once(api_key, endpoint, model_name, messages, caller_ip):

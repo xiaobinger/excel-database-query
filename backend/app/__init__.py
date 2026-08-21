@@ -56,6 +56,7 @@ def create_app(config_name='default'):
         db.create_all()
         _auto_migrate(app)
         _migrate_ticket_comments_nullable(app)
+        _migrate_api_call_log_columns(app)
         _init_default_admin(app)
         _init_connection_pool(app)
         _recover_stale_ai_tickets(app)
@@ -410,6 +411,47 @@ def _migrate_ticket_comments_nullable(app):
             db.session.rollback()
         except Exception as e:
             app.logger.warning(f'Rollback failed: {e}')
+
+
+def _migrate_api_call_log_columns(app):
+    """将 api_call_logs 的 messages/response_content 列扩容为 MEDIUMTEXT。
+
+    旧表建表时为 TEXT(64KB)，长对话/长回复会超限导致调用记录写入失败（统计丢失），
+    且非严格模式下截断会破坏多字节字符产生乱码。_auto_migrate 只加列不改类型，
+    需单独 ALTER。幂等，仅 MySQL 执行。只在实际应用进程（非reloader主进程）中执行。
+    """
+    import os
+    if app.debug and os.environ.get('WERKZEUG_RUN_MAIN') is None:
+        return
+
+    try:
+        from sqlalchemy import inspect, text
+        if db.engine.dialect.name != 'mysql':
+            return  # SQLite 无长度限制
+        inspector = inspect(db.engine)
+        if not inspector.has_table('api_call_logs'):
+            return
+        columns = {c['name']: c for c in inspector.get_columns('api_call_logs')}
+        comments = {'messages': '请求的对话内容(JSON)，MEDIUMTEXT防止长对话超限',
+                    'response_content': 'AI回复全文，MEDIUMTEXT防止长回复超限'}
+        for col_name, comment in comments.items():
+            col = columns.get(col_name)
+            if col is None:
+                continue
+            col_type = str(col.get('type', '')).upper()
+            if 'MEDIUMTEXT' in col_type or 'LONGTEXT' in col_type:
+                continue
+            if 'TEXT' in col_type:
+                db.session.execute(text(
+                    f"ALTER TABLE api_call_logs MODIFY COLUMN {col_name} MEDIUMTEXT COMMENT '{comment}'"))
+                db.session.commit()
+                app.logger.info(f'Migration: api_call_logs.{col_name} 已扩容为 MEDIUMTEXT')
+    except Exception as e:
+        app.logger.warning(f'迁移api_call_logs列类型失败: {e}')
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
 
 
 def _init_default_admin(app):
