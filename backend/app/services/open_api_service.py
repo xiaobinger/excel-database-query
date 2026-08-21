@@ -239,157 +239,166 @@ def chat_once(api_key, endpoint, model_name, messages, caller_ip):
         return {'success': False, 'error': str(e)}
 
 
-def stream_chat(api_key, endpoint, model_name, messages, caller_ip):
+def stream_chat(api_key, endpoint, model_name, messages, caller_ip, app=None):
     """流式对话生成器：逐段 yield (delta_text, done, meta)。
 
     上游为 OpenAI 兼容 SSE；在收到首个内容chunk之前允许failover换模型，
-    开始输出后不再切换。结束时写调用记录。meta 在 done 时携带
-    {model, usage, elapsed} 或 {error}。
+    开始输出后不再切换。结束时写调用记录。
+    注意：生成器在响应头发出后才执行（此时请求上下文已弹出），
+    因此 app 必须由调用方在请求阶段通过 current_app._get_current_object() 取出后传入。
     """
     from flask import current_app
-    app = current_app._get_current_object()
-    start = time.time()
-    model_requested = (model_name or 'auto').strip() or 'auto'
-    config, matched = resolve_model(api_key, model_requested)
+    if app is None:
+        app = current_app._get_current_object()
+    # 生成器在响应头发出后才执行（请求上下文已弹出），而主体内含 DB 查询、
+    # 加密解密等需要 app context 的操作，因此整个主体包在 app context 中执行
+    with app.app_context():
+        start = time.time()
+        model_requested = (model_name or 'auto').strip() or 'auto'
+        config, matched = resolve_model(api_key, model_requested)
 
-    full_content = []
-    tokens = p_tokens = c_tokens_out = cc = cr = 0
-    model_used = ''
-    resp = None
+        full_content = []
+        tokens = p_tokens = c_tokens_out = cc = cr = 0
+        model_used = ''
+        resp = None
 
-    try:
-        if config:
-            configs = [config]
-        else:
-            configs = _ordered_configs()
-            if not configs:
-                raise ValueError('没有可用的AI模型配置')
+        try:
+            if config:
+                configs = [config]
+            else:
+                configs = _ordered_configs()
+                if not configs:
+                    raise ValueError('没有可用的AI模型配置')
 
-        from app.services.ai_service import post_chat_completions, _apply_cache_control
+            from app.services.ai_service import post_chat_completions, _apply_cache_control
 
-        last_err = None
-        for idx, cfg in enumerate(configs):
-            try:
-                api_key_val = cfg.get_api_key()
-                if not api_key_val:
-                    raise ValueError('API密钥未配置')
-                api_base = cfg.api_base or 'https://api.openai.com/v1'
-                url = f"{api_base.rstrip('/')}/chat/completions"
-                headers = {'Authorization': f'Bearer {api_key_val}', 'Content-Type': 'application/json'}
-                base_messages = _apply_cache_control(messages, cfg.provider, api_base)
-                payload = {
-                    'model': cfg.model_name or 'gpt-3.5-turbo',
-                    'messages': base_messages,
-                    'max_tokens': cfg.max_tokens or 4096,
-                    'temperature': cfg.temperature if cfg.temperature is not None else 0.7,
-                    'stream': True,
-                    'stream_options': {'include_usage': True},
-                }
-                r = post_chat_completions(url, headers, payload, timeout=120, stream=True)
-                if r.status_code == 400 and 'stream_options' in (r.text or ''):
-                    # 旧API不支持stream_options，去掉后重试
-                    r.close()
-                    payload.pop('stream_options', None)
+            last_err = None
+            for idx, cfg in enumerate(configs):
+                try:
+                    api_key_val = cfg.get_api_key()
+                    if not api_key_val:
+                        raise ValueError('API密钥未配置')
+                    api_base = cfg.api_base or 'https://api.openai.com/v1'
+                    url = f"{api_base.rstrip('/')}/chat/completions"
+                    headers = {'Authorization': f'Bearer {api_key_val}', 'Content-Type': 'application/json'}
+                    base_messages = _apply_cache_control(messages, cfg.provider, api_base)
+                    payload = {
+                        'model': cfg.model_name or 'gpt-3.5-turbo',
+                        'messages': base_messages,
+                        'max_tokens': cfg.max_tokens or 4096,
+                        'temperature': cfg.temperature if cfg.temperature is not None else 0.7,
+                        'stream': True,
+                        'stream_options': {'include_usage': True},
+                    }
                     r = post_chat_completions(url, headers, payload, timeout=120, stream=True)
-                r.raise_for_status()
-                # 首个chunk前校验可用性：读取第一个data行
-                first = None
-                for line in r.iter_lines(decode_unicode=True):
-                    if line and line.startswith('data:'):
-                        first = line[5:].strip()
-                        break
-                if first is None:
-                    raise ValueError('上游未返回流式数据')
-                if first != '[DONE]':
-                    try:
-                        chunk = json.loads(first)
-                        if chunk.get('error'):
-                            raise ValueError(str(chunk['error']))
-                    except json.JSONDecodeError:
-                        pass
-                resp = r
-                resp._first_line = first
-                model_used = cfg.model_name or ''
-                last_err = None
-                break
-            except Exception as e:
-                last_err = e
-                logger.warning(f'开放API流式模型 {getattr(cfg, "name", "?")} 建立失败: {e}')
-                if config:
-                    break  # 指定模型不failover
-                continue
+                    if r.status_code == 400 and 'stream_options' in (r.text or ''):
+                        # 旧API不支持stream_options，去掉后重试
+                        r.close()
+                        payload.pop('stream_options', None)
+                        r = post_chat_completions(url, headers, payload, timeout=120, stream=True)
+                    r.raise_for_status()
+                    # 首个chunk前校验可用性：读取第一个data行。
+                    # 注意：必须保存迭代器复用——requests 的 iter_lines 每次调用返回
+                    # 新迭代器并重新缓冲底层流，重复调用会丢失已缓冲的数据
+                    line_iter = r.iter_lines(decode_unicode=True)
+                    first = None
+                    for line in line_iter:
+                        if line and line.startswith('data:'):
+                            first = line[5:].strip()
+                            break
+                    if first is None:
+                        raise ValueError('上游未返回流式数据')
+                    if first != '[DONE]':
+                        try:
+                            chunk = json.loads(first)
+                            if chunk.get('error'):
+                                raise ValueError(str(chunk['error']))
+                        except json.JSONDecodeError:
+                            pass
+                    resp = r
+                    resp._line_iter = line_iter
+                    resp._first_line = first
+                    model_used = cfg.model_name or ''
+                    last_err = None
+                    break
+                except Exception as e:
+                    last_err = e
+                    logger.warning(f'开放API流式模型 {getattr(cfg, "name", "?")} 建立失败: {e}')
+                    if config:
+                        break  # 指定模型不failover
+                    continue
 
-        if resp is None:
-            raise last_err or RuntimeError('流式连接建立失败')
+            if resp is None:
+                raise last_err or RuntimeError('流式连接建立失败')
 
-        # 输出首个chunk的内容（已在建连时读出）
-        if resp._first_line and resp._first_line != '[DONE]':
-            try:
-                chunk = json.loads(resp._first_line)
-                choices = chunk.get('choices') or []
-                if choices:
-                    delta = choices[0].get('delta', {}) or {}
-                    text = delta.get('content') or ''
-                    if text:
-                        full_content.append(text)
-                        yield text, False, None
+            # 输出首个chunk的内容（已在建连时读出）
+            if resp._first_line and resp._first_line != '[DONE]':
+                try:
+                    chunk = json.loads(resp._first_line)
+                    choices = chunk.get('choices') or []
+                    if choices:
+                        delta = choices[0].get('delta', {}) or {}
+                        text = delta.get('content') or ''
+                        if text:
+                            full_content.append(text)
+                            yield text, False, None
+                    usage = chunk.get('usage')
+                    if usage:
+                        p_tokens, c_tokens_out, cc, cr = _extract_usage(usage)
+                        tokens = usage.get('total_tokens', 0)
+                except json.JSONDecodeError:
+                    pass
+
+            # 继续读取后续chunk（复用建连时保存的迭代器，避免丢失已缓冲数据）
+            for line in resp._line_iter:
+                if not line or not line.startswith('data:'):
+                    continue
+                data = line[5:].strip()
+                if data == '[DONE]':
+                    break
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
                 usage = chunk.get('usage')
                 if usage:
                     p_tokens, c_tokens_out, cc, cr = _extract_usage(usage)
                     tokens = usage.get('total_tokens', 0)
-            except json.JSONDecodeError:
+                choices = chunk.get('choices') or []
+                if not choices:
+                    continue
+                delta = choices[0].get('delta', {}) or {}
+                text = delta.get('content') or ''
+                if text:
+                    full_content.append(text)
+                    yield text, False, None
+            try:
+                resp.close()
+            except Exception:
                 pass
 
-        # 继续读取后续chunk
-        for line in resp.iter_lines(decode_unicode=True):
-            if not line or not line.startswith('data:'):
-                continue
-            data = line[5:].strip()
-            if data == '[DONE]':
-                break
-            try:
-                chunk = json.loads(data)
-            except json.JSONDecodeError:
-                continue
-            usage = chunk.get('usage')
-            if usage:
-                p_tokens, c_tokens_out, cc, cr = _extract_usage(usage)
-                tokens = usage.get('total_tokens', 0)
-            choices = chunk.get('choices') or []
-            if not choices:
-                continue
-            delta = choices[0].get('delta', {}) or {}
-            text = delta.get('content') or ''
-            if text:
-                full_content.append(text)
-                yield text, False, None
-        try:
-            resp.close()
-        except Exception:
-            pass
-
-        elapsed = time.time() - start
-        content = ''.join(full_content)
-        _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
-                  messages, content, tokens, p_tokens, c_tokens_out, cc, cr, elapsed, True)
-        yield '', True, {
-            'model': model_used,
-            'usage': {
-                'prompt_tokens': p_tokens,
-                'completion_tokens': c_tokens_out,
-                'total_tokens': tokens,
-                'cache_creation_tokens': cc,
-                'cache_read_tokens': cr,
-            },
-            'elapsed': round(elapsed, 2),
-        }
-    except Exception as e:
-        error = str(e)
-        elapsed = time.time() - start
-        _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
-                  messages, ''.join(full_content), tokens, p_tokens, c_tokens_out, cc, cr,
-                  elapsed, False, error)
-        yield '', True, {'error': error}
+            elapsed = time.time() - start
+            content = ''.join(full_content)
+            _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
+                      messages, content, tokens, p_tokens, c_tokens_out, cc, cr, elapsed, True)
+            yield '', True, {
+                'model': model_used,
+                'usage': {
+                    'prompt_tokens': p_tokens,
+                    'completion_tokens': c_tokens_out,
+                    'total_tokens': tokens,
+                    'cache_creation_tokens': cc,
+                    'cache_read_tokens': cr,
+                },
+                'elapsed': round(elapsed, 2),
+            }
+        except Exception as e:
+            error = str(e)
+            elapsed = time.time() - start
+            _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
+                      messages, ''.join(full_content), tokens, p_tokens, c_tokens_out, cc, cr,
+                      elapsed, False, error)
+            yield '', True, {'error': error}
 
 
 def list_available_models(api_key) -> list:

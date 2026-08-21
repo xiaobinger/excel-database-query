@@ -120,10 +120,13 @@ def _openai_plain_response(api_key, model_name, messages, ip):
 def _openai_stream_response(api_key, model_name, messages, ip):
     completion_id = f'chatcmpl-{uuid.uuid4().hex[:24]}'
     created = int(time.time())
+    # 生成器在响应头发出后才执行（请求上下文已弹出），需先在请求阶段取出 app
+    from flask import current_app
+    app = current_app._get_current_object()
 
     def generate():
         model_name_out = model_name
-        for text, done, meta in stream_chat(api_key, 'openai', model_name, messages, ip):
+        for text, done, meta in stream_chat(api_key, 'openai', model_name, messages, ip, app=app):
             if done:
                 if meta and meta.get('error'):
                     # 流已开始后出错：以OpenAI格式输出错误信息后结束
@@ -197,8 +200,12 @@ def custom_chat():
     stream = bool(data.get('stream'))
 
     if stream:
+        # 生成器在响应头发出后才执行（请求上下文已弹出），需先在请求阶段取出 app
+        from flask import current_app
+        app = current_app._get_current_object()
+
         def generate():
-            for text, done, meta in stream_chat(api_key, 'custom', model_name, messages, ip):
+            for text, done, meta in stream_chat(api_key, 'custom', model_name, messages, ip, app=app):
                 if done:
                     if meta and meta.get('error'):
                         yield 'data: ' + json.dumps({'type': 'error', 'message': meta['error']}, ensure_ascii=False) + '\n\n'
