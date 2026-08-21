@@ -1039,6 +1039,7 @@ def send_message(chat_id):
             override_configs=ordered_configs if specified_config else None,
             tools=nonstream_filtered_tools)
         response_text = ai_response['content']
+        model_used = ai_response.get('model') or ''
 
         # 空响应检测：模型只输出了思考、无正文无工具调用，自动重试一次（引导模型直接行动）
         if not response_text.strip() and not ai_response.get('tool_calls'):
@@ -1259,6 +1260,7 @@ def send_message(chat_id):
                         override_configs=ordered_configs if specified_config else None,
                         tools=nonstream_filtered_tools)
                     response_text = ai_response2['content']
+                    model_used = ai_response2.get('model') or model_used
                     second_tool_calls = ai_response2['tool_calls']
                     tokens = ai_response2['tokens']
                     prompt_tokens += ai_response2.get('prompt_tokens', 0)
@@ -1344,6 +1346,7 @@ def send_message(chat_id):
                             response2.raise_for_status()
                             result3 = response2.json()
                             response_text = result3['choices'][0].get('message', {}).get('content', '') if result3.get('choices') else ''
+                            model_used = ai_config.model_name or model_used
                             usage3 = result3.get('usage', {})
                             tokens = usage3.get('total_tokens', tokens)
                             prompt_tokens += usage3.get('prompt_tokens', 0)
@@ -1379,6 +1382,8 @@ def send_message(chat_id):
                 cache_read_tokens=cache_read_tokens,
                 elapsed=elapsed,
             )
+            if model_used:
+                assistant_message.msg_metadata = json.dumps({'model': model_used}, ensure_ascii=False)
             db.session.add(assistant_message)
             db.session.flush()
             response_payload['assistant_message'] = assistant_message.to_dict()
@@ -2376,7 +2381,10 @@ def send_message_stream(chat_id):
                 if thinking_content:
                     assistant_message.msg_metadata = json.dumps({
                         'thinking_content': thinking_content,
+                        'model': config_model_name,
                     }, ensure_ascii=False)
+                else:
+                    assistant_message.msg_metadata = json.dumps({'model': config_model_name}, ensure_ascii=False)
                 db.session.add(assistant_message)
                 db.session.commit()
                 msg_id = assistant_message.id
@@ -2430,7 +2438,7 @@ def send_message_stream(chat_id):
                 _finished_streams[chat_id] = (stream_info, time.time())
 
             # 发送完成信号
-            yield f"data: {json.dumps({'type': 'done', 'message_id': msg_id, 'user_message_id': stream_user_message_id, 'tokens': tokens_used, 'prompt_tokens': prompt_tokens_used, 'completion_tokens': completion_tokens_used, 'cache_creation_tokens': cache_creation_tokens_used, 'cache_read_tokens': cache_read_tokens_used, 'elapsed': elapsed}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'message_id': msg_id, 'user_message_id': stream_user_message_id, 'tokens': tokens_used, 'prompt_tokens': prompt_tokens_used, 'completion_tokens': completion_tokens_used, 'cache_creation_tokens': cache_creation_tokens_used, 'cache_read_tokens': cache_read_tokens_used, 'elapsed': elapsed, 'model': config_model_name}, ensure_ascii=False)}\n\n"
 
         except requests.exceptions.HTTPError as e:
             # HTTP错误：透传API返回的具体错误信息（如400参数错误）
@@ -2491,7 +2499,10 @@ def send_message_stream(chat_id):
                     if thinking_content:
                         partial_message.msg_metadata = json.dumps({
                             'thinking_content': thinking_content,
+                            'model': config_model_name,
                         }, ensure_ascii=False)
+                    else:
+                        partial_message.msg_metadata = json.dumps({'model': config_model_name}, ensure_ascii=False)
                     db.session.add(partial_message)
                     db.session.commit()
                     logger.info(f'客户端断开，已补存部分AI消息: chat_id={chat_id}, content_len={len(full_content)}')

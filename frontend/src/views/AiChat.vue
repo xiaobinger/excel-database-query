@@ -330,7 +330,8 @@
                 <!-- 流式输出光标 -->
                 <span v-if="msg._streaming" class="streaming-cursor"></span>
                 <!-- 耗时和token统计 -->
-                <div v-if="!msg._streaming && (msg._tokens > 0 || msg._elapsed > 0) && msg.role === 'assistant'" class="message-meta">
+                <div v-if="!msg._streaming && (msg._tokens > 0 || msg._elapsed > 0 || (msg._model || msg._metadata?.model)) && msg.role === 'assistant'" class="message-meta">
+                  <span v-if="msg._model || msg._metadata?.model"><i class="fas fa-microchip"></i> {{ msg._model || msg._metadata.model }}</span>
                   <span v-if="msg._elapsed > 0"><i class="fas fa-clock"></i> {{ msg._elapsed }}s</span>
                   <span v-if="msg._tokens > 0"><i class="fas fa-coins"></i> {{ msg._tokens }} = ↑{{ msg._prompt_tokens || 0 }} + ↓{{ msg._completion_tokens || 0 }}</span>
                   <span v-if="(msg.cache_creation_tokens > 0 || msg.cache_read_tokens > 0)" class="cache-info">
@@ -1898,6 +1899,7 @@ async function checkAndResumeStream(chatId) {
             if (event.message_id) {
               streamMsg.id = event.message_id
             }
+            streamMsg._model = event.model || streamMsg._model
           } else if (event.type === 'truncated') {
             // 输出因max_tokens上限被截断，追加提示
             streamMsg.content += (streamMsg.content ? '\n\n' : '') + `*${event.content || 'AI输出因token上限被截断'}*`
@@ -1932,6 +1934,7 @@ async function checkAndResumeStream(chatId) {
             if (event.message_id) {
               streamMsg.id = event.message_id
             }
+            streamMsg._model = event.model || streamMsg._model
           }
         } catch {}
       }
@@ -2778,6 +2781,7 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
               streamMsg.cache_creation_tokens = event.cache_creation_tokens || 0
               streamMsg.cache_read_tokens = event.cache_read_tokens || 0
               streamMsg._elapsed = event.elapsed || 0
+              streamMsg._model = event.model || streamMsg._model
               // 同步真实用户消息ID（用于重新发送时复用原消息）
               if (event.user_message_id && onUserMessageId) onUserMessageId(event.user_message_id)
             } else if (event.type === 'truncated') {
@@ -2825,6 +2829,7 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
             streamMsg._prompt_tokens = event.prompt_tokens || 0
             streamMsg._completion_tokens = event.completion_tokens || 0
             streamMsg._elapsed = event.elapsed || 0
+            streamMsg._model = event.model || streamMsg._model
             if (event.user_message_id && onUserMessageId) onUserMessageId(event.user_message_id)
           } else if (event.type === 'error') {
             streamMsg._streaming = false

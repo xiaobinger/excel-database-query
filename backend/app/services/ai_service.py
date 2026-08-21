@@ -819,6 +819,7 @@ class AiService:
             'cache_creation_tokens': cache_creation_tokens,
             'cache_read_tokens': cache_read_tokens,
             'finish_reason': finish_reason,
+            'model': config.model_name or '',
         }
 
     @staticmethod
