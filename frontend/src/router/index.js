@@ -29,6 +29,7 @@ const routes = [
       { path: 'skills', name: 'Skills', component: () => import('../views/SkillManager.vue'), meta: { menu: 'skills', title: 'Skills' } },
       { path: 'agents', name: 'Agents', component: () => import('../views/AgentManager.vue'), meta: { menu: 'agent_manager', title: 'Agent 管理' } },
       { path: 'mcp-servers', name: 'McpServers', component: () => import('../views/McpServerManager.vue'), meta: { menu: 'mcp_servers', title: 'MCP 服务' } },
+      { path: 'open-api', name: 'OpenApi', component: () => import('../views/OpenApiManager.vue'), meta: { menu: 'open_api', title: '开放API' } },
       { path: 'cache-stats', name: 'CacheStats', component: () => import('../views/CacheManager.vue'), meta: { menu: 'cache_stats', title: '缓存统计' } },
       { path: 'business', name: 'BusinessSystems', component: () => import('../views/BusinessSystems.vue'), meta: { menu: 'business_systems', title: '业务系统' } },
       { path: 'system-tasks', name: 'SystemTasks', component: () => import('../views/SystemTaskManager.vue'), meta: { menu: 'system_tasks', title: '系统任务' } },

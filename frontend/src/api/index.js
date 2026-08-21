@@ -323,4 +323,19 @@ const mcp = {
   marketplace: () => http.get('/mcp/marketplace'),
 }
 
-export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, mcp, business, systemTask, lookup, profitShare, tickets }
+const openApi = {
+  getSettings: () => http.get('/open-api/settings'),
+  saveSettings: (data) => http.put('/open-api/settings', data),
+  listKeys: () => http.get('/open-api/keys'),
+  createKey: (data) => http.post('/open-api/keys', data),
+  updateKey: (id, data) => http.put(`/open-api/keys/${id}`, data),
+  deleteKey: (id) => http.delete(`/open-api/keys/${id}`),
+  regenerateKey: (id) => http.post(`/open-api/keys/${id}/regenerate`),
+  revealKey: (id) => http.post(`/open-api/keys/${id}/reveal`),
+  testKey: (id) => http.post(`/open-api/keys/${id}/test`),
+  getLogs: (params) => http.get('/open-api/logs', { params }),
+  getLogDetail: (id) => http.get(`/open-api/logs/${id}`),
+  getStats: () => http.get('/open-api/stats'),
+}
+
+export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, mcp, openApi, business, systemTask, lookup, profitShare, tickets }

@@ -1,0 +1,404 @@
+"""开放API服务
+
+- 认证: Bearer sk-xxx (ApiKey 哈希查询) + IP白名单（精确IP/CIDR）
+- 模型解析: 外部名匹配 ApiKey.model_mapping → 指定模型；auto/未匹配 → 系统模型路由策略(含failover)
+- 调用: 非流式/流式，每次调用写 ApiCallLog（内容/耗时/token/缓存token/实际模型/IP）
+- 设置: SystemConfig 存储 open_api_enabled / open_api_endpoint_mode
+"""
+import hashlib
+import ipaddress
+import json
+import logging
+import time
+import uuid
+from datetime import datetime
+
+import requests as req_lib
+from flask import request
+
+from app import db
+
+logger = logging.getLogger(__name__)
+
+# 全局设置键
+OPEN_API_ENABLED_KEY = 'open_api_enabled'
+OPEN_API_ENDPOINT_MODE_KEY = 'open_api_endpoint_mode'
+VALID_ENDPOINT_MODES = ('openai', 'custom', 'both')
+
+
+def get_client_ip() -> str:
+    """获取调用方IP（反代场景优先取X-Forwarded-For首个）"""
+    xff = request.headers.get('X-Forwarded-For', '')
+    if xff:
+        return xff.split(',')[0].strip()
+    return request.remote_addr or ''
+
+
+def get_settings() -> dict:
+    """读取开放API全局设置"""
+    from app.models.system_config import SystemConfig
+    enabled_cfg = SystemConfig.query.filter_by(config_key=OPEN_API_ENABLED_KEY).first()
+    mode_cfg = SystemConfig.query.filter_by(config_key=OPEN_API_ENDPOINT_MODE_KEY).first()
+    mode = mode_cfg.config_value if mode_cfg and mode_cfg.config_value in VALID_ENDPOINT_MODES else 'both'
+    try:
+        enabled = enabled_cfg and str(enabled_cfg.config_value).lower() in ('1', 'true', 'yes')
+    except Exception:
+        enabled = False
+    return {'enabled': bool(enabled), 'endpoint_mode': mode}
+
+
+def save_settings(enabled: bool, endpoint_mode: str) -> dict:
+    """保存开放API全局设置"""
+    if endpoint_mode not in VALID_ENDPOINT_MODES:
+        raise ValueError(f'endpoint_mode 必须是 {"、".join(VALID_ENDPOINT_MODES)} 之一')
+    from app.models.system_config import SystemConfig
+    for key, value in ((OPEN_API_ENABLED_KEY, 'true' if enabled else 'false'),
+                       (OPEN_API_ENDPOINT_MODE_KEY, endpoint_mode)):
+        cfg = SystemConfig.query.filter_by(config_key=key).first()
+        if cfg:
+            cfg.config_value = value
+        else:
+            db.session.add(SystemConfig(config_key=key, description='开放API设置', config_value=value))
+    db.session.commit()
+    return get_settings()
+
+
+def ip_allowed(api_key, ip: str) -> bool:
+    """IP白名单校验：空白名单不限；条目支持精确IP与CIDR"""
+    whitelist = api_key.get_ip_whitelist()
+    if not whitelist:
+        return True
+    if not ip:
+        return False
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    for entry in whitelist:
+        entry = str(entry).strip()
+        if not entry:
+            continue
+        try:
+            if '/' in entry:
+                if addr in ipaddress.ip_network(entry, strict=False):
+                    return True
+            elif addr == ipaddress.ip_address(entry):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def authenticate(key_str: str, ip: str):
+    """认证并校验，返回 (ApiKey, 错误信息)"""
+    from app.models.api_key import ApiKey
+    if not key_str:
+        return None, '缺少API密钥'
+    key_hash = hashlib.sha256(key_str.encode('utf-8')).hexdigest()
+    api_key = ApiKey.query.filter_by(api_key_hash=key_hash).first()
+    if not api_key:
+        return None, 'API密钥无效'
+    if not api_key.is_active:
+        return None, 'API密钥已禁用'
+    if not ip_allowed(api_key, ip):
+        return None, f'IP {ip} 不在白名单内'
+    return api_key, None
+
+
+def resolve_model(api_key, model_name: str):
+    """解析请求模型：返回 (AiConfig或None, 匹配的外部名)。None表示走系统路由策略(auto)"""
+    from app.models.ai_config import AiConfig
+    model_name = (model_name or '').strip()
+    if model_name and model_name.lower() != 'auto':
+        for m in api_key.get_model_mapping():
+            if m.get('external') == model_name:
+                try:
+                    config = AiConfig.query.filter_by(id=int(m.get('config_id')), is_active=True).first()
+                    if config:
+                        return config, model_name
+                except (TypeError, ValueError):
+                    continue
+        # 有名称但未匹配映射 → 走auto（不报错，保持灵活）
+    return None, None
+
+
+def _ordered_configs():
+    from app.services.ai_service import AiService
+    return AiService.get_ordered_configs()
+
+
+def _extract_usage(usage: dict):
+    prompt_tokens = usage.get('prompt_tokens', 0)
+    completion_tokens = usage.get('completion_tokens', 0)
+    cache_creation = usage.get('cache_creation_input_tokens', 0) or 0
+    cache_read = usage.get('cache_read_input_tokens', 0) or 0
+    details = usage.get('prompt_tokens_details', {})
+    if isinstance(details, dict) and details.get('cached_tokens'):
+        cache_read = details['cached_tokens']
+    return prompt_tokens, completion_tokens, cache_creation, cache_read
+
+
+def _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
+              messages, response_content, tokens, p_tokens, c_tokens, cc, cr,
+              elapsed, is_success, error_msg=None):
+    """写调用记录（可在任意线程，自带 app context）"""
+    with app.app_context():
+        try:
+            from app.models.api_call_log import ApiCallLog
+            from app.models.api_key import ApiKey
+            log = ApiCallLog(
+                api_key_id=api_key.id,
+                api_key_name=api_key.name,
+                endpoint=endpoint,
+                model_requested=model_requested,
+                model_used=model_used,
+                caller_ip=caller_ip,
+                messages=json.dumps(messages, ensure_ascii=False) if messages else None,
+                response_content=(response_content or '')[:100000] or None,
+                tokens_used=tokens or 0,
+                prompt_tokens=p_tokens or 0,
+                completion_tokens=c_tokens or 0,
+                cache_creation_tokens=cc or 0,
+                cache_read_tokens=cr or 0,
+                elapsed=round(elapsed, 2),
+                is_success=is_success,
+                error_msg=(error_msg or '')[:2000] or None,
+            )
+            db.session.add(log)
+            # 更新最近使用时间
+            key_obj = ApiKey.query.get(api_key.id)
+            if key_obj:
+                key_obj.last_used_at = datetime.utcnow()
+            db.session.commit()
+        except Exception as e:
+            logger.warning(f'写开放API调用记录失败: {e}')
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+
+
+def chat_once(api_key, endpoint, model_name, messages, caller_ip):
+    """非流式对话。返回 dict: {success, content, model, usage, elapsed} 或 {success, error}"""
+    from flask import current_app
+    app = current_app._get_current_object()
+    start = time.time()
+    model_requested = (model_name or 'auto').strip() or 'auto'
+    config, matched = resolve_model(api_key, model_requested)
+
+    content = ''
+    model_used = ''
+    tokens = p_tokens = c_tokens = cc = cr = 0
+    error = None
+
+    try:
+        if config:
+            configs = [config]
+        else:
+            configs = _ordered_configs()
+            if not configs:
+                raise ValueError('没有可用的AI模型配置')
+
+        last_err = None
+        for cfg in configs:
+            try:
+                from app.services.ai_service import AiService
+                content, tokens, p_tokens, c_tokens, cc, cr = AiService.chat(cfg, messages)
+                model_used = cfg.model_name or ''
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+                logger.warning(f'开放API模型 {cfg.name} 调用失败: {e}')
+                if config:
+                    break  # 指定模型不failover
+                continue
+        if last_err is not None and not content:
+            raise last_err
+
+        elapsed = time.time() - start
+        _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
+                  messages, content, tokens, p_tokens, c_tokens, cc, cr, elapsed, True)
+        return {
+            'success': True,
+            'content': content,
+            'model': model_used,
+            'usage': {
+                'prompt_tokens': p_tokens,
+                'completion_tokens': c_tokens,
+                'total_tokens': tokens,
+                'cache_creation_tokens': cc,
+                'cache_read_tokens': cr,
+            },
+            'elapsed': round(elapsed, 2),
+        }
+    except Exception as e:
+        elapsed = time.time() - start
+        _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
+                  messages, '', 0, 0, 0, 0, 0, elapsed, False, str(e))
+        return {'success': False, 'error': str(e)}
+
+
+def stream_chat(api_key, endpoint, model_name, messages, caller_ip):
+    """流式对话生成器：逐段 yield (delta_text, done, meta)。
+
+    上游为 OpenAI 兼容 SSE；在收到首个内容chunk之前允许failover换模型，
+    开始输出后不再切换。结束时写调用记录。meta 在 done 时携带
+    {model, usage, elapsed} 或 {error}。
+    """
+    from flask import current_app
+    app = current_app._get_current_object()
+    start = time.time()
+    model_requested = (model_name or 'auto').strip() or 'auto'
+    config, matched = resolve_model(api_key, model_requested)
+
+    full_content = []
+    tokens = p_tokens = c_tokens_out = cc = cr = 0
+    model_used = ''
+    resp = None
+
+    try:
+        if config:
+            configs = [config]
+        else:
+            configs = _ordered_configs()
+            if not configs:
+                raise ValueError('没有可用的AI模型配置')
+
+        from app.services.ai_service import post_chat_completions, _apply_cache_control
+
+        last_err = None
+        for idx, cfg in enumerate(configs):
+            try:
+                api_key_val = cfg.get_api_key()
+                if not api_key_val:
+                    raise ValueError('API密钥未配置')
+                api_base = cfg.api_base or 'https://api.openai.com/v1'
+                url = f"{api_base.rstrip('/')}/chat/completions"
+                headers = {'Authorization': f'Bearer {api_key_val}', 'Content-Type': 'application/json'}
+                base_messages = _apply_cache_control(messages, cfg.provider, api_base)
+                payload = {
+                    'model': cfg.model_name or 'gpt-3.5-turbo',
+                    'messages': base_messages,
+                    'max_tokens': cfg.max_tokens or 4096,
+                    'temperature': cfg.temperature if cfg.temperature is not None else 0.7,
+                    'stream': True,
+                    'stream_options': {'include_usage': True},
+                }
+                r = post_chat_completions(url, headers, payload, timeout=120, stream=True)
+                if r.status_code == 400 and 'stream_options' in (r.text or ''):
+                    # 旧API不支持stream_options，去掉后重试
+                    r.close()
+                    payload.pop('stream_options', None)
+                    r = post_chat_completions(url, headers, payload, timeout=120, stream=True)
+                r.raise_for_status()
+                # 首个chunk前校验可用性：读取第一个data行
+                first = None
+                for line in r.iter_lines(decode_unicode=True):
+                    if line and line.startswith('data:'):
+                        first = line[5:].strip()
+                        break
+                if first is None:
+                    raise ValueError('上游未返回流式数据')
+                if first != '[DONE]':
+                    try:
+                        chunk = json.loads(first)
+                        if chunk.get('error'):
+                            raise ValueError(str(chunk['error']))
+                    except json.JSONDecodeError:
+                        pass
+                resp = r
+                resp._first_line = first
+                model_used = cfg.model_name or ''
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+                logger.warning(f'开放API流式模型 {getattr(cfg, "name", "?")} 建立失败: {e}')
+                if config:
+                    break  # 指定模型不failover
+                continue
+
+        if resp is None:
+            raise last_err or RuntimeError('流式连接建立失败')
+
+        # 输出首个chunk的内容（已在建连时读出）
+        if resp._first_line and resp._first_line != '[DONE]':
+            try:
+                chunk = json.loads(resp._first_line)
+                choices = chunk.get('choices') or []
+                if choices:
+                    delta = choices[0].get('delta', {}) or {}
+                    text = delta.get('content') or ''
+                    if text:
+                        full_content.append(text)
+                        yield text, False, None
+                usage = chunk.get('usage')
+                if usage:
+                    p_tokens, c_tokens_out, cc, cr = _extract_usage(usage)
+                    tokens = usage.get('total_tokens', 0)
+            except json.JSONDecodeError:
+                pass
+
+        # 继续读取后续chunk
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line or not line.startswith('data:'):
+                continue
+            data = line[5:].strip()
+            if data == '[DONE]':
+                break
+            try:
+                chunk = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            usage = chunk.get('usage')
+            if usage:
+                p_tokens, c_tokens_out, cc, cr = _extract_usage(usage)
+                tokens = usage.get('total_tokens', 0)
+            choices = chunk.get('choices') or []
+            if not choices:
+                continue
+            delta = choices[0].get('delta', {}) or {}
+            text = delta.get('content') or ''
+            if text:
+                full_content.append(text)
+                yield text, False, None
+        try:
+            resp.close()
+        except Exception:
+            pass
+
+        elapsed = time.time() - start
+        content = ''.join(full_content)
+        _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
+                  messages, content, tokens, p_tokens, c_tokens_out, cc, cr, elapsed, True)
+        yield '', True, {
+            'model': model_used,
+            'usage': {
+                'prompt_tokens': p_tokens,
+                'completion_tokens': c_tokens_out,
+                'total_tokens': tokens,
+                'cache_creation_tokens': cc,
+                'cache_read_tokens': cr,
+            },
+            'elapsed': round(elapsed, 2),
+        }
+    except Exception as e:
+        error = str(e)
+        elapsed = time.time() - start
+        _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
+                  messages, ''.join(full_content), tokens, p_tokens, c_tokens_out, cc, cr,
+                  elapsed, False, error)
+        yield '', True, {'error': error}
+
+
+def list_available_models(api_key) -> list:
+    """列出该key可用的外部模型名（映射 + auto + 路由策略模型）"""
+    from app.models.ai_config import AiConfig
+    models = []
+    for m in api_key.get_model_mapping():
+        if m.get('external'):
+            models.append(str(m['external']))
+    if 'auto' not in models:
+        models.append('auto')
+    return models
