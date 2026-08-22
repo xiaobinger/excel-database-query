@@ -339,6 +339,8 @@ def stream_chat(api_key, endpoint, model_name, messages, caller_ip, app=None):
                         payload.pop('stream_options', None)
                         r = post_chat_completions(url, headers, payload, timeout=120, stream=True)
                     r.raise_for_status()
+                    # 确保使用UTF-8解码，避免中文乱码（部分API不返回charset头时requests默认按latin-1解码）
+                    r.encoding = 'utf-8'
                     # 首个chunk前校验可用性：读取第一个data行。
                     # 注意：必须保存迭代器复用——requests 的 iter_lines 每次调用返回
                     # 新迭代器并重新缓冲底层流，重复调用会丢失已缓冲的数据
