@@ -346,6 +346,76 @@ def _execute_query_for_ticket(ticket, result, tool_log_text, app):
     )
 
 
+def _execute_pay_withdraw_for_ticket(ticket, result, tool_log_text, app):
+    """在工单上下文中实际执行代付提现任务"""
+    from app.services import pay_service
+
+    channel = result.get('channel', '')
+    interface_type = result.get('interface_type', '')
+    environment = result.get('environment', 'test')
+    file_path = result.get('file_path', '')
+    sheet_index = result.get('sheet_index', 0)
+    real_time = result.get('real_time', '是')
+    execute_type = result.get('execute_type', '创建代付')
+
+    output_dir = app.config['OUTPUT_FOLDER']
+    os.makedirs(output_dir, exist_ok=True)
+
+    ticket_id = ticket.id
+
+    def on_complete(status, message, logs, result_url=None):
+        """代付提现执行完成回调"""
+        from app import db as _db
+        from app.models.ticket import Ticket as _Ticket
+        try:
+            t = _Ticket.query.get(ticket_id)
+            if not t:
+                logger.error(f'工单{ticket_id}不存在，无法更新代付结果')
+                return
+            if status == 'completed':
+                log_text = '\n'.join(logs) if logs else ''
+                _add_comment(t, None,
+                    f'代付提现任务已完成：{message}\n\n**执行日志：**\n```\n{log_text}\n```\n\n---\n**处理过程：**\n{tool_log_text}',
+                    'ai_process', is_ai=True)
+                t.ai_result = f'代付提现任务已完成：{message}'
+            else:
+                log_text = '\n'.join(logs) if logs else ''
+                _add_comment(t, None,
+                    f'代付提现任务执行失败：{message}\n\n**执行日志：**\n```\n{log_text}\n```\n\n---\n**处理过程：**\n{tool_log_text}',
+                    'ai_process', is_ai=True)
+                t.ai_result = f'代付提现任务执行失败：{message}'
+            t.status = STATUS_PROCESSED
+            t.processed_at = datetime.utcnow()
+            _add_comment(t, None, '任务执行完成，等待提交人核实', 'status_change', is_ai=True)
+            _db.session.commit()
+            logger.info(f'工单 {t.ticket_no} 代付提现任务完成，状态: {status}')
+        except Exception as e:
+            logger.error(f'工单{ticket_id}代付回调异常: {e}', exc_info=True)
+            try:
+                _db.session.rollback()
+            except Exception:
+                pass
+
+    # 启动后台线程执行代付提现
+    t = threading.Thread(
+        target=pay_service.execute_pay_withdraw,
+        kwargs={
+            'channel': channel,
+            'interface_type': interface_type,
+            'environment': environment,
+            'file_path': file_path,
+            'sheet_index': sheet_index,
+            'real_time': real_time,
+            'execute_type': execute_type,
+            'output_dir': output_dir,
+            'on_complete': on_complete,
+        },
+        daemon=True,
+    )
+    _ticket_ai_threads[ticket_id] = t
+    t.start()
+
+
 def _process_ticket_with_ai_async(ticket_id, app):
     """后台线程：用AI处理工单（支持工具调用，可匹配系统的导出/查询/系统任务等）"""
     with app.app_context():
@@ -393,7 +463,7 @@ def _process_ticket_with_ai_async(ticket_id, app):
             filtered_tools = get_effective_tools(agent)
 
             # 操作型工具：触发即视为已处理（任务已创建）
-            action_tools = {'request_export', 'request_query', 'request_system_task', 'request_profit_share'}
+            action_tools = {'request_export', 'request_query', 'request_system_task', 'request_profit_share', 'request_pay_withdraw'}
 
             # 工具调用循环（最多3轮，防止死循环）
             max_rounds = 3
@@ -416,8 +486,9 @@ def _process_ticket_with_ai_async(ticket_id, app):
 
                 # 执行工具调用
                 tool_results = []
-                # 检测是否有需要确认执行的SQL系统任务
+                # 检测是否有需要确认执行的SQL系统任务或生产环境代付提现
                 pending_system_task = None
+                pending_pay_withdraw = None
                 for tc in tool_calls:
                     func_name = tc.get('function', {}).get('name', '')
                     func_args = tc.get('function', {}).get('arguments', '')
@@ -482,6 +553,30 @@ def _process_ticket_with_ai_async(ticket_id, app):
                             result_summary = f"已创建分润导出任务(任务ID: {task_id})" if task_id else "分润导出已触发"
                             action_triggered = True
                             tool_executed = True
+                        elif result.get('action_type') == 'pay_withdraw':
+                            env = result.get('environment', 'test')
+                            if env == 'pro':
+                                # 生产环境代付提现，需用户确认后执行
+                                pending_pay_withdraw = {
+                                    'func_name': func_name,
+                                    'func_args': func_args,
+                                    'channel': result.get('channel', ''),
+                                    'channel_name': result.get('channel_name', ''),
+                                    'interface_type': result.get('interface_type', ''),
+                                    'environment': env,
+                                    'file_path': result.get('file_path', ''),
+                                    'sheet_index': result.get('sheet_index', 0),
+                                    'sheet_name': result.get('sheet_name', ''),
+                                    'real_time': result.get('real_time', '是'),
+                                    'execute_type': result.get('execute_type', '创建代付'),
+                                    'description': result.get('description', ''),
+                                    'confirm_message': result.get('confirm_message', ''),
+                                }
+                                result_summary = f"代付提现「{result.get('channel_name', '')}」生产环境需用户确认后执行"
+                            else:
+                                result_summary = f"代付提现参数已确认：{result.get('channel_name', result.get('channel', ''))} {result.get('interface_type', '')}"
+                                action_triggered = True
+                                tool_executed = True
                         elif result.get('total') is not None:
                             result_summary = f"匹配到{result['total']}项"
                         else:
@@ -510,6 +605,26 @@ def _process_ticket_with_ai_async(ticket_id, app):
                     logger.info(f'工单 {ticket.ticket_no} AI处理暂停，需用户确认执行SQL系统任务: {pending_system_task["task_name"]}')
                     return
 
+                # 如果检测到生产环境代付提现，暂停处理，等待用户确认
+                if pending_pay_withdraw:
+                    ticket.set_pending_action(pending_pay_withdraw)
+                    ticket.status = STATUS_PENDING_CONFIRMATION
+                    confirm_msg = pending_pay_withdraw.get('confirm_message', '')
+                    ticket.ai_result = (
+                        f"AI识别到需要执行**生产环境代付提现**操作：\n\n"
+                        f"{confirm_msg}\n\n"
+                        f"⚠️ 此操作将真实执行代付提现，请提交人确认后执行。\n"
+                        f"可在下方评论「同意」、「确认执行」或点击「确认执行」按钮继续。"
+                    )
+                    if tool_log:
+                        tool_log_text = '\n\n'.join(tool_log)
+                        ticket.ai_result = f'{ticket.ai_result}\n\n---\n**处理过程：**\n{tool_log_text}'
+                    _add_comment(ticket, None, ticket.ai_result, 'ai_process', is_ai=True)
+                    _add_comment(ticket, None, '工单状态已转为「待确认」，等待提交人确认后执行生产环境代付提现', 'status_change', is_ai=True)
+                    db.session.commit()
+                    logger.info(f'工单 {ticket.ticket_no} AI处理暂停，需用户确认执行生产环境代付提现: {pending_pay_withdraw["channel_name"]}')
+                    return
+
                 # 如果触发了操作型工具
                 if action_triggered:
                     tool_log_text = '\n\n'.join(tool_log) if tool_log else ''
@@ -528,6 +643,9 @@ def _process_ticket_with_ai_async(ticket_id, app):
                             elif r.get('action_type') == 'profit_share' and not r.get('error'):
                                 action_detail = {'type': 'profit_share', 'result': r}
                                 break
+                            elif r.get('action_type') == 'pay_withdraw' and not r.get('error'):
+                                action_detail = {'type': 'pay_withdraw', 'result': r}
+                                break
 
                     if action_detail:
                         # 实际执行导出/查询/分润任务，由回调处理后续
@@ -539,6 +657,8 @@ def _process_ticket_with_ai_async(ticket_id, app):
                             _execute_query_for_ticket(ticket, action_detail['result'], tool_log_text, app)
                         elif action_detail['type'] == 'profit_share':
                             _execute_profit_share_for_ticket(ticket, action_detail['result'], tool_log_text, app)
+                        elif action_detail['type'] == 'pay_withdraw':
+                            _execute_pay_withdraw_for_ticket(ticket, action_detail['result'], tool_log_text, app)
                         return  # 后台任务已启动，回调处理后续
 
                     # 其他操作型工具（query/system_task），仍按原逻辑获取AI总结
@@ -668,7 +788,8 @@ def _build_ticket_ai_prompt(agent, system_name):
         '2. 查询任务（query）：根据Excel文件中的主键数据去数据库批量查询匹配信息，调用 list_query_options / request_query\n'
         '3. 系统任务（system_task）：后台运维类操作（如数据清理、缓存刷新、终端解绑、执行本地脚本等），支持SQL、API和本地脚本三种类型，调用 list_system_tasks / request_system_task\n'
         '4. 信息查询（lookup）：根据用户提供的参数值快速查询数据库返回结果（如查询SN绑定状态、商户是否激活、订单是否出款等），调用 list_lookup_options / request_lookup\n'
-        '5. 分润导出（profit_share）：根据代理商编号和交易时间范围计算各级代理分润并导出Excel，调用 request_profit_share\n\n'
+        '5. 分润导出（profit_share）：根据代理商编号和交易时间范围计算各级代理分润并导出Excel，调用 request_profit_share\n'
+        '6. 代付提现（pay_withdraw）：根据Excel文件批量执行代付/查询操作，支持合利宝、电银、乐商通PLUS、快乐刷4个渠道，调用 list_pay_channels / request_pay_withdraw\n\n'
         '## 工单处理规则\n'
         '- 仔细分析工单内容，判断属于哪种任务类型，调用对应工具实际执行\n'
         '- 如果工单内容包含明确的参数（如商户号、订单号、SN号、日期等），直接调用 request_* 工具执行\n'
@@ -677,7 +798,8 @@ def _build_ticket_ai_prompt(agent, system_name):
         '- API类型的系统任务参数齐全时会自动执行并返回结果，请根据mapping_summary（映射摘要）用自然语言说明执行结果\n'
         '- 如果用户的意图是条件性的（如"查一下这个SN的绑定状态，如果已绑定就解绑"），先调用 request_lookup 查询状态，再根据结果决定是否调用 request_system_task\n'
         '- 如果同时需要对多个对象执行同样的操作（如"解绑SN001、SN002"），请同时调用多个 request_system_task\n'
-        '- 务必从工单内容中提取所有参数值填入 params 对象，params的键名必须使用list_*工具返回的参数配置中的name字段值\n\n'
+        '- 务必从工单内容中提取所有参数值填入 params 对象，params的键名必须使用list_*工具返回的参数配置中的name字段值\n'
+        '- 代付提现任务：工单附件中的Excel文件为输入，执行前必须确认渠道、接口类型、环境、工作表等所有参数；生产环境必须等待提交人确认后才能执行\n\n'
         '## 回复格式规则\n'
         '- 如果你成功调用了工具并执行了任务（导出/查询/系统任务/信息查询/分润导出），请用自然语言总结执行结果，回复以【已处理】开头\n'
         '- 如果你无法通过工具处理（如需要物理操作、需要人工审批、需要外部协调等），请说明原因，回复以【待人工处理】开头\n'
@@ -731,8 +853,85 @@ def _confirm_ticket_action(ticket, current_user):
     t.start()
 
 
+def _execute_pending_pay_withdraw(ticket, app):
+    """执行待确认的生产环境代付提现操作"""
+    from app.services import pay_service
+    pending_action = ticket.get_pending_action()
+    if not pending_action:
+        raise Exception('没有待确认执行的任务信息')
+
+    channel = pending_action.get('channel', '')
+    interface_type = pending_action.get('interface_type', '')
+    environment = pending_action.get('environment', 'pro')
+    file_path = pending_action.get('file_path', '')
+    sheet_index = pending_action.get('sheet_index', 0)
+    real_time = pending_action.get('real_time', '是')
+    execute_type = pending_action.get('execute_type', '创建代付')
+    description = pending_action.get('description', '')
+
+    logger.info(f'工单 {ticket.ticket_no} 开始执行生产环境代付提现: channel={channel} interface_type={interface_type} file={file_path}')
+
+    output_dir = app.config['OUTPUT_FOLDER']
+    os.makedirs(output_dir, exist_ok=True)
+
+    ticket_id = ticket.id
+
+    def on_complete(status, message, logs, result_url=None):
+        """生产环境代付提现执行完成回调"""
+        from app import db as _db
+        from app.models.ticket import Ticket as _Ticket
+        try:
+            t = _Ticket.query.get(ticket_id)
+            if not t:
+                logger.error(f'工单{ticket_id}不存在，无法更新代付结果')
+                return
+            if status == 'completed':
+                log_text = '\n'.join(logs) if logs else ''
+                _add_comment(t, None,
+                    f'✅ 生产环境代付提现任务已完成：{message}\n\n**执行日志：**\n```\n{log_text}\n```',
+                    'ai_process', is_ai=True)
+                t.ai_result = f'✅ 生产环境代付提现任务已完成：{message}'
+            else:
+                log_text = '\n'.join(logs) if logs else ''
+                _add_comment(t, None,
+                    f'❌ 生产环境代付提现任务执行失败：{message}\n\n**执行日志：**\n```\n{log_text}\n```',
+                    'ai_process', is_ai=True)
+                t.ai_result = f'❌ 生产环境代付提现任务执行失败：{message}'
+                t.status = STATUS_PENDING_ASSIGNMENT
+            t.clear_pending_action()
+            t.processed_at = datetime.utcnow()
+            _add_comment(t, None, 'AI已完成代付提现操作，等待提交人核实', 'status_change', is_ai=True)
+            _db.session.commit()
+            logger.info(f'工单 {t.ticket_no} 生产环境代付提现任务完成，状态: {status}')
+        except Exception as e:
+            logger.error(f'工单{ticket_id}生产环境代付回调异常: {e}', exc_info=True)
+            try:
+                _db.session.rollback()
+            except Exception:
+                pass
+
+    # 启动后台线程执行代付提现
+    t = threading.Thread(
+        target=pay_service.execute_pay_withdraw,
+        kwargs={
+            'channel': channel,
+            'interface_type': interface_type,
+            'environment': environment,
+            'file_path': file_path,
+            'sheet_index': sheet_index,
+            'real_time': real_time,
+            'execute_type': execute_type,
+            'output_dir': output_dir,
+            'on_complete': on_complete,
+        },
+        daemon=True,
+    )
+    _ticket_ai_threads[ticket_id] = t
+    t.start()
+
+
 def _execute_pending_action_async(ticket_id, app):
-    """后台线程：执行待确认的数据变更操作（SQL系统任务）"""
+    """后台线程：执行待确认的数据变更操作（SQL系统任务 或 生产环境代付提现）"""
     with app.app_context():
         try:
             ticket = Ticket.query.get(ticket_id)
@@ -742,6 +941,11 @@ def _execute_pending_action_async(ticket_id, app):
             pending_action = ticket.get_pending_action()
             if not pending_action:
                 raise Exception('没有待确认执行的任务信息')
+
+            # 判断是生产环境代付提现
+            if pending_action.get('channel') and pending_action.get('environment') == 'pro':
+                _execute_pending_pay_withdraw(ticket, app)
+                return
 
             task_id = pending_action.get('task_id')
             params_values = pending_action.get('params_values', {})

@@ -393,6 +393,64 @@ AI_TOOLS = [
                 "required": ["title", "content", "description"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_pay_channels",
+            "description": "列出所有可用的代付提现渠道及其配置信息（渠道名称、支持的接口类型、环境等）。当用户提到代付、提现、代付提现、批量打款等需求时，先调用此工具了解可用渠道，再引导用户选择具体参数。",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "request_pay_withdraw",
+            "description": "当用户明确要执行代付提现时调用此工具。需要指定渠道、接口类型、环境、Excel文件路径和工作表索引。重要：执行前必须与用户确认所有参数（渠道、接口类型、环境、文件、工作表），用户未提供的参数必须主动询问，绝不能自行假设。Excel文件路径通常来自用户之前上传的文件（parse_uploaded_file工具返回的file_path）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "channel": {
+                        "type": "string",
+                        "description": "代付渠道标识，如 helipay(合利宝)、dianyin(电银)、lepass(乐商通PLUS)、kls(快乐刷)"
+                    },
+                    "interface_type": {
+                        "type": "string",
+                        "description": "接口类型，如 代付、查询。必须从 list_pay_channels 返回的该渠道 interface_types 中选择"
+                    },
+                    "environment": {
+                        "type": "string",
+                        "enum": ["test", "pro"],
+                        "description": "执行环境：test=测试环境，pro=生产环境。生产环境需用户明确确认"
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Excel文件的服务器路径（来自 parse_uploaded_file 返回的 file_path 字段）"
+                    },
+                    "sheet_index": {
+                        "type": "integer",
+                        "description": "要执行的工作表索引（从0开始），默认0。必须从 parse_uploaded_file 返回的 sheets 列表中让用户选择"
+                    },
+                    "real_time": {
+                        "type": "string",
+                        "description": "实时代付（仅快乐刷渠道需要），是/否"
+                    },
+                    "execute_type": {
+                        "type": "string",
+                        "description": "跑批步骤（仅快乐刷渠道且非实时代付时需要），如 创建代付、查询代付"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "用户原始需求简要描述"
+                    }
+                },
+                "required": ["channel", "interface_type", "environment", "file_path", "description"]
+            }
+        }
     }
 ]
 
@@ -900,6 +958,10 @@ class AiService:
             return AiService._tool_request_profit_share(args, user_id)
         elif tool_name == 'create_ticket':
             return AiService._tool_create_ticket(args, user_id)
+        elif tool_name == 'list_pay_channels':
+            return AiService._tool_list_pay_channels(args, user_id)
+        elif tool_name == 'request_pay_withdraw':
+            return AiService._tool_request_pay_withdraw(args, user_id)
         else:
             return {'error': f'未知工具: {tool_name}'}
 
@@ -1979,6 +2041,140 @@ AI回复：{ai_response[:500] if ai_response else ''}
             'database_name': database_display_name,
             'description': description or f'代理商 {org_no} 分润导出 {start_time} ~ {end_time}',
             'confirm_message': f'即将执行分润导出：\n• 代理商编号：{org_no}\n• 交易时间：{start_time} ~ {end_time}\n• 数据库：{database_display_name}\n\n系统将逐笔订单计算各级代理分润并导出 Excel。',
+        }
+
+    @staticmethod
+    def _tool_list_pay_channels(args: dict, user_id: int = None) -> dict:
+        """列出所有代付提现渠道及其配置"""
+        from app.services import pay_service
+        try:
+            rows = pay_service.load_channels()
+            channels = []
+            for r in rows:
+                cfg = pay_service.get_config(r['channel'])
+                channels.append({
+                    'channel': r['channel'],
+                    'name': r['name'],
+                    'interface_types': r.get('interface_types', []),
+                    'real_time': r.get('real_time', False),
+                    'execute_types': r.get('execute_types', []),
+                    'has_config': cfg is not None,
+                    'config_status': '已配置' if cfg else '未配置',
+                })
+            return {
+                'action_type': 'list_pay_channels',
+                'channels': channels,
+                'total': len(channels),
+            }
+        except Exception as e:
+            logger.exception('列出代付渠道失败')
+            return {'error': f'获取代付渠道失败: {str(e)}'}
+
+    @staticmethod
+    def _tool_request_pay_withdraw(args: dict, user_id: int = None) -> dict:
+        """处理代付提现请求：校验参数、返回确认信息"""
+        from app.services import pay_service
+        from app.models.user import User
+
+        channel = (args.get('channel') or '').strip()
+        interface_type = (args.get('interface_type') or '').strip()
+        environment = (args.get('environment') or 'test').strip()
+        file_path = (args.get('file_path') or '').strip()
+        sheet_index = int(args.get('sheet_index', 0))
+        real_time = (args.get('real_time') or '是').strip()
+        execute_type = (args.get('execute_type') or '创建代付').strip()
+        description = (args.get('description') or '').strip()
+
+        missing = []
+        if not channel:
+            missing.append('渠道(channel)')
+        if not interface_type:
+            missing.append('接口类型(interface_type)')
+        if not file_path:
+            missing.append('Excel文件(file_path)')
+        if missing:
+            return {
+                'error': f'缺少必要参数: {", ".join(missing)}',
+                'action_type': 'pay_withdraw',
+                'missing_params': missing,
+                'ask_user': '请提供以下信息: ' + '、'.join(missing),
+            }
+
+        if user_id:
+            user = User.query.get(user_id)
+            if user and not user.is_admin():
+                return {
+                    'error': '代付提现仅管理员可用，请联系管理员',
+                    'action_type': 'pay_withdraw',
+                }
+
+        if environment == 'pro':
+            pass
+
+        cfg = pay_service.get_config(channel)
+        if not cfg:
+            return {
+                'error': f'渠道 {channel} 未配置，请先在系统配置中完成代付配置',
+                'action_type': 'pay_withdraw',
+            }
+
+        try:
+            sheets_info = pay_service.get_sheets_info(file_path)
+        except Exception as e:
+            return {
+                'error': f'无法读取Excel文件: {str(e)}',
+                'action_type': 'pay_withdraw',
+            }
+
+        if not sheets_info:
+            return {
+                'error': 'Excel文件中未找到任何工作表',
+                'action_type': 'pay_withdraw',
+            }
+
+        if sheet_index >= len(sheets_info):
+            return {
+                'error': f'工作表索引 {sheet_index} 超出范围，文件共有 {len(sheets_info)} 个工作表（0~{len(sheets_info)-1}）',
+                'action_type': 'pay_withdraw',
+                'sheets': sheets_info,
+            }
+
+        selected_sheet = sheets_info[sheet_index]
+        env_label = '生产' if environment == 'pro' else '测试'
+        channel_name_map = {'helipay': '合利宝', 'dianyin': '电银', 'lepass': '乐商通PLUS', 'kls': '快乐刷'}
+        channel_name = channel_name_map.get(channel, channel)
+
+        confirm_lines = [
+            f'即将执行代付提现操作：',
+            f'• 渠道：{channel_name}({channel})',
+            f'• 接口类型：{interface_type}',
+            f'• 环境：{env_label}',
+            f'• 工作表：{selected_sheet["name"]}（{selected_sheet["row_count"]} 行数据）',
+        ]
+        if channel == 'kls':
+            confirm_lines.append(f'• 实时代付：{real_time}')
+            if interface_type == '代付' and real_time == '否':
+                confirm_lines.append(f'• 跑批步骤：{execute_type}')
+
+        if environment == 'pro':
+            confirm_lines.append('')
+            confirm_lines.append('⚠️ 生产环境，将真实执行代付操作，请确认后执行。')
+
+        return {
+            'action_type': 'pay_withdraw',
+            'channel': channel,
+            'channel_name': channel_name,
+            'interface_type': interface_type,
+            'environment': environment,
+            'file_path': file_path,
+            'sheet_index': sheet_index,
+            'sheet_name': selected_sheet['name'],
+            'sheet_row_count': selected_sheet['row_count'],
+            'sheets': sheets_info,
+            'real_time': real_time,
+            'execute_type': execute_type,
+            'description': description or f'{channel_name} {interface_type}（{selected_sheet["name"]}）',
+            'confirm_message': '\n'.join(confirm_lines),
         }
 
     @staticmethod

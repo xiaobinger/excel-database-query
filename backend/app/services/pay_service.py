@@ -62,6 +62,34 @@ def generate_unique_id(merchant_id, length=32):
     return f"{merchant_id}{timestamp}{random_part}"
 
 
+def load_channels():
+    """加载所有渠道元数据及其配置状态，供 AI 工具调用"""
+    from app.models.pay_config import PayConfig
+    CHANNEL_META = [
+        {'channel': 'helipay', 'name': '合利宝', 'interface_types': ['代付'], 'real_time': False, 'execute_types': []},
+        {'channel': 'dianyin', 'name': '电银', 'interface_types': ['代付', '查询'], 'real_time': False, 'execute_types': []},
+        {'channel': 'lepass', 'name': '乐商通PLUS', 'interface_types': ['代付', '查询'], 'real_time': True, 'execute_types': []},
+        {'channel': 'kls', 'name': '快乐刷', 'interface_types': ['代付', '查询'], 'real_time': True,
+         'execute_types': ['创建代付', '查询代付', '发起提现']},
+    ]
+    rows = []
+    for meta in CHANNEL_META:
+        cfg_db = PayConfig.query.filter_by(channel=meta['channel']).first()
+        item = dict(meta)
+        item['has_config'] = cfg_db is not None and bool(cfg_db.get_test_config() or cfg_db.get_pro_config())
+        rows.append(item)
+    return rows
+
+
+def get_config(channel):
+    """获取指定渠道的配置（优先 test 环境），供 AI 工具调用"""
+    from app.models.pay_config import PayConfig
+    cfg_db = PayConfig.query.filter_by(channel=channel).first()
+    if not cfg_db:
+        return None
+    return cfg_db.get_test_config() or cfg_db.get_pro_config()
+
+
 def get_sheets_info(file_path):
     """获取 Excel 文件所有工作表信息（名称 + 数据行数），返回 list[dict]"""
     ext = os.path.splitext(file_path)[1].lower()
@@ -670,3 +698,85 @@ def execute_pay(channel, cfg, rows, params, log):
             return kls_apply_withdraw(cfg, rows, params, log)
     else:
         raise ValueError(f'未知渠道: {channel}')
+
+
+def execute_pay_withdraw(channel, interface_type, environment, file_path, sheet_index=0,
+                         real_time='是', execute_type='创建代付', output_dir=None, on_complete=None):
+    """供工单AI调用的异步执行入口（在后台线程中运行，需自行创建 app context）
+
+    参数:
+        channel: 渠道标识
+        interface_type: 接口类型（代付/查询）
+        environment: 环境（test/pro）
+        file_path: Excel 文件路径
+        sheet_index: 工作表索引
+        real_time: 实时代付（是/否，仅快乐刷）
+        execute_type: 跑批步骤（仅快乐刷跑批）
+        output_dir: 结果文件输出目录
+        on_complete: 回调函数 fn(status, message, logs, result_url=None)
+            status: 'completed' 或 'failed'
+            message: 执行结果摘要
+            logs: 日志列表
+            result_url: 结果文件下载URL（可选）
+    """
+    import logging
+    _logger = logging.getLogger(__name__)
+    logs = []
+
+    def log(msg):
+        logs.append(msg)
+        _logger.info(f'[代付-工单] {msg}')
+
+    try:
+        from flask import current_app
+        from app.models.pay_config import PayConfig
+
+        cfg_db = PayConfig.query.filter_by(channel=channel).first()
+        if not cfg_db:
+            raise Exception(f'渠道 {channel} 未配置')
+
+        cfg = cfg_db.get_pro_config() if environment == 'pro' else cfg_db.get_test_config()
+        if not cfg:
+            raise Exception(f'渠道 {channel} 的 {environment} 环境未配置')
+
+        params = {
+            'interface_type': interface_type,
+            'real_time': real_time,
+            'execute_type': execute_type,
+            'bank_code': cfg_db.bank_code or 'CCB',
+            'online_bank_type': cfg_db.online_bank_type or 'B2C',
+            'transfer_mode': cfg_db.transfer_mode or ('6' if channel == 'kls' else '7'),
+            'busi_type': cfg_db.busi_type or '144',
+            'channel_code': cfg_db.channel_code or ('kls' if channel == 'kls' else 'lepass'),
+        }
+
+        rows = _load_rows(file_path, sheet_index=sheet_index)
+        if not rows:
+            raise Exception(f'Excel 工作表索引 {sheet_index} 无数据行')
+
+        sheets = get_sheets_info(file_path)
+        sheet_name = sheets[sheet_index]['name'] if sheet_index < len(sheets) else str(sheet_index)
+        env_label = '生产' if environment == 'pro' else '测试'
+        log(f'开始执行代付提现：渠道={channel} 环境={env_label} 接口={interface_type} 工作表={sheet_name} 数据行数={len(rows)}')
+
+        message, result_rows = execute_pay(channel, cfg, rows, params, log)
+        result_path = _write_result(file_path, rows, result_rows)
+        result_name = os.path.basename(result_path)
+
+        # 移动结果文件到输出目录
+        result_url = None
+        if output_dir and os.path.exists(result_path):
+            os.makedirs(output_dir, exist_ok=True)
+            dest_path = os.path.join(output_dir, result_name)
+            import shutil
+            shutil.move(result_path, dest_path)
+            result_url = f'/api/download/ticket/{result_name}'
+
+        log(f'执行完成：{message}')
+        if on_complete:
+            on_complete('completed', message, logs, result_url)
+    except Exception as e:
+        _logger.exception('代付提现执行失败')
+        log(f'执行失败: {e}')
+        if on_complete:
+            on_complete('failed', str(e), logs, None)

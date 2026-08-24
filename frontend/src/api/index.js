@@ -320,6 +320,7 @@ const pay = {
   createConfig: (data) => http.post('/pay/configs', data),
   updateConfig: (id, data) => http.put(`/pay/configs/${id}`, data),
   deleteConfig: (id) => http.delete(`/pay/configs/${id}`),
+  sheets: (formData) => http.post('/pay/sheets', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   execute: (formData) => http.post('/pay/execute', formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 600000 }),
 }
 

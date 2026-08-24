@@ -73,6 +73,15 @@
         </el-form-item>
       </el-form>
 
+      <!-- 工作表选择 -->
+      <el-form label-width="110px" v-if="sheetList.length > 0">
+        <el-form-item label="工作表">
+          <el-select v-model="selectedSheetIndex" style="width:100%" placeholder="请选择要执行的工作表">
+            <el-option v-for="(s, idx) in sheetList" :key="idx" :label="`${idx + 1}. ${s.name}（${s.row_count} 行数据）`" :value="idx" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+
       <!-- 执行按钮 -->
       <div class="action-bar">
         <el-button type="primary" :loading="executing" :disabled="!canExecute" @click="doExecute">
@@ -115,6 +124,9 @@ const uploadRef = ref()
 const executing = ref(false)
 const result = ref(null)
 const showLogs = ref(false)
+const sheetList = ref([])
+const selectedSheetIndex = ref(0)
+const uploadedFilePath = ref('')
 
 const form = reactive({
   channel: '',
@@ -126,7 +138,7 @@ const form = reactive({
 
 const currentChannel = computed(() => channels.value.find(c => c.channel === form.channel))
 const isKls = computed(() => form.channel === 'kls')
-const canExecute = computed(() => !!form.channel && fileList.value.length > 0)
+const canExecute = computed(() => !!form.channel && fileList.value.length > 0 && sheetList.value.length > 0)
 
 function onChannelChange() {
   const c = currentChannel.value
@@ -135,9 +147,30 @@ function onChannelChange() {
   form.execute_type = c?.execute_types?.[0] || '创建代付'
 }
 
-function onFileChange(file) {
+async function onFileChange(file) {
   fileList.value = [file]
   result.value = null
+  sheetList.value = []
+  selectedSheetIndex.value = 0
+  uploadedFilePath.value = ''
+
+  const fd = new FormData()
+  fd.append('file', file.raw)
+  try {
+    const res = await api.pay.sheets(fd)
+    sheetList.value = res.data.sheets || []
+    uploadedFilePath.value = res.data.file_path || ''
+    if (sheetList.value.length > 0) {
+      selectedSheetIndex.value = 0
+      ElMessage.success(`识别到 ${sheetList.value.length} 个工作表，共 ${sheetList.value.reduce((a, b) => a + (b.row_count || 0), 0)} 行数据`)
+    } else {
+      ElMessage.warning('未识别到有效数据工作表')
+    }
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '工作表识别失败')
+    fileList.value = []
+    uploadRef.value?.clearFiles()
+  }
 }
 function onExceed() {
   ElMessage.warning('一次只能上传一个文件，请先移除已有文件')
@@ -150,6 +183,9 @@ function resetForm() {
   form.real_time = '是'
   form.execute_type = '创建代付'
   fileList.value = []
+  sheetList.value = []
+  selectedSheetIndex.value = 0
+  uploadedFilePath.value = ''
   uploadRef.value?.clearFiles()
   result.value = null
 }
@@ -157,23 +193,30 @@ function resetForm() {
 async function doExecute() {
   if (!form.channel) { ElMessage.warning('请选择渠道'); return }
   if (!fileList.value.length) { ElMessage.warning('请选择 Excel 文件'); return }
+  if (!sheetList.value.length) { ElMessage.warning('请等待工作表识别完成'); return }
   const fd = new FormData()
-  fd.append('file', fileList.value[0].raw)
+  if (uploadedFilePath.value) {
+    fd.append('file_path', uploadedFilePath.value)
+  } else {
+    fd.append('file', fileList.value[0].raw)
+  }
   fd.append('channel', form.channel)
   fd.append('environment', form.environment)
   fd.append('interface_type', form.interface_type)
   fd.append('real_time', form.real_time)
   fd.append('execute_type', form.execute_type)
+  fd.append('sheet_index', String(selectedSheetIndex.value))
 
   executing.value = true
   result.value = null
   try {
     const res = await api.pay.execute(fd)
     result.value = res.data
+    const sheetHint = res.data?.sheet_name ? `（工作表: ${res.data.sheet_name}）` : ''
     if (form.environment === 'pro') {
-      ElMessage.warning('生产环境执行完成：' + res.data.message)
+      ElMessage.warning('生产环境执行完成：' + res.data.message + sheetHint)
     } else {
-      ElMessage.success(res.data.message)
+      ElMessage.success(res.data.message + sheetHint)
     }
   } catch (e) {
     ElMessage.error(e?.response?.data?.message || '执行失败')
