@@ -58,6 +58,7 @@ def create_app(config_name='default'):
         _auto_migrate(app)
         _migrate_ticket_comments_nullable(app)
         _migrate_api_call_log_columns(app)
+        _migrate_api_call_log_session(app)
         _init_default_admin(app)
         _init_connection_pool(app)
         _recover_stale_ai_tickets(app)
@@ -451,6 +452,72 @@ def _migrate_api_call_log_columns(app):
                 app.logger.info(f'Migration: api_call_logs.{col_name} 已扩容为 MEDIUMTEXT')
     except Exception as e:
         app.logger.warning(f'迁移api_call_logs列类型失败: {e}')
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+
+
+def _migrate_api_call_log_session(app):
+    """api_call_logs.session_id 的索引创建与历史数据回填。
+
+    1) 为 session_id 建索引（会话聚合查询用，幂等）；
+    2) 将历史 NULL session_id 的记录按其 messages JSON 哈希回填，
+       使旧数据也能按会话聚合展示。仅在实际应用进程（非reloader主进程）中执行。
+    """
+    import os
+    if app.debug and os.environ.get('WERKZEUG_RUN_MAIN') is None:
+        return
+
+    try:
+        from sqlalchemy import inspect, Index
+        from app.models.api_call_log import ApiCallLog
+        inspector = inspect(db.engine)
+        if not inspector.has_table(ApiCallLog.__tablename__):
+            return
+
+        # 1) 索引（checkfirst 幂等）
+        existing_idx = {i['name'] for i in inspector.get_indexes(ApiCallLog.__tablename__)}
+        if 'ix_api_call_logs_session_id' not in existing_idx:
+            Index('ix_api_call_logs_session_id', ApiCallLog.session_id).create(bind=db.engine, checkfirst=True)
+            app.logger.info('Migration: 已创建 api_call_logs.session_id 索引')
+
+        # 2) 回填历史 NULL session_id
+        from app.services.open_api_service import compute_session_id
+        batch = 200
+        total_backfilled = 0
+        while True:
+            with app.app_context():
+                rows = (ApiCallLog.query
+                        .filter(ApiCallLog.session_id.is_(None))
+                        .order_by(ApiCallLog.id)
+                        .limit(batch).all())
+                if not rows:
+                    break
+                for row in rows:
+                    import json as _json
+                    try:
+                        msgs = _json.loads(row.messages) if row.messages else []
+                    except (ValueError, TypeError):
+                        msgs = []
+                    if isinstance(msgs, list) and msgs:
+                        row.session_id = compute_session_id(row.api_key_id, msgs)
+                    elif row.messages:
+                        # JSON损坏但内容存在：按原始文本前缀哈希
+                        seed = f'{row.api_key_id}:{(row.messages or "")[:4096]}'
+                        import hashlib as _hashlib
+                        row.session_id = _hashlib.sha256(seed.encode('utf-8')).hexdigest()[:32]
+                    else:
+                        # 无内容（失败记录等）：独立会话
+                        row.session_id = f'legacy-{row.id}'
+                db.session.commit()
+                total_backfilled += len(rows)
+                if len(rows) < batch:
+                    break
+        if total_backfilled:
+            app.logger.info(f'Migration: 已回填 {total_backfilled} 条 api_call_logs.session_id')
+    except Exception as e:
+        app.logger.warning(f'迁移api_call_logs.session_id失败: {e}')
         try:
             db.session.rollback()
         except Exception:

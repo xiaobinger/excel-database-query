@@ -125,61 +125,175 @@ Authorization: Bearer sk-xxxxxxxx</pre>
             <el-col :span="4"><div class="stat-box"><div class="stat-num">{{ stats.avg_elapsed || 0 }}s</div><div class="stat-label">平均耗时</div></div></el-col>
           </el-row>
 
-          <div style="margin-bottom: 12px; display: flex; gap: 8px; flex-wrap: wrap">
-            <el-select v-model="logFilter.api_key_id" placeholder="按密钥筛选" clearable style="width: 180px">
+          <div style="margin-bottom: 12px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center">
+            <el-select v-model="logFilter.api_key_id" placeholder="按密钥筛选" clearable filterable style="width: 160px">
               <el-option v-for="k in keys" :key="k.id" :label="k.name" :value="k.id" />
             </el-select>
-            <el-select v-model="logFilter.status" placeholder="按状态筛选" clearable style="width: 140px">
+            <el-select v-model="logFilter.model" placeholder="按实际调用模型筛选" clearable filterable style="width: 200px">
+              <el-option v-for="m in logModels" :key="m" :label="m" :value="m" />
+            </el-select>
+            <el-select v-model="logFilter.status" placeholder="按状态筛选" clearable style="width: 120px">
               <el-option label="成功" value="success" />
               <el-option label="失败" value="failed" />
             </el-select>
+            <el-input v-model="logFilter.session_id" placeholder="按会话ID筛选" clearable style="width: 200px" />
             <el-date-picker v-model="logTimeRange" type="datetimerange" range-separator="至"
-              start-placeholder="开始时间" end-placeholder="结束时间" style="width: 360px" />
-            <el-button type="primary" @click="fetchLogs"><i class="fas fa-search"></i> 查询</el-button>
+              start-placeholder="开始时间" end-placeholder="结束时间" style="width: 340px" />
+            <el-button type="primary" @click="handleLogSearch"><i class="fas fa-search"></i> 查询</el-button>
+            <el-radio-group v-model="logViewMode" @change="handleViewModeChange" style="margin-left: auto">
+              <el-radio-button value="sessions">会话聚合</el-radio-button>
+              <el-radio-button value="detail">调用明细</el-radio-button>
+            </el-radio-group>
           </div>
 
-          <el-table :data="logs" stripe v-loading="logsLoading" style="width: 100%" size="small">
-            <el-table-column prop="created_at" label="时间" width="160" align="center" />
-            <el-table-column prop="api_key_name" label="密钥" min-width="100" show-overflow-tooltip />
-            <el-table-column label="端点" width="90" align="center">
-              <template #default="{ row }">
-                <el-tag :type="row.endpoint === 'openai' ? 'primary' : 'success'" size="small">{{ row.endpoint }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="模型（请求→实际）" min-width="180" show-overflow-tooltip>
-              <template #default="{ row }">
-                {{ row.model_requested }}<span v-if="row.model_used && row.model_used !== row.model_requested"> → {{ row.model_used }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="Token（↑/↓/缓存）" width="170" align="center">
-              <template #default="{ row }">
-                {{ row.tokens_used }} <span style="color:#999">({{ row.prompt_tokens }}/{{ row.completion_tokens }}<template v-if="row.cache_read_tokens > 0">, 命中{{ row.cache_read_tokens }}</template>)</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="耗时" width="80" align="center">
-              <template #default="{ row }">{{ row.elapsed }}s</template>
-            </el-table-column>
-            <el-table-column prop="caller_ip" label="调用方IP" width="130" align="center" />
-            <el-table-column label="状态" width="70" align="center">
-              <template #default="{ row }">
-                <el-tag :type="row.is_success ? 'success' : 'danger'" size="small">{{ row.is_success ? '成功' : '失败' }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="操作" width="100" align="center" fixed="right">
-              <template #default="{ row }">
-                <el-button size="small" type="primary" text @click="showLogDetail(row.id)"><i class="fas fa-file-alt"></i></el-button>
-                <el-popconfirm title="确定删除此条调用记录？" @confirm="handleDeleteLog(row.id)">
-                  <template #reference>
-                    <el-button size="small" type="danger" text><i class="fas fa-trash"></i></el-button>
-                  </template>
-                </el-popconfirm>
-              </template>
-            </el-table-column>
-          </el-table>
-          <div style="margin-top: 12px; display: flex; justify-content: flex-end">
-            <el-pagination background layout="total, prev, pager, next" :total="logTotal"
-              :page-size="logFilter.per_page" v-model:current-page="logFilter.page" @current-change="fetchLogs" />
-          </div>
+          <!-- 会话聚合视图：外层会话汇总，展开显示会话内每条对话 -->
+          <template v-if="logViewMode === 'sessions'">
+            <el-table :data="sessions" stripe v-loading="sessionsLoading" style="width: 100%" size="small"
+              row-key="session_id" @expand-change="handleSessionExpand">
+              <el-table-column type="expand">
+                <template #default="{ row }">
+                  <div class="session-expand">
+                    <div class="session-expand-tip">
+                      会话 {{ row.session_id }} · 共 {{ row.call_count }} 条对话（点击行查看对话内容）
+                    </div>
+                    <el-table :data="sessionLogs[row.session_id] || []" size="small"
+                      v-loading="sessionLogsLoading[row.session_id]"
+                      @row-click="(r) => showLogDetail(r.id)" class="inner-log-table">
+                      <el-table-column prop="created_at" label="时间" width="160" align="center" />
+                      <el-table-column label="模型（请求→实际）" min-width="180" show-overflow-tooltip>
+                        <template #default="{ row: r }">
+                          {{ r.model_requested }}<span v-if="r.model_used && r.model_used !== r.model_requested"> → {{ r.model_used }}</span>
+                        </template>
+                      </el-table-column>
+                      <el-table-column label="Token（↑/↓）" width="130" align="center">
+                        <template #default="{ row: r }">{{ r.tokens_used }} <span style="color:#999">({{ r.prompt_tokens }}/{{ r.completion_tokens }})</span></template>
+                      </el-table-column>
+                      <el-table-column label="耗时" width="70" align="center">
+                        <template #default="{ row: r }">{{ r.elapsed }}s</template>
+                      </el-table-column>
+                      <el-table-column label="状态" width="70" align="center">
+                        <template #default="{ row: r }">
+                          <el-tag :type="r.is_success ? 'success' : 'danger'" size="small">{{ r.is_success ? '成功' : '失败' }}</el-tag>
+                        </template>
+                      </el-table-column>
+                      <el-table-column label="操作" width="90" align="center">
+                        <template #default="{ row: r }">
+                          <el-button size="small" type="primary" text @click.stop="showLogDetail(r.id)"><i class="fas fa-file-alt"></i></el-button>
+                          <el-popconfirm title="确定删除此条调用记录？" @confirm="handleDeleteLog(r.id)">
+                            <template #reference>
+                              <el-button size="small" type="danger" text @click.stop><i class="fas fa-trash"></i></el-button>
+                            </template>
+                          </el-popconfirm>
+                        </template>
+                      </el-table-column>
+                    </el-table>
+                    <div v-if="(sessionLogs[row.session_id] || []).length === 0 && !sessionLogsLoading[row.session_id]" class="form-tip" style="padding: 8px">
+                      暂无对话记录
+                    </div>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="会话ID" min-width="150">
+                <template #default="{ row }">
+                  <div style="display: flex; align-items: center; gap: 4px">
+                    <el-tooltip :content="row.session_id" placement="top">
+                      <span class="mono">{{ shortSessionId(row.session_id) }}</span>
+                    </el-tooltip>
+                    <el-button size="small" text type="primary" @click.stop="copyText(row.session_id)">
+                      <i class="fas fa-copy"></i>
+                    </el-button>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column prop="api_key_name" label="密钥" min-width="100" show-overflow-tooltip />
+              <el-table-column label="对话数" width="80" align="center">
+                <template #default="{ row }">
+                  <el-tag size="small" type="primary">{{ row.call_count }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="涉及模型" min-width="170">
+                <template #default="{ row }">
+                  <el-tooltip v-for="m in row.models" :key="m.model" :content="`${m.model} × ${m.count} 次`" placement="top">
+                    <el-tag size="small" :type="m.model.includes('auto') ? 'warning' : 'success'" style="margin-right: 4px">
+                      {{ m.model }}<span style="opacity:.7">×{{ m.count }}</span>
+                    </el-tag>
+                  </el-tooltip>
+                </template>
+              </el-table-column>
+              <el-table-column label="Token（↑/↓/命中）" width="150" align="center">
+                <template #default="{ row }">
+                  {{ row.total_tokens }} <span style="color:#999">({{ row.prompt_tokens }}/{{ row.completion_tokens }}<template v-if="row.cache_read_tokens > 0">, {{ row.cache_read_tokens }}</template>)</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="总耗时" width="80" align="center">
+                <template #default="{ row }">{{ row.total_elapsed }}s</template>
+              </el-table-column>
+              <el-table-column label="成功率" width="80" align="center">
+                <template #default="{ row }">
+                  <span :style="{ color: row.success_rate >= 100 ? '#67c23a' : (row.success_rate > 0 ? '#e6a23c' : '#f56c6c') }">{{ row.success_rate }}%</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="last_time" label="最近活动" width="160" align="center" />
+            </el-table>
+            <div style="margin-top: 12px; display: flex; justify-content: flex-end">
+              <el-pagination background layout="total, prev, pager, next" :total="sessionTotal"
+                :page-size="logFilter.per_page" v-model:current-page="logFilter.page" @current-change="fetchSessions" />
+            </div>
+          </template>
+
+          <!-- 调用明细视图 -->
+          <template v-else>
+            <el-table :data="logs" stripe v-loading="logsLoading" style="width: 100%" size="small">
+              <el-table-column prop="created_at" label="时间" width="160" align="center" />
+              <el-table-column prop="api_key_name" label="密钥" min-width="90" show-overflow-tooltip />
+              <el-table-column label="会话ID" min-width="120">
+                <template #default="{ row }">
+                  <el-tooltip v-if="row.session_id" :content="row.session_id" placement="top">
+                    <span class="mono">{{ shortSessionId(row.session_id) }}</span>
+                  </el-tooltip>
+                  <span v-else style="color:#999">—</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="端点" width="80" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="row.endpoint === 'openai' ? 'primary' : 'success'" size="small">{{ row.endpoint }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="模型（请求→实际）" min-width="180" show-overflow-tooltip>
+                <template #default="{ row }">
+                  {{ row.model_requested }}<span v-if="row.model_used && row.model_used !== row.model_requested"> → {{ row.model_used }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="Token（↑/↓/缓存）" width="170" align="center">
+                <template #default="{ row }">
+                  {{ row.tokens_used }} <span style="color:#999">({{ row.prompt_tokens }}/{{ row.completion_tokens }}<template v-if="row.cache_read_tokens > 0">, 命中{{ row.cache_read_tokens }}</template>)</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="耗时" width="80" align="center">
+                <template #default="{ row }">{{ row.elapsed }}s</template>
+              </el-table-column>
+              <el-table-column prop="caller_ip" label="调用方IP" width="130" align="center" />
+              <el-table-column label="状态" width="70" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="row.is_success ? 'success' : 'danger'" size="small">{{ row.is_success ? '成功' : '失败' }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="100" align="center" fixed="right">
+                <template #default="{ row }">
+                  <el-button size="small" type="primary" text @click="showLogDetail(row.id)"><i class="fas fa-file-alt"></i></el-button>
+                  <el-popconfirm title="确定删除此条调用记录？" @confirm="handleDeleteLog(row.id)">
+                    <template #reference>
+                      <el-button size="small" type="danger" text><i class="fas fa-trash"></i></el-button>
+                    </template>
+                  </el-popconfirm>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div style="margin-top: 12px; display: flex; justify-content: flex-end">
+              <el-pagination background layout="total, prev, pager, next" :total="logTotal"
+                :page-size="logFilter.per_page" v-model:current-page="logFilter.page" @current-change="fetchLogs" />
+            </div>
+          </template>
         </el-tab-pane>
       </el-tabs>
     </el-card>
@@ -234,7 +348,7 @@ Authorization: Bearer sk-xxxxxxxx</pre>
     </el-dialog>
 
     <!-- 调用详情对话框 -->
-    <el-dialog v-model="logDetailVisible" title="调用详情" width="720px" destroy-on-close>
+    <el-dialog v-model="logDetailVisible" title="调用详情" width="720px" destroy-on-close top="5vh">
       <template v-if="logDetail">
         <el-descriptions :column="2" border size="small">
           <el-descriptions-item label="时间">{{ logDetail.created_at }}</el-descriptions-item>
@@ -246,6 +360,16 @@ Authorization: Bearer sk-xxxxxxxx</pre>
           <el-descriptions-item label="耗时">{{ logDetail.elapsed }}s</el-descriptions-item>
           <el-descriptions-item label="调用方IP">{{ logDetail.caller_ip }}</el-descriptions-item>
         </el-descriptions>
+        <div v-if="logDetail.session_id" style="margin-top: 8px">
+          <el-descriptions :column="1" border size="small">
+            <el-descriptions-item label="会话ID">
+              <div style="display: flex; align-items: center; gap: 6px">
+                <span class="mono">{{ logDetail.session_id }}</span>
+                <el-button size="small" text type="primary" @click="copyText(logDetail.session_id)"><i class="fas fa-copy"></i></el-button>
+              </div>
+            </el-descriptions-item>
+          </el-descriptions>
+        </div>
         <div v-if="logDetail.error_msg" style="margin-top: 12px">
           <el-alert type="error" :closable="false" :title="logDetail.error_msg" />
         </div>
@@ -255,14 +379,16 @@ Authorization: Bearer sk-xxxxxxxx</pre>
         </div>
         <div style="margin-top: 12px">
           <div style="font-weight: 600; margin-bottom: 6px">AI 回复</div>
-          <div class="msg-item" style="white-space: pre-wrap">{{ logDetail.response_content || '（空）' }}</div>
+          <div v-if="logDetail.response_content" class="msg-item md-text" v-html="renderMarkdown(logDetail.response_content)"></div>
+          <div v-else class="msg-item" style="color: #999">（空）</div>
         </div>
         <div style="margin-top: 12px">
           <el-collapse>
             <el-collapse-item :title="`完整对话内容（${(logDetail.messages || []).length}条，点击展开）`" name="messages">
               <div v-for="(m, i) in logDetail.messages" :key="i" class="msg-item">
                 <el-tag size="small" :type="m.role === 'user' ? 'primary' : (m.role === 'assistant' ? 'success' : 'info')">{{ m.role }}</el-tag>
-                <span style="margin-left: 8px; white-space: pre-wrap">{{ m.content }}</span>
+                <div v-if="m.role === 'user' || m.role === 'system'" style="margin-top: 6px; white-space: pre-wrap">{{ m.content }}</div>
+                <div v-else class="md-text" style="margin-top: 6px" v-html="renderMarkdown(m.content || '')"></div>
               </div>
             </el-collapse-item>
           </el-collapse>
@@ -421,36 +547,111 @@ async function handleTestKey(row) {
 }
 
 // ===== 调用记录 =====
+import { marked } from 'marked'
+
 const logs = ref([])
 const logsLoading = ref(false)
 const logTotal = ref(0)
-const logFilter = reactive({ page: 1, per_page: 20, api_key_id: null, status: '' })
+const logFilter = reactive({ page: 1, per_page: 20, api_key_id: null, status: '', model: '', session_id: '' })
 const logTimeRange = ref(null)
 const logDetail = ref(null)
 const logDetailVisible = ref(false)
 const stats = ref({})
+const logModels = ref([])
+
+// 视图模式：sessions=按会话聚合 / detail=调用明细
+const logViewMode = ref('sessions')
+const sessions = ref([])
+const sessionsLoading = ref(false)
+const sessionTotal = ref(0)
+const sessionLogs = reactive({})        // session_id -> 该会话的调用明细（展开行）
+const sessionLogsLoading = reactive({})
+
+function buildLogParams(withPage = true) {
+  const params = {}
+  if (withPage) { params.page = logFilter.page; params.per_page = logFilter.per_page }
+  if (logFilter.api_key_id) params.api_key_id = logFilter.api_key_id
+  if (logFilter.status) params.status = logFilter.status
+  if (logFilter.model) params.model = logFilter.model
+  if (logFilter.session_id) params.session_id = logFilter.session_id.trim()
+  if (logTimeRange && logTimeRange.value && logTimeRange.value.length === 2) {
+    params.start_time = logTimeRange.value[0].toISOString()
+    params.end_time = logTimeRange.value[1].toISOString()
+  }
+  return params
+}
 
 async function fetchLogs() {
   logsLoading.value = true
   try {
-    const params = { page: logFilter.page, per_page: logFilter.per_page }
-    if (logFilter.api_key_id) params.api_key_id = logFilter.api_key_id
-    if (logFilter.status) params.status = logFilter.status
-    if (logTimeRange && logTimeRange.value && logTimeRange.value.length === 2) {
-      params.start_time = logTimeRange.value[0].toISOString()
-      params.end_time = logTimeRange.value[1].toISOString()
-    }
-    const res = await api.openApi.getLogs(params)
+    const res = await api.openApi.getLogs(buildLogParams())
     logs.value = res.data || []
     logTotal.value = res.total || 0
   } catch { logs.value = [] } finally { logsLoading.value = false }
 }
 
+async function fetchSessions() {
+  sessionsLoading.value = true
+  try {
+    const res = await api.openApi.getSessionLogs(buildLogParams())
+    sessions.value = res.data || []
+    sessionTotal.value = res.total || 0
+    // 筛选变化后清空展开行缓存
+    Object.keys(sessionLogs).forEach(k => delete sessionLogs[k])
+  } catch { sessions.value = [] } finally { sessionsLoading.value = false }
+}
+
 async function fetchStats() {
   try {
-    const res = await api.openApi.getStats()
+    const res = await api.openApi.getStats(buildLogParams(false))
     stats.value = res.data || {}
   } catch { stats.value = {} }
+}
+
+async function fetchLogModels() {
+  try {
+    const res = await api.openApi.getLogModels()
+    logModels.value = res.data || []
+  } catch { logModels.value = [] }
+}
+
+function handleLogSearch() {
+  logFilter.page = 1
+  if (logViewMode.value === 'sessions') fetchSessions()
+  else fetchLogs()
+  fetchStats()
+}
+
+function handleViewModeChange() {
+  logFilter.page = 1
+  if (logViewMode.value === 'sessions') fetchSessions()
+  else fetchLogs()
+}
+
+// 展开某会话时懒加载其调用明细
+async function handleSessionExpand(row, expandedRows) {
+  const expanded = expandedRows.some(r => r.session_id === row.session_id)
+  if (!expanded || sessionLogs[row.session_id]) return
+  sessionLogsLoading[row.session_id] = true
+  try {
+    const res = await api.openApi.getLogs({ session_id: row.session_id, page: 1, per_page: 200 })
+    sessionLogs[row.session_id] = res.data || []
+  } catch { sessionLogs[row.session_id] = [] } finally { sessionLogsLoading[row.session_id] = false }
+}
+
+function shortSessionId(sid) {
+  if (!sid) return '—'
+  return sid.length > 12 ? sid.slice(0, 8) + '…' + sid.slice(-4) : sid
+}
+
+function copyText(val) {
+  navigator.clipboard?.writeText(val).then(() => ElMessage.success('已复制')).catch(() => ElMessage.warning('复制失败，请手动复制'))
+}
+
+// Markdown/HTML 渲染（AI回复与assistant消息）
+function renderMarkdown(text) {
+  if (!text) return ''
+  try { return marked.parse(text) } catch { return String(text).replace(/\n/g, '<br>') }
 }
 
 async function showLogDetail(id) {
@@ -474,7 +675,10 @@ async function handleDeleteLog(id) {
   try {
     await api.openApi.deleteLog(id)
     ElMessage.success('删除成功')
-    fetchLogs()
+    // 清空会话明细缓存并刷新当前视图与统计
+    Object.keys(sessionLogs).forEach(k => delete sessionLogs[k])
+    if (logViewMode.value === 'sessions') fetchSessions()
+    else fetchLogs()
     fetchStats()
   } catch { /* 拦截器已提示 */ }
 }
@@ -483,7 +687,8 @@ onMounted(() => {
   fetchSettings()
   fetchKeys()
   fetchAiConfigs()
-  fetchLogs()
+  fetchLogModels()
+  fetchSessions()
   fetchStats()
 })
 </script>
@@ -558,4 +763,51 @@ onMounted(() => {
   line-height: 1.6;
   word-break: break-word;
 }
+.session-expand {
+  padding: 4px 8px 8px 28px;
+}
+.session-expand-tip {
+  font-size: 12px;
+  color: #999;
+  margin-bottom: 8px;
+}
+.inner-log-table {
+  cursor: pointer;
+}
+.md-text :deep(p) { margin: 4px 0; }
+.md-text :deep(pre) {
+  background: #1e1e2e;
+  color: #cdd6f4;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  overflow-x: auto;
+}
+.md-text :deep(code) {
+  background: rgba(64,158,255,0.1);
+  color: #409eff;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+.md-text :deep(pre code) {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+.md-text :deep(table) { border-collapse: collapse; margin: 6px 0; }
+.md-text :deep(th), .md-text :deep(td) {
+  border: 1px solid #dcdfe6;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.md-text :deep(blockquote) {
+  margin: 6px 0;
+  padding: 4px 10px;
+  border-left: 3px solid #dcdfe6;
+  color: #666;
+}
+.md-text :deep(img) { max-width: 100%; }
+.md-text :deep(ul), .md-text :deep(ol) { padding-left: 20px; margin: 4px 0; }
+.md-text :deep(a) { color: #409eff; }
 </style>

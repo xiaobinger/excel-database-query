@@ -36,6 +36,19 @@ def _parse_auth_token():
     return request.headers.get('X-Api-Key', '').strip()
 
 
+def _parse_session_id(data):
+    """提取调用方显式传入的会话ID：body 的 session_id 优先，其次 X-Session-Id 头。
+
+    便于调用方（外部agent等）将多次调用归属到同一业务会话；
+    未传时由服务端按首条user消息自动派生。返回 '' 表示未显式指定。
+    """
+    from app.services.open_api_service import sanitize_session_id
+    raw = (data or {}).get('session_id') if isinstance(data, dict) else None
+    if raw in (None, ''):
+        raw = request.headers.get('X-Session-Id', '')
+    return sanitize_session_id(raw)
+
+
 def _authenticate_request():
     """认证请求，返回 (api_key, 错误响应, caller_ip)"""
     ip = get_client_ip()
@@ -139,14 +152,15 @@ def openai_chat_completions():
         return _openai_error(extras_err, 400)
     model_name = data.get('model') or 'auto'
     stream = bool(data.get('stream'))
+    session_id = _parse_session_id(data)
 
     if stream:
-        return _openai_stream_response(api_key, model_name, messages, ip, extras)
-    return _openai_plain_response(api_key, model_name, messages, ip, extras)
+        return _openai_stream_response(api_key, model_name, messages, ip, extras, session_id=session_id)
+    return _openai_plain_response(api_key, model_name, messages, ip, extras, session_id=session_id)
 
 
-def _openai_plain_response(api_key, model_name, messages, ip, extras=None):
-    result = chat_once(api_key, 'openai', model_name, messages, ip, extras=extras)
+def _openai_plain_response(api_key, model_name, messages, ip, extras=None, session_id=None):
+    result = chat_once(api_key, 'openai', model_name, messages, ip, extras=extras, session_id=session_id)
     if not result.get('success'):
         return _openai_error(result.get('error', '调用失败'), 502, 'api_error')
     message = {'role': 'assistant', 'content': result.get('content') or ''}
@@ -170,7 +184,7 @@ def _openai_plain_response(api_key, model_name, messages, ip, extras=None):
     })
 
 
-def _openai_stream_response(api_key, model_name, messages, ip, extras=None):
+def _openai_stream_response(api_key, model_name, messages, ip, extras=None, session_id=None):
     completion_id = f'chatcmpl-{uuid.uuid4().hex[:24]}'
     created = int(time.time())
     # 生成器在响应头发出后才执行（请求上下文已弹出），需先在请求阶段取出 app
@@ -179,7 +193,7 @@ def _openai_stream_response(api_key, model_name, messages, ip, extras=None):
 
     def generate():
         model_name_out = model_name
-        for event, done, meta in stream_chat(api_key, 'openai', model_name, messages, ip, app=app, extras=extras):
+        for event, done, meta in stream_chat(api_key, 'openai', model_name, messages, ip, app=app, extras=extras, session_id=session_id):
             if done:
                 if meta and meta.get('error'):
                     # 流已开始后出错：以OpenAI格式输出错误信息后结束
@@ -262,6 +276,7 @@ def custom_chat():
         return jsonify({'success': False, 'message': extras_err}), 400
     model_name = data.get('model') or 'auto'
     stream = bool(data.get('stream'))
+    session_id = _parse_session_id(data)
 
     if stream:
         # 生成器在响应头发出后才执行（请求上下文已弹出），需先在请求阶段取出 app
@@ -269,7 +284,7 @@ def custom_chat():
         app = current_app._get_current_object()
 
         def generate():
-            for event, done, meta in stream_chat(api_key, 'custom', model_name, messages, ip, app=app, extras=extras):
+            for event, done, meta in stream_chat(api_key, 'custom', model_name, messages, ip, app=app, extras=extras, session_id=session_id):
                 if done:
                     if meta and meta.get('error'):
                         yield 'data: ' + json.dumps({'type': 'error', 'message': meta['error']}, ensure_ascii=False) + '\n\n'
@@ -284,7 +299,7 @@ def custom_chat():
 
         return Response(generate(), mimetype='text/event-stream', headers=SSE_HEADERS)
 
-    result = chat_once(api_key, 'custom', model_name, messages, ip, extras=extras)
+    result = chat_once(api_key, 'custom', model_name, messages, ip, extras=extras, session_id=session_id)
     if not result.get('success'):
         return jsonify({'success': False, 'message': result.get('error', '调用失败')}), 502
     data_out = {

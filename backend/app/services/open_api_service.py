@@ -191,6 +191,41 @@ def _content_with_tool_calls(content: str, tool_calls) -> str:
     return f'[tool_calls]\n{merged}'
 
 
+def sanitize_session_id(raw) -> str:
+    """规范化调用方显式传入的会话ID：仅保留安全字符，超长截断，非法返回空串"""
+    if raw is None:
+        return ''
+    s = str(raw).strip()
+    if not s:
+        return ''
+    s = ''.join(c if (c.isalnum() or c in '-_.') else '-' for c in s)
+    return s[:64]
+
+
+def compute_session_id(api_key_id, messages) -> str:
+    """自动派生会话ID（调用方未显式传sessionId时）。
+
+    OpenAI兼容协议无会话概念，调用方通常每次携带完整上下文，
+    因此以「密钥ID + 首条user消息内容」的哈希作为会话指纹：
+    同一会话的多次调用首条user消息相同 → 聚合到同一会话。
+    无user消息时按整体消息哈希兜底。
+    """
+    seed = None
+    if isinstance(messages, list):
+        for m in messages:
+            if isinstance(m, dict) and m.get('role') == 'user':
+                seed = f'{api_key_id}:{m.get("content") or ""}'
+                break
+        if seed is None:
+            try:
+                seed = f'{api_key_id}:{json.dumps(messages, ensure_ascii=False)[:4096]}'
+            except (TypeError, ValueError):
+                seed = f'{api_key_id}:'
+    else:
+        seed = f'{api_key_id}:'
+    return hashlib.sha256(seed.encode('utf-8')).hexdigest()[:32]
+
+
 def _chat_single(cfg, messages: list, extras: dict = None):
     """单模型非流式调用（支持工具调用透传）。
     返回 (content, tool_calls, finish_reason, tokens, p, c, cc, cr)"""
@@ -225,7 +260,7 @@ def _chat_single(cfg, messages: list, extras: dict = None):
 
 def _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
               messages, response_content, tokens, p_tokens, c_tokens, cc, cr,
-              elapsed, is_success, error_msg=None):
+              elapsed, is_success, error_msg=None, session_id=None):
     """写调用记录（可在任意线程，自带 app context）。
 
     超长内容按字节安全截断；写入失败时降级（去掉内容重试）确保统计不丢。
@@ -240,6 +275,7 @@ def _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
                 endpoint=endpoint,
                 model_requested=model_requested,
                 model_used=model_used,
+                session_id=session_id or compute_session_id(api_key.id, messages),
                 caller_ip=caller_ip,
                 messages=_truncate_bytes(json.dumps(messages, ensure_ascii=False), 15 * 1024 * 1024) if messages else None,
                 response_content=_truncate_bytes(response_content, 15 * 1024 * 1024) or None,
@@ -269,6 +305,7 @@ def _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
                     endpoint=endpoint,
                     model_requested=model_requested,
                     model_used=model_used,
+                    session_id=session_id or compute_session_id(api_key.id, messages),
                     caller_ip=caller_ip,
                     messages=None,
                     response_content=None,
@@ -294,7 +331,7 @@ def _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
                     pass
 
 
-def chat_once(api_key, endpoint, model_name, messages, caller_ip, extras=None):
+def chat_once(api_key, endpoint, model_name, messages, caller_ip, extras=None, session_id=None):
     """非流式对话（支持工具调用透传）。
     返回 dict: {success, content, tool_calls, finish_reason, model, usage, elapsed} 或 {success, error}"""
     from flask import current_app
@@ -302,6 +339,7 @@ def chat_once(api_key, endpoint, model_name, messages, caller_ip, extras=None):
     start = time.time()
     model_requested = (model_name or 'auto').strip() or 'auto'
     config, matched = resolve_model(api_key, model_requested)
+    session_id = sanitize_session_id(session_id) or None
 
     content = ''
     tool_calls = []
@@ -338,7 +376,7 @@ def chat_once(api_key, endpoint, model_name, messages, caller_ip, extras=None):
         elapsed = time.time() - start
         _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
                   messages, _content_with_tool_calls(content, tool_calls),
-                  tokens, p_tokens, c_tokens, cc, cr, elapsed, True)
+                  tokens, p_tokens, c_tokens, cc, cr, elapsed, True, session_id=session_id)
         return {
             'success': True,
             'content': content,
@@ -357,11 +395,11 @@ def chat_once(api_key, endpoint, model_name, messages, caller_ip, extras=None):
     except Exception as e:
         elapsed = time.time() - start
         _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
-                  messages, '', 0, 0, 0, 0, 0, elapsed, False, str(e))
+                  messages, '', 0, 0, 0, 0, 0, elapsed, False, str(e), session_id=session_id)
         return {'success': False, 'error': str(e)}
 
 
-def stream_chat(api_key, endpoint, model_name, messages, caller_ip, app=None, extras=None):
+def stream_chat(api_key, endpoint, model_name, messages, caller_ip, app=None, extras=None, session_id=None):
     """流式对话生成器（支持工具调用透传）：逐段 yield (event, done, meta)。
 
     event 为 None（结束帧）或 dict：
@@ -381,6 +419,7 @@ def stream_chat(api_key, endpoint, model_name, messages, caller_ip, app=None, ex
         start = time.time()
         model_requested = (model_name or 'auto').strip() or 'auto'
         config, matched = resolve_model(api_key, model_requested)
+        session_id = sanitize_session_id(session_id) or None
 
         full_content = []
         tool_calls_accum = {}  # 流式tool_calls按index聚合（存调用记录用）
@@ -526,7 +565,7 @@ def stream_chat(api_key, endpoint, model_name, messages, caller_ip, app=None, ex
             tool_calls = [tool_calls_accum[k] for k in sorted(tool_calls_accum)]
             _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
                       messages, _content_with_tool_calls(content, tool_calls),
-                      tokens, p_tokens, c_tokens_out, cc, cr, elapsed, True)
+                      tokens, p_tokens, c_tokens_out, cc, cr, elapsed, True, session_id=session_id)
             yield '', True, {
                 'model': model_used,
                 'finish_reason': finish_reason,
@@ -546,7 +585,7 @@ def stream_chat(api_key, endpoint, model_name, messages, caller_ip, app=None, ex
             _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
                       messages, _content_with_tool_calls(''.join(full_content),
                       [tool_calls_accum[k] for k in sorted(tool_calls_accum)]),
-                      tokens, p_tokens, c_tokens_out, cc, cr, elapsed, False, error)
+                      tokens, p_tokens, c_tokens_out, cc, cr, elapsed, False, error, session_id=session_id)
             yield '', True, {'error': error}
 
 

@@ -14,6 +14,7 @@ class ApiCallLog(db.Model):
     endpoint = db.Column(db.String(20), comment='端点: openai/custom')
     model_requested = db.Column(db.String(100), comment='请求的模型名(外部名或auto)')
     model_used = db.Column(db.String(100), comment='最终调用的模型名')
+    session_id = db.Column(db.String(64), index=True, comment='会话ID：显式传入(X-Session-Id/body)或按首条user消息派生')
     caller_ip = db.Column(db.String(64), comment='调用方IP')
     messages = db.Column(db.Text(16000000), comment='请求的对话内容(JSON)，MEDIUMTEXT防止长对话超限')
     response_content = db.Column(db.Text(16000000), comment='AI回复全文，MEDIUMTEXT防止长回复超限')
@@ -33,6 +34,7 @@ class ApiCallLog(db.Model):
             'api_key_id': self.api_key_id,
             'api_key_name': self.api_key_name,
             'endpoint': self.endpoint,
+            'session_id': self.session_id,
             'model_requested': self.model_requested,
             'model_used': self.model_used,
             'caller_ip': self.caller_ip,

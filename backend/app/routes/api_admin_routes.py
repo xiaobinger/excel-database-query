@@ -240,13 +240,23 @@ def test_key(key_id):
 
 # ============ 调用记录与统计 ============
 
-@open_api_admin_bp.route('/logs', methods=['GET'])
-@permission_required('system')
-def list_logs():
-    """调用记录列表（分页+筛选）"""
-    page = request.args.get('page', 1, type=int)
-    per_page = min(request.args.get('per_page', 20, type=int), 100)
-    query = ApiCallLog.query
+def _parse_utc(dt_str):
+    """解析ISO时间参数为UTC naive datetime（DB存UTC），非法返回None"""
+    try:
+        dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+        if dt.tzinfo is not None:
+            dt = dt.replace(tzinfo=None)  # DB存的是UTC naive时间
+        return dt
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _apply_log_filters(query, session_exact=False):
+    """按公共筛选条件（密钥/模型/状态/时间/会话ID）过滤调用记录查询。
+
+    session_exact=True 时会话ID精确匹配（用于取某会话的明细列表），
+    否则模糊匹配（用于会话搜索）。
+    """
     api_key_id = request.args.get('api_key_id', type=int)
     if api_key_id:
         query = query.filter_by(api_key_id=api_key_id)
@@ -258,24 +268,32 @@ def list_logs():
         query = query.filter_by(is_success=True)
     elif status == 'failed':
         query = query.filter_by(is_success=False)
+    session_id = request.args.get('session_id', '').strip()
+    if session_id:
+        if session_exact:
+            query = query.filter(ApiCallLog.session_id == session_id)
+        else:
+            query = query.filter(ApiCallLog.session_id.like(f'%{session_id}%'))
     start_time = request.args.get('start_time', '').strip()
     if start_time:
-        try:
-            dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
-            if dt.tzinfo is not None:
-                dt = dt.replace(tzinfo=None)  # DB存的是UTC naive时间
+        dt = _parse_utc(start_time)
+        if dt is not None:
             query = query.filter(ApiCallLog.created_at >= dt)
-        except (ValueError, TypeError):
-            pass
     end_time = request.args.get('end_time', '').strip()
     if end_time:
-        try:
-            dt = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
-            if dt.tzinfo is not None:
-                dt = dt.replace(tzinfo=None)
+        dt = _parse_utc(end_time)
+        if dt is not None:
             query = query.filter(ApiCallLog.created_at <= dt)
-        except (ValueError, TypeError):
-            pass
+    return query
+
+
+@open_api_admin_bp.route('/logs', methods=['GET'])
+@permission_required('system')
+def list_logs():
+    """调用记录列表（分页+筛选，支持按会话ID筛选）"""
+    page = request.args.get('page', 1, type=int)
+    per_page = min(request.args.get('per_page', 20, type=int), 200)
+    query = _apply_log_filters(ApiCallLog.query, session_exact=True)
 
     total = query.count()
     logs = query.order_by(ApiCallLog.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
@@ -344,8 +362,8 @@ def batch_delete_logs():
 @open_api_admin_bp.route('/stats', methods=['GET'])
 @permission_required('system')
 def get_stats():
-    """汇总统计：总量/成功率/token/缓存/耗时 + 按模型与按key分组"""
-    base = ApiCallLog.query
+    """汇总统计（跟随筛选条件）：总量/成功率/token/缓存/耗时 + 按模型与按key分组"""
+    base = _apply_log_filters(ApiCallLog.query)
     total = base.count()
     if total == 0:
         return jsonify({'success': True, 'data': {
@@ -353,25 +371,25 @@ def get_stats():
             'avg_elapsed': 0, 'by_model': [], 'by_key': [],
         }})
     success_count = base.filter_by(is_success=True).count()
-    agg = db.session.query(
+    agg = _apply_log_filters(db.session.query(
         func.coalesce(func.sum(ApiCallLog.tokens_used), 0),
         func.coalesce(func.sum(ApiCallLog.cache_creation_tokens), 0),
         func.coalesce(func.sum(ApiCallLog.cache_read_tokens), 0),
         func.coalesce(func.avg(ApiCallLog.elapsed), 0),
-    ).filter(ApiCallLog.is_success == True).first()
+    )).filter(ApiCallLog.is_success == True).first()
 
-    by_model = db.session.query(
+    by_model = _apply_log_filters(db.session.query(
         ApiCallLog.model_used,
         func.count(ApiCallLog.id),
         func.coalesce(func.sum(ApiCallLog.tokens_used), 0),
-    ).group_by(ApiCallLog.model_used).all()
+    )).group_by(ApiCallLog.model_used).all()
 
-    by_key = db.session.query(
+    by_key = _apply_log_filters(db.session.query(
         ApiCallLog.api_key_id,
         ApiCallLog.api_key_name,
         func.count(ApiCallLog.id),
         func.coalesce(func.sum(ApiCallLog.tokens_used), 0),
-    ).group_by(ApiCallLog.api_key_id, ApiCallLog.api_key_name).all()
+    )).group_by(ApiCallLog.api_key_id, ApiCallLog.api_key_name).all()
 
     return jsonify({'success': True, 'data': {
         'total': total,
@@ -384,3 +402,91 @@ def get_stats():
         'by_model': [{'model': m or '(未知)', 'count': c, 'tokens': int(t)} for m, c, t in by_model],
         'by_key': [{'api_key_id': kid, 'name': n or f'#{kid}', 'count': c, 'tokens': int(t)} for kid, n, c, t in by_key],
     }})
+
+
+@open_api_admin_bp.route('/logs/models', methods=['GET'])
+@permission_required('system')
+def list_log_models():
+    """实际调用模型去重列表（用于筛选下拉）"""
+    rows = db.session.query(ApiCallLog.model_used).distinct().all()
+    models = sorted({m for (m,) in rows if m})
+    return jsonify({'success': True, 'data': models})
+
+
+@open_api_admin_bp.route('/logs/sessions', methods=['GET'])
+@permission_required('system')
+def list_log_sessions():
+    """按会话聚合的调用记录（分页+筛选）。
+
+    外层每行一个会话：对话条数/token/耗时/成功率等汇总 + 涉及的模型列表；
+    展开行明细通过 /logs?session_id=xx 获取。
+    """
+    from sqlalchemy import case
+    from app.utils.helpers import beijing_isoformat
+
+    page = request.args.get('page', 1, type=int)
+    per_page = min(request.args.get('per_page', 20, type=int), 100)
+
+    sub = _apply_log_filters(db.session.query(ApiCallLog.session_id))\
+        .filter(ApiCallLog.session_id.isnot(None))\
+        .group_by(ApiCallLog.session_id).subquery()
+    total = db.session.query(func.count()).select_from(sub).scalar() or 0
+
+    grouped = _apply_log_filters(db.session.query(
+        ApiCallLog.session_id,
+        func.count(ApiCallLog.id).label('call_count'),
+        func.min(ApiCallLog.created_at).label('first_time'),
+        func.max(ApiCallLog.created_at).label('last_time'),
+        func.coalesce(func.sum(ApiCallLog.tokens_used), 0).label('total_tokens'),
+        func.coalesce(func.sum(ApiCallLog.prompt_tokens), 0).label('prompt_tokens'),
+        func.coalesce(func.sum(ApiCallLog.completion_tokens), 0).label('completion_tokens'),
+        func.coalesce(func.sum(ApiCallLog.cache_read_tokens), 0).label('cache_read_tokens'),
+        func.coalesce(func.sum(ApiCallLog.elapsed), 0).label('total_elapsed'),
+        func.sum(case((ApiCallLog.is_success == True, 1), else_=0)).label('success_count'),
+        func.min(ApiCallLog.api_key_id).label('api_key_id'),
+        func.min(ApiCallLog.api_key_name).label('api_key_name'),
+        func.min(ApiCallLog.caller_ip).label('caller_ip'),
+    )).filter(ApiCallLog.session_id.isnot(None))\
+     .group_by(ApiCallLog.session_id)\
+     .order_by(func.max(ApiCallLog.created_at).desc())
+
+    rows = grouped.offset((page - 1) * per_page).limit(per_page).all()
+    sessions = []
+    session_ids = []
+    for r in rows:
+        sid = r.session_id or '(无会话)'
+        session_ids.append(r.session_id)
+        sessions.append({
+            'session_id': sid,
+            'call_count': int(r.call_count or 0),
+            'first_time': beijing_isoformat(r.first_time) if r.first_time else None,
+            'last_time': beijing_isoformat(r.last_time) if r.last_time else None,
+            'total_tokens': int(r.total_tokens or 0),
+            'prompt_tokens': int(r.prompt_tokens or 0),
+            'completion_tokens': int(r.completion_tokens or 0),
+            'cache_read_tokens': int(r.cache_read_tokens or 0),
+            'total_elapsed': round(float(r.total_elapsed or 0), 2),
+            'success_count': int(r.success_count or 0),
+            'success_rate': round(int(r.success_count or 0) / r.call_count * 100, 1) if r.call_count else 0,
+            'api_key_id': r.api_key_id,
+            'api_key_name': r.api_key_name or (f'#{r.api_key_id}' if r.api_key_id else ''),
+            'caller_ip': r.caller_ip or '',
+        })
+
+    # 每个会话涉及的模型列表（二次查询，避免GROUP_CONCAT方言差异）
+    if session_ids:
+        model_rows = db.session.query(
+            ApiCallLog.session_id, ApiCallLog.model_used, func.count(ApiCallLog.id),
+        ).filter(ApiCallLog.session_id.in_(session_ids))\
+         .group_by(ApiCallLog.session_id, ApiCallLog.model_used).all()
+        models_map = {}
+        for sid, model, cnt in model_rows:
+            models_map.setdefault(sid, []).append({'model': model or '(未知)', 'count': int(cnt or 0)})
+        for s in sessions:
+            s['models'] = sorted(models_map.get(s['session_id'], []), key=lambda x: -x['count'])
+    else:
+        for s in sessions:
+            s['models'] = []
+
+    return jsonify({'success': True, 'data': sessions, 'total': total,
+                    'page': page, 'per_page': per_page})

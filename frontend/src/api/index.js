@@ -349,7 +349,9 @@ const openApi = {
   getLogDetail: (id) => http.get(`/open-api/logs/${id}`),
   deleteLog: (id) => http.delete(`/open-api/logs/${id}`),
   deleteLogs: (params) => http.delete('/open-api/logs', { params }),
-  getStats: () => http.get('/open-api/stats'),
+  getLogModels: () => http.get('/open-api/logs/models'),
+  getSessionLogs: (params) => http.get('/open-api/logs/sessions', { params }),
+  getStats: (params) => http.get('/open-api/stats', { params }),
 }
 
 export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, mcp, openApi, business, systemTask, lookup, profitShare, tickets, pay }
