@@ -380,7 +380,7 @@
                   </div>
                 </el-form-item>
                 <el-form-item label="模型列表">
-                  <el-select v-model="strategyForm.model_ids" multiple style="width: 100%" placeholder="选择参与调度的模型（按优先级排序）">
+                  <el-select v-model="strategyForm.model_ids" multiple clearable style="width: 100%" placeholder="留空=所有启用的模型均参与调度">
                     <el-option
                       v-for="c in aiConfigs.filter(c => c.is_active)"
                       :key="c.id"
@@ -388,7 +388,7 @@
                       :value="c.id"
                     />
                   </el-select>
-                  <div style="color: #909399; font-size: 12px; margin-top: 4px">按选择的顺序确定优先级（第一个为最高优先级）</div>
+                  <div style="color: #909399; font-size: 12px; margin-top: 4px">留空表示所有启用的模型参与调度；选择后按顺序确定优先级</div>
                 </el-form-item>
                 <el-divider />
                 <el-form-item label="故障转移">

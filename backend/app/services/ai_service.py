@@ -504,15 +504,18 @@ class AiService:
 
     @staticmethod
     def _configs_from_strategy(strategy) -> list:
-        """根据单个策略返回有序模型列表。"""
+        """根据单个策略返回有序模型列表。model_ids 为空时使用所有启用模型。"""
         from app.models.ai_config import AiConfig
         from app import db
 
         model_ids = strategy.get_model_ids()
-        if not model_ids:
-            return []
-
         free_only = strategy.route_to_free_only
+
+        if not model_ids:
+            query = AiConfig.query.filter_by(is_active=True)
+            if free_only:
+                query = query.filter_by(is_free=True)
+            return query.all()
 
         configs = []
         for mid in model_ids:
@@ -522,10 +525,8 @@ class AiService:
                     continue
                 configs.append(cfg)
 
-        if not configs:
-            if free_only:
-                configs = [c for c in AiConfig.query.filter_by(is_active=True, is_free=True).all()]
-            return configs
+        if not configs and free_only:
+            configs = [c for c in AiConfig.query.filter_by(is_active=True, is_free=True).all()]
 
         if strategy.strategy_type == 'round_robin':
             idx = strategy.get_next_round_robin_index(len(configs))
