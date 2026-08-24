@@ -58,16 +58,28 @@ def _validate_messages(messages):
         if not isinstance(m, dict):
             return None, 'messages 中每项必须是对象'
         role = m.get('role', '')
-        content = m.get('content', '')
         if role not in ('system', 'user', 'assistant', 'tool'):
             return None, f'不支持的角色: {role}'
-        if not isinstance(content, str):
+        content = m.get('content', '')
+        msg = {'role': role}
+        if isinstance(content, str):
+            msg['content'] = content
+        elif isinstance(content, list):
             # 兼容多模态 content 数组，转纯文本
-            if isinstance(content, list):
-                content = '\n'.join(str(p.get('text', '')) for p in content if isinstance(p, dict))
-            else:
-                content = str(content)
-        normalized.append({'role': role, 'content': content})
+            msg['content'] = '\n'.join(str(p.get('text', '')) for p in content if isinstance(p, dict))
+        elif content is None and role == 'assistant' and m.get('tool_calls'):
+            # assistant 发起工具调用时 content 允许为空，保留 None
+            msg['content'] = None
+        else:
+            msg['content'] = str(content)
+        # 保留工具调用相关字段：外部agent传入 tool 消息时上游API要求必须带 tool_call_id
+        if role == 'tool' and m.get('tool_call_id'):
+            msg['tool_call_id'] = str(m['tool_call_id'])
+        if role == 'assistant' and isinstance(m.get('tool_calls'), list):
+            msg['tool_calls'] = m['tool_calls']
+        if m.get('name'):
+            msg['name'] = str(m['name'])[:100]
+        normalized.append(msg)
     return normalized, None
 
 
