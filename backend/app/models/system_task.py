@@ -37,6 +37,9 @@ class SystemTask(db.Model):
     # Response field mapping (for API tasks)
     response_mapping = db.Column(db.Text, comment='响应字段意义映射(JSON)，格式: [{"field":"status","label":"状态","mapping":{"0":"失败","1":"成功"}}]')
 
+    # AI execution notes: key points sent to AI when task is triggered via AI chat
+    ai_notes = db.Column(db.Text, comment='AI执行要点：通过AI触发时随任务信息发送给AI的注意点/执行要求')
+
     # Signing
     sign_enabled = db.Column(db.Boolean, default=False, comment='是否启用加签')
     sign_key = db.Column(db.String(500), comment='加签密钥')
@@ -126,6 +129,7 @@ class SystemTask(db.Model):
             'script_env': self.get_script_env(),
             'params_config': self.get_params_config(),
             'response_mapping': self.get_response_mapping(),
+            'ai_notes': self.ai_notes or '',
             'sign_enabled': self.sign_enabled,
             'sign_key': self.sign_key,
             'sign_method': self.sign_method,

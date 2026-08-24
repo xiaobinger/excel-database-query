@@ -195,6 +195,10 @@
         <el-form-item label="描述">
           <el-input v-model="form.description" type="textarea" :rows="2" placeholder="简要描述此任务" />
         </el-form-item>
+        <el-form-item label="AI执行要点">
+          <el-input v-model="form.ai_notes" type="textarea" :rows="3"
+            placeholder="通过AI触发此任务时发送给AI的执行注意点，如：参数格式要求、执行前需确认的事项、结果反馈的注意事项等（可留空）" />
+        </el-form-item>
         <el-form-item label="任务类型" prop="task_type">
           <el-radio-group v-model="form.task_type">
             <el-radio value="sql">SQL脚本</el-radio>
@@ -715,6 +719,7 @@ let eventSource = null
 const defaultForm = {
   name: '',
   description: '',
+  ai_notes: '',
   task_type: 'sql',
   script_id: null,
   database_ids: [],
@@ -935,6 +940,7 @@ function openDialog(row) {
     Object.assign(form, {
       name: row.name || '',
       description: row.description || '',
+      ai_notes: row.ai_notes || '',
       task_type: row.task_type || 'sql',
       script_id: row.script_id || null,
       database_ids: row.database_ids && row.database_ids.length > 0 ? [...row.database_ids] : [],
@@ -987,6 +993,7 @@ async function handleSubmit() {
     const payload = {
       name: form.name,
       description: form.description,
+      ai_notes: form.ai_notes || '',
       task_type: form.task_type,
       script_id: form.script_id,
       database_ids: form.database_ids || [],

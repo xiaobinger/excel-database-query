@@ -1063,6 +1063,7 @@ class AiService:
                 'databases': databases_info,
                 'response_mapping': response_mapping_info,
                 'script_info': script_info,
+                'ai_notes': t.ai_notes or '',
             })
         resp = {'tasks': result, 'total': len(result)}
         if len(result) == 0:
@@ -1216,6 +1217,9 @@ class AiService:
             if response_mapping:
                 response_mapping_info = response_mapping
 
+        # AI执行要点（管理员配置的任务执行注意点）
+        ai_notes = task.ai_notes or ''
+
         # API类型任务 + 参数齐全 + 不需要选择数据库 → 直接同步执行
         is_api_task = (task.task_type or 'sql') == 'api'
         is_script_task = (task.task_type or 'sql') == 'script'
@@ -1251,6 +1255,7 @@ class AiService:
                     'description': desc,
                     'params_values': params,
                     'auto_executed': True,
+                    'ai_notes': ai_notes,
                     'success': exec_result.get('success', False),
                     'status_code': exec_result.get('status_code'),
                     'response': exec_result.get('response'),
@@ -1282,6 +1287,7 @@ class AiService:
                     'description': desc,
                     'params_values': params,
                     'auto_executed': True,
+                    'ai_notes': ai_notes,
                     'success': exec_result.get('success', False),
                     'returncode': exec_result.get('returncode'),
                     'stdout': exec_result.get('stdout'),
@@ -1306,6 +1312,7 @@ class AiService:
             'databases': databases_info,
             'database_id': matched_db_id,
             'response_mapping': response_mapping_info,
+            'ai_notes': ai_notes,
             'confirm_message': f'AI 准备执行系统任务：{task.name}',
             '_hint': AiService._build_missing_params_hint(task_params, params, needs_dbSelection, databases_info),
         }

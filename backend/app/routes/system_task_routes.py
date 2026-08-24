@@ -95,6 +95,7 @@ def create_system_task():
         script_type=data.get('script_type', 'python'),
         script_path=data.get('script_path', ''),
         script_timeout=data.get('script_timeout', 60),
+        ai_notes=data.get('ai_notes', ''),
         sign_enabled=data.get('sign_enabled', False),
         sign_key=data.get('sign_key', ''),
         sign_method=data.get('sign_method', 'md5'),
@@ -152,7 +153,7 @@ def update_system_task(task_id):
     simple_fields = [
         'name', 'description', 'task_type', 'script_id', 'database_connection_id',
         'api_method', 'api_url', 'api_body', 'api_timeout',
-        'script_type', 'script_path', 'script_timeout',
+        'script_type', 'script_path', 'script_timeout', 'ai_notes',
         'sign_enabled', 'sign_key', 'sign_method', 'sign_param_name', 'sign_append_type',
         'is_enabled'
     ]
