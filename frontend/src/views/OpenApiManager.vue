@@ -250,15 +250,22 @@ Authorization: Bearer sk-xxxxxxxx</pre>
           <el-alert type="error" :closable="false" :title="logDetail.error_msg" />
         </div>
         <div style="margin-top: 12px">
-          <div style="font-weight: 600; margin-bottom: 6px">对话内容</div>
-          <div v-for="(m, i) in logDetail.messages" :key="i" class="msg-item">
-            <el-tag size="small" :type="m.role === 'user' ? 'primary' : (m.role === 'assistant' ? 'success' : 'info')">{{ m.role }}</el-tag>
-            <span style="margin-left: 8px; white-space: pre-wrap">{{ m.content }}</span>
-          </div>
+          <div style="font-weight: 600; margin-bottom: 6px">用户本次指令</div>
+          <div class="msg-item" style="white-space: pre-wrap">{{ lastUserMessage || '（无）' }}</div>
         </div>
         <div style="margin-top: 12px">
           <div style="font-weight: 600; margin-bottom: 6px">AI 回复</div>
           <div class="msg-item" style="white-space: pre-wrap">{{ logDetail.response_content || '（空）' }}</div>
+        </div>
+        <div style="margin-top: 12px">
+          <el-collapse>
+            <el-collapse-item :title="`完整对话内容（${(logDetail.messages || []).length}条，点击展开）`" name="messages">
+              <div v-for="(m, i) in logDetail.messages" :key="i" class="msg-item">
+                <el-tag size="small" :type="m.role === 'user' ? 'primary' : (m.role === 'assistant' ? 'success' : 'info')">{{ m.role }}</el-tag>
+                <span style="margin-left: 8px; white-space: pre-wrap">{{ m.content }}</span>
+              </div>
+            </el-collapse-item>
+          </el-collapse>
         </div>
       </template>
     </el-dialog>
@@ -266,7 +273,7 @@ Authorization: Bearer sk-xxxxxxxx</pre>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import api from '../api'
 import { ElMessage } from 'element-plus'
 
@@ -453,6 +460,15 @@ async function showLogDetail(id) {
     logDetailVisible.value = true
   } catch { /* 拦截器已提示 */ }
 }
+
+// 用户本次指令：取对话中最后一条user消息（agent场景最后一条可能是tool结果）
+const lastUserMessage = computed(() => {
+  const msgs = logDetail.value?.messages || []
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === 'user') return msgs[i].content
+  }
+  return ''
+})
 
 async function handleDeleteLog(id) {
   try {

@@ -85,6 +85,38 @@ def _validate_messages(messages):
 
 # ============ OpenAI 兼容端点 ============
 
+def _validate_request_extras(data):
+    """提取并校验可选透传参数（tools/tool_choice/parallel_tool_calls/max_tokens/temperature）。
+    外部agent依赖tools驱动工具调用，必须原样透传给上游。返回 (extras, err)"""
+    extras = {}
+    tools = data.get('tools')
+    if tools is not None:
+        if not isinstance(tools, list):
+            return None, 'tools 必须是数组'
+        if tools:  # 空数组视为无工具，忽略
+            for t in tools:
+                if not isinstance(t, dict) or t.get('type') != 'function' or not isinstance(t.get('function'), dict):
+                    return None, 'tools 中每项必须是 {type: "function", function: {...}} 格式'
+                if not t['function'].get('name'):
+                    return None, '工具函数缺少 name'
+            extras['tools'] = tools
+    tool_choice = data.get('tool_choice')
+    if tool_choice is not None:
+        valid = tool_choice in ('auto', 'none', 'required') or (
+            isinstance(tool_choice, dict) and tool_choice.get('type') == 'function'
+        )
+        if not valid:
+            return None, 'tool_choice 必须是 auto/none/required 或 {type: "function", function: {...}}'
+        extras['tool_choice'] = tool_choice
+    if isinstance(data.get('max_tokens'), int) and data['max_tokens'] > 0:
+        extras['max_tokens'] = data['max_tokens']
+    if isinstance(data.get('temperature'), (int, float)):
+        extras['temperature'] = data['temperature']
+    if isinstance(data.get('parallel_tool_calls'), bool):
+        extras['parallel_tool_calls'] = data['parallel_tool_calls']
+    return extras, None
+
+
 @openai_bp.route('/chat/completions', methods=['POST'])
 def openai_chat_completions():
     settings = get_settings()
@@ -102,18 +134,27 @@ def openai_chat_completions():
     messages, msg_err = _validate_messages(data.get('messages'))
     if msg_err:
         return _openai_error(msg_err, 400)
+    extras, extras_err = _validate_request_extras(data)
+    if extras_err:
+        return _openai_error(extras_err, 400)
     model_name = data.get('model') or 'auto'
     stream = bool(data.get('stream'))
 
     if stream:
-        return _openai_stream_response(api_key, model_name, messages, ip)
-    return _openai_plain_response(api_key, model_name, messages, ip)
+        return _openai_stream_response(api_key, model_name, messages, ip, extras)
+    return _openai_plain_response(api_key, model_name, messages, ip, extras)
 
 
-def _openai_plain_response(api_key, model_name, messages, ip):
-    result = chat_once(api_key, 'openai', model_name, messages, ip)
+def _openai_plain_response(api_key, model_name, messages, ip, extras=None):
+    result = chat_once(api_key, 'openai', model_name, messages, ip, extras=extras)
     if not result.get('success'):
         return _openai_error(result.get('error', '调用失败'), 502, 'api_error')
+    message = {'role': 'assistant', 'content': result.get('content') or ''}
+    finish_reason = 'stop'
+    if result.get('tool_calls'):
+        # 工具调用透传：外部agent依赖tool_calls驱动执行
+        message['tool_calls'] = result['tool_calls']
+        finish_reason = 'tool_calls'
     return jsonify({
         'id': f'chatcmpl-{uuid.uuid4().hex[:24]}',
         'object': 'chat.completion',
@@ -121,15 +162,15 @@ def _openai_plain_response(api_key, model_name, messages, ip):
         'model': result.get('model', ''),
         'choices': [{
             'index': 0,
-            'message': {'role': 'assistant', 'content': result.get('content', '')},
-            'finish_reason': 'stop',
+            'message': message,
+            'finish_reason': finish_reason,
         }],
         'usage': result.get('usage', {}),
         'system_fingerprint': 'excel-query-openapi',
     })
 
 
-def _openai_stream_response(api_key, model_name, messages, ip):
+def _openai_stream_response(api_key, model_name, messages, ip, extras=None):
     completion_id = f'chatcmpl-{uuid.uuid4().hex[:24]}'
     created = int(time.time())
     # 生成器在响应头发出后才执行（请求上下文已弹出），需先在请求阶段取出 app
@@ -138,7 +179,7 @@ def _openai_stream_response(api_key, model_name, messages, ip):
 
     def generate():
         model_name_out = model_name
-        for text, done, meta in stream_chat(api_key, 'openai', model_name, messages, ip, app=app):
+        for event, done, meta in stream_chat(api_key, 'openai', model_name, messages, ip, app=app, extras=extras):
             if done:
                 if meta and meta.get('error'):
                     # 流已开始后出错：以OpenAI格式输出错误信息后结束
@@ -153,7 +194,7 @@ def _openai_stream_response(api_key, model_name, messages, ip):
                     yield 'data: ' + json.dumps({
                         'id': completion_id, 'object': 'chat.completion.chunk',
                         'created': created, 'model': model_name_out,
-                        'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}],
+                        'choices': [{'index': 0, 'delta': {}, 'finish_reason': (meta or {}).get('finish_reason') or 'stop'}],
                     }, ensure_ascii=False) + '\n\n'
                     if meta and meta.get('usage'):
                         yield 'data: ' + json.dumps({
@@ -163,12 +204,20 @@ def _openai_stream_response(api_key, model_name, messages, ip):
                             'usage': meta['usage'],
                         }, ensure_ascii=False) + '\n\n'
                 yield 'data: [DONE]\n\n'
-            elif text:
-                yield 'data: ' + json.dumps({
-                    'id': completion_id, 'object': 'chat.completion.chunk',
-                    'created': created, 'model': model_name_out,
-                    'choices': [{'index': 0, 'delta': {'content': text}}],
-                }, ensure_ascii=False) + '\n\n'
+            elif event:
+                if event['type'] == 'tool_calls':
+                    # 工具调用增量片段原样透传，调用方SDK自行拼接
+                    yield 'data: ' + json.dumps({
+                        'id': completion_id, 'object': 'chat.completion.chunk',
+                        'created': created, 'model': model_name_out,
+                        'choices': [{'index': 0, 'delta': {'tool_calls': event['tool_calls']}}],
+                    }, ensure_ascii=False) + '\n\n'
+                elif event.get('text'):
+                    yield 'data: ' + json.dumps({
+                        'id': completion_id, 'object': 'chat.completion.chunk',
+                        'created': created, 'model': model_name_out,
+                        'choices': [{'index': 0, 'delta': {'content': event['text']}}],
+                    }, ensure_ascii=False) + '\n\n'
 
     return Response(generate(), mimetype='text/event-stream', headers=SSE_HEADERS)
 
@@ -208,6 +257,9 @@ def custom_chat():
     messages, msg_err = _validate_messages(data.get('messages'))
     if msg_err:
         return jsonify({'success': False, 'message': msg_err}), 400
+    extras, extras_err = _validate_request_extras(data)
+    if extras_err:
+        return jsonify({'success': False, 'message': extras_err}), 400
     model_name = data.get('model') or 'auto'
     stream = bool(data.get('stream'))
 
@@ -217,23 +269,32 @@ def custom_chat():
         app = current_app._get_current_object()
 
         def generate():
-            for text, done, meta in stream_chat(api_key, 'custom', model_name, messages, ip, app=app):
+            for event, done, meta in stream_chat(api_key, 'custom', model_name, messages, ip, app=app, extras=extras):
                 if done:
                     if meta and meta.get('error'):
                         yield 'data: ' + json.dumps({'type': 'error', 'message': meta['error']}, ensure_ascii=False) + '\n\n'
                     else:
                         yield 'data: ' + json.dumps({'type': 'done', **(meta or {})}, ensure_ascii=False) + '\n\n'
-                elif text:
-                    yield 'data: ' + json.dumps({'type': 'content', 'content': text}, ensure_ascii=False) + '\n\n'
+                elif event:
+                    if event['type'] == 'tool_calls':
+                        # 工具调用增量片段原样透传，调用方SDK自行拼接
+                        yield 'data: ' + json.dumps({'type': 'tool_calls', 'tool_calls': event['tool_calls']}, ensure_ascii=False) + '\n\n'
+                    elif event.get('text'):
+                        yield 'data: ' + json.dumps({'type': 'content', 'content': event['text']}, ensure_ascii=False) + '\n\n'
 
         return Response(generate(), mimetype='text/event-stream', headers=SSE_HEADERS)
 
-    result = chat_once(api_key, 'custom', model_name, messages, ip)
+    result = chat_once(api_key, 'custom', model_name, messages, ip, extras=extras)
     if not result.get('success'):
         return jsonify({'success': False, 'message': result.get('error', '调用失败')}), 502
-    return jsonify({'success': True, 'data': {
+    data_out = {
         'content': result.get('content', ''),
         'model': result.get('model', ''),
         'usage': result.get('usage', {}),
         'elapsed': result.get('elapsed', 0),
-    }})
+    }
+    if result.get('tool_calls'):
+        # 工具调用透传：外部agent依赖tool_calls驱动执行
+        data_out['tool_calls'] = result['tool_calls']
+        data_out['finish_reason'] = 'tool_calls'
+    return jsonify({'success': True, 'data': data_out})

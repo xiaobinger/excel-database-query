@@ -149,6 +149,80 @@ def _truncate_bytes(text: str, max_bytes: int) -> str:
     return encoded[:max_bytes].decode('utf-8', errors='ignore')
 
 
+def _apply_extras(payload: dict, extras: dict):
+    """将调用方透传的可选参数应用到上游payload（覆盖配置默认值）。
+    外部agent依赖tools驱动工具调用，必须原样透传。"""
+    extras = extras or {}
+    if extras.get('max_tokens'):
+        payload['max_tokens'] = extras['max_tokens']
+    if extras.get('temperature') is not None:
+        payload['temperature'] = extras['temperature']
+    if extras.get('tools'):
+        payload['tools'] = extras['tools']
+    if 'tool_choice' in extras:
+        payload['tool_choice'] = extras['tool_choice']
+    if 'parallel_tool_calls' in extras:
+        payload['parallel_tool_calls'] = extras['parallel_tool_calls']
+
+
+def _merge_tool_calls(accum: dict, delta_list: list):
+    """流式tool_calls增量片段按index聚合（首片带id/name，后续片只有arguments增量）"""
+    for tc in delta_list:
+        if not isinstance(tc, dict):
+            continue
+        idx = tc.get('index', 0)
+        cur = accum.setdefault(idx, {'id': '', 'type': 'function', 'function': {'name': '', 'arguments': ''}})
+        if tc.get('id'):
+            cur['id'] = tc['id']
+        fn = tc.get('function') or {}
+        if fn.get('name'):
+            cur['function']['name'] = fn['name']
+        if fn.get('arguments'):
+            cur['function']['arguments'] += fn['arguments']
+
+
+def _content_with_tool_calls(content: str, tool_calls) -> str:
+    """调用记录用：content + tool_calls JSON（工具调用响应content常为空）"""
+    if not tool_calls:
+        return content or ''
+    merged = json.dumps(tool_calls, ensure_ascii=False)
+    if content:
+        return f'{content}\n\n[tool_calls]\n{merged}'
+    return f'[tool_calls]\n{merged}'
+
+
+def _chat_single(cfg, messages: list, extras: dict = None):
+    """单模型非流式调用（支持工具调用透传）。
+    返回 (content, tool_calls, finish_reason, tokens, p, c, cc, cr)"""
+    from app.services.ai_service import post_chat_completions, _apply_cache_control
+    api_key_val = cfg.get_api_key()
+    if not api_key_val:
+        raise ValueError('API密钥未配置')
+    api_base = cfg.api_base or 'https://api.openai.com/v1'
+    url = f"{api_base.rstrip('/')}/chat/completions"
+    headers = {'Authorization': f'Bearer {api_key_val}', 'Content-Type': 'application/json'}
+    base_messages = _apply_cache_control(messages, cfg.provider, api_base)
+    payload = {
+        'model': cfg.model_name or 'gpt-3.5-turbo',
+        'messages': base_messages,
+        'max_tokens': cfg.max_tokens or 4096,
+        'temperature': cfg.temperature if cfg.temperature is not None else 0.7,
+    }
+    _apply_extras(payload, extras)
+    r = post_chat_completions(url, headers, payload, timeout=120)
+    r.raise_for_status()
+    result = r.json()
+    choice = (result.get('choices') or [{}])[0]
+    message = choice.get('message') or {}
+    content = message.get('content') or ''
+    tool_calls = message.get('tool_calls') or []
+    finish_reason = choice.get('finish_reason') or 'stop'
+    usage = result.get('usage') or {}
+    p_tokens, c_tokens, cc, cr = _extract_usage(usage)
+    tokens = usage.get('total_tokens') or (p_tokens + c_tokens)
+    return content, tool_calls, finish_reason, tokens, p_tokens, c_tokens, cc, cr
+
+
 def _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
               messages, response_content, tokens, p_tokens, c_tokens, cc, cr,
               elapsed, is_success, error_msg=None):
@@ -220,8 +294,9 @@ def _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
                     pass
 
 
-def chat_once(api_key, endpoint, model_name, messages, caller_ip):
-    """非流式对话。返回 dict: {success, content, model, usage, elapsed} 或 {success, error}"""
+def chat_once(api_key, endpoint, model_name, messages, caller_ip, extras=None):
+    """非流式对话（支持工具调用透传）。
+    返回 dict: {success, content, tool_calls, finish_reason, model, usage, elapsed} 或 {success, error}"""
     from flask import current_app
     app = current_app._get_current_object()
     start = time.time()
@@ -229,6 +304,8 @@ def chat_once(api_key, endpoint, model_name, messages, caller_ip):
     config, matched = resolve_model(api_key, model_requested)
 
     content = ''
+    tool_calls = []
+    finish_reason = 'stop'
     model_used = ''
     tokens = p_tokens = c_tokens = cc = cr = 0
     error = None
@@ -244,8 +321,8 @@ def chat_once(api_key, endpoint, model_name, messages, caller_ip):
         last_err = None
         for cfg in configs:
             try:
-                from app.services.ai_service import AiService
-                content, tokens, p_tokens, c_tokens, cc, cr = AiService.chat(cfg, messages)
+                content, tool_calls, finish_reason, tokens, p_tokens, c_tokens, cc, cr = \
+                    _chat_single(cfg, messages, extras)
                 model_used = cfg.model_name or ''
                 last_err = None
                 break
@@ -255,15 +332,18 @@ def chat_once(api_key, endpoint, model_name, messages, caller_ip):
                 if config:
                     break  # 指定模型不failover
                 continue
-        if last_err is not None and not content:
+        if last_err is not None and not content and not tool_calls:
             raise last_err
 
         elapsed = time.time() - start
         _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
-                  messages, content, tokens, p_tokens, c_tokens, cc, cr, elapsed, True)
+                  messages, _content_with_tool_calls(content, tool_calls),
+                  tokens, p_tokens, c_tokens, cc, cr, elapsed, True)
         return {
             'success': True,
             'content': content,
+            'tool_calls': tool_calls,
+            'finish_reason': finish_reason,
             'model': model_used,
             'usage': {
                 'prompt_tokens': p_tokens,
@@ -281,9 +361,12 @@ def chat_once(api_key, endpoint, model_name, messages, caller_ip):
         return {'success': False, 'error': str(e)}
 
 
-def stream_chat(api_key, endpoint, model_name, messages, caller_ip, app=None):
-    """流式对话生成器：逐段 yield (delta_text, done, meta)。
+def stream_chat(api_key, endpoint, model_name, messages, caller_ip, app=None, extras=None):
+    """流式对话生成器（支持工具调用透传）：逐段 yield (event, done, meta)。
 
+    event 为 None（结束帧）或 dict：
+      - {'type': 'content', 'text': str}                  文本增量
+      - {'type': 'tool_calls', 'tool_calls': [...]}        工具调用增量片段（原样透传，调用方SDK自行拼接）
     上游为 OpenAI 兼容 SSE；在收到首个内容chunk之前允许failover换模型，
     开始输出后不再切换。结束时写调用记录。
     注意：生成器在响应头发出后才执行（此时请求上下文已弹出），
@@ -300,9 +383,11 @@ def stream_chat(api_key, endpoint, model_name, messages, caller_ip, app=None):
         config, matched = resolve_model(api_key, model_requested)
 
         full_content = []
+        tool_calls_accum = {}  # 流式tool_calls按index聚合（存调用记录用）
         tokens = p_tokens = c_tokens_out = cc = cr = 0
         model_used = ''
         resp = None
+        finish_reason = 'stop'
 
         try:
             if config:
@@ -332,6 +417,8 @@ def stream_chat(api_key, endpoint, model_name, messages, caller_ip, app=None):
                         'stream': True,
                         'stream_options': {'include_usage': True},
                     }
+                    # 调用方透传参数（tools/tool_choice等）覆盖配置默认值
+                    _apply_extras(payload, extras)
                     r = post_chat_completions(url, headers, payload, timeout=120, stream=True)
                     if r.status_code == 400 and 'stream_options' in (r.text or ''):
                         # 旧API不支持stream_options，去掉后重试
@@ -385,7 +472,13 @@ def stream_chat(api_key, endpoint, model_name, messages, caller_ip, app=None):
                         text = delta.get('content') or ''
                         if text:
                             full_content.append(text)
-                            yield text, False, None
+                            yield {'type': 'content', 'text': text}, False, None
+                        tc_delta = delta.get('tool_calls')
+                        if tc_delta:
+                            _merge_tool_calls(tool_calls_accum, tc_delta)
+                            yield {'type': 'tool_calls', 'tool_calls': tc_delta}, False, None
+                        if choices[0].get('finish_reason'):
+                            finish_reason = choices[0]['finish_reason']
                     usage = chunk.get('usage')
                     if usage:
                         p_tokens, c_tokens_out, cc, cr = _extract_usage(usage)
@@ -415,7 +508,14 @@ def stream_chat(api_key, endpoint, model_name, messages, caller_ip, app=None):
                 text = delta.get('content') or ''
                 if text:
                     full_content.append(text)
-                    yield text, False, None
+                    yield {'type': 'content', 'text': text}, False, None
+                tc_delta = delta.get('tool_calls')
+                if tc_delta:
+                    # 工具调用增量片段：透传给调用方，同时聚合存调用记录
+                    _merge_tool_calls(tool_calls_accum, tc_delta)
+                    yield {'type': 'tool_calls', 'tool_calls': tc_delta}, False, None
+                if choices[0].get('finish_reason'):
+                    finish_reason = choices[0]['finish_reason']
             try:
                 resp.close()
             except Exception:
@@ -423,10 +523,14 @@ def stream_chat(api_key, endpoint, model_name, messages, caller_ip, app=None):
 
             elapsed = time.time() - start
             content = ''.join(full_content)
+            tool_calls = [tool_calls_accum[k] for k in sorted(tool_calls_accum)]
             _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
-                      messages, content, tokens, p_tokens, c_tokens_out, cc, cr, elapsed, True)
+                      messages, _content_with_tool_calls(content, tool_calls),
+                      tokens, p_tokens, c_tokens_out, cc, cr, elapsed, True)
             yield '', True, {
                 'model': model_used,
+                'finish_reason': finish_reason,
+                'tool_calls': tool_calls,
                 'usage': {
                     'prompt_tokens': p_tokens,
                     'completion_tokens': c_tokens_out,
@@ -440,8 +544,9 @@ def stream_chat(api_key, endpoint, model_name, messages, caller_ip, app=None):
             error = str(e)
             elapsed = time.time() - start
             _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
-                      messages, ''.join(full_content), tokens, p_tokens, c_tokens_out, cc, cr,
-                      elapsed, False, error)
+                      messages, _content_with_tool_calls(''.join(full_content),
+                      [tool_calls_accum[k] for k in sorted(tool_calls_accum)]),
+                      tokens, p_tokens, c_tokens_out, cc, cr, elapsed, False, error)
             yield '', True, {'error': error}
 
 
