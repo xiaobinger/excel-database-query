@@ -335,6 +335,8 @@ const openApi = {
   testKey: (id) => http.post(`/open-api/keys/${id}/test`),
   getLogs: (params) => http.get('/open-api/logs', { params }),
   getLogDetail: (id) => http.get(`/open-api/logs/${id}`),
+  deleteLog: (id) => http.delete(`/open-api/logs/${id}`),
+  deleteLogs: (params) => http.delete('/open-api/logs', { params }),
   getStats: () => http.get('/open-api/stats'),
 }
 

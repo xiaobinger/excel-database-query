@@ -292,6 +292,55 @@ def get_log_detail(log_id):
     return jsonify({'success': True, 'data': log.to_dict(include_content=True)})
 
 
+@open_api_admin_bp.route('/logs/<int:log_id>', methods=['DELETE'])
+@permission_required('system')
+def delete_log(log_id):
+    """删除单条调用记录"""
+    log = ApiCallLog.query.get(log_id)
+    if not log:
+        return jsonify({'success': False, 'message': '记录不存在'}), 404
+    try:
+        db.session.delete(log)
+        db.session.commit()
+        return jsonify({'success': True, 'message': '删除成功'})
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'删除调用记录失败: {e}')
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
+@open_api_admin_bp.route('/logs', methods=['DELETE'])
+@permission_required('system')
+def batch_delete_logs():
+    """批量删除调用记录（按筛选条件）"""
+    api_key_id = request.args.get('api_key_id', type=int)
+    before = request.args.get('before', '').strip()
+    if not api_key_id and not before:
+        return jsonify({'success': False, 'message': '请提供 api_key_id 或 before 时间筛选'}), 400
+    query = ApiCallLog.query
+    if api_key_id:
+        query = query.filter_by(api_key_id=api_key_id)
+    if before:
+        try:
+            dt = datetime.fromisoformat(before.replace('Z', '+00:00'))
+            if dt.tzinfo is not None:
+                dt = dt.replace(tzinfo=None)
+            query = query.filter(ApiCallLog.created_at < dt)
+        except (ValueError, TypeError):
+            pass
+    count = query.count()
+    if count == 0:
+        return jsonify({'success': True, 'message': '无匹配记录', 'deleted': 0})
+    try:
+        query.delete(synchronize_session=False)
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'已删除 {count} 条记录', 'deleted': count})
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'批量删除调用记录失败: {e}')
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+
 @open_api_admin_bp.route('/stats', methods=['GET'])
 @permission_required('system')
 def get_stats():

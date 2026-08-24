@@ -165,9 +165,14 @@ Authorization: Bearer sk-xxxxxxxx</pre>
                 <el-tag :type="row.is_success ? 'success' : 'danger'" size="small">{{ row.is_success ? '成功' : '失败' }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="70" align="center" fixed="right">
+            <el-table-column label="操作" width="100" align="center" fixed="right">
               <template #default="{ row }">
                 <el-button size="small" type="primary" text @click="showLogDetail(row.id)"><i class="fas fa-file-alt"></i></el-button>
+                <el-popconfirm title="确定删除此条调用记录？" @confirm="handleDeleteLog(row.id)">
+                  <template #reference>
+                    <el-button size="small" type="danger" text><i class="fas fa-trash"></i></el-button>
+                  </template>
+                </el-popconfirm>
               </template>
             </el-table-column>
           </el-table>
@@ -446,6 +451,15 @@ async function showLogDetail(id) {
     const res = await api.openApi.getLogDetail(id)
     logDetail.value = res.data
     logDetailVisible.value = true
+  } catch { /* 拦截器已提示 */ }
+}
+
+async function handleDeleteLog(id) {
+  try {
+    await api.openApi.deleteLog(id)
+    ElMessage.success('删除成功')
+    fetchLogs()
+    fetchStats()
   } catch { /* 拦截器已提示 */ }
 }
 
