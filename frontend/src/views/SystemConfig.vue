@@ -144,6 +144,11 @@
                   <el-tag v-if="row.is_default" type="success" size="small">是</el-tag>
                 </template>
               </el-table-column>
+              <el-table-column prop="is_free" label="免费" width="70" align="center">
+                <template #default="{ row }">
+                  <el-tag v-if="row.is_free" type="warning" size="small">免费</el-tag>
+                </template>
+              </el-table-column>
               <el-table-column prop="is_active" label="状态" width="80" align="center">
                 <template #default="{ row }">
                   <el-tag :type="row.is_active ? 'success' : 'info'" size="small">{{ row.is_active ? '启用' : '禁用' }}</el-tag>
@@ -274,6 +279,10 @@
                   <el-switch v-model="aiConfigForm.enable_streaming" active-text="是" inactive-text="否" />
                   <span style="margin-left: 12px; color: #909399; font-size: 12px">启用后逐字打印AI回复内容</span>
                 </el-form-item>
+                <el-form-item label="免费模型">
+                  <el-switch v-model="aiConfigForm.is_free" active-text="是" inactive-text="否" />
+                  <span style="margin-left: 12px; color: #909399; font-size: 12px">标记为免费模型，可配合路由策略的「仅免费」过滤使用</span>
+                </el-form-item>
                 <el-form-item label="系统提示词">
                   <el-input v-model="aiConfigForm.system_prompt" type="textarea" :rows="4" placeholder="AI助手的行为设定（可选）" />
                 </el-form-item>
@@ -328,6 +337,19 @@
                 </el-form-item>
                 <el-form-item label="重试次数" v-if="strategyForm.failover_enabled">
                   <el-input-number v-model="strategyForm.failover_max_retries" :min="1" :max="10" style="width: 120px" />
+                </el-form-item>
+                <el-divider />
+                <el-form-item label="仅免费模型">
+                  <el-switch v-model="strategyForm.route_to_free_only" active-text="是" inactive-text="否" />
+                  <span style="margin-left: 12px; color: #909399; font-size: 12px">开启后仅路由到标记为免费的AI模型配置</span>
+                </el-form-item>
+                <el-form-item label="作用域">
+                  <el-select v-model="strategyForm.scope" multiple style="width: 100%" placeholder="留空表示对所有场景生效">
+                    <el-option label="系统AI对话" value="system_chat" />
+                    <el-option label="对外API" value="open_api" />
+                    <el-option label="系统工单" value="ticket" />
+                  </el-select>
+                  <div style="color: #909399; font-size: 12px; margin-top: 4px">留空=全部场景生效；选择后仅在对应场景使用此策略（未命中场景回退到默认模型）</div>
                 </el-form-item>
                 <el-form-item label="描述">
                   <el-input v-model="strategyForm.description" type="textarea" :rows="2" placeholder="策略说明（可选）" />
@@ -583,6 +605,7 @@ const defaultAiConfigForm = {
   is_active: true,
   enable_thinking: false,
   enable_streaming: true,
+  is_free: false,
   system_prompt: '',
 }
 
@@ -653,6 +676,7 @@ function openAiConfigDialog(row) {
       is_active: row.is_active !== false,
       enable_thinking: row.enable_thinking || false,
       enable_streaming: row.enable_streaming || false,
+      is_free: row.is_free || false,
       system_prompt: row.system_prompt || '',
     })
   } else {
@@ -724,6 +748,8 @@ const strategyForm = reactive({
   is_active: true,
   failover_enabled: true,
   failover_max_retries: 3,
+  route_to_free_only: false,
+  scope: [],
   description: '',
 })
 
@@ -739,6 +765,8 @@ async function fetchStrategy() {
         is_active: res.data.is_active !== false,
         failover_enabled: res.data.failover_enabled !== false,
         failover_max_retries: res.data.failover_max_retries || 3,
+        route_to_free_only: res.data.route_to_free_only || false,
+        scope: res.data.scope || [],
         description: res.data.description || '',
       })
     } else {
@@ -750,6 +778,8 @@ async function fetchStrategy() {
         is_active: true,
         failover_enabled: true,
         failover_max_retries: 3,
+        route_to_free_only: false,
+        scope: [],
         description: '',
       })
     }

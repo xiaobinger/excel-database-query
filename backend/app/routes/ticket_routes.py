@@ -404,7 +404,7 @@ def _process_ticket_with_ai_async(ticket_id, app):
 
             for round_idx in range(max_rounds):
                 ai_response = AiService.chat_with_failover(
-                    messages, use_tools=True, tools=filtered_tools
+                    messages, use_tools=True, tools=filtered_tools, scope='ticket'
                 )
                 content = ai_response.get('content', '') or ''
                 tool_calls = ai_response.get('tool_calls', []) or []
@@ -554,7 +554,7 @@ def _process_ticket_with_ai_async(ticket_id, app):
                             'content': json.dumps(tr['result'], ensure_ascii=False),
                         })
                     try:
-                        summary_content, _, _, _, _, _ = AiService.chat_with_failover(messages, use_tools=False)
+                        summary_content, _, _, _, _, _ = AiService.chat_with_failover(messages, use_tools=False, scope='ticket')
                         final_content = summary_content or ''
                     except Exception as se:
                         logger.warning(f'工单{ticket.ticket_no} AI归总回复失败: {se}')
@@ -577,7 +577,7 @@ def _process_ticket_with_ai_async(ticket_id, app):
                 # 最后一轮，请求AI生成最终回复（不带工具）
                 if round_idx == max_rounds - 1:
                     try:
-                        final_content, _, _, _, _, _ = AiService.chat_with_failover(messages, use_tools=False)
+                        final_content, _, _, _, _, _ = AiService.chat_with_failover(messages, use_tools=False, scope='ticket')
                         final_content = final_content or ''
                     except Exception as se:
                         logger.warning(f'工单{ticket.ticket_no} AI最终回复失败: {se}')

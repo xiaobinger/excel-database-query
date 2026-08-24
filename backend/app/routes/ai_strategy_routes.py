@@ -46,9 +46,12 @@ def save_strategy():
     strategy.failover_timeout = data.get('failover_timeout', 30)
     strategy.description = data.get('description', '')
     strategy.is_active = data.get('is_active', True)
+    strategy.route_to_free_only = data.get('route_to_free_only', False)
 
     if 'model_ids' in data:
         strategy.set_model_ids(data['model_ids'])
+    if 'scope' in data:
+        strategy.set_scope(data['scope'])
 
     # Reset round_robin_index when strategy changes
     if 'strategy_type' in data:

@@ -30,6 +30,13 @@ class AiStrategy(db.Model):
     # Round-robin index (for round_robin strategy)
     round_robin_index = db.Column(db.Integer, default=0, comment='轮询索引')
 
+    # Only route to free models
+    route_to_free_only = db.Column(db.Boolean, default=False, comment='仅路由到免费模型')
+
+    # Scope: JSON array of applicable scopes (empty = all scopes)
+    # Values: system_chat / open_api / ticket
+    scope = db.Column(db.Text, comment='策略作用域(JSON数组，空=全部): system_chat/open_api/ticket')
+
     description = db.Column(db.String(500), comment='策略描述')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -56,6 +63,17 @@ class AiStrategy(db.Model):
     def set_token_usage(self, usage: dict):
         self.token_usage = json.dumps(usage) if usage else None
 
+    def get_scope(self) -> list:
+        if self.scope:
+            try:
+                return json.loads(self.scope)
+            except (json.JSONDecodeError, TypeError):
+                return []
+        return []
+
+    def set_scope(self, scope_list: list):
+        self.scope = json.dumps(scope_list) if scope_list else None
+
     def record_token_usage(self, model_id: int, tokens: int):
         usage = self.get_token_usage()
         usage[str(model_id)] = usage.get(str(model_id), 0) + tokens
@@ -80,6 +98,8 @@ class AiStrategy(db.Model):
             'failover_timeout': self.failover_timeout,
             'token_usage': self.get_token_usage(),
             'round_robin_index': self.round_robin_index,
+            'route_to_free_only': self.route_to_free_only or False,
+            'scope': self.get_scope(),
             'description': self.description,
             'created_at': beijing_isoformat(self.created_at),
             'updated_at': beijing_isoformat(self.updated_at),

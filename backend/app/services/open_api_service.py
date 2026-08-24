@@ -124,7 +124,7 @@ def resolve_model(api_key, model_name: str):
 
 def _ordered_configs():
     from app.services.ai_service import AiService
-    return AiService.get_ordered_configs()
+    return AiService.get_ordered_configs(scope='open_api')
 
 
 def _extract_usage(usage: dict):

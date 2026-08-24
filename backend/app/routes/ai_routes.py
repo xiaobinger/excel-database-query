@@ -155,6 +155,7 @@ def create_config():
             description=data.get('description', ''),
             enable_thinking=data.get('enable_thinking', False),
             enable_streaming=data.get('enable_streaming', True),
+            is_free=data.get('is_free', False),
         )
         if data.get('api_key'):
             config.set_api_key(data['api_key'])
@@ -187,7 +188,7 @@ def update_config(config_id):
     try:
         simple_fields = ['name', 'provider', 'api_base', 'model_name', 'is_default',
                          'is_active', 'max_tokens', 'context_window', 'temperature', 'system_prompt',
-                         'description', 'enable_thinking', 'enable_streaming']
+                         'description', 'enable_thinking', 'enable_streaming', 'is_free']
         for key in simple_fields:
             if key in data:
                 setattr(config, key, data[key])
@@ -924,7 +925,7 @@ def send_message(chat_id):
     # 根据用户权限决定模型选择策略
     if current_user.can_switch_model():
         # 有切换权限且有2+模型：使用系统策略，但只路由到授权模型
-        ordered_configs = AiService.get_ordered_configs()
+        ordered_configs = AiService.get_ordered_configs(scope='system_chat')
         # 过滤掉未授权的模型
         ordered_configs = [c for c in ordered_configs if c.id in allowed_model_ids]
         if not ordered_configs:
@@ -1038,7 +1039,7 @@ def send_message(chat_id):
         nonstream_filtered_tools = get_effective_tools(agent)
         ai_response = AiService.chat_with_failover(messages, use_tools=True,
             override_configs=ordered_configs if specified_config else None,
-            tools=nonstream_filtered_tools)
+            tools=nonstream_filtered_tools, scope='system_chat')
         response_text = ai_response['content']
         model_used = ai_response.get('model') or ''
 
@@ -1054,7 +1055,7 @@ def send_message(chat_id):
             })
             ai_response = AiService.chat_with_failover(messages, use_tools=True,
                 override_configs=ordered_configs if specified_config else None,
-                tools=nonstream_filtered_tools)
+                tools=nonstream_filtered_tools, scope='system_chat')
             response_text = ai_response['content']
             if not response_text.strip() and not ai_response.get('tool_calls'):
                 response_text = '抱歉，本次请求未产生有效输出，请重试或换个模型。'
@@ -1259,7 +1260,7 @@ def send_message(chat_id):
                         })
                     ai_response2 = AiService.chat_with_failover(messages, use_tools=True,
                         override_configs=ordered_configs if specified_config else None,
-                        tools=nonstream_filtered_tools)
+                        tools=nonstream_filtered_tools, scope='system_chat')
                     response_text = ai_response2['content']
                     model_used = ai_response2.get('model') or model_used
                     second_tool_calls = ai_response2['tool_calls']
@@ -1606,7 +1607,7 @@ def send_message_stream(chat_id):
     # 根据用户权限决定模型选择策略
     if current_user.can_switch_model():
         # 有切换权限且有2+模型：使用系统策略，但只路由到授权模型
-        ordered_configs = AiService.get_ordered_configs()
+        ordered_configs = AiService.get_ordered_configs(scope='system_chat')
         ordered_configs = [c for c in ordered_configs if c.id in allowed_model_ids]
         if not ordered_configs:
             ordered_configs = [default_config] if default_config else allowed_models[:1]

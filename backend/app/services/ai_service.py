@@ -472,36 +472,50 @@ class AiService:
         }
 
     @staticmethod
-    def get_ordered_configs() -> list:
-        """根据策略返回有序的模型配置列表，支持故障转移"""
+    def get_ordered_configs(scope: str = None) -> list:
+        """根据策略返回有序的模型配置列表，支持故障转移。
+        scope: 调用场景标识（system_chat/open_api/ticket），用于匹配策略作用域。
+        """
         from app.models.ai_strategy import AiStrategy
         from app.models.ai_config import AiConfig
         from app import db
 
         strategy = AiStrategy.query.filter_by(is_active=True).first()
-        if not strategy:
-            # 无策略时回退到默认配置
+
+        def _fallback_configs():
             config = AiConfig.query.filter_by(is_default=True, is_active=True).first()
             if not config:
                 config = AiConfig.query.filter_by(is_active=True).first()
             return [config] if config else []
 
+        if not strategy:
+            return _fallback_configs()
+
+        # 检查策略作用域匹配：如果策略设置了scope且当前scope不在其中，回退到默认
+        strategy_scope = strategy.get_scope()
+        if strategy_scope and scope and scope not in strategy_scope:
+            return _fallback_configs()
+
         model_ids = strategy.get_model_ids()
         if not model_ids:
-            config = AiConfig.query.filter_by(is_default=True, is_active=True).first()
-            if not config:
-                config = AiConfig.query.filter_by(is_active=True).first()
-            return [config] if config else []
+            return _fallback_configs()
+
+        # free_only 过滤：仅保留 is_free=True 的配置
+        free_only = strategy.route_to_free_only
 
         configs = []
         for mid in model_ids:
             cfg = AiConfig.query.get(mid)
             if cfg and cfg.is_active:
+                if free_only and not cfg.is_free:
+                    continue
                 configs.append(cfg)
 
         if not configs:
-            config = AiConfig.query.filter_by(is_active=True).first()
-            return [config] if config else []
+            if free_only:
+                configs = [c for c in AiConfig.query.filter_by(is_active=True, is_free=True).all()]
+            if not configs:
+                return _fallback_configs()
 
         # 根据策略类型重新排序
         if strategy.strategy_type == 'round_robin':
@@ -511,13 +525,11 @@ class AiService:
         elif strategy.strategy_type == 'token_balanced':
             usage = strategy.get_token_usage()
             configs.sort(key=lambda c: usage.get(str(c.id), 0))
-        # priority 和 temperature 保持原顺序（priority已按优先级排列）
-        # temperature 策略可以根据模型温度重排，暂时保持 priority 顺序
 
         return configs
 
     @staticmethod
-    def chat_with_failover(messages: list, use_tools: bool = False, override_configs: list = None, tools: list = None) -> Tuple:
+    def chat_with_failover(messages: list, use_tools: bool = False, override_configs: list = None, tools: list = None, scope: str = None) -> Tuple:
         """支持故障转移的AI调用，自动尝试多个模型。如果提供 override_configs 则使用指定模型。
         tools: 可选，指定工具列表（用于Agent工具过滤），为None时使用默认AI_TOOLS。"""
         from app.models.ai_strategy import AiStrategy
@@ -526,7 +538,7 @@ class AiService:
         if override_configs:
             configs = override_configs
         else:
-            configs = AiService.get_ordered_configs()
+            configs = AiService.get_ordered_configs(scope=scope)
         if not configs:
             raise ValueError('没有可用的AI模型配置')
 
