@@ -15,8 +15,9 @@ from app.models.business_system import BusinessSystem
 from app.models.system_task import SystemTask, SystemTaskExecution
 from app.models.tool_memory import ToolMemory
 from app.models.ticket import Ticket, TicketComment
+from app.models.pay_config import PayConfig
 
 __all__ = ['SshConfig', 'DatabaseConnection', 'Script', 'QueryTask', 'Role', 'User',
            'SystemConfig', 'AutoExportTask', 'AiConfig', 'AiStrategy', 'UserBehavior', 'AiSkill',
            'AiChat', 'AiChatMessage', 'BusinessSystem', 'SystemTask', 'SystemTaskExecution', 'ToolMemory',
-           'Ticket', 'TicketComment']
+           'Ticket', 'TicketComment', 'PayConfig']

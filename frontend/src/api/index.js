@@ -313,6 +313,16 @@ const tickets = {
   analytics: (params) => http.get('/tickets/analytics', { params }),
 }
 
+const pay = {
+  channels: () => http.get('/pay/channels'),
+  listConfigs: () => http.get('/pay/configs'),
+  getConfig: (id) => http.get(`/pay/configs/${id}`),
+  createConfig: (data) => http.post('/pay/configs', data),
+  updateConfig: (id, data) => http.put(`/pay/configs/${id}`, data),
+  deleteConfig: (id) => http.delete(`/pay/configs/${id}`),
+  execute: (formData) => http.post('/pay/execute', formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 600000 }),
+}
+
 const mcp = {
   list: () => http.get('/mcp'),
   create: (data) => http.post('/mcp', data),
@@ -342,4 +352,4 @@ const openApi = {
   getStats: () => http.get('/open-api/stats'),
 }
 
-export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, mcp, openApi, business, systemTask, lookup, profitShare, tickets }
+export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, mcp, openApi, business, systemTask, lookup, profitShare, tickets, pay }

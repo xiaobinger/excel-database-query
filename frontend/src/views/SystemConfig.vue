@@ -433,8 +433,119 @@
             </el-dialog>
           </div>
         </el-tab-pane>
+
+        <!-- 代付配置 -->
+        <el-tab-pane label="代付配置" name="pay">
+          <div class="tab-content">
+            <div class="tab-toolbar">
+              <el-button type="primary" size="small" @click="openPayConfigDialog()"><i class="fa fa-plus"></i> 添加渠道</el-button>
+            </div>
+            <el-table :data="payConfigs" v-loading="payConfigsLoading" stripe border>
+              <el-table-column prop="name" label="渠道" width="140" />
+              <el-table-column prop="channel" label="标识" width="100" />
+              <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
+              <el-table-column label="生产配置" width="90" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="row.pro_config && Object.keys(row.pro_config).length ? 'success' : 'info'" size="small">
+                    {{ row.pro_config && Object.keys(row.pro_config).length ? '已配置' : '未配置' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="测试配置" width="90" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="row.test_config && Object.keys(row.test_config).length ? 'success' : 'info'" size="small">
+                    {{ row.test_config && Object.keys(row.test_config).length ? '已配置' : '未配置' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="状态" width="80" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="row.is_active ? 'success' : 'info'" size="small">{{ row.is_active ? '启用' : '停用' }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="140" fixed="right">
+                <template #default="{ row }">
+                  <el-button size="small" type="primary" link @click="openPayConfigDialog(row)">编辑</el-button>
+                  <el-button size="small" type="danger" link @click="deletePayConfig(row)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </el-tab-pane>
       </el-tabs>
     </el-card>
+
+    <!-- 代付配置编辑弹窗 -->
+    <el-dialog v-model="payConfigDialogVisible" :title="payConfigForm.id ? '编辑代付渠道' : '添加代付渠道'" width="720px" :close-on-click-modal="false">
+      <el-form :model="payConfigForm" label-width="110px">
+        <el-row :gutter="16">
+          <el-col :span="12">
+            <el-form-item label="渠道标识">
+              <el-select v-model="payConfigForm.channel" placeholder="选择渠道" style="width:100%" :disabled="!!payConfigForm.id">
+                <el-option v-for="c in payChannelOptions" :key="c.channel" :label="c.name" :value="c.channel" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="渠道名称">
+              <el-input v-model="payConfigForm.name" placeholder="渠道名称" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-form-item label="描述">
+          <el-input v-model="payConfigForm.description" placeholder="渠道描述" />
+        </el-form-item>
+        <el-row :gutter="16">
+          <el-col :span="8">
+            <el-form-item label="转账类型">
+              <el-select v-model="payConfigForm.online_bank_type" style="width:100%">
+                <el-option label="B2C 对私" value="B2C" />
+                <el-option label="B2B 对公" value="B2B" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="银行编码">
+              <el-input v-model="payConfigForm.bank_code" placeholder="如 CCB" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="代付模式">
+              <el-input v-model="payConfigForm.transfer_mode" placeholder="6/7（乐商通/快乐刷）" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="16">
+          <el-col :span="8">
+            <el-form-item label="跑批类型">
+              <el-input v-model="payConfigForm.busi_type" placeholder="144（快乐刷）" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="渠道码">
+              <el-input v-model="payConfigForm.channel_code" placeholder="kls / lepass" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="启用">
+              <el-switch v-model="payConfigForm.is_active" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-divider content-position="left">生产环境配置 (JSON)</el-divider>
+        <el-form-item label="生产配置">
+          <el-input v-model="payConfigForm.pro_config_text" type="textarea" :rows="6" placeholder='{"agentNo":"...","userId":"...","baseUrl":"...","key":"...","sign":"..."}' />
+        </el-form-item>
+        <el-divider content-position="left">测试环境配置 (JSON)</el-divider>
+        <el-form-item label="测试配置">
+          <el-input v-model="payConfigForm.test_config_text" type="textarea" :rows="6" placeholder='{"agentNo":"...","userId":"...","baseUrl":"...","key":"...","sign":"..."}' />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="payConfigDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="payConfigSaving" @click="savePayConfig">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -618,6 +729,85 @@ const aiConfigFormRef = ref(null)
 const tableRef = ref(null)
 const selectedRows = ref([])
 
+// ============ 代付配置 ============
+const payConfigs = ref([])
+const payConfigsLoading = ref(false)
+const payChannelOptions = ref([])
+const payConfigDialogVisible = ref(false)
+const payConfigSaving = ref(false)
+const payConfigForm = ref({})
+
+async function loadPayConfigs() {
+  payConfigsLoading.value = true
+  try { const res = await api.pay.listConfigs(); payConfigs.value = res.data }
+  finally { payConfigsLoading.value = false }
+}
+
+async function loadPayChannels() {
+  try { const res = await api.pay.channels(); payChannelOptions.value = res.data } catch (e) { /* ignore */ }
+}
+
+function openPayConfigDialog(row) {
+  if (row) {
+    payConfigForm.value = {
+      ...row,
+      pro_config_text: row.pro_config ? JSON.stringify(row.pro_config, null, 2) : '',
+      test_config_text: row.test_config ? JSON.stringify(row.test_config, null, 2) : '',
+    }
+  } else {
+    payConfigForm.value = {
+      channel: '', name: '', description: '', is_active: true,
+      online_bank_type: 'B2C', bank_code: 'CCB', transfer_mode: '', busi_type: '144', channel_code: '',
+      pro_config_text: '', test_config_text: '',
+    }
+  }
+  payConfigDialogVisible.value = true
+}
+
+function parseConfigText(text) {
+  if (!text || !text.trim()) return null
+  try { return JSON.parse(text) } catch (e) { throw new Error('JSON 格式错误: ' + e.message) }
+}
+
+async function savePayConfig() {
+  const f = payConfigForm.value
+  if (!f.channel) { ElMessage.warning('请选择渠道'); return }
+  let pro_config = null, test_config = null
+  try {
+    pro_config = parseConfigText(f.pro_config_text)
+    test_config = parseConfigText(f.test_config_text)
+  } catch (e) { ElMessage.error(e.message); return }
+
+  const payload = {
+    name: f.name, description: f.description, is_active: f.is_active,
+    online_bank_type: f.online_bank_type, bank_code: f.bank_code,
+    transfer_mode: f.transfer_mode, busi_type: f.busi_type, channel_code: f.channel_code,
+    pro_config, test_config,
+  }
+  payConfigSaving.value = true
+  try {
+    if (f.id) {
+      await api.pay.updateConfig(f.id, payload)
+      ElMessage.success('更新成功')
+    } else {
+      await api.pay.createConfig({ ...payload, channel: f.channel })
+      ElMessage.success('创建成功')
+    }
+    payConfigDialogVisible.value = false
+    await loadPayConfigs()
+  } catch (e) { /* handled by interceptor */ }
+  finally { payConfigSaving.value = false }
+}
+
+async function deletePayConfig(row) {
+  try {
+    await ElMessageBox.confirm(`确定删除渠道「${row.name}」？`, '提示', { type: 'warning' })
+    await api.pay.deleteConfig(row.id)
+    ElMessage.success('删除成功')
+    await loadPayConfigs()
+  } catch (e) { /* cancelled */ }
+}
+
 function handleSelectionChange(rows) {
   selectedRows.value = rows
 }
@@ -794,6 +984,8 @@ onMounted(() => {
   fetchConfig()
   fetchAiConfigs()
   fetchStrategy()
+  loadPayConfigs()
+  loadPayChannels()
 })
 
 // AI Strategy

@@ -53,6 +53,7 @@ def create_app(config_name='default'):
         from app.models.api_key import ApiKey
         from app.models.api_call_log import ApiCallLog
         from app.models.ticket import Ticket, TicketComment
+        from app.models.pay_config import PayConfig
         db.create_all()
         _auto_migrate(app)
         _migrate_ticket_comments_nullable(app)
@@ -187,6 +188,7 @@ def _register_blueprints(app):
     from app.routes.profit_share_routes import profit_share_bp
     from app.routes.task_routes import task_bp
     from app.routes.ticket_routes import ticket_bp
+    from app.routes.pay_routes import pay_bp
 
     app.register_blueprint(ssh_bp)
     app.register_blueprint(database_bp)
@@ -212,6 +214,7 @@ def _register_blueprints(app):
     app.register_blueprint(profit_share_bp)
     app.register_blueprint(task_bp)
     app.register_blueprint(ticket_bp)
+    app.register_blueprint(pay_bp)
 
 
 def _register_error_handlers(app):
@@ -472,7 +475,7 @@ def _init_default_admin(app):
         # 确保管理员角色包含新菜单权限
         try:
             menus = json.loads(admin_role.menu_permissions) if admin_role.menu_permissions else []
-            new_menus = ['ai_chat', 'ai_sessions', 'skills', 'agent_manager', 'mcp_servers', 'open_api', 'cache_stats', 'business_systems', 'system_tasks', 'profit_share', 'tickets', 'system_map']
+            new_menus = ['ai_chat', 'ai_sessions', 'skills', 'agent_manager', 'mcp_servers', 'open_api', 'cache_stats', 'business_systems', 'system_tasks', 'profit_share', 'tickets', 'system_map', 'pay_withdraw']
             updated = False
             for m in new_menus:
                 if m not in menus:
