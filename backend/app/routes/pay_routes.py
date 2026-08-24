@@ -117,11 +117,11 @@ def _apply_fields(cfg, data):
 # 执行代付/查询
 # ---------------------------------------------------------------------------
 
-@pay_bp.route('/execute', methods=['POST'])
+@pay_bp.route('/sheets', methods=['POST'])
 @login_required
 @permission_required('pay_withdraw')
-def execute():
-    """上传 Excel 并执行代付/查询，返回结果 Excel 下载 URL + 日志 + 汇总"""
+def list_sheets():
+    """上传 Excel 文件，返回所有工作表信息（名称 + 数据行数）"""
     if 'file' not in request.files:
         return jsonify({'success': False, 'message': '未上传文件'}), 400
     file = request.files['file']
@@ -131,8 +131,54 @@ def execute():
     if ext not in ('.xls', '.xlsx'):
         return jsonify({'success': False, 'message': f'不支持的文件类型: {ext}'}), 400
 
+    upload_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'pay')
+    os.makedirs(upload_dir, exist_ok=True)
+    saved_name = f"pay_{uuid.uuid4().hex[:12]}{ext}"
+    file_path = os.path.join(upload_dir, saved_name)
+    file.save(file_path)
+
+    try:
+        sheets = pay_service.get_sheets_info(file_path)
+        return jsonify({
+            'success': True,
+            'data': {
+                'sheets': sheets,
+                'file_path': file_path,
+                'file_name': saved_name,
+            },
+        })
+    except Exception as e:
+        current_app.logger.exception('读取工作表失败')
+        return jsonify({'success': False, 'message': f'读取工作表失败: {e}'}), 500
+
+
+@pay_bp.route('/execute', methods=['POST'])
+@login_required
+@permission_required('pay_withdraw')
+def execute():
+    """上传 Excel 并执行代付/查询，返回结果 Excel 下载 URL + 日志 + 汇总"""
     channel = request.form.get('channel', '')
     environment = request.form.get('environment', 'test')
+    sheet_index = int(request.form.get('sheet_index', 0))
+
+    # 支持两种模式：上传新文件 或 复用已上传的文件
+    file_path = request.form.get('file_path', '')
+    if not file_path and 'file' not in request.files:
+        return jsonify({'success': False, 'message': '未上传文件'}), 400
+
+    if not file_path:
+        file = request.files['file']
+        if not file.filename:
+            return jsonify({'success': False, 'message': '文件名为空'}), 400
+        ext = os.path.splitext(file.filename)[1].lower()
+        if ext not in ('.xls', '.xlsx'):
+            return jsonify({'success': False, 'message': f'不支持的文件类型: {ext}'}), 400
+        upload_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'pay')
+        os.makedirs(upload_dir, exist_ok=True)
+        saved_name = f"pay_{uuid.uuid4().hex[:12]}{ext}"
+        file_path = os.path.join(upload_dir, saved_name)
+        file.save(file_path)
+
     params = {
         'interface_type': request.form.get('interface_type', '代付'),
         'real_time': request.form.get('real_time', '是'),
@@ -154,13 +200,6 @@ def execute():
     params['busi_type'] = cfg_db.busi_type or '144'
     params['channel_code'] = cfg_db.channel_code or ('kls' if channel == 'kls' else 'lepass')
 
-    # 保存上传文件
-    upload_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'pay')
-    os.makedirs(upload_dir, exist_ok=True)
-    saved_name = f"pay_{uuid.uuid4().hex[:12]}{ext}"
-    file_path = os.path.join(upload_dir, saved_name)
-    file.save(file_path)
-
     logs = []
 
     def log(msg):
@@ -168,10 +207,12 @@ def execute():
         current_app.logger.info(f'[代付] {msg}')
 
     try:
-        rows = pay_service._load_rows(file_path)
+        rows = pay_service._load_rows(file_path, sheet_index=sheet_index)
         if not rows:
-            return jsonify({'success': False, 'message': 'Excel 无数据行'}), 400
-        log(f'读取 {len(rows)} 行数据，渠道={channel} 环境={environment} 接口={params["interface_type"]}')
+            return jsonify({'success': False, 'message': f'Excel 工作表索引 {sheet_index} 无数据行'}), 400
+        sheets = pay_service.get_sheets_info(file_path)
+        sheet_name = sheets[sheet_index]['name'] if sheet_index < len(sheets) else str(sheet_index)
+        log(f'读取 {len(rows)} 行数据，渠道={channel} 环境={environment} 接口={params["interface_type"]} 工作表={sheet_name}')
         message, result_rows = pay_service.execute_pay(channel, cfg, rows, params, log)
         result_path = pay_service._write_result(file_path, rows, result_rows)
         result_name = os.path.basename(result_path)
@@ -182,6 +223,7 @@ def execute():
                 'logs': logs,
                 'result_url': f'/api/pay/files/{result_name}',
                 'total': len(rows),
+                'sheet_name': sheet_name,
             },
         })
     except Exception as e:

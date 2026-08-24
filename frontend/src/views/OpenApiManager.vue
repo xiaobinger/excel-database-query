@@ -154,41 +154,77 @@ Authorization: Bearer sk-xxxxxxxx</pre>
                 <template #default="{ row }">
                   <div class="session-expand">
                     <div class="session-expand-tip">
-                      会话 {{ row.session_id }} · 共 {{ row.call_count }} 条对话（点击行查看对话内容）
+                      会话 {{ row.session_id }} · 共 {{ row.call_count }} 条对话（点击卡片查看对话内容）
                     </div>
-                    <el-table :data="sessionLogs[row.session_id] || []" size="small"
-                      v-loading="sessionLogsLoading[row.session_id]"
-                      @row-click="(r) => showLogDetail(r.id)" class="inner-log-table">
-                      <el-table-column prop="created_at" label="时间" width="160" align="center" />
-                      <el-table-column label="模型（请求→实际）" min-width="180" show-overflow-tooltip>
-                        <template #default="{ row: r }">
-                          {{ r.model_requested }}<span v-if="r.model_used && r.model_used !== r.model_requested"> → {{ r.model_used }}</span>
-                        </template>
-                      </el-table-column>
-                      <el-table-column label="Token（↑/↓）" width="130" align="center">
-                        <template #default="{ row: r }">{{ r.tokens_used }} <span style="color:#999">({{ r.prompt_tokens }}/{{ r.completion_tokens }})</span></template>
-                      </el-table-column>
-                      <el-table-column label="耗时" width="70" align="center">
-                        <template #default="{ row: r }">{{ r.elapsed }}s</template>
-                      </el-table-column>
-                      <el-table-column label="状态" width="70" align="center">
-                        <template #default="{ row: r }">
-                          <el-tag :type="r.is_success ? 'success' : 'danger'" size="small">{{ r.is_success ? '成功' : '失败' }}</el-tag>
-                        </template>
-                      </el-table-column>
-                      <el-table-column label="操作" width="90" align="center">
-                        <template #default="{ row: r }">
-                          <el-button size="small" type="primary" text @click.stop="showLogDetail(r.id)"><i class="fas fa-file-alt"></i></el-button>
-                          <el-popconfirm title="确定删除此条调用记录？" @confirm="handleDeleteLog(r.id)">
-                            <template #reference>
-                              <el-button size="small" type="danger" text @click.stop><i class="fas fa-trash"></i></el-button>
-                            </template>
-                          </el-popconfirm>
-                        </template>
-                      </el-table-column>
-                    </el-table>
                     <div v-if="(sessionLogs[row.session_id] || []).length === 0 && !sessionLogsLoading[row.session_id]" class="form-tip" style="padding: 8px">
                       暂无对话记录
+                    </div>
+                    <div v-else class="call-list">
+                      <div v-for="r in sessionLogs[row.session_id] || []" :key="r.id"
+                        class="call-card" :class="r.is_success ? 'is-success' : 'is-failed'"
+                        @click="showLogDetail(r.id)">
+                        <div class="call-status-bar"></div>
+                        <div class="call-body">
+                          <div class="call-header">
+                            <div class="call-meta-left">
+                              <span class="call-time"><i class="far fa-clock"></i> {{ r.created_at }}</span>
+                              <el-tag size="small" :type="r.endpoint === 'openai' ? 'primary' : 'success'" effect="plain" class="ml-6">
+                                {{ r.endpoint }}
+                              </el-tag>
+                              <el-tag v-if="r.session_id" size="small" effect="plain" type="info" class="ml-6">
+                                <i class="fas fa-fingerprint"></i> {{ shortSessionId(r.session_id) }}
+                              </el-tag>
+                            </div>
+                            <div class="call-meta-right">
+                              <el-tag size="small" :type="r.is_success ? 'success' : 'danger'">
+                                <i :class="r.is_success ? 'fas fa-check-circle' : 'fas fa-exclamation-circle'"></i>
+                                {{ r.is_success ? '成功' : '失败' }}
+                              </el-tag>
+                              <el-button size="small" text type="primary" class="ml-6" @click.stop="showLogDetail(r.id)">
+                                <i class="fas fa-file-alt"></i> 详情
+                              </el-button>
+                              <el-popconfirm title="确定删除此条调用记录？" @confirm="handleDeleteLog(r.id)">
+                                <template #reference>
+                                  <el-button size="small" text type="danger" @click.stop>
+                                    <i class="fas fa-trash"></i>
+                                  </el-button>
+                                </template>
+                              </el-popconfirm>
+                            </div>
+                          </div>
+                          <div class="call-preview" :title="r.preview">
+                            <i class="fas fa-comment-dots call-preview-icon"></i>
+                            <span v-if="r.preview">{{ r.preview }}</span>
+                            <span v-else class="call-preview-empty">（未提取到用户指令摘要）</span>
+                          </div>
+                          <div class="call-chips">
+                            <span class="chip chip-model" :title="`请求: ${r.model_requested || '—'} / 实际: ${r.model_used || '—'}`">
+                              <i class="fas fa-microchip"></i>
+                              <span class="chip-label">模型</span>
+                              <span class="chip-value">
+                                {{ r.model_requested || 'auto' }}
+                                <span v-if="r.model_used && r.model_used !== r.model_requested" class="chip-arrow">→</span>
+                                <span v-if="r.model_used && r.model_used !== r.model_requested">{{ r.model_used }}</span>
+                              </span>
+                            </span>
+                            <span class="chip chip-token" :title="`总Token ${r.tokens_used}（输入 ${r.prompt_tokens} / 输出 ${r.completion_tokens}${r.cache_read_tokens ? ' / 命中 ' + r.cache_read_tokens : ''}）`">
+                              <i class="fas fa-coins"></i>
+                              <span class="chip-label">Token</span>
+                              <span class="chip-value">{{ r.tokens_used }}</span>
+                              <span class="chip-sub">↑{{ r.prompt_tokens }} ↓{{ r.completion_tokens }}<span v-if="r.cache_read_tokens"> 命中{{ r.cache_read_tokens }}</span></span>
+                            </span>
+                            <span class="chip chip-time" :title="`响应耗时 ${r.elapsed}s`">
+                              <i class="fas fa-stopwatch"></i>
+                              <span class="chip-label">耗时</span>
+                              <span class="chip-value">{{ r.elapsed }}s</span>
+                            </span>
+                            <span v-if="r.caller_ip" class="chip chip-ip" :title="`调用方IP: ${r.caller_ip}`">
+                              <i class="fas fa-globe"></i>
+                              <span class="chip-value">{{ r.caller_ip }}</span>
+                            </span>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </template>
@@ -764,16 +800,152 @@ onMounted(() => {
   word-break: break-word;
 }
 .session-expand {
-  padding: 4px 8px 8px 28px;
+  padding: 4px 4px 8px 4px;
+  background: #fafbfc;
 }
 .session-expand-tip {
   font-size: 12px;
-  color: #999;
-  margin-bottom: 8px;
+  color: #909399;
+  margin: 4px 8px 10px;
 }
 .inner-log-table {
   cursor: pointer;
 }
+
+/* ============ 对话卡片列表 ============ */
+.call-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 8px;
+}
+.call-card {
+  display: flex;
+  background: #fff;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  position: relative;
+}
+.call-card:hover {
+  border-color: #409eff;
+  box-shadow: 0 2px 12px rgba(64, 158, 255, 0.15);
+  transform: translateY(-1px);
+}
+.call-status-bar {
+  width: 4px;
+  flex-shrink: 0;
+  background: #dcdfe6;
+}
+.call-card.is-success .call-status-bar {
+  background: linear-gradient(180deg, #67c23a 0%, #5daf34 100%);
+}
+.call-card.is-failed .call-status-bar {
+  background: linear-gradient(180deg, #f56c6c 0%, #dd6161 100%);
+}
+.call-card.is-failed {
+  background: #fef8f8;
+}
+.call-body {
+  flex: 1;
+  padding: 10px 14px;
+  min-width: 0;
+}
+.call-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.call-meta-left,
+.call-meta-right {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.call-time {
+  font-size: 12px;
+  color: #606266;
+}
+.call-time i {
+  margin-right: 4px;
+  color: #909399;
+}
+.ml-6 { margin-left: 6px; }
+.call-preview {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0 8px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #303133;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.call-preview-icon {
+  color: #409eff;
+  margin-top: 4px;
+  flex-shrink: 0;
+}
+.call-preview-empty {
+  color: #c0c4cc;
+  font-style: italic;
+}
+.call-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 4px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  background: #f5f7fa;
+  border-radius: 999px;
+  font-size: 12px;
+  color: #606266;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.chip i {
+  color: #909399;
+  font-size: 11px;
+}
+.chip-label {
+  color: #909399;
+}
+.chip-value {
+  color: #303133;
+  font-weight: 500;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chip-arrow {
+  color: #c0c4cc;
+  margin: 0 2px;
+}
+.chip-sub {
+  color: #909399;
+  font-size: 11px;
+  margin-left: 2px;
+}
+.chip-model .chip-value { color: #409eff; }
+.chip-token .chip-value { color: #e6a23c; }
+.chip-time .chip-value { color: #67c23a; }
+.chip-ip .chip-value { color: #909399; font-weight: 400; font-family: Consolas, Monaco, monospace; }
 .md-text :deep(p) { margin: 4px 0; }
 .md-text :deep(pre) {
   background: #1e1e2e;

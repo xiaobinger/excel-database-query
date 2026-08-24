@@ -19,6 +19,8 @@ import string
 import time
 import hashlib
 import requests
+import os
+import xlrd
 from openpyxl import load_workbook, Workbook
 
 
@@ -60,16 +62,51 @@ def generate_unique_id(merchant_id, length=32):
     return f"{merchant_id}{timestamp}{random_part}"
 
 
-def _load_rows(file_path):
-    """读取 Excel 数据行（跳过表头），返回 list[list]"""
-    wb = load_workbook(file_path, data_only=True)
-    ws = wb.active
-    rows = []
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        if all(c is None or str(c).strip() == '' for c in row):
-            continue
-        rows.append(list(row))
-    return rows
+def get_sheets_info(file_path):
+    """获取 Excel 文件所有工作表信息（名称 + 数据行数），返回 list[dict]"""
+    ext = os.path.splitext(file_path)[1].lower()
+    sheets = []
+    if ext == '.xlsx':
+        wb = load_workbook(file_path, data_only=True)
+        for ws in wb.worksheets:
+            # 跳过表头行，统计数据行数
+            data_rows = 0
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if all(c is None or str(c).strip() == '' for c in row):
+                    continue
+                data_rows += 1
+            sheets.append({'name': ws.title, 'row_count': data_rows})
+    elif ext == '.xls':
+        book = xlrd.open_workbook(file_path)
+        for sheet in book.sheets():
+            data_rows = max(sheet.nrows - 1, 0)  # 减去表头行
+            sheets.append({'name': sheet.name, 'row_count': data_rows})
+    return sheets
+
+
+def _load_rows(file_path, sheet_index=0):
+    """读取 Excel 数据行（跳过表头），返回 list[list]，支持指定工作表索引"""
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == '.xlsx':
+        wb = load_workbook(file_path, data_only=True)
+        ws = wb.worksheets[sheet_index] if sheet_index < len(wb.worksheets) else wb.active
+        rows = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if all(c is None or str(c).strip() == '' for c in row):
+                continue
+            rows.append(list(row))
+        return rows
+    elif ext == '.xls':
+        book = xlrd.open_workbook(file_path)
+        sheet = book.sheets()[sheet_index] if sheet_index < len(book.sheets()) else book.sheets()[0]
+        rows = []
+        for r in range(1, sheet.nrows):
+            row_data = [sheet.cell_value(r, c) for c in range(sheet.ncols)]
+            if all(v is None or str(v).strip() == '' for v in row_data):
+                continue
+            rows.append(row_data)
+        return rows
+    return []
 
 
 def _write_result(file_path, rows, result_rows, sheet_name='代付结果'):
@@ -87,9 +124,25 @@ def _write_result(file_path, rows, result_rows, sheet_name='代付结果'):
     return out_path
 
 
-def _post_json(url, payload, timeout=30):
-    resp = requests.post(url, json=payload, timeout=timeout)
-    return resp
+def _post_json(url, payload, timeout=30, log=None):
+    """POST JSON 请求，打印详细请求和响应日志"""
+    if log:
+        try:
+            payload_str = json.dumps(payload, ensure_ascii=False)
+        except (TypeError, ValueError):
+            payload_str = str(payload)
+        log(f'[HTTP请求] POST {url}')
+        log(f'[HTTP请求] Payload: {payload_str}')
+    try:
+        resp = requests.post(url, json=payload, timeout=timeout)
+        if log:
+            log(f'[HTTP响应] 状态码: {resp.status_code}')
+            log(f'[HTTP响应] Body: {resp.text[:2000]}')
+        return resp
+    except Exception as e:
+        if log:
+            log(f'[HTTP异常] {type(e).__name__}: {e}')
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +175,7 @@ def helipay_pay(cfg, rows, params, log):
             'url': cfg.get('helipayUrl', '') + '/mpos-trx/rest/withdraw/agentApply.action',
         }
         try:
-            resp = _post_json(cfg.get('baseUrl', '') + '/test/heliPay/sendRequest', payload)
+            resp = _post_json(cfg.get('baseUrl', '') + '/test/heliPay/sendRequest', payload, log=log)
             text = resp.text
             result_json = json.loads(text)
             if result_json.get('retCode') == '0000':
@@ -154,12 +207,26 @@ def _dianyin_sign(json_obj, key):
     return hashlib.sha256(result.encode('utf-8')).hexdigest()
 
 
-def _dianyin_request(cfg, url, signature, param_json):
+def _dianyin_request(cfg, url, signature, param_json, log=None):
+    """电银请求：POST + signature header，打印详细请求和响应日志"""
     headers = {'Content-Type': 'application/json', 'signature': signature}
-    return requests.post(url, data=param_json, headers=headers, timeout=30)
+    if log:
+        log(f'[电银HTTP请求] POST {url}')
+        log(f'[电银HTTP请求] Headers: signature={signature}')
+        log(f'[电银HTTP请求] Body: {param_json if isinstance(param_json, str) else json.dumps(param_json, ensure_ascii=False)}')
+    try:
+        resp = requests.post(url, data=param_json, headers=headers, timeout=30)
+        if log:
+            log(f'[电银HTTP响应] 状态码: {resp.status_code}')
+            log(f'[电银HTTP响应] Body: {resp.text[:2000]}')
+        return resp
+    except Exception as e:
+        if log:
+            log(f'[电银HTTP异常] {type(e).__name__}: {e}')
+        raise
 
 
-def dianyin_withdraw(cfg, order_no, amount, account_json):
+def dianyin_withdraw(cfg, order_no, amount, account_json, log=None):
     """账户报备 + 发起提现"""
     account_report_obj = json.loads(account_json)
     account_report_obj["drawType"] = 'FROZEN'
@@ -168,14 +235,18 @@ def dianyin_withdraw(cfg, order_no, amount, account_json):
     account_report_obj["partnerNo"] = cfg.get('partnerNo', '88805')
     account_report_obj = json.dumps(account_report_obj)
 
+    if log:
+        log(f'[电银] 步骤1: 账户报备 流水{order_no}')
     account_report_url = cfg.get('accountReportUrl', 'http://39.101.182.160:8070/api/with-draw/account-contract')
     account_report_sign = _dianyin_sign(account_report_obj, cfg.get('signKey', ''))
-    account_report_result = _dianyin_request(cfg, account_report_url, account_report_sign, account_report_obj)
+    account_report_result = _dianyin_request(cfg, account_report_url, account_report_sign, account_report_obj, log)
 
     if account_report_result.status_code == 200:
         account_report_json = account_report_result.json()
         if account_report_json.get("code") == 200:
             account_id = account_report_json["data"]["accId"]
+            if log:
+                log(f'[电银] 账户报备成功 accId={account_id}')
             withdraw_obj = {
                 "accId": account_id,
                 "amount": amount,
@@ -186,16 +257,24 @@ def dianyin_withdraw(cfg, order_no, amount, account_json):
                 "partnerIden": "dyin",
                 "partnerNo": cfg.get('partnerNo', '88805'),
             }
+            if log:
+                log(f'[电银] 步骤2: 发起提现 流水{order_no} 金额{amount}')
             withdraw_url = cfg.get('withdrawUrl', 'http://39.101.182.160:8070/api/with-draw/with-draw')
-            withdraw_result = _dianyin_request(cfg, withdraw_url, _dianyin_sign(json.dumps(withdraw_obj), cfg.get('signKey', '')), json.dumps(withdraw_obj))
+            withdraw_result = _dianyin_request(cfg, withdraw_url, _dianyin_sign(json.dumps(withdraw_obj), cfg.get('signKey', '')), json.dumps(withdraw_obj), log)
             if withdraw_result.json().get("code") == 200 and withdraw_result.json().get("data", {}).get("orderStatus") == 'ONTHEWAY':
                 return True
+            if log:
+                log(f'[电银] 提现失败: {withdraw_result.text[:500]}')
             return False
+        if log:
+            log(f'[电银] 账户报备失败: {account_report_json}')
         return False
+    if log:
+        log(f'[电银] 账户报备HTTP错误: {account_report_result.status_code}')
     return False
 
 
-def dianyin_query(cfg, order_no):
+def dianyin_query(cfg, order_no, log=None):
     query_obj = {
         "channelNo": cfg.get('channelNo', '81429675'),
         "orderNo": order_no,
@@ -203,7 +282,7 @@ def dianyin_query(cfg, order_no):
         "partnerNo": cfg.get('partnerNo', '88805'),
     }
     query_url = cfg.get('queryUrl', 'http://39.101.182.160:8070/api/with-draw/order-query')
-    return _dianyin_request(cfg, query_url, _dianyin_sign(json.dumps(query_obj), cfg.get('signKey', '')), json.dumps(query_obj))
+    return _dianyin_request(cfg, query_url, _dianyin_sign(json.dumps(query_obj), cfg.get('signKey', '')), json.dumps(query_obj), log)
 
 
 def dianyin_pay(cfg, rows, params, log):
@@ -227,7 +306,7 @@ def dianyin_pay(cfg, rows, params, log):
             "idName": id_name,
         }
         try:
-            flag = dianyin_withdraw(cfg, order_no, amount, json.dumps(account_report_obj, ensure_ascii=False))
+            flag = dianyin_withdraw(cfg, order_no, amount, json.dumps(account_report_obj, ensure_ascii=False), log)
             if flag:
                 success += 1
                 success_amount += _to_int(amount)
@@ -252,7 +331,7 @@ def dianyin_query_batch(cfg, rows, params, log):
     for row in rows:
         order_no = _to_str(_cell(row, 3))
         try:
-            result = dianyin_query(cfg, order_no)
+            result = dianyin_query(cfg, order_no, log)
             data = result.json()
             if data.get("code") == 200:
                 status = data.get("data", {}).get("orderStatus")
@@ -284,14 +363,18 @@ def dianyin_query_batch(cfg, rows, params, log):
 # 乐商通PLUS / 快乐刷（共用 external-api 接口）
 # ---------------------------------------------------------------------------
 
-def _get_sub_agent_id(cfg, bank_card_no, channel_code):
+def _get_sub_agent_id(cfg, bank_card_no, channel_code, log=None):
     url = cfg.get('getSubAgentIdUrl', '')
     payload = {"bankCardNo": bank_card_no, "channelCode": channel_code}
+    if log:
+        log(f'[获取子代理] POST {url} 银行卡={bank_card_no} 渠道={channel_code}')
     resp = requests.post(url, json=payload, timeout=30)
+    if log:
+        log(f'[获取子代理] 状态码: {resp.status_code} 响应: {resp.text[:500]}')
     return resp.text.strip()
 
 
-def _lsp_transfer(cfg, business_no, object_dst_id, amount, transfer_mode):
+def _lsp_transfer(cfg, business_no, object_dst_id, amount, transfer_mode, log=None):
     payload = {
         "source": cfg.get("source"),
         "objectSrcId": cfg.get("objectSrcId"),
@@ -302,10 +385,10 @@ def _lsp_transfer(cfg, business_no, object_dst_id, amount, transfer_mode):
         "businessNo": business_no,
         "sign": cfg.get("sign"),
     }
-    return _post_json(cfg.get("baseUrl", '') + '/external-api/behalfPay/transfer', payload).text
+    return _post_json(cfg.get("baseUrl", '') + '/external-api/behalfPay/transfer', payload, log=log).text
 
 
-def _lsp_create_pay(cfg, business_no, object_dst_id, amount, busi_type):
+def _lsp_create_pay(cfg, business_no, object_dst_id, amount, busi_type, log=None):
     payload = {
         "source": cfg.get("source"),
         "agentId": cfg.get("objectSrcId"),
@@ -316,10 +399,10 @@ def _lsp_create_pay(cfg, business_no, object_dst_id, amount, busi_type):
         "reqId": business_no,
         "sign": cfg.get("sign"),
     }
-    return _post_json(cfg.get("baseUrl", '') + '/external-api/behalfPay/bPay', payload).text
+    return _post_json(cfg.get("baseUrl", '') + '/external-api/behalfPay/bPay', payload, log=log).text
 
 
-def _lsp_query_pay(cfg, req_id, busi_type):
+def _lsp_query_pay(cfg, req_id, busi_type, log=None):
     payload = {
         "source": cfg.get("source"),
         "agentId": cfg.get("objectSrcId"),
@@ -328,10 +411,10 @@ def _lsp_query_pay(cfg, req_id, busi_type):
         "reqId": req_id,
         "sign": cfg.get("sign"),
     }
-    return _post_json(cfg.get("baseUrl", '') + '/external-api/behalfPay/queryV2', payload).text
+    return _post_json(cfg.get("baseUrl", '') + '/external-api/behalfPay/queryV2', payload, log=log).text
 
 
-def _lsp_withdraw(cfg, business_no, object_dst_id, amount):
+def _lsp_withdraw(cfg, business_no, object_dst_id, amount, log=None):
     payload = {
         "agentId": cfg.get("objectSrcId"),
         "applyAgentId": object_dst_id,
@@ -343,15 +426,15 @@ def _lsp_withdraw(cfg, business_no, object_dst_id, amount):
         "applyAmount": amount,
         "key": cfg.get("key"),
     }
-    return _post_json(cfg.get("baseUrl", '') + '/external-api/merchantinfo/v3/submitWithdraw', payload).text
+    return _post_json(cfg.get("baseUrl", '') + '/external-api/merchantinfo/v3/submitWithdraw', payload, log=log).text
 
 
-def _lsp_query_order(cfg, business_no):
+def _lsp_query_order(cfg, business_no, log=None):
     payload = {"source": cfg.get("source"), "key": cfg.get("key"), "businessNo": business_no, "sign": cfg.get("sign")}
-    return _post_json(cfg.get("baseUrl", '') + '/external-api/behalfPay/transferOrderInfo', payload).text
+    return _post_json(cfg.get("baseUrl", '') + '/external-api/behalfPay/transferOrderInfo', payload, log=log).text
 
 
-def _lsp_query_withdraw(cfg, object_dst_id, apply_id):
+def _lsp_query_withdraw(cfg, object_dst_id, apply_id, log=None):
     payload = {
         "source": cfg.get("source"),
         "key": cfg.get("key"),
@@ -360,7 +443,7 @@ def _lsp_query_withdraw(cfg, object_dst_id, apply_id):
         "agentId": cfg.get("objectSrcId"),
         "sign": cfg.get("sign"),
     }
-    return _post_json(cfg.get("baseUrl", '') + '/external-api/merchantinfo/v3/queryWithdrawState', payload).text
+    return _post_json(cfg.get("baseUrl", '') + '/external-api/merchantinfo/v3/queryWithdrawState', payload, log=log).text
 
 
 def _check_without_agent(cfg, id_card_no):
@@ -382,23 +465,23 @@ def lepass_realtime_pay(cfg, rows, params, log):
             continue
         business_no = generate_unique_id(_to_str(_cell(row, 3)))
         bank_card_no = _to_str(_cell(row, 6))
-        object_dst_id = _get_sub_agent_id(cfg, bank_card_no, channel_code)
+        object_dst_id = _get_sub_agent_id(cfg, bank_card_no, channel_code, log)
         if not bank_card_no or not object_dst_id:
             result_rows.append(row + ['', '', '需要创建子代理', '', '', ''])
             log(f'流水{_to_str(_cell(row, 3))} 需要创建子代理')
             continue
         amount = _to_int(_cell(row, 8))
         try:
-            pay_result = json.loads(_lsp_transfer(cfg, business_no, object_dst_id, amount, transfer_mode))
+            pay_result = json.loads(_lsp_transfer(cfg, business_no, object_dst_id, amount, transfer_mode, log))
             if pay_result.get("error_code") == 0 and pay_result.get("data", {}).get("state") == 2:
-                order_info = _lsp_query_order(cfg, business_no)
+                order_info = _lsp_query_order(cfg, business_no, log)
                 withdraw_biz_no = business_no + str(amount)
-                withdraw_result = json.loads(_lsp_withdraw(cfg, withdraw_biz_no, object_dst_id, amount))
+                withdraw_result = json.loads(_lsp_withdraw(cfg, withdraw_biz_no, object_dst_id, amount, log))
                 if withdraw_result.get("error_code") == 0 and withdraw_result.get("error_msg") == "成功":
                     success += 1
                     success_amount += amount
                     apply_id = withdraw_result.get("data", {}).get("applyId")
-                    withdraw_query = _lsp_query_withdraw(cfg, object_dst_id, apply_id)
+                    withdraw_query = _lsp_query_withdraw(cfg, object_dst_id, apply_id, log)
                     result_rows.append(row + [object_dst_id, apply_id, order_info, withdraw_result.get("error_msg"), '', withdraw_query])
                     log(f'{channel_code} 流水{business_no} 代付+提现成功 applyId={apply_id}')
                 else:
@@ -426,13 +509,13 @@ def kls_create_pay(cfg, rows, params, log):
     for row in rows:
         business_no = generate_unique_id(_to_str(_cell(row, 3)))
         bank_card_no = _to_str(_cell(row, 6))
-        object_dst_id = _get_sub_agent_id(cfg, bank_card_no, channel_code)
+        object_dst_id = _get_sub_agent_id(cfg, bank_card_no, channel_code, log)
         if not bank_card_no or not object_dst_id:
             result_rows.append(row + ['', '', '需要创建子代理', '', '', ''])
             continue
         amount = _to_int(_cell(row, 8))
         try:
-            pay_result = json.loads(_lsp_create_pay(cfg, business_no, object_dst_id, amount, busi_type))
+            pay_result = json.loads(_lsp_create_pay(cfg, business_no, object_dst_id, amount, busi_type, log))
             if pay_result.get("error_code") == 0:
                 success += 1
                 success_amount += amount
@@ -462,7 +545,7 @@ def kls_query_pay(cfg, rows, params, log):
             result_rows.append(row + ['', '', '', '', '创建代付未成功', ''])
             continue
         try:
-            pay_result = json.loads(_lsp_query_pay(cfg, req_id, busi_type))
+            pay_result = json.loads(_lsp_query_pay(cfg, req_id, busi_type, log))
             if pay_result.get("error_code") == 0:
                 state = int(pay_result.get("data", {}).get("state"))
                 if state == 3:
@@ -497,12 +580,12 @@ def kls_apply_withdraw(cfg, rows, params, log):
         amount = _to_int(_cell(row, 8))
         object_dst_id = _to_str(_cell(row, 12))
         try:
-            withdraw_result = json.loads(_lsp_withdraw(cfg, business_no, object_dst_id, amount))
+            withdraw_result = json.loads(_lsp_withdraw(cfg, business_no, object_dst_id, amount, log))
             if withdraw_result.get("error_code") == 0 and withdraw_result.get("error_msg") == "成功":
                 success += 1
                 success_amount += amount
                 apply_id = withdraw_result.get("data", {}).get("applyId")
-                withdraw_query = _lsp_query_withdraw(cfg, object_dst_id, apply_id)
+                withdraw_query = _lsp_query_withdraw(cfg, object_dst_id, apply_id, log)
                 result_rows.append(row + [object_dst_id, apply_id, '', withdraw_result.get("error_msg"), '', withdraw_query])
                 log(f'快乐刷发起提现 流水{business_no} 成功 applyId={apply_id}')
             else:
@@ -528,7 +611,7 @@ def lsp_withdraw_query(cfg, rows, params, log):
             result_rows.append(row + ['', '', '', '', '', '无applyId'])
             continue
         try:
-            result = json.loads(_lsp_query_withdraw(cfg, object_dst_id, apply_id))
+            result = json.loads(_lsp_query_withdraw(cfg, object_dst_id, apply_id, log))
             if result.get("error_code") == 0:
                 f_state = result.get("data", {}).get("F_state")
                 if f_state in (-1, "6", 6):

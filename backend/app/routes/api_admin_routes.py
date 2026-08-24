@@ -1,5 +1,7 @@
 """开放API管理接口（仅系统权限）"""
+import json
 import logging
+import re
 from datetime import datetime
 
 from flask import Blueprint, request, jsonify
@@ -12,6 +14,47 @@ from app.utils.auth import permission_required, get_current_user
 
 logger = logging.getLogger(__name__)
 open_api_admin_bp = Blueprint('open_api_admin', __name__, url_prefix='/api/open-api')
+
+
+_PREVIEW_MAX = 120
+_PREVIEW_MSG_LIMIT = 200 * 1024  # 超过 200KB 的对话跳过摘要提取，避免大 JSON 解析阻塞列表
+_USER_RE = re.compile(r'\{\s*"role"\s*:\s*"user"\s*,\s*"content"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def _short_text(s, limit=_PREVIEW_MAX):
+    s = (s or '').strip().replace('\r\n', '\n').replace('\n', ' ')
+    return s if len(s) <= limit else s[:limit] + '…'
+
+
+def _extract_user_preview(messages_json):
+    """从请求的 messages JSON 提取首条 user 消息作为摘要。
+    列表用 JSON 解析（准确），解析失败或体量过大时回退到正则子串搜索（保证 O(1) 近似）。
+    """
+    if not messages_json:
+        return ''
+    if len(messages_json) > _PREVIEW_MSG_LIMIT:
+        m = _USER_RE.search(messages_json[:8192])
+        if m:
+            try:
+                return _short_text(m.group(1).encode('utf-8').decode('unicode_escape', errors='ignore'))
+            except Exception:
+                return ''
+        return ''
+    try:
+        msgs = json.loads(messages_json)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        m = _USER_RE.search(messages_json[:8192])
+        if m:
+            try:
+                return _short_text(m.group(1).encode('utf-8').decode('unicode_escape', errors='ignore'))
+            except Exception:
+                return ''
+        return ''
+    if isinstance(msgs, list):
+        for m in msgs:
+            if isinstance(m, dict) and m.get('role') == 'user':
+                return _short_text(m.get('content') or '')
+    return ''
 
 
 # ============ 全局设置 ============
@@ -297,7 +340,12 @@ def list_logs():
 
     total = query.count()
     logs = query.order_by(ApiCallLog.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
-    return jsonify({'success': True, 'data': [l.to_dict() for l in logs], 'total': total,
+    data = []
+    for l in logs:
+        d = l.to_dict()
+        d['preview'] = _extract_user_preview(l.messages)
+        data.append(d)
+    return jsonify({'success': True, 'data': data, 'total': total,
                     'page': page, 'per_page': per_page})
 
 
@@ -307,7 +355,9 @@ def get_log_detail(log_id):
     log = ApiCallLog.query.get(log_id)
     if not log:
         return jsonify({'success': False, 'message': '记录不存在'}), 404
-    return jsonify({'success': True, 'data': log.to_dict(include_content=True)})
+    data = log.to_dict(include_content=True)
+    data['preview'] = _extract_user_preview(log.messages)
+    return jsonify({'success': True, 'data': data})
 
 
 @open_api_admin_bp.route('/logs/<int:log_id>', methods=['DELETE'])

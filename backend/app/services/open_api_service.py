@@ -26,12 +26,51 @@ OPEN_API_ENDPOINT_MODE_KEY = 'open_api_endpoint_mode'
 VALID_ENDPOINT_MODES = ('openai', 'custom', 'both')
 
 
+def _normalize_ip(raw) -> str:
+    """规范化IP字符串：剥IPv4-mapped IPv6(::ffff:1.2.3.4→1.2.3.4)，非合法返回''"""
+    if not raw:
+        return ''
+    s = str(raw).strip()
+    if not s:
+        return ''
+    # 去掉端口：'1.2.3.4:5678' → '1.2.3.4'（处理Werkzeug/反代偶发带端口）
+    if s.count(':') == 1 and s[0].isdigit():
+        host, _, port = s.partition(':')
+        if port.isdigit():
+            s = host
+    try:
+        ip = ipaddress.ip_address(s)
+    except ValueError:
+        return ''
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        return str(ip.ipv4_mapped)
+    # 链路本地IPv6（fe80::/10）通常无业务意义，过滤；返回 '' 后由调用方回退到下一候选
+    if isinstance(ip, ipaddress.IPv6Address) and (ip.is_link_local or ip.is_loopback):
+        return ''
+    if isinstance(ip, ipaddress.IPv4Address) and ip.is_loopback:
+        return ''
+    return str(ip)
+
+
 def get_client_ip() -> str:
-    """获取调用方IP（反代场景优先取X-Forwarded-For首个）"""
+    """获取调用方真实IP（按可信度顺序取首个合法IP）：
+    X-Forwarded-For（多级反代由调用方依次追加）> X-Real-IP > remote_addr。
+    跳过链路本地/loopback等无业务意义的地址，支持 IPv4-mapped IPv6 转 IPv4。
+    """
+    candidates = []
     xff = request.headers.get('X-Forwarded-For', '')
     if xff:
-        return xff.split(',')[0].strip()
-    return request.remote_addr or ''
+        candidates.extend(p.strip() for p in xff.split(',') if p.strip())
+    xri = request.headers.get('X-Real-IP', '').strip()
+    if xri:
+        candidates.append(xri)
+    if request.remote_addr:
+        candidates.append(request.remote_addr)
+    for c in candidates:
+        ip = _normalize_ip(c)
+        if ip:
+            return ip
+    return ''
 
 
 def get_settings() -> dict:
