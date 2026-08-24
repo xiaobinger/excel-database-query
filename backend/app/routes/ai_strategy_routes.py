@@ -7,13 +7,7 @@ from app.utils.auth import permission_required
 ai_strategy_bp = Blueprint('ai_strategy', __name__, url_prefix='/api/ai-strategy')
 
 
-@ai_strategy_bp.route('', methods=['GET'])
-@permission_required('system')
-def get_strategy():
-    strategy = AiStrategy.query.filter_by(is_active=True).first()
-    if not strategy:
-        return jsonify({'success': True, 'data': None, 'message': '未配置策略'})
-    # Enrich with model details
+def _enrich_strategy(strategy):
     d = strategy.to_dict()
     model_ids = strategy.get_model_ids()
     models = []
@@ -22,64 +16,94 @@ def get_strategy():
         if cfg:
             models.append({'id': cfg.id, 'name': cfg.name, 'model_name': cfg.model_name, 'is_active': cfg.is_active})
     d['models'] = models
-    return jsonify({'success': True, 'data': d})
+    return d
 
 
-@ai_strategy_bp.route('', methods=['POST', 'PUT'])
+@ai_strategy_bp.route('/list', methods=['GET'])
 @permission_required('system')
-def save_strategy():
+def list_strategies():
+    strategies = AiStrategy.query.order_by(AiStrategy.sort_order.desc()).all()
+    data = [_enrich_strategy(s) for s in strategies]
+    return jsonify({'success': True, 'data': data})
+
+
+@ai_strategy_bp.route('/<int:strategy_id>', methods=['GET'])
+@permission_required('system')
+def get_strategy(strategy_id):
+    strategy = AiStrategy.query.get(strategy_id)
+    if not strategy:
+        return jsonify({'success': False, 'message': '策略不存在'}), 404
+    return jsonify({'success': True, 'data': _enrich_strategy(strategy)})
+
+
+@ai_strategy_bp.route('', methods=['POST'])
+@permission_required('system')
+def create_strategy():
     data = request.get_json()
     if not data:
         return jsonify({'success': False, 'message': '请求数据为空'}), 400
 
-    strategy = AiStrategy.query.filter_by(is_active=True).first()
-    is_new = not strategy
+    strategy = AiStrategy()
+    db.session.add(strategy)
+    _apply_fields(strategy, data)
+    db.session.commit()
+    return jsonify({'success': True, 'data': strategy.to_dict(), 'message': '策略已创建'})
 
-    if is_new:
-        strategy = AiStrategy()
-        db.session.add(strategy)
 
-    strategy.name = data.get('name', '默认策略')
-    strategy.strategy_type = data.get('strategy_type', 'priority')
-    strategy.failover_enabled = data.get('failover_enabled', True)
-    strategy.failover_max_retries = data.get('failover_max_retries', 3)
-    strategy.failover_timeout = data.get('failover_timeout', 30)
-    strategy.description = data.get('description', '')
-    strategy.is_active = data.get('is_active', True)
-    strategy.route_to_free_only = data.get('route_to_free_only', False)
+@ai_strategy_bp.route('/<int:strategy_id>', methods=['PUT'])
+@permission_required('system')
+def update_strategy(strategy_id):
+    strategy = AiStrategy.query.get(strategy_id)
+    if not strategy:
+        return jsonify({'success': False, 'message': '策略不存在'}), 404
+
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': '请求数据为空'}), 400
+
+    _apply_fields(strategy, data)
+    db.session.commit()
+    return jsonify({'success': True, 'data': strategy.to_dict(), 'message': '策略已更新'})
+
+
+@ai_strategy_bp.route('/<int:strategy_id>', methods=['DELETE'])
+@permission_required('system')
+def delete_strategy(strategy_id):
+    strategy = AiStrategy.query.get(strategy_id)
+    if not strategy:
+        return jsonify({'success': False, 'message': '策略不存在'}), 404
+
+    db.session.delete(strategy)
+    db.session.commit()
+    return jsonify({'success': True, 'message': '策略已删除'})
+
+
+@ai_strategy_bp.route('/<int:strategy_id>/reset-tokens', methods=['POST'])
+@permission_required('system')
+def reset_token_usage(strategy_id):
+    strategy = AiStrategy.query.get(strategy_id)
+    if not strategy:
+        return jsonify({'success': False, 'message': '策略不存在'}), 404
+
+    strategy.token_usage = None
+    strategy.round_robin_index = 0
+    db.session.commit()
+    return jsonify({'success': True, 'message': 'Token统计已重置'})
+
+
+def _apply_fields(strategy, data):
+    simple_fields = ['name', 'strategy_type', 'failover_enabled', 'failover_max_retries',
+                     'failover_timeout', 'description', 'is_active', 'route_to_free_only', 'sort_order']
+    for field in simple_fields:
+        if field in data:
+            setattr(strategy, field, data[field])
 
     if 'model_ids' in data:
         strategy.set_model_ids(data['model_ids'])
     if 'scope' in data:
         strategy.set_scope(data['scope'])
 
-    # Reset round_robin_index when strategy changes
     if 'strategy_type' in data:
         strategy.round_robin_index = 0
     if 'model_ids' in data:
         strategy.token_usage = None
-
-    db.session.commit()
-    return jsonify({'success': True, 'data': strategy.to_dict(), 'message': '策略已保存'})
-
-
-@ai_strategy_bp.route('', methods=['DELETE'])
-@permission_required('system')
-def delete_strategy():
-    strategy = AiStrategy.query.filter_by(is_active=True).first()
-    if strategy:
-        db.session.delete(strategy)
-        db.session.commit()
-    return jsonify({'success': True, 'message': '策略已删除'})
-
-
-@ai_strategy_bp.route('/reset-tokens', methods=['POST'])
-@permission_required('system')
-def reset_token_usage():
-    strategy = AiStrategy.query.filter_by(is_active=True).first()
-    if not strategy:
-        return jsonify({'success': False, 'message': '未配置策略'}), 404
-    strategy.token_usage = None
-    strategy.round_robin_index = 0
-    db.session.commit()
-    return jsonify({'success': True, 'message': 'Token统计已重置'})

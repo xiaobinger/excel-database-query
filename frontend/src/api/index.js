@@ -216,10 +216,12 @@ const ai = {
   adminRestoreChat: (chatId) => http.put(`/ai/admin/chats/${chatId}/restore`),
   batchRestoreChats: (ids) => http.post('/ai/admin/chats/batch-restore', { ids }),
   restoreAllChats: () => http.put('/ai/admin/chats/restore-all'),
-  getStrategy: () => http.get('/ai-strategy'),
-  saveStrategy: (data) => http.post('/ai-strategy', data),
-  deleteStrategy: () => http.delete('/ai-strategy'),
-  resetStrategyTokens: () => http.post('/ai-strategy/reset-tokens'),
+  listStrategies: () => http.get('/ai-strategy/list'),
+  getStrategy: (id) => http.get(`/ai-strategy/${id}`),
+  createStrategy: (data) => http.post('/ai-strategy', data),
+  updateStrategy: (id, data) => http.put(`/ai-strategy/${id}`, data),
+  deleteStrategy: (id) => http.delete(`/ai-strategy/${id}`),
+  resetStrategyTokens: (id) => http.post(`/ai-strategy/${id}/reset-tokens`),
   getCacheStats: () => http.get('/ai/cache/stats'),
 }
 

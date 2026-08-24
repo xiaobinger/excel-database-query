@@ -472,35 +472,46 @@ class AiService:
         }
 
     @staticmethod
-    def get_ordered_configs(scope: str = None) -> list:
-        """根据策略返回有序的模型配置列表，支持故障转移。
-        scope: 调用场景标识（system_chat/open_api/ticket），用于匹配策略作用域。
+    def _find_strategy_for_scope(scope: str = None):
+        """根据 scope 匹配最优策略。
+        优先匹配 scope 明确包含当前场景的策略；无匹配时回退到 scope 为空的通用策略。
+        多条匹配时取 sort_order 最大的。
         """
         from app.models.ai_strategy import AiStrategy
+
+        all_active = AiStrategy.query.filter_by(is_active=True).order_by(
+            AiStrategy.sort_order.desc()
+        ).all()
+
+        if not all_active:
+            return None
+
+        if not scope:
+            return all_active[0]
+
+        scope_match = None
+        fallback = None
+        for s in all_active:
+            s_scope = s.get_scope()
+            if not s_scope:
+                if fallback is None:
+                    fallback = s
+            elif scope in s_scope:
+                if scope_match is None:
+                    scope_match = s
+
+        return scope_match or fallback or all_active[0]
+
+    @staticmethod
+    def _configs_from_strategy(strategy) -> list:
+        """根据单个策略返回有序模型列表。"""
         from app.models.ai_config import AiConfig
         from app import db
 
-        strategy = AiStrategy.query.filter_by(is_active=True).first()
-
-        def _fallback_configs():
-            config = AiConfig.query.filter_by(is_default=True, is_active=True).first()
-            if not config:
-                config = AiConfig.query.filter_by(is_active=True).first()
-            return [config] if config else []
-
-        if not strategy:
-            return _fallback_configs()
-
-        # 检查策略作用域匹配：如果策略设置了scope且当前scope不在其中，回退到默认
-        strategy_scope = strategy.get_scope()
-        if strategy_scope and scope and scope not in strategy_scope:
-            return _fallback_configs()
-
         model_ids = strategy.get_model_ids()
         if not model_ids:
-            return _fallback_configs()
+            return []
 
-        # free_only 过滤：仅保留 is_free=True 的配置
         free_only = strategy.route_to_free_only
 
         configs = []
@@ -514,10 +525,8 @@ class AiService:
         if not configs:
             if free_only:
                 configs = [c for c in AiConfig.query.filter_by(is_active=True, is_free=True).all()]
-            if not configs:
-                return _fallback_configs()
+            return configs
 
-        # 根据策略类型重新排序
         if strategy.strategy_type == 'round_robin':
             idx = strategy.get_next_round_robin_index(len(configs))
             configs = configs[idx:] + configs[:idx]
@@ -529,10 +538,29 @@ class AiService:
         return configs
 
     @staticmethod
+    def get_ordered_configs(scope: str = None) -> list:
+        """根据策略返回有序的模型配置列表，支持故障转移。
+        scope: 调用场景标识（system_chat/open_api/ticket），用于匹配策略作用域。
+        """
+        from app.models.ai_config import AiConfig
+
+        def _fallback_configs():
+            config = AiConfig.query.filter_by(is_default=True, is_active=True).first()
+            if not config:
+                config = AiConfig.query.filter_by(is_active=True).first()
+            return [config] if config else []
+
+        strategy = AiService._find_strategy_for_scope(scope)
+        if not strategy:
+            return _fallback_configs()
+
+        configs = AiService._configs_from_strategy(strategy)
+        return configs if configs else _fallback_configs()
+
+    @staticmethod
     def chat_with_failover(messages: list, use_tools: bool = False, override_configs: list = None, tools: list = None, scope: str = None) -> Tuple:
         """支持故障转移的AI调用，自动尝试多个模型。如果提供 override_configs 则使用指定模型。
         tools: 可选，指定工具列表（用于Agent工具过滤），为None时使用默认AI_TOOLS。"""
-        from app.models.ai_strategy import AiStrategy
         from app import db
 
         if override_configs:
@@ -542,7 +570,7 @@ class AiService:
         if not configs:
             raise ValueError('没有可用的AI模型配置')
 
-        strategy = AiStrategy.query.filter_by(is_active=True).first()
+        strategy = AiService._find_strategy_for_scope(scope)
         failover = strategy.failover_enabled if strategy else True
         max_retries = strategy.failover_max_retries if strategy else 3
         timeout = strategy.failover_timeout if strategy else 120

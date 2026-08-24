@@ -114,9 +114,6 @@
                 <el-button v-hasPermi="['system:delete']" type="danger" size="small" plain @click="handleDeleteAll">
                   <i class="fas fa-trash"></i> 删除全部
                 </el-button>
-                <el-button type="warning" size="small" @click="openStrategyDialog()">
-                  <i class="fas fa-random"></i> 策略配置
-                </el-button>
                 <el-button type="primary" size="small" @click="openAiConfigDialog()">
                   <i class="fas fa-plus"></i> 添加配置
                 </el-button>
@@ -168,6 +165,66 @@
                 </template>
               </el-table-column>
             </el-table>
+
+            <div style="margin-top: 24px">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px">
+                <div style="font-weight: 600; font-size: 15px">
+                  <i class="fas fa-random" style="color: #E6A23C; margin-right: 6px"></i>路由策略
+                  <span style="color: #909399; font-size: 12px; font-weight: 400; margin-left: 8px">按权重从高到低匹配，scope 匹配优先于通用策略</span>
+                </div>
+                <el-button type="warning" size="small" @click="openStrategyDialog()">
+                  <i class="fas fa-plus"></i> 添加策略
+                </el-button>
+              </div>
+              <el-table :data="strategies" stripe style="width: 100%">
+                <el-table-column prop="name" label="策略名称" min-width="120" />
+                <el-table-column label="类型" width="110" align="center">
+                  <template #default="{ row }">
+                    <el-tag size="small" :type="row.strategy_type === 'priority' ? 'primary' : row.strategy_type === 'round_robin' ? 'success' : 'warning'">
+                      {{ row.strategy_type === 'priority' ? '优先级' : row.strategy_type === 'round_robin' ? '轮询' : 'Token均衡' }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="模型" min-width="180">
+                  <template #default="{ row }">
+                    <el-tag v-for="m in (row.models || []).slice(0, 3)" :key="m.id" size="small" style="margin: 2px 4px 2px 0">{{ m.name }}</el-tag>
+                    <span v-if="(row.models || []).length > 3" style="color: #909399; font-size: 12px">+{{ row.models.length - 3 }}</span>
+                    <span v-if="!row.models || row.models.length === 0" style="color: #909399">-</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="作用域" width="200" align="center">
+                  <template #default="{ row }">
+                    <template v-if="row.scope && row.scope.length > 0">
+                      <el-tag v-for="s in row.scope" :key="s" size="small" type="info" style="margin: 2px">
+                        {{ s === 'system_chat' ? '系统对话' : s === 'open_api' ? '对外API' : s === 'ticket' ? '工单' : s }}
+                      </el-tag>
+                    </template>
+                    <el-tag v-else size="small" type="info">全部</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="免费" width="70" align="center">
+                  <template #default="{ row }">
+                    <el-tag v-if="row.route_to_free_only" type="warning" size="small">仅免费</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="sort_order" label="权重" width="70" align="center" />
+                <el-table-column label="状态" width="80" align="center">
+                  <template #default="{ row }">
+                    <el-tag :type="row.is_active ? 'success' : 'info'" size="small">{{ row.is_active ? '启用' : '禁用' }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="160" align="center">
+                  <template #default="{ row }">
+                    <el-button size="small" type="primary" text @click="openStrategyDialog(row)">
+                      <i class="fas fa-edit"></i> 编辑
+                    </el-button>
+                    <el-button size="small" type="danger" text @click="handleDeleteStrategy(row.id)">
+                      <i class="fas fa-trash"></i>
+                    </el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
 
             <el-dialog v-model="aiConfigDialogVisible" :title="isEditAiConfig ? '编辑AI配置' : '添加AI配置'" width="550px" destroy-on-close>
               <el-form ref="aiConfigFormRef" :model="aiConfigForm" :rules="aiConfigRules" label-width="120px">
@@ -294,14 +351,17 @@
             </el-dialog>
 
             <!-- Strategy Dialog -->
-            <el-dialog v-model="strategyDialogVisible" title="AI模型调度策略" width="650px" destroy-on-close>
+            <el-dialog v-model="strategyDialogVisible" :title="isEditStrategy ? '编辑路由策略' : '添加路由策略'" width="650px" destroy-on-close>
               <el-form :model="strategyForm" label-width="120px">
                 <el-form-item label="策略名称">
-                  <el-input v-model="strategyForm.name" placeholder="如: 默认策略" />
+                  <el-input v-model="strategyForm.name" placeholder="如: 对外API免费模型" />
+                </el-form-item>
+                <el-form-item label="权重">
+                  <el-input-number v-model="strategyForm.sort_order" :min="0" :max="999" style="width: 120px" />
+                  <span style="margin-left: 12px; color: #909399; font-size: 12px">越大优先级越高，相同 scope 内按权重匹配</span>
                 </el-form-item>
                 <el-form-item label="启用策略">
                   <el-switch v-model="strategyForm.is_active" active-text="启用" inactive-text="禁用" />
-                  <span style="margin-left: 12px; color: #909399; font-size: 12px">启用后将按策略调度模型，禁用时使用默认模型</span>
                 </el-form-item>
                 <el-divider />
                 <el-form-item label="调度策略">
@@ -349,14 +409,14 @@
                     <el-option label="对外API" value="open_api" />
                     <el-option label="系统工单" value="ticket" />
                   </el-select>
-                  <div style="color: #909399; font-size: 12px; margin-top: 4px">留空=全部场景生效；选择后仅在对应场景使用此策略（未命中场景回退到默认模型）</div>
+                  <div style="color: #909399; font-size: 12px; margin-top: 4px">留空=全部场景生效；选择后仅在对应场景使用此策略（未命中场景回退到通用策略）</div>
                 </el-form-item>
                 <el-form-item label="描述">
                   <el-input v-model="strategyForm.description" type="textarea" :rows="2" placeholder="策略说明（可选）" />
                 </el-form-item>
-                <el-form-item label="Token统计" v-if="currentStrategy && Object.keys(currentStrategy.token_usage || {}).length > 0">
+                <el-form-item label="Token统计" v-if="editingStrategyId && editingStrategyTokenUsage && Object.keys(editingStrategyTokenUsage).length > 0">
                   <div style="font-size: 13px">
-                    <div v-for="(tokens, modelId) in currentStrategy.token_usage" :key="modelId" style="margin-bottom: 4px">
+                    <div v-for="(tokens, modelId) in editingStrategyTokenUsage" :key="modelId" style="margin-bottom: 4px">
                       <el-tag size="small">{{ getModelNameById(parseInt(modelId)) }}</el-tag>
                       <span style="margin-left: 8px">{{ Number(tokens).toLocaleString() }} tokens</span>
                     </div>
@@ -367,7 +427,6 @@
                 </el-form-item>
               </el-form>
               <template #footer>
-                <el-button v-if="currentStrategy" type="danger" plain @click="handleDeleteStrategy">删除策略</el-button>
                 <el-button @click="strategyDialogVisible = false">取消</el-button>
                 <el-button type="primary" :loading="savingStrategy" @click="handleSaveStrategy">保存</el-button>
               </template>
@@ -740,9 +799,12 @@ onMounted(() => {
 // AI Strategy
 const strategyDialogVisible = ref(false)
 const savingStrategy = ref(false)
-const currentStrategy = ref(null)
-const strategyForm = reactive({
-  name: '默认策略',
+const isEditStrategy = ref(false)
+const editingStrategyId = ref(null)
+const editingStrategyTokenUsage = ref(null)
+const strategies = ref([])
+const defaultStrategyForm = {
+  name: '',
   strategy_type: 'priority',
   model_ids: [],
   is_active: true,
@@ -750,76 +812,82 @@ const strategyForm = reactive({
   failover_max_retries: 3,
   route_to_free_only: false,
   scope: [],
+  sort_order: 0,
   description: '',
-})
+}
+const strategyForm = reactive({ ...defaultStrategyForm })
 
-async function fetchStrategy() {
+async function fetchStrategies() {
   try {
-    const res = await api.ai.getStrategy()
-    if (res.data) {
-      currentStrategy.value = res.data
-      Object.assign(strategyForm, {
-        name: res.data.name || '默认策略',
-        strategy_type: res.data.strategy_type || 'priority',
-        model_ids: res.data.model_ids || [],
-        is_active: res.data.is_active !== false,
-        failover_enabled: res.data.failover_enabled !== false,
-        failover_max_retries: res.data.failover_max_retries || 3,
-        route_to_free_only: res.data.route_to_free_only || false,
-        scope: res.data.scope || [],
-        description: res.data.description || '',
-      })
-    } else {
-      currentStrategy.value = null
-      Object.assign(strategyForm, {
-        name: '默认策略',
-        strategy_type: 'priority',
-        model_ids: [],
-        is_active: true,
-        failover_enabled: true,
-        failover_max_retries: 3,
-        route_to_free_only: false,
-        scope: [],
-        description: '',
-      })
-    }
+    const res = await api.ai.listStrategies()
+    strategies.value = res.data || []
   } catch {
-    currentStrategy.value = null
+    strategies.value = []
   }
 }
 
-function openStrategyDialog() {
+function fetchStrategy() {
+  fetchStrategies()
+}
+
+function openStrategyDialog(row) {
+  if (row) {
+    isEditStrategy.value = true
+    editingStrategyId.value = row.id
+    editingStrategyTokenUsage.value = row.token_usage || null
+    Object.assign(strategyForm, {
+      name: row.name || '',
+      strategy_type: row.strategy_type || 'priority',
+      model_ids: row.model_ids || [],
+      is_active: row.is_active !== false,
+      failover_enabled: row.failover_enabled !== false,
+      failover_max_retries: row.failover_max_retries || 3,
+      route_to_free_only: row.route_to_free_only || false,
+      scope: row.scope || [],
+      sort_order: row.sort_order || 0,
+      description: row.description || '',
+    })
+  } else {
+    isEditStrategy.value = false
+    editingStrategyId.value = null
+    editingStrategyTokenUsage.value = null
+    Object.assign(strategyForm, { ...defaultStrategyForm })
+  }
   strategyDialogVisible.value = true
 }
 
 async function handleSaveStrategy() {
   savingStrategy.value = true
   try {
-    await api.ai.saveStrategy({ ...strategyForm })
+    if (isEditStrategy.value && editingStrategyId.value) {
+      await api.ai.updateStrategy(editingStrategyId.value, { ...strategyForm })
+    } else {
+      await api.ai.createStrategy({ ...strategyForm })
+    }
     ElMessage.success('策略已保存')
     strategyDialogVisible.value = false
-    fetchStrategy()
+    fetchStrategies()
   } catch {} finally {
     savingStrategy.value = false
   }
 }
 
-async function handleDeleteStrategy() {
+async function handleDeleteStrategy(id) {
   try {
-    await ElMessageBox.confirm('确定要删除当前策略吗？删除后将使用默认模型。', '确认', { type: 'warning' })
-    await api.ai.deleteStrategy()
+    await ElMessageBox.confirm('确定要删除该策略吗？', '确认', { type: 'warning' })
+    await api.ai.deleteStrategy(id)
     ElMessage.success('策略已删除')
-    currentStrategy.value = null
-    strategyDialogVisible.value = false
-    fetchStrategy()
+    fetchStrategies()
   } catch {}
 }
 
 async function handleResetTokens() {
+  if (!editingStrategyId.value) return
   try {
-    await api.ai.resetStrategyTokens()
+    await api.ai.resetStrategyTokens(editingStrategyId.value)
     ElMessage.success('Token统计已重置')
-    fetchStrategy()
+    editingStrategyTokenUsage.value = null
+    fetchStrategies()
   } catch {}
 }
 

@@ -16,7 +16,7 @@ class AiStrategy(db.Model):
     # JSON array of model IDs in order (first = highest priority for priority strategy)
     model_ids = db.Column(db.Text, comment='模型ID列表(JSON array, ordered)')
 
-    # Whether this strategy is currently active (only one should be active)
+    # Whether this strategy is currently active
     is_active = db.Column(db.Boolean, default=True, comment='是否启用')
 
     # Failover: if a model fails, try the next one (always enabled for safety)
@@ -36,6 +36,8 @@ class AiStrategy(db.Model):
     # Scope: JSON array of applicable scopes (empty = all scopes)
     # Values: system_chat / open_api / ticket
     scope = db.Column(db.Text, comment='策略作用域(JSON数组，空=全部): system_chat/open_api/ticket')
+
+    sort_order = db.Column(db.Integer, default=0, comment='排序权重(越大优先级越高)')
 
     description = db.Column(db.String(500), comment='策略描述')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -100,6 +102,7 @@ class AiStrategy(db.Model):
             'round_robin_index': self.round_robin_index,
             'route_to_free_only': self.route_to_free_only or False,
             'scope': self.get_scope(),
+            'sort_order': self.sort_order or 0,
             'description': self.description,
             'created_at': beijing_isoformat(self.created_at),
             'updated_at': beijing_isoformat(self.updated_at),
