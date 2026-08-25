@@ -116,6 +116,23 @@ const BRANDS = {
   grok: { title: 'xAI Grok', color: '#000000', label: 'X' },
   hunyuan: { title: '腾讯混元', color: '#0053e0', label: '腾' },
   doubao: { title: '豆包', color: '#00d4b7', label: '豆' },
+  // poolside：agentic coding 平台（poolside.ai），品牌标志为几何波纹，深海蓝
+  poolside: {
+    title: 'Poolside',
+    color: '#1a73e8',
+    path: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.14-7-7 3.14-7 7-7zm0 2.5a4.5 4.5 0 100 9 4.5 4.5 0 000-9zm0 2a2.5 2.5 0 110 5 2.5 2.5 0 010-5z',
+  },
+  // nemotron：NVIDIA 开源大模型系列，使用 NVIDIA 品牌绿
+  nemotron: {
+    title: 'NVIDIA Nemotron',
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="100%" height="100%" aria-hidden="true"><rect rx="4" width="24" height="24" fill="#76B900"/><path d="M5.272 16.756V7.244h1.612l3.72 6.604V7.244h1.36v9.512h-1.44L7.72 9.88v6.876zM17.3 16.96c-.532 0-1.004-.092-1.416-.276a2.9 2.9 0 01-1.044-.76 2.8 2.8 0 01-.6-1.128c-.132-.44-.196-.924-.196-1.452V12.44c0-.532.068-1.02.204-1.464a2.9 2.9 0 01.612-1.14c.268-.324.592-.58.972-.768.388-.192.824-.288 1.308-.288.464 0 .884.092 1.26.276a2.7 2.7 0 01.948.756c.26.32.452.692.576 1.116.128.42.192.876.192 1.368v.396h-5.16v.96c0 .464.08.872.24 1.224.16.348.388.62.684.816.3.192.652.288 1.056.288.32 0 .604-.056.852-.168a2.1 2.1 0 001.14-1.032l1.2.612a3.3 3.3 0 01-.72.876 3.3 3.3 0 01-.984.528c-.376.128-.784.192-1.224.192zm-.12-6.84c-.304 0-.568.072-.792.216a1.6 1.6 0 00-.552.588c-.132.24-.212.508-.24.804v.312h3.72v-.312c0-.3-.068-.58-.204-.84a1.6 1.6 0 00-.564-.576 1.5 1.5 0 00-.804-.204l-.564.012z" fill="white"/></svg>`,
+  },
+  // ox-alpha：OpenRouter 上的匿名 stealth 模型，以牛头为标志
+  oxalpha: {
+    title: 'Ox Alpha',
+    color: '#636363',
+    path: 'M12 2C8.5 2 4.8 3.6 4 6c-.4 1.2-.2 2.4.2 3.4L3 12l2.2 2.6c.8 1 1.8 1.6 2.8 2l-1 3h10l-1-3c1-.4 2-1 2.8-2L21 12l-1.2-2.6c.4-1 .6-2.2.2-3.4C19.2 3.6 15.5 2 12 2zm-3 6.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm6 0a1.5 1.5 0 110 3 1.5 1.5 0 010-3zM9 14c0 0 .5 2 3 2s3-2 3-2H9z',
+  },
   generic: { title: 'AI模型', color: '#909399', label: 'AI' },
 }
 
@@ -141,6 +158,8 @@ function detectBrandKey(provider, apiBase, modelName) {
   if (base.includes('ollama') || base.includes('localhost') || base.includes('127.0.0.1')) return 'ollama'
   if (base.includes('hunyuan')) return 'hunyuan'
   if (base.includes('doubao') || base.includes('volc')) return 'doubao'
+  if (base.includes('poolside')) return 'poolside'
+  if (base.includes('nemotron') || base.includes('nvidia')) return 'nemotron'
   if (base.includes('openai') || base.includes('gpt')) return 'openai'
 
   // 再综合模型名判断
@@ -160,6 +179,9 @@ function detectBrandKey(provider, apiBase, modelName) {
   if (s.includes('xiaomi') || s.includes('milm') || s.includes('mimo')) return 'xiaomi'
   if (s.includes('hunyuan')) return 'hunyuan'
   if (s.includes('doubao') || s.includes('volc')) return 'doubao'
+  if (s.includes('poolside') || s.includes('laguna')) return 'poolside'
+  if (s.includes('nemotron')) return 'nemotron'
+  if (s.includes('ox-alpha') || s.includes('ox_alpha') || s.includes('oxalpha')) return 'oxalpha'
   if (s.includes('gpt') || s.includes('openai') || s.includes('o1') || s.includes('o3') || s.includes('o4')) return 'openai'
   return 'generic'
 }
