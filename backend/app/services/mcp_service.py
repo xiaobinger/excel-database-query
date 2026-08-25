@@ -297,7 +297,13 @@ class McpClientManager:
                 elif server.transport_type == 'sse':
                     cm = sdk['sse_client'](url=server.url, headers=headers or None)
                 elif server.transport_type == 'streamable_http':
-                    cm = sdk['streamablehttp_client'](url=server.url, headers=headers or None)
+                    # streamable_http_client 1.29.0+ 不再接受 headers 参数，
+                    # 需通过 httpx.AsyncClient(headers=...) 传入
+                    http_client = None
+                    if headers:
+                        import httpx
+                        http_client = httpx.AsyncClient(headers=headers)
+                    cm = sdk['streamablehttp_client'](url=server.url, http_client=http_client)
                 else:
                     raise ValueError(f'不支持的传输类型: {server.transport_type}')
 
