@@ -71,7 +71,7 @@ const BRANDS = {
   },
   openrouter: {
     title: 'OpenRouter',
-    color: '#6566f1',
+    color: '#94a3b8',
     path: 'M16.778 1.844v1.919q-.569-.026-1.138-.032-.708-.008-1.415.037c-1.93.126-4.023.728-6.149 2.237-2.911 2.066-2.731 1.95-4.14 2.75-.396.223-1.342.574-2.185.798-.841.225-1.753.333-1.751.333v4.229s.768.108 1.61.333c.842.224 1.789.575 2.185.799 1.41.798 1.228.683 4.14 2.75 2.126 1.509 4.22 2.11 6.148 2.236.88.058 1.716.041 2.555.005v1.918l7.222-4.168-7.222-4.17v2.176c-.86.038-1.611.065-2.278.021-1.364-.09-2.417-.357-3.979-1.465-2.244-1.593-2.866-2.027-3.68-2.508.889-.518 1.449-.906 3.822-2.59 1.56-1.109 2.614-1.377 3.978-1.466.667-.044 1.418-.017 2.278.02v2.176L24 6.014Z',
   },
   minimax: {
@@ -107,6 +107,12 @@ const BRANDS = {
     svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 31.5 26.55" width="100%" height="100%" aria-hidden="true"><path fill="#1E51FF" d="M16.5376 0.0307374L14.3326 3.13223C14.1617 3.37577 13.9331 3.57415 13.6667 3.71001C13.4004 3.84586 13.1045 3.91504 12.8048 3.9115H0.787598V0.015152H16.5376V0.0307374Z"/><path fill="#1E51FF" d="M31.5 0.0321655L12.6 26.5273H0L18.9 0.0321655H31.5Z"/><path fill="#1E51FF" d="M14.9624 26.5272L17.1832 23.4101C17.3564 23.1689 17.5856 22.9723 17.8513 22.8368C18.1171 22.7012 18.4119 22.6306 18.7109 22.6308H30.7124V26.5272H14.9624Z"/></svg>`,
   },
   // 以下厂商暂无官方SVG，使用品牌色+单字回退
+  // 商汤：SenseNova（日日新）官方logo（platform.sensenova.cn，@lobehub/icons），
+  // 紫 #5B2AD8 + 青绿 #06FDB7 双色四象限图形
+  sensetime: {
+    title: '商汤SenseNova（日日新）',
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="100%" height="100%" aria-hidden="true"><path d="M23 8.333h-7.333v7.334H23V8.333z" fill="#06FDB7"/><path d="M1 1v14.667h7.333V8.333h7.334V1H1z" fill="#5B2AD8"/><path d="M14.038 4.333h.17l1.459 1.456v.17l-1.63-1.626zM13.224 4.333h.17l2.273 2.268v.17l-2.443-2.438zM12.41 4.333h.17l3.087 3.08v.17l-3.257-3.25zM11.596 4.333h.17l3.9 3.892v.108h-.06l-4.01-4zM10.782 4.333h.17l4.01 4h-.17l-4.01-4zM9.968 4.333h.17l4.009 4h-.17l-4.01-4zM9.154 4.333h.17l4.009 4h-.17l-4.01-4zM8.34 4.333h.17l4.01 4h-.17l-4.01-4zM7.521 4.333h.17l4.01 4h-.17l-4.01-4zM6.707 4.333h.17l4.01 4h-.17l-4.01-4zM5.892 4.333h.17l4.009 4h-.17l-4.01-4zM5.077 4.333h.17l4.01 4h-.17l-4.01-4zM4.333 4.403v-.07h.1l4.01 4h-.11v.06l-4-3.99zM4.333 5.215v-.17l4 3.991v.17l-4-3.99zM4.333 6.027v-.17l4 3.991v.17l-4-3.99zM4.333 6.84v-.17l4 3.99v.17l-4-3.99zM4.333 7.652v-.17l4 3.99v.17l-4-3.99zM4.333 8.464v-.17l4 3.99v.17l-4-3.99zM4.333 9.276v-.17l4 3.991v.17l-4-3.991zM4.333 10.088v-.17l4 3.991v.17l-4-3.991zM4.333 10.9v-.17l4 3.991v.17l-4-3.991zM4.333 11.712v-.17l4 3.991v.134h-.036l-3.964-3.955zM4.333 12.526v-.17l3.318 3.31h-.17l-3.148-3.14zM4.333 13.34v-.169l2.502 2.496h-.17L4.333 13.34zM4.333 14.152v-.169l1.688 1.684h-.17l-1.518-1.514zM4.333 14.965v-.17l.874.872h-.17l-.704-.702zM15.667 5.146l-.815-.813h.17l.645.644v.169z" fill="#06FDB7"/><path d="M23 15.667h-7.333V23H23v-7.333z" fill="#5B2AD8"/><path d="M15.667 15.667H8.333V23h7.334v-7.333z" fill="#06FDB7"/></svg>`,
+  },
   grok: { title: 'xAI Grok', color: '#000000', label: 'X' },
   hunyuan: { title: '腾讯混元', color: '#0053e0', label: '腾' },
   doubao: { title: '豆包', color: '#00d4b7', label: '豆' },
@@ -114,23 +120,44 @@ const BRANDS = {
 }
 
 function detectBrandKey(provider, apiBase, modelName) {
-  const s = `${provider || ''} ${apiBase || ''} ${modelName || ''}`.toLowerCase()
-  if (s.includes('sub2api')) return 'sub2api'
-  if (s.includes('agnes')) return 'agnes'
+  // 平台/网关优先：provider 或 apiBase 命中即认定该平台，
+  // 避免被模型名中的 claude/gemini/gpt 等关键词抢占
+  // （如 OpenRouter 上的 anthropic/claude-*、google/gemini-* 模型应显示 OpenRouter logo）
+  const base = `${provider || ''} ${apiBase || ''}`.toLowerCase()
+  if (base.includes('sub2api')) return 'sub2api'
+  if (base.includes('agnes')) return 'agnes'
+  if (base.includes('openrouter')) return 'openrouter'
+  if (base.includes('sensetime') || base.includes('sensenova') || base.includes('商汤')) return 'sensetime'
+  if (base.includes('kimi') || base.includes('moonshot')) return 'kimi'
+  if (base.includes('deepseek')) return 'deepseek'
+  if (base.includes('glm') || base.includes('zhipu') || base.includes('bigmodel') || base.includes('chatglm')) return 'zhipu'
+  if (base.includes('dashscope') || base.includes('tongyi')) return 'qwen'
+  if (base.includes('generativelanguage')) return 'gemini'
+  if (base.includes('x.ai')) return 'grok'
+  if (base.includes('mistral')) return 'mistral'
+  if (base.includes('ernie') || base.includes('wenxin') || base.includes('baidu')) return 'baidu'
+  if (base.includes('minimax')) return 'minimax'
+  if (base.includes('xiaomi') || base.includes('milm') || base.includes('mimo')) return 'xiaomi'
+  if (base.includes('ollama') || base.includes('localhost') || base.includes('127.0.0.1')) return 'ollama'
+  if (base.includes('hunyuan')) return 'hunyuan'
+  if (base.includes('doubao') || base.includes('volc')) return 'doubao'
+  if (base.includes('openai') || base.includes('gpt')) return 'openai'
+
+  // 再综合模型名判断
+  const s = `${base} ${modelName || ''}`.toLowerCase()
+  if (s.includes('sensetime') || s.includes('sensenova') || s.includes('sensechat') || s.includes('商汤') || s.includes('日日新') || s.includes('商量')) return 'sensetime'
   if (s.includes('kimi') || s.includes('moonshot')) return 'kimi'
   if (s.includes('deepseek')) return 'deepseek'
-  if (s.includes('glm') || s.includes('zhipu') || s.includes('bigmodel') || s.includes('chatglm')) return 'zhipu'
+  if (s.includes('glm') || s.includes('zhipu') || s.includes('chatglm')) return 'zhipu'
   if (s.includes('claude')) return 'claude'
   if (s.includes('anthropic')) return 'anthropic'
-  if (s.includes('qwen') || s.includes('dashscope') || s.includes('tongyi')) return 'qwen'
-  if (s.includes('gemini') || s.includes('generativelanguage')) return 'gemini'
-  if (s.includes('grok') || s.includes('x.ai')) return 'grok'
+  if (s.includes('qwen') || s.includes('tongyi')) return 'qwen'
+  if (s.includes('gemini')) return 'gemini'
+  if (s.includes('grok')) return 'grok'
   if (s.includes('mistral')) return 'mistral'
-  if (s.includes('ernie') || s.includes('wenxin') || s.includes('baidu')) return 'baidu'
+  if (s.includes('ernie') || s.includes('wenxin')) return 'baidu'
   if (s.includes('minimax')) return 'minimax'
   if (s.includes('xiaomi') || s.includes('milm') || s.includes('mimo')) return 'xiaomi'
-  if (s.includes('openrouter')) return 'openrouter'
-  if (s.includes('ollama') || s.includes('localhost') || s.includes('127.0.0.1')) return 'ollama'
   if (s.includes('hunyuan')) return 'hunyuan'
   if (s.includes('doubao') || s.includes('volc')) return 'doubao'
   if (s.includes('gpt') || s.includes('openai') || s.includes('o1') || s.includes('o3') || s.includes('o4')) return 'openai'
