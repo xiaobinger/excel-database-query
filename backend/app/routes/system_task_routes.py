@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import time
 from flask import Blueprint, request, jsonify, Response, stream_with_context, current_app
 from app import db
@@ -172,6 +173,76 @@ def update_system_task(task_id):
 
     db.session.commit()
     return jsonify({'success': True, 'data': task.to_dict(), 'message': '更新成功'})
+
+
+@system_task_bp.route('/upload-script', methods=['POST'])
+@login_required
+def upload_script():
+    """上传本地脚本文件到服务器指定路径（用于本地脚本类型的系统任务）
+
+    参数:
+        file: 脚本文件（multipart/form-data）
+        script_path: 服务器上的存放路径（绝对路径，含文件名）
+        create_dirs: 是否在目录不存在时自动创建（'true'/'1'，默认否）
+    """
+    current_user = get_current_user()
+    if not current_user.is_admin():
+        return jsonify({'success': False, 'message': '仅管理员可上传脚本'}), 403
+
+    file = request.files.get('file')
+    if not file or not file.filename:
+        return jsonify({'success': False, 'message': '请选择要上传的脚本文件'}), 400
+
+    script_path = (request.form.get('script_path') or '').strip()
+    if not script_path:
+        return jsonify({'success': False, 'message': '请填写脚本存放路径'}), 400
+
+    # 规范化为绝对路径并校验
+    script_path = os.path.abspath(script_path.replace('\\', '/'))
+    create_dirs = (request.form.get('create_dirs') or '').lower() in ('true', '1', 'yes', 'on')
+
+    # 脚本类型白名单校验（防止上传任意文件到服务器）
+    allowed_exts = {'.py', '.sh', '.bat', '.ps1'}
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in allowed_exts:
+        return jsonify({'success': False, 'message': f'不支持的脚本类型 {ext}，仅支持 {"、".join(sorted(allowed_exts))}'}), 400
+
+    parent_dir = os.path.dirname(script_path)
+    if not os.path.isdir(parent_dir):
+        if not create_dirs:
+            return jsonify({'success': False, 'message': f'目录不存在: {parent_dir}，可勾选「自动创建文件夹」后重试'}), 400
+        try:
+            os.makedirs(parent_dir, exist_ok=True)
+        except OSError as e:
+            return jsonify({'success': False, 'message': f'创建目录失败: {e}'}), 400
+
+    # 路径已存在且是目录
+    if os.path.isdir(script_path):
+        return jsonify({'success': False, 'message': f'目标路径是一个已存在的目录: {script_path}'}), 400
+
+    try:
+        file.save(script_path)
+        # Linux 下脚本加执行权限（.sh）
+        if ext == '.sh':
+            try:
+                os.chmod(script_path, 0o755)
+            except OSError:
+                pass
+    except OSError as e:
+        return jsonify({'success': False, 'message': f'保存脚本失败: {e}'}), 500
+
+    size = os.path.getsize(script_path)
+    logger.info(f'用户 {current_user.username} 上传脚本到 {script_path} ({size} bytes)')
+    return jsonify({
+        'success': True,
+        'data': {
+            'script_path': script_path,
+            'file_name': file.filename,
+            'size': size,
+            'dir_created': create_dirs and not os.path.exists(parent_dir),
+        },
+        'message': f'脚本已上传到 {script_path}',
+    })
 
 
 @system_task_bp.route('/<int:task_id>', methods=['DELETE'])

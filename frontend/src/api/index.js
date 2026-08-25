@@ -276,6 +276,7 @@ const systemTask = {
   },
   getEnums: () => http.get('/system-tasks/enums'),
   saveEnums: (data) => http.put('/system-tasks/enums', data),
+  uploadScript: (formData) => http.post('/system-tasks/upload-script', formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 300000 }),
 }
 
 const lookup = {

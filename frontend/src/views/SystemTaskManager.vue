@@ -301,7 +301,26 @@
             </el-select>
           </el-form-item>
           <el-form-item label="脚本路径" prop="script_path">
-            <el-input v-model="form.script_path" placeholder="/path/to/script.py" />
+            <div style="display: flex; gap: 8px; width: 100%;">
+              <el-input v-model="form.script_path" placeholder="/path/to/script.py（服务器绝对路径，含文件名）" />
+              <el-upload
+                :auto-upload="false"
+                :show-file-list="false"
+                :limit="1"
+                accept=".py,.sh,.bat,.ps1"
+                :on-change="onScriptFileChange"
+              >
+                <el-button type="primary" plain :loading="uploadingScript">
+                  <i class="fas fa-upload"></i> {{ uploadingScript ? '上传中...' : '上传脚本' }}
+                </el-button>
+              </el-upload>
+            </div>
+            <div style="width: 100%; margin-top: 6px;">
+              <el-checkbox v-model="scriptCreateDirs">路径中的文件夹不存在时自动创建</el-checkbox>
+              <span v-if="uploadedScriptName" style="margin-left: 12px; color: #67c23a; font-size: 12px;">
+                <i class="fas fa-check-circle"></i> {{ uploadedScriptName }} 已上传
+              </span>
+            </div>
           </el-form-item>
           <el-form-item label="超时时间(秒)">
             <el-input-number v-model="form.script_timeout" :min="1" :max="3600" />
@@ -744,6 +763,36 @@ const defaultForm = {
 
 const form = reactive({ ...defaultForm })
 
+// 本地脚本上传
+const uploadingScript = ref(false)
+const scriptCreateDirs = ref(false)
+const uploadedScriptName = ref('')
+
+async function onScriptFileChange(file) {
+  const raw = file.raw || file
+  if (!raw) return
+  if (!form.script_path || !form.script_path.trim()) {
+    ElMessage.warning('请先填写脚本存放路径（含文件名）')
+    return
+  }
+  const fd = new FormData()
+  fd.append('file', raw)
+  fd.append('script_path', form.script_path.trim())
+  fd.append('create_dirs', scriptCreateDirs.value ? 'true' : 'false')
+  uploadingScript.value = true
+  try {
+    const res = await api.systemTask.uploadScript(fd)
+    const savedPath = res.data?.data?.script_path || form.script_path.trim()
+    form.script_path = savedPath
+    uploadedScriptName.value = res.data?.data?.file_name || raw.name
+    ElMessage.success(res.data?.message || '脚本上传成功')
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '脚本上传失败')
+  } finally {
+    uploadingScript.value = false
+  }
+}
+
 const apiHeadersText = computed({
   get() {
     return form.api_headers ? JSON.stringify(form.api_headers, null, 2) : ''
@@ -982,6 +1031,9 @@ function openDialog(row) {
   }
   syncEntriesFromHeaders()
   showRawHeaders.value = false
+  uploadingScript.value = false
+  scriptCreateDirs.value = false
+  uploadedScriptName.value = ''
   dialogVisible.value = true
 }
 
