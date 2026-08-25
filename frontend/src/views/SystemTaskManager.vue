@@ -249,6 +249,20 @@
           </el-form-item>
           <el-form-item label="请求头">
             <div style="width: 100%">
+              <div class="json-toolbar" v-if="showRawHeaders">
+                <el-button size="small" text @click="jsonBeautifyField('api_headers')">
+                  <i class="fas fa-align-left"></i> 美化
+                </el-button>
+                <el-button size="small" text @click="jsonCompressField('api_headers')">
+                  <i class="fas fa-compress"></i> 压缩
+                </el-button>
+                <el-button size="small" text @click="jsonEscapeField('api_headers')">
+                  <i class="fas fa-code"></i> 转义
+                </el-button>
+                <el-button size="small" text @click="jsonUnescapeField('api_headers')">
+                  <i class="fas fa-unlink"></i> 去转义
+                </el-button>
+              </div>
               <div style="margin-bottom: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
                 <span style="color: #909399; font-size: 12px;">快速选择:</span>
                 <el-button size="small" :type="isContentType('application/json') ? 'primary' : 'info'" text @click="presetHeader('json')">JSON</el-button>
@@ -283,6 +297,20 @@
             </div>
           </el-form-item>
           <el-form-item label="请求体模板">
+            <div class="json-toolbar">
+              <el-button size="small" text @click="jsonBeautifyField('api_body')">
+                <i class="fas fa-align-left"></i> 美化
+              </el-button>
+              <el-button size="small" text @click="jsonCompressField('api_body')">
+                <i class="fas fa-compress"></i> 压缩
+              </el-button>
+              <el-button size="small" text @click="jsonEscapeField('api_body')">
+                <i class="fas fa-code"></i> 转义
+              </el-button>
+              <el-button size="small" text @click="jsonUnescapeField('api_body')">
+                <i class="fas fa-unlink"></i> 去转义
+              </el-button>
+            </div>
             <el-input v-model="form.api_body" type="textarea" :rows="4" placeholder='请求体模板，可使用 {{param_name}} 作为参数占位符' />
           </el-form-item>
           <el-form-item label="超时时间(秒)">
@@ -326,6 +354,20 @@
             <el-input-number v-model="form.script_timeout" :min="1" :max="3600" />
           </el-form-item>
           <el-form-item label="环境变量">
+            <div class="json-toolbar">
+              <el-button size="small" text @click="jsonBeautifyField('script_env')">
+                <i class="fas fa-align-left"></i> 美化
+              </el-button>
+              <el-button size="small" text @click="jsonCompressField('script_env')">
+                <i class="fas fa-compress"></i> 压缩
+              </el-button>
+              <el-button size="small" text @click="jsonEscapeField('script_env')">
+                <i class="fas fa-code"></i> 转义
+              </el-button>
+              <el-button size="small" text @click="jsonUnescapeField('script_env')">
+                <i class="fas fa-unlink"></i> 去转义
+              </el-button>
+            </div>
             <el-input v-model="scriptEnvText" type="textarea" :rows="3" placeholder='{"KEY": "value"}' />
           </el-form-item>
         </template>
@@ -867,6 +909,55 @@ const scriptEnvText = computed({
   }
 })
 
+function getJsonFieldText(field) {
+  if (field === 'api_headers') return apiHeadersText.value
+  if (field === 'api_body') return form.api_body
+  if (field === 'script_env') return scriptEnvText.value
+  return ''
+}
+
+function setJsonFieldText(field, val) {
+  if (field === 'api_headers') apiHeadersText.value = val
+  else if (field === 'api_body') form.api_body = val
+  else if (field === 'script_env') scriptEnvText.value = val
+}
+
+function jsonBeautifyField(field) {
+  const text = getJsonFieldText(field).trim()
+  if (!text) return
+  try {
+    setJsonFieldText(field, JSON.stringify(JSON.parse(text), null, 2))
+  } catch {
+    ElMessage.warning('JSON 格式不正确，无法美化')
+  }
+}
+
+function jsonCompressField(field) {
+  const text = getJsonFieldText(field).trim()
+  if (!text) return
+  try {
+    setJsonFieldText(field, JSON.stringify(JSON.parse(text)))
+  } catch {
+    ElMessage.warning('JSON 格式不正确，无法压缩')
+  }
+}
+
+function jsonEscapeField(field) {
+  const text = getJsonFieldText(field)
+  if (!text) return
+  setJsonFieldText(field, JSON.stringify(text))
+}
+
+function jsonUnescapeField(field) {
+  const text = getJsonFieldText(field).trim()
+  if (!text) return
+  try {
+    setJsonFieldText(field, JSON.parse(text))
+  } catch {
+    ElMessage.warning('内容不是有效的 JSON 转义字符串，无法去转义')
+  }
+}
+
 const rules = {
   name: [{ required: true, message: '请输入任务名称', trigger: 'blur' }],
   task_type: [{ required: true, message: '请选择任务类型', trigger: 'change' }],
@@ -1396,6 +1487,14 @@ async function handleSaveEnums() {
 <style scoped>
 .system-task-manager {
   max-width: 1400px;
+}
+
+.json-toolbar {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin-bottom: 6px;
+  padding: 0 4px;
 }
 
 .card-header {
