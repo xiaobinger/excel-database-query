@@ -42,6 +42,12 @@ def get_system_tasks():
         if task.database_connection_id:
             conn = DatabaseConnection.query.get(task.database_connection_id)
             d['database_name'] = conn.name if conn else '未知'
+        if task.param_source_script_id:
+            ps_script = Script.query.get(task.param_source_script_id)
+            d['param_source_script_name'] = ps_script.name if ps_script else '未知'
+        if task.param_source_db_id:
+            ps_conn = DatabaseConnection.query.get(task.param_source_db_id)
+            d['param_source_db_name'] = ps_conn.name if ps_conn else '未知'
         result.append(d)
     return jsonify({'success': True, 'data': result})
 
@@ -66,6 +72,12 @@ def get_system_task(task_id):
     if task.database_connection_id:
         conn = DatabaseConnection.query.get(task.database_connection_id)
         d['database_name'] = conn.name if conn else '未知'
+    if task.param_source_script_id:
+        ps_script = Script.query.get(task.param_source_script_id)
+        d['param_source_script_name'] = ps_script.name if ps_script else '未知'
+    if task.param_source_db_id:
+        ps_conn = DatabaseConnection.query.get(task.param_source_db_id)
+        d['param_source_db_name'] = ps_conn.name if ps_conn else '未知'
     return jsonify({'success': True, 'data': d})
 
 
@@ -96,6 +108,9 @@ def create_system_task():
         script_type=data.get('script_type', 'python'),
         script_path=data.get('script_path', ''),
         script_timeout=data.get('script_timeout', 60),
+        param_source_enabled=data.get('param_source_enabled', False),
+        param_source_script_id=data.get('param_source_script_id'),
+        param_source_db_id=data.get('param_source_db_id'),
         ai_notes=data.get('ai_notes', ''),
         sign_enabled=data.get('sign_enabled', False),
         sign_key=data.get('sign_key', ''),
@@ -115,6 +130,8 @@ def create_system_task():
         task.set_response_mapping(data['response_mapping'])
     if data.get('script_env'):
         task.set_script_env(data['script_env'])
+    if 'param_source_param_mapping' in data:
+        task.set_param_source_param_mapping(data['param_source_param_mapping'])
 
     db.session.add(task)
     db.session.commit()
@@ -154,7 +171,9 @@ def update_system_task(task_id):
     simple_fields = [
         'name', 'description', 'task_type', 'script_id', 'database_connection_id',
         'api_method', 'api_url', 'api_body', 'api_timeout',
-        'script_type', 'script_path', 'script_timeout', 'ai_notes',
+        'script_type', 'script_path', 'script_timeout',
+        'param_source_enabled', 'param_source_script_id', 'param_source_db_id',
+        'ai_notes',
         'sign_enabled', 'sign_key', 'sign_method', 'sign_param_name', 'sign_append_type',
         'is_enabled'
     ]
@@ -170,6 +189,10 @@ def update_system_task(task_id):
         task.set_params_config(data['params_config'])
     if 'response_mapping' in data:
         task.set_response_mapping(data['response_mapping'])
+    if 'script_env' in data:
+        task.set_script_env(data['script_env'])
+    if 'param_source_param_mapping' in data:
+        task.set_param_source_param_mapping(data['param_source_param_mapping'])
 
     db.session.commit()
     return jsonify({'success': True, 'data': task.to_dict(), 'message': '更新成功'})

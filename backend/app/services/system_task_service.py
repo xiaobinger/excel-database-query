@@ -131,6 +131,114 @@ class SystemTaskService:
                 update_execution_progress(execution_id, 100, f'执行失败: {str(e)}', 'error')
 
     @staticmethod
+    def _resolve_param_source(execution: SystemTaskExecution, system_task: SystemTask,
+                              params_values: Dict[str, Any]) -> Dict[str, Any]:
+        if not system_task.param_source_enabled or not system_task.param_source_script_id:
+            return params_values
+
+        execution.add_log('开始执行参数来源脚本，获取动态参数')
+        db.session.commit()
+
+        source_script = Script.query.get(system_task.param_source_script_id)
+        if not source_script:
+            execution.add_log('参数来源脚本不存在，跳过', 'warning')
+            return params_values
+
+        sql_text = source_script.sql_text
+        if not sql_text:
+            execution.add_log('参数来源脚本SQL为空，跳过', 'warning')
+            return params_values
+
+        if params_values:
+            for key, val in params_values.items():
+                placeholder = f'{{{{{key}}}}}'
+                if placeholder in sql_text:
+                    sql_text = sql_text.replace(placeholder, str(val))
+
+        filter_params = {}
+        if params_values:
+            for k, v in params_values.items():
+                if v is not None and v != '' and v != []:
+                    filter_params[k] = v
+
+        source_db_id = system_task.param_source_db_id
+        if not source_db_id:
+            db_ids = source_script.get_database_ids()
+            source_db_id = db_ids[0] if db_ids else None
+
+        if not source_db_id:
+            execution.add_log('参数来源脚本未配置数据库，跳过', 'warning')
+            return params_values
+
+        conn_model = DatabaseConnection.query.get(source_db_id)
+        if not conn_model:
+            execution.add_log(f'参数来源数据库不存在(ID:{source_db_id})，跳过', 'warning')
+            return params_values
+
+        try:
+            from app.utils.connection_pool import ConnectionPoolManager
+            pool = ConnectionPoolManager.get_instance()
+            connector = pool.get_connector_with_health_check(source_db_id)
+            if not connector:
+                execution.add_log(f'参数来源数据库连接失败: {conn_model.name}，跳过', 'warning')
+                return params_values
+
+            statements = SystemTaskService._split_sql_statements(sql_text)
+            if not statements:
+                execution.add_log('参数来源脚本无可执行SQL，跳过', 'warning')
+                return params_values
+
+            last_query_result = None
+            with connector.get_connection() as conn:
+                for stmt in statements:
+                    if not stmt.strip():
+                        continue
+                    result = conn.execute(text(stmt), filter_params) if filter_params else conn.execute(text(stmt))
+                    if SystemTaskService._is_query_statement(stmt):
+                        column_headers = list(result.keys()) if hasattr(result, 'keys') else []
+                        rows = result.fetchall()
+                        if rows and column_headers:
+                            row_dict = {}
+                            for i, header in enumerate(column_headers):
+                                if i < len(rows[0]):
+                                    row_dict[header] = rows[0][i]
+                            last_query_result = row_dict
+                    else:
+                        conn.commit()
+
+            param_mapping = system_task.get_param_source_param_mapping()
+            if last_query_result and param_mapping:
+                merged = dict(params_values) if params_values else {}
+                mapped_count = 0
+                for m in param_mapping:
+                    source_field = m.get('source_field', '')
+                    target_param = m.get('target_param', '')
+                    if not source_field or not target_param:
+                        continue
+                    if source_field in last_query_result:
+                        val = last_query_result[source_field]
+                        merged[target_param] = str(val) if val is not None else ''
+                        mapped_count += 1
+                execution.add_log(f'参数来源脚本执行成功，映射了 {mapped_count} 个参数')
+                db.session.commit()
+                return merged
+            elif last_query_result and not param_mapping:
+                merged = dict(params_values) if params_values else {}
+                merged.update({k: str(v) if v is not None else '' for k, v in last_query_result.items()})
+                execution.add_log('参数来源脚本执行成功（无映射配置，自动合并所有字段）')
+                db.session.commit()
+                return merged
+            else:
+                execution.add_log('参数来源脚本未返回查询结果，使用原始参数', 'warning')
+                db.session.commit()
+                return params_values
+
+        except Exception as e:
+            execution.add_log(f'参数来源脚本执行失败: {str(e)}，使用原始参数', 'warning')
+            db.session.commit()
+            return params_values
+
+    @staticmethod
     def _split_sql_statements(sql: str) -> List[str]:
         """Split SQL into individual statements, respecting string literals."""
         # Remove single-line comments
@@ -367,6 +475,11 @@ class SystemTaskService:
         if not system_task.api_url:
             raise ValueError('API地址未配置')
 
+        params_values = SystemTaskService._resolve_param_source(execution, system_task, params_values)
+        execution.progress = 15
+        db.session.commit()
+        update_execution_progress(execution_id, 15, '参数已就绪，准备API请求')
+
         url = system_task.api_url
         method = (system_task.api_method or 'POST').upper()
         headers = system_task.get_api_headers()
@@ -557,6 +670,11 @@ class SystemTaskService:
 
         if not system_task.script_path:
             raise ValueError('本地脚本路径未配置')
+
+        params_values = SystemTaskService._resolve_param_source(execution, system_task, params_values)
+        execution.progress = 15
+        db.session.commit()
+        update_execution_progress(execution_id, 15, '参数已就绪，准备执行脚本')
 
         script_path = system_task.script_path
         script_type = system_task.script_type or 'python'
@@ -811,6 +929,9 @@ class SystemTaskService:
         db.session.add(execution)
         db.session.commit()
 
+        # 解析参数来源脚本
+        params_values = SystemTaskService._resolve_param_source(execution, system_task, params_values)
+
         url = system_task.api_url
         method = (system_task.api_method or 'POST').upper()
         headers = system_task.get_api_headers()
@@ -1003,6 +1124,9 @@ class SystemTaskService:
         execution.add_log(f'开始执行本地脚本任务: {system_task.name}')
         db.session.add(execution)
         db.session.commit()
+
+        # 解析参数来源脚本
+        params_values = SystemTaskService._resolve_param_source(execution, system_task, params_values)
 
         script_path = system_task.script_path
         script_type = system_task.script_type or 'python'

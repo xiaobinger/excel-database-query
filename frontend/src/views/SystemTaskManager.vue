@@ -60,6 +60,14 @@
                 <span v-else style="color: #c0c4cc">-</span>
               </template>
             </el-table-column>
+            <el-table-column label="参数来源" width="90" align="center">
+              <template #default="{ row }">
+                <el-tooltip v-if="row.param_source_enabled" :content="`脚本: ${row.param_source_script_name || '未知'}`" placement="top">
+                  <el-tag size="small" type="info">脚本获取</el-tag>
+                </el-tooltip>
+                <span v-else style="color: #c0c4cc">-</span>
+              </template>
+            </el-table-column>
             <el-table-column label="状态" width="90" align="center">
               <template #default="{ row }">
                 <el-tag :type="row.is_enabled ? 'success' : 'info'" size="small">
@@ -426,6 +434,57 @@
           </el-form-item>
         </template>
 
+        <!-- Param Source Script (for API and Script tasks) -->
+        <template v-if="form.task_type === 'api' || form.task_type === 'script'">
+          <el-divider content-position="left">参数来源脚本</el-divider>
+          <el-form-item label="启用从脚本获取参数">
+            <el-switch v-model="form.param_source_enabled" />
+            <span style="margin-left: 8px; color: #909399; font-size: 12px;">
+              启用后，执行任务前会先运行参数来源脚本，脚本查询结果将作为额外参数注入
+            </span>
+          </el-form-item>
+          <template v-if="form.param_source_enabled">
+            <el-form-item label="参数来源脚本">
+              <el-select v-model="form.param_source_script_id" placeholder="请选择SQL脚本" style="width: 100%" filterable clearable>
+                <el-option
+                  v-for="s in sqlScripts"
+                  :key="s.id"
+                  :label="s.name"
+                  :value="s.id"
+                />
+              </el-select>
+              <div style="color: #909399; font-size: 12px; margin-top: 4px">该脚本的查询结果第一行将被用于填充任务参数</div>
+            </el-form-item>
+            <el-form-item label="执行数据库">
+              <el-select v-model="form.param_source_db_id" placeholder="使用脚本默认数据库（可选）" style="width: 100%" clearable filterable>
+                <el-option
+                  v-for="d in databases"
+                  :key="d.id"
+                  :label="d.name"
+                  :value="d.id"
+                />
+              </el-select>
+              <div style="color: #909399; font-size: 12px; margin-top: 4px">不选择则使用参数来源脚本配置的默认数据库</div>
+            </el-form-item>
+            <el-form-item label="字段映射">
+              <div class="mapping-hint" style="margin-bottom: 8px; color: #909399; font-size: 12px;">
+                配置脚本返回字段到任务参数的映射关系；不配置则自动合并所有字段（参数名与脚本字段名相同）
+              </div>
+              <div v-for="(item, idx) in form.param_source_param_mapping" :key="idx" class="param-source-mapping-row" style="margin-bottom: 8px;">
+                <el-input v-model="item.source_field" placeholder="脚本返回字段名" style="width: 200px" />
+                <span style="line-height: 32px; color: #909399;">→</span>
+                <el-input v-model="item.target_param" placeholder="任务参数名" style="width: 200px" />
+                <el-button type="danger" text @click="form.param_source_param_mapping.splice(idx, 1)" style="margin-left: 8px;">
+                  <i class="fas fa-trash"></i>
+                </el-button>
+              </div>
+              <el-button type="primary" text size="small" @click="form.param_source_param_mapping.push({source_field: '', target_param: ''})">
+                <i class="fas fa-plus"></i> 添加字段映射
+              </el-button>
+            </el-form-item>
+          </template>
+        </template>
+
         <!-- Signing Config (only for API tasks) -->
         <template v-if="form.task_type === 'api'">
           <el-divider content-position="left">加签配置</el-divider>
@@ -521,6 +580,7 @@
           <strong>任务:</strong> {{ currentTask.name }}
           <el-tag size="small" style="margin-left: 8px">{{ currentTask.task_type }}</el-tag>
         </p>
+        <el-alert v-if="currentTask.param_source_enabled" title="此任务启用了参数来源脚本，执行前将先运行 SQL 脚本获取动态参数" type="info" :closable="false" show-icon style="margin-bottom: 12px" />
         <el-form label-width="100px" label-position="right">
           <el-form-item v-if="currentTaskDatabases.length > 0 && currentTask.task_type === 'sql'" label="数据库连接">
             <el-select v-model="executeDatabaseId" placeholder="全部数据库（默认）" clearable style="width: 100%">
@@ -800,6 +860,10 @@ const defaultForm = {
   api_timeout: 30,
   params_config: [],
   response_mapping: [],
+  param_source_enabled: false,
+  param_source_script_id: null,
+  param_source_db_id: null,
+  param_source_param_mapping: [],
   sign_enabled: false,
   sign_key: '',
   sign_method: 'md5',
@@ -1126,6 +1190,12 @@ function openDialog(row) {
       script_path: row.script_path || '',
       script_timeout: row.script_timeout || 60,
       script_env: row.script_env || {},
+      param_source_enabled: row.param_source_enabled || false,
+      param_source_script_id: row.param_source_script_id || null,
+      param_source_db_id: row.param_source_db_id || null,
+      param_source_param_mapping: (row.param_source_param_mapping && Array.isArray(row.param_source_param_mapping))
+        ? JSON.parse(JSON.stringify(row.param_source_param_mapping))
+        : [],
     })
   } else {
     isEdit.value = false
@@ -1188,6 +1258,15 @@ async function handleSubmit() {
     }
     if (form.task_type === 'script' && form.script_env && Object.keys(form.script_env).length > 0) {
       payload.script_env = form.script_env
+    }
+    if (form.task_type === 'api' || form.task_type === 'script') {
+      payload.param_source_enabled = form.param_source_enabled || false
+      if (form.param_source_enabled) {
+        payload.param_source_script_id = form.param_source_script_id
+        payload.param_source_db_id = form.param_source_db_id || null
+        payload.param_source_param_mapping = (form.param_source_param_mapping || [])
+          .filter(m => m.source_field && m.target_param)
+      }
     }
 
     if (isEdit.value) {

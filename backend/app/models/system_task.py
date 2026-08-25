@@ -37,6 +37,12 @@ class SystemTask(db.Model):
     # Response field mapping (for API tasks)
     response_mapping = db.Column(db.Text, comment='响应字段意义映射(JSON)，格式: [{"field":"status","label":"状态","mapping":{"0":"失败","1":"成功"}}]')
 
+    # Parameter source script (pre-execution to fetch params for api/script tasks)
+    param_source_enabled = db.Column(db.Boolean, default=False, comment='是否从脚本获取参数')
+    param_source_script_id = db.Column(db.Integer, db.ForeignKey('scripts.id'), nullable=True, comment='参数来源SQL脚本ID')
+    param_source_db_id = db.Column(db.Integer, db.ForeignKey('database_connections.id'), nullable=True, comment='参数来源脚本执行数据库ID')
+    param_source_param_mapping = db.Column(db.Text, comment='脚本输出字段到任务参数的映射(JSON)')
+
     # AI execution notes: key points sent to AI when task is triggered via AI chat
     ai_notes = db.Column(db.Text, comment='AI执行要点：通过AI触发时随任务信息发送给AI的注意点/执行要求')
 
@@ -109,6 +115,17 @@ class SystemTask(db.Model):
     def set_script_env(self, env: dict):
         self.script_env = json.dumps(env, ensure_ascii=False) if env else None
 
+    def get_param_source_param_mapping(self) -> list:
+        if self.param_source_param_mapping:
+            try:
+                return json.loads(self.param_source_param_mapping)
+            except (json.JSONDecodeError, TypeError):
+                return []
+        return []
+
+    def set_param_source_param_mapping(self, mapping: list):
+        self.param_source_param_mapping = json.dumps(mapping, ensure_ascii=False) if mapping else None
+
     def to_dict(self) -> dict:
         return {
             'id': self.id,
@@ -129,6 +146,10 @@ class SystemTask(db.Model):
             'script_env': self.get_script_env(),
             'params_config': self.get_params_config(),
             'response_mapping': self.get_response_mapping(),
+            'param_source_enabled': self.param_source_enabled,
+            'param_source_script_id': self.param_source_script_id,
+            'param_source_db_id': self.param_source_db_id,
+            'param_source_param_mapping': self.get_param_source_param_mapping(),
             'ai_notes': self.ai_notes or '',
             'sign_enabled': self.sign_enabled,
             'sign_key': self.sign_key,
