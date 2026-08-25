@@ -25,6 +25,13 @@ MCP_TOOL_PREFIX = 'mcp__'
 SERVER_NAME_PATTERN = re.compile(r'^(?!.*__)[a-zA-Z][a-zA-Z0-9_-]{0,63}$')
 
 
+def _unwrap_exception_group(exc):
+    """解包 ExceptionGroup/BaseExceptionGroup，返回用户友好的根因异常"""
+    while isinstance(exc, BaseExceptionGroup) and exc.exceptions:
+        exc = exc.exceptions[0]
+    return exc
+
+
 def _sdk():
     """懒加载官方 mcp SDK，未安装时给出明确错误"""
     try:
@@ -318,8 +325,12 @@ class McpClientManager:
                         self._on_session_ready(server.id, entry, ready)
                         # 保持会话存活，直到被显式关闭或回收
                         await entry.closed.wait()
-            except Exception as e:
-                self._on_session_ready(server.id, None, ready, error=e)
+            except BaseException as e:
+                # anyio task group 会把子异常包装为 ExceptionGroup/BaseExceptionGroup，
+                # 这里解包出真实根因再上抛，便于上层给出 502/超时/连接拒绝等明确错误
+                if isinstance(e, BaseExceptionGroup):
+                    logger.warning(f'MCP server "{server.name}" 连接异常: {e}')
+                self._on_session_ready(server.id, None, ready, error=_unwrap_exception_group(e))
             finally:
                 entry.session = None
                 entry.dead = True
@@ -334,6 +345,12 @@ class McpClientManager:
             # 尝试取消仍在运行的协程，避免超时后会话迟到登记造成泄漏
             future.cancel()
             raise TimeoutError(f'MCP server "{server.name}" 连接超时({timeout}s)')
+        except BaseException as e:
+            # 同样解包 ExceptionGroup，让上层拿到 httpx.HTTPStatusError/ConnectionError 等真实错误
+            real = _unwrap_exception_group(e)
+            if real is not e:
+                raise real from None
+            raise
         self._last_used[server.id] = time.time()
         return entry
 
