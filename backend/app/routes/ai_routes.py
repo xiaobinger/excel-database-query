@@ -1180,6 +1180,7 @@ def send_message(chat_id):
                         'auto_executed': True,
                         'success': result.get('success', False),
                         'status_code': result.get('status_code'),
+                        'ai_notes': result.get('ai_notes', ''),
                         'mapping_summary': result.get('mapping_summary', ''),
                         'mapping_info': result.get('mapping_info', ''),
                     }
@@ -1252,7 +1253,7 @@ def send_message(chat_id):
                     if has_lookup_needs_reply:
                         reply_hints.append('上面的信息查询已经执行完成并返回了结果。请根据查询结果回答用户问题。如果用户意图是条件性的（如满足条件则执行系统任务），请根据查询结果判断是否需要调用request_system_task等工具。不要重复调用request_lookup。')
                     if has_auto_exec_system_task:
-                        reply_hints.append('上面的API系统任务已经自动执行完成并返回了结果。请根据mapping_summary（映射摘要）直接用自然语言告诉用户执行结果，如果多个任务请用列表汇总。不要重复调用request_system_task。')
+                        reply_hints.append('上面的API系统任务已经自动执行完成并返回了结果。请根据mapping_summary（映射摘要）直接用自然语言告诉用户执行结果，如果多个任务请用列表汇总。不要重复调用request_system_task。如果结果中包含ai_notes（执行要点），请严格遵守其中的要求来反馈结果。')
                     if reply_hints:
                         messages.append({
                             'role': 'system',
@@ -2131,6 +2132,7 @@ def send_message_stream(chat_id):
                             'auto_executed': True,
                             'success': result.get('success', False),
                             'status_code': result.get('status_code'),
+                            'ai_notes': result.get('ai_notes', ''),
                             'mapping_summary': result.get('mapping_summary', ''),
                             'mapping_info': result.get('mapping_info', ''),
                         }
@@ -2173,7 +2175,7 @@ def send_message_stream(chat_id):
                 if has_lookup_needs_reply:
                     reply_hints.append('上面的信息查询已经执行完成并返回了结果。请根据查询结果回答用户问题。如果用户意图是条件性的（如满足条件则执行系统任务），请根据查询结果判断是否需要调用request_system_task等工具。不要重复调用request_lookup。')
                 if has_auto_exec_system_task:
-                    reply_hints.append('上面的API系统任务已经自动执行完成并返回了结果。请根据mapping_summary（映射摘要）直接用自然语言告诉用户执行结果，如果多个任务请用列表汇总。不要重复调用request_system_task。')
+                    reply_hints.append('上面的API系统任务已经自动执行完成并返回了结果。请根据mapping_summary（映射摘要）直接用自然语言告诉用户执行结果，如果多个任务请用列表汇总。不要重复调用request_system_task。如果结果中包含ai_notes（执行要点），请严格遵守其中的要求来反馈结果。')
                 if reply_hints:
                     messages.append({
                         'role': 'system',

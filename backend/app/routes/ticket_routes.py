@@ -518,7 +518,10 @@ def _process_ticket_with_ai_async(ticket_id, app):
                             tool_executed = True
                         elif result.get('action_type') == 'system_task':
                             if result.get('auto_executed'):
+                                ai_notes = result.get('ai_notes', '')
                                 result_summary = f"系统任务已自动执行: {result.get('mapping_summary', '完成')}"
+                                if ai_notes:
+                                    result_summary = f"{result_summary}\n\n⚠️ 任务执行要点(务必遵守)：{ai_notes}"
                                 tool_executed = True
                             else:
                                 # SQL类型系统任务，未自动执行，需要用户确认
