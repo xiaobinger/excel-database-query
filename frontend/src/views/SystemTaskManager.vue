@@ -462,11 +462,23 @@
           <el-divider content-position="left">响应字段映射</el-divider>
           <el-form-item label="字段映射">
             <div class="mapping-hint" style="margin-bottom: 8px; color: #909399; font-size: 12px;">
-              配置API响应字段的意义枚举映射，执行结果中会自动将原始值替换为可读文本（如 status: 0→失败, 1→成功）
+              配置API响应字段的意义枚举映射；勾选「业务状态」后，以业务返回码判断任务成功或失败（如 code: 0 → 成功，其他 → 失败），并可指定失败原因字段
             </div>
-            <div v-for="(item, idx) in form.response_mapping" :key="idx" class="mapping-row" style="margin-bottom: 8px;">
-              <el-input v-model="item.field" placeholder="字段路径(如status或data.code)" style="width: 180px" />
-              <el-input v-model="item.label" placeholder="字段含义(如状态)" style="width: 120px" />
+            <div v-for="(item, idx) in form.response_mapping" :key="idx" class="mapping-row" style="margin-bottom: 12px;">
+              <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px;">
+                <el-input v-model="item.field" placeholder="字段路径(如status或data.code)" style="width: 180px" />
+                <el-input v-model="item.label" placeholder="字段含义(如状态)" style="width: 120px" />
+                <el-checkbox v-model="item.is_status">业务状态</el-checkbox>
+                <el-button type="danger" text @click="form.response_mapping.splice(idx, 1)">
+                  <i class="fas fa-trash"></i>
+                </el-button>
+              </div>
+              <div v-if="item.is_status" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; padding-left: 0;">
+                <span style="font-size: 12px; color: #606266; white-space: nowrap;">成功值：</span>
+                <el-input v-model="item.success_value" placeholder="如 0" style="width: 100px" />
+                <span style="font-size: 12px; color: #606266; white-space: nowrap;">失败原因字段：</span>
+                <el-input v-model="item.error_field" placeholder="如 data.msg 或 msg" style="width: 180px" />
+              </div>
               <div class="mapping-enum" style="flex: 1;">
                 <div v-for="(val, key) in item.mappingEntries" :key="key" style="display: flex; gap: 4px; margin-bottom: 4px;">
                   <el-input v-model="item.mappingEntries[key].key" placeholder="原始值" style="width: 100px" />
@@ -478,9 +490,6 @@
                   <i class="fas fa-plus"></i> 添加枚举
                 </el-button>
               </div>
-              <el-button type="danger" text @click="form.response_mapping.splice(idx, 1)">
-                <i class="fas fa-trash"></i>
-              </el-button>
             </div>
             <el-button type="primary" text @click="addResponseMapping">
               <i class="fas fa-plus"></i> 添加字段映射
@@ -1004,7 +1013,7 @@ function onEnumRefChange(param) {
 
 function addResponseMapping() {
   if (!form.response_mapping) form.response_mapping = []
-  form.response_mapping.push({ field: '', label: '', mapping: {}, mappingEntries: [{ key: '', value: '' }] })
+  form.response_mapping.push({ field: '', label: '', mapping: {}, is_status: false, success_value: '0', error_field: '', mappingEntries: [{ key: '', value: '' }] })
 }
 
 // 将mappingEntries转换为mapping对象（提交时调用）
@@ -1101,6 +1110,9 @@ function openDialog(row) {
             field: m.field || '',
             label: m.label || '',
             mapping: m.mapping || {},
+            is_status: m.is_status || false,
+            success_value: m.success_value || '0',
+            error_field: m.error_field || '',
             mappingEntries: convertMappingToEntries(m.mapping),
           }))
         : [],
@@ -1165,8 +1177,11 @@ async function handleSubmit() {
           field: m.field,
           label: m.label || m.field,
           mapping: convertMappingEntriesToMapping(m.mappingEntries),
+          is_status: m.is_status || false,
+          success_value: m.success_value || '',
+          error_field: m.error_field || '',
         }))
-        .filter(m => Object.keys(m.mapping).length > 0)
+        .filter(m => Object.keys(m.mapping).length > 0 || m.is_status)
     }
     if (form.api_headers && Object.keys(form.api_headers).length > 0) {
       payload.api_headers = form.api_headers
@@ -1600,5 +1615,12 @@ async function handleSaveEnums() {
   border: 1px solid #ebeef5;
   border-radius: 4px;
   padding: 8px 12px;
+}
+
+.mapping-row {
+  border: 1px solid #ebeef5;
+  border-radius: 4px;
+  padding: 10px;
+  background: #fafafa;
 }
 </style>

@@ -514,7 +514,12 @@ class SystemTaskService:
             mapping_info = ''
             response_mapping = system_task.get_response_mapping()
             if response_mapping and isinstance(resp_data, dict):
-                resp_data_mapped, mapping_info = SystemTaskService._apply_response_mapping(resp_data, response_mapping)
+                resp_data_mapped, mapping_info, is_business_success = SystemTaskService._apply_response_mapping(resp_data, response_mapping)
+                if is_business_success is True:
+                    is_success = True
+                elif is_business_success is False:
+                    is_success = False
+                    execution.error_message = mapping_info
 
             execution.set_result_data({
                 'status_code': resp.status_code,
@@ -529,7 +534,7 @@ class SystemTaskService:
             execution.progress = 100
             execution.status = 'completed' if is_success else 'failed'
             execution.completed_at = datetime.utcnow()
-            if not is_success:
+            if not is_success and not execution.error_message:
                 execution.error_message = f'API返回非成功状态码: {resp.status_code}'
             execution.add_log(f'API请求完成，状态码: {resp.status_code}')
             db.session.commit()
@@ -697,33 +702,48 @@ class SystemTaskService:
     @staticmethod
     def _apply_response_mapping(resp_data: dict, response_mapping: list) -> tuple:
         """应用响应字段映射，将原始值替换为可读文本，同时保留原始值。
-        返回 (mapped_data, mapping_info_str)
+        返回 (mapped_data, mapping_info_str, is_business_success)
         """
         import copy
         mapped = copy.deepcopy(resp_data)
         info_parts = []
+        is_business_success = None
+        business_error_message = ''
 
         for m in response_mapping:
             field = m.get('field', '')
             label = m.get('label', field)
             mapping = m.get('mapping', {})
-            if not field or not mapping:
+            if not field:
                 continue
 
-            # 支持嵌套字段，如 data.status
             value = SystemTaskService._get_nested_value(resp_data, field)
             if value is None:
                 continue
 
             value_str = str(value)
+
+            if m.get('is_status'):
+                success_value = str(m.get('success_value', ''))
+                if value_str == success_value:
+                    is_business_success = True
+                else:
+                    is_business_success = False
+                    error_field = m.get('error_field', '')
+                    if error_field:
+                        error_value = SystemTaskService._get_nested_value(resp_data, error_field)
+                        if error_value is not None:
+                            business_error_message = str(error_value)
+
             if value_str in mapping:
                 readable = mapping[value_str]
-                # 在映射后的数据中，将原始值替换为 "原始值(可读文本)" 格式
                 SystemTaskService._set_nested_value(mapped, field, f'{value_str}({readable})')
                 info_parts.append(f'{label}({field}): {value_str} → {readable}')
 
         mapping_info = '; '.join(info_parts) if info_parts else ''
-        return mapped, mapping_info
+        if is_business_success is False and business_error_message:
+            mapping_info = f'{mapping_info}; 错误原因: {business_error_message}' if mapping_info else f'错误原因: {business_error_message}'
+        return mapped, mapping_info, is_business_success
 
     @staticmethod
     def _get_nested_value(data: dict, field_path: str):
@@ -911,13 +931,19 @@ class SystemTaskService:
             mapping_summary = ''
             response_mapping = system_task.get_response_mapping()
             if response_mapping and isinstance(resp_data, dict):
-                resp_data_mapped, mapping_info = SystemTaskService._apply_response_mapping(resp_data, response_mapping)
+                resp_data_mapped, mapping_info, is_business_success = SystemTaskService._apply_response_mapping(resp_data, response_mapping)
                 mapping_summary = SystemTaskService._build_mapping_summary(resp_data, response_mapping)
+                if is_business_success is True:
+                    is_success = True
+                elif is_business_success is False:
+                    is_success = False
 
             # 更新执行记录
             execution.status = 'completed' if is_success else 'failed'
             execution.progress = 100
             execution.completed_at = datetime.utcnow()
+            if not is_success and mapping_info:
+                execution.error_message = mapping_info
             execution.set_result_data({
                 'status_code': resp.status_code,
                 'response': resp_data_mapped if isinstance(resp_data_mapped, (dict, list)) else resp_text,
@@ -1087,15 +1113,25 @@ class SystemTaskService:
         parts = []
         for m in response_mapping:
             field = m.get('field', '')
+            if not field:
+                continue
             label = m.get('label', field)
             mapping = m.get('mapping', {})
-            if not field or not mapping:
-                continue
             value = SystemTaskService._get_nested_value(resp_data, field)
             if value is None:
                 continue
             value_str = str(value)
-            if value_str in mapping:
+            if m.get('is_status'):
+                success_value = str(m.get('success_value', ''))
+                status_text = '成功' if value_str == success_value else '失败'
+                parts.append(f'{label}: {value_str}（{status_text}）')
+                if value_str != success_value:
+                    error_field = m.get('error_field', '')
+                    if error_field:
+                        error_value = SystemTaskService._get_nested_value(resp_data, error_field)
+                        if error_value is not None:
+                            parts.append(f'失败原因: {error_value}')
+            elif value_str in mapping:
                 readable = mapping[value_str]
                 parts.append(f'{label}: {readable}')
             else:
