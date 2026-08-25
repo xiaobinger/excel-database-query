@@ -141,13 +141,11 @@ class SystemTaskService:
 
         source_script = Script.query.get(system_task.param_source_script_id)
         if not source_script:
-            execution.add_log('参数来源脚本不存在，跳过', 'warning')
-            return params_values
+            raise ValueError('参数来源脚本不存在')
 
         sql_text = source_script.sql_text
         if not sql_text:
-            execution.add_log('参数来源脚本SQL为空，跳过', 'warning')
-            return params_values
+            raise ValueError('参数来源脚本SQL为空')
 
         if params_values:
             for key, val in params_values.items():
@@ -167,76 +165,65 @@ class SystemTaskService:
             source_db_id = db_ids[0] if db_ids else None
 
         if not source_db_id:
-            execution.add_log('参数来源脚本未配置数据库，跳过', 'warning')
-            return params_values
+            raise ValueError('参数来源脚本未配置数据库')
 
         conn_model = DatabaseConnection.query.get(source_db_id)
         if not conn_model:
-            execution.add_log(f'参数来源数据库不存在(ID:{source_db_id})，跳过', 'warning')
-            return params_values
+            raise ValueError(f'参数来源数据库不存在(ID:{source_db_id})')
 
-        try:
-            from app.utils.connection_pool import ConnectionPoolManager
-            pool = ConnectionPoolManager.get_instance()
-            connector = pool.get_connector_with_health_check(source_db_id)
-            if not connector:
-                execution.add_log(f'参数来源数据库连接失败: {conn_model.name}，跳过', 'warning')
-                return params_values
+        from app.utils.connection_pool import ConnectionPoolManager
+        pool = ConnectionPoolManager.get_instance()
+        connector = pool.get_connector_with_health_check(source_db_id)
+        if not connector:
+            raise ValueError(f'参数来源数据库连接失败: {conn_model.name}')
 
-            statements = SystemTaskService._split_sql_statements(sql_text)
-            if not statements:
-                execution.add_log('参数来源脚本无可执行SQL，跳过', 'warning')
-                return params_values
+        statements = SystemTaskService._split_sql_statements(sql_text)
+        if not statements:
+            raise ValueError('参数来源脚本无可执行SQL')
 
-            last_query_result = None
-            with connector.get_connection() as conn:
-                for stmt in statements:
-                    if not stmt.strip():
-                        continue
-                    result = conn.execute(text(stmt), filter_params) if filter_params else conn.execute(text(stmt))
-                    if SystemTaskService._is_query_statement(stmt):
-                        column_headers = list(result.keys()) if hasattr(result, 'keys') else []
-                        rows = result.fetchall()
-                        if rows and column_headers:
-                            row_dict = {}
-                            for i, header in enumerate(column_headers):
-                                if i < len(rows[0]):
-                                    row_dict[header] = rows[0][i]
-                            last_query_result = row_dict
-                    else:
-                        conn.commit()
+        last_query_result = None
+        with connector.get_connection() as conn:
+            for stmt in statements:
+                if not stmt.strip():
+                    continue
+                result = conn.execute(text(stmt), filter_params) if filter_params else conn.execute(text(stmt))
+                if SystemTaskService._is_query_statement(stmt):
+                    column_headers = list(result.keys()) if hasattr(result, 'keys') else []
+                    rows = result.fetchall()
+                    if rows and column_headers:
+                        row_dict = {}
+                        for i, header in enumerate(column_headers):
+                            if i < len(rows[0]):
+                                row_dict[header] = rows[0][i]
+                        last_query_result = row_dict
+                else:
+                    conn.commit()
 
-            param_mapping = system_task.get_param_source_param_mapping()
-            if last_query_result and param_mapping:
-                merged = dict(params_values) if params_values else {}
-                mapped_count = 0
-                for m in param_mapping:
-                    source_field = m.get('source_field', '')
-                    target_param = m.get('target_param', '')
-                    if not source_field or not target_param:
-                        continue
-                    if source_field in last_query_result:
-                        val = last_query_result[source_field]
-                        merged[target_param] = str(val) if val is not None else ''
-                        mapped_count += 1
-                execution.add_log(f'参数来源脚本执行成功，映射了 {mapped_count} 个参数')
-                db.session.commit()
-                return merged
-            elif last_query_result and not param_mapping:
-                merged = dict(params_values) if params_values else {}
-                merged.update({k: str(v) if v is not None else '' for k, v in last_query_result.items()})
-                execution.add_log('参数来源脚本执行成功（无映射配置，自动合并所有字段）')
-                db.session.commit()
-                return merged
-            else:
-                execution.add_log('参数来源脚本未返回查询结果，使用原始参数', 'warning')
-                db.session.commit()
-                return params_values
+        if not last_query_result:
+            raise ValueError('参数来源脚本未返回查询结果')
 
-        except Exception as e:
-            execution.add_log(f'参数来源脚本执行失败: {str(e)}，使用原始参数', 'warning')
+        param_mapping = system_task.get_param_source_param_mapping()
+        if param_mapping:
+            merged = dict(params_values) if params_values else {}
+            mapped_count = 0
+            for m in param_mapping:
+                source_field = m.get('source_field', '')
+                target_param = m.get('target_param', '')
+                if not source_field or not target_param:
+                    continue
+                if source_field in last_query_result:
+                    val = last_query_result[source_field]
+                    merged[target_param] = str(val) if val is not None else ''
+                    mapped_count += 1
+            execution.add_log(f'参数来源脚本执行成功，映射了 {mapped_count} 个参数')
             db.session.commit()
-            return params_values
+            return merged
+        else:
+            merged = dict(params_values) if params_values else {}
+            merged.update({k: str(v) if v is not None else '' for k, v in last_query_result.items()})
+            execution.add_log('参数来源脚本执行成功（无映射配置，自动合并所有字段）')
+            db.session.commit()
+            return merged
 
     @staticmethod
     def _split_sql_statements(sql: str) -> List[str]:

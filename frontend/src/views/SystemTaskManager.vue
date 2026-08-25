@@ -436,53 +436,120 @@
 
         <!-- Param Source Script (for API and Script tasks) -->
         <template v-if="form.task_type === 'api' || form.task_type === 'script'">
-          <el-divider content-position="left">参数来源脚本</el-divider>
-          <el-form-item label="启用从脚本获取参数">
-            <el-switch v-model="form.param_source_enabled" />
-            <span style="margin-left: 8px; color: #909399; font-size: 12px;">
-              启用后，执行任务前会先运行参数来源脚本，脚本查询结果将作为额外参数注入
+          <el-divider content-position="left">
+            <span style="display: inline-flex; align-items: center; gap: 6px;">
+              <i class="fas fa-database" style="color: #409eff;"></i>
+              参数来源脚本
             </span>
+          </el-divider>
+
+          <el-form-item label="启用从脚本获取参数">
+            <div class="param-source-toggle">
+              <el-switch
+                v-model="form.param_source_enabled"
+                active-text="已启用"
+                inactive-text="未启用"
+                inline-prompt
+                style="--el-switch-on-color: #67c23a;"
+              />
+              <span class="param-source-hint">
+                <i class="fas fa-info-circle"></i>
+                启用后，执行任务前将先运行参数来源脚本，其查询结果会作为额外参数注入主任务
+              </span>
+            </div>
           </el-form-item>
-          <template v-if="form.param_source_enabled">
-            <el-form-item label="参数来源脚本">
-              <el-select v-model="form.param_source_script_id" placeholder="请选择SQL脚本" style="width: 100%" filterable clearable>
-                <el-option
-                  v-for="s in sqlScripts"
-                  :key="s.id"
-                  :label="s.name"
-                  :value="s.id"
-                />
-              </el-select>
-              <div style="color: #909399; font-size: 12px; margin-top: 4px">该脚本的查询结果第一行将被用于填充任务参数</div>
-            </el-form-item>
-            <el-form-item label="执行数据库">
-              <el-select v-model="form.param_source_db_id" placeholder="使用脚本默认数据库（可选）" style="width: 100%" clearable filterable>
-                <el-option
-                  v-for="d in databases"
-                  :key="d.id"
-                  :label="d.name"
-                  :value="d.id"
-                />
-              </el-select>
-              <div style="color: #909399; font-size: 12px; margin-top: 4px">不选择则使用参数来源脚本配置的默认数据库</div>
-            </el-form-item>
-            <el-form-item label="字段映射">
-              <div class="mapping-hint" style="margin-bottom: 8px; color: #909399; font-size: 12px;">
+
+          <transition name="el-fade-in-linear">
+            <div v-if="form.param_source_enabled" class="param-source-card">
+              <div class="param-source-card-header">
+                <i class="fas fa-plug"></i>
+                <span>数据源配置</span>
+              </div>
+
+              <el-form-item label="参数来源脚本">
+                <el-select v-model="form.param_source_script_id" placeholder="请选择SQL脚本" style="width: 100%" filterable clearable>
+                  <el-option
+                    v-for="s in sqlScripts"
+                    :key="s.id"
+                    :label="s.name"
+                    :value="s.id"
+                  />
+                </el-select>
+                <div class="param-source-hint">
+                  <i class="fas fa-lightbulb"></i>
+                  仅取查询结果的第一行用于填充任务参数
+                </div>
+              </el-form-item>
+
+              <el-form-item label="执行数据库">
+                <el-select v-model="form.param_source_db_id" placeholder="使用脚本默认数据库（可选）" style="width: 100%" clearable filterable>
+                  <el-option
+                    v-for="d in databases"
+                    :key="d.id"
+                    :label="d.name"
+                    :value="d.id"
+                  />
+                </el-select>
+                <div class="param-source-hint">
+                  <i class="fas fa-lightbulb"></i>
+                  不选择则使用参数来源脚本配置的默认数据库
+                </div>
+              </el-form-item>
+
+              <div class="param-source-divider">
+                <span><i class="fas fa-exchange-alt"></i> 字段映射</span>
+              </div>
+
+              <div class="param-source-hint" style="margin-bottom: 12px;">
+                <i class="fas fa-info-circle"></i>
                 配置脚本返回字段到任务参数的映射关系；不配置则自动合并所有字段（参数名与脚本字段名相同）
               </div>
-              <div v-for="(item, idx) in form.param_source_param_mapping" :key="idx" class="param-source-mapping-row" style="margin-bottom: 8px;">
-                <el-input v-model="item.source_field" placeholder="脚本返回字段名" style="width: 200px" />
-                <span style="line-height: 32px; color: #909399;">→</span>
-                <el-input v-model="item.target_param" placeholder="任务参数名" style="width: 200px" />
-                <el-button type="danger" text @click="form.param_source_param_mapping.splice(idx, 1)" style="margin-left: 8px;">
-                  <i class="fas fa-trash"></i>
-                </el-button>
+
+              <div v-if="form.param_source_param_mapping.length === 0" class="param-source-empty">
+                <i class="fas fa-inbox"></i>
+                <span>暂无映射，点击下方按钮添加</span>
               </div>
-              <el-button type="primary" text size="small" @click="form.param_source_param_mapping.push({source_field: '', target_param: ''})">
-                <i class="fas fa-plus"></i> 添加字段映射
+
+              <div class="param-source-mapping-list">
+                <div
+                  v-for="(item, idx) in form.param_source_param_mapping"
+                  :key="idx"
+                  class="param-source-mapping-row"
+                >
+                  <el-input v-model="item.source_field" placeholder="脚本返回字段名" class="mapping-field" />
+                  <span class="mapping-arrow">
+                    <i class="fas fa-arrow-right"></i>
+                  </span>
+                  <el-input v-model="item.target_param" placeholder="任务参数名" class="mapping-field" />
+                  <el-button
+                    type="danger"
+                    circle
+                    size="small"
+                    @click="form.param_source_param_mapping.splice(idx, 1)"
+                    class="mapping-delete"
+                  >
+                    <i class="fas fa-trash-alt"></i>
+                  </el-button>
+                </div>
+              </div>
+
+              <el-button
+                type="primary"
+                plain
+                size="small"
+                @click="form.param_source_param_mapping.push({source_field: '', target_param: ''})"
+                class="param-source-add-btn"
+              >
+                <i class="fas fa-plus"></i>
+                <span>添加字段映射</span>
               </el-button>
-            </el-form-item>
-          </template>
+
+              <div class="param-source-warning">
+                <i class="fas fa-exclamation-triangle"></i>
+                <span>若参数来源脚本执行失败或未返回结果，将中止主任务执行</span>
+              </div>
+            </div>
+          </transition>
         </template>
 
         <!-- Signing Config (only for API tasks) -->
@@ -580,7 +647,21 @@
           <strong>任务:</strong> {{ currentTask.name }}
           <el-tag size="small" style="margin-left: 8px">{{ currentTask.task_type }}</el-tag>
         </p>
-        <el-alert v-if="currentTask.param_source_enabled" title="此任务启用了参数来源脚本，执行前将先运行 SQL 脚本获取动态参数" type="info" :closable="false" show-icon style="margin-bottom: 12px" />
+        <el-alert
+          v-if="currentTask.param_source_enabled"
+          title="此任务启用了参数来源脚本，执行前将先运行 SQL 脚本获取动态参数；若执行失败或无返回将中止主任务"
+          type="warning"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 16px"
+        >
+          <template #title>
+            <span style="display: inline-flex; align-items: center; gap: 6px; font-weight: 600;">
+              <i class="fas fa-database"></i>
+              已启用参数来源脚本
+            </span>
+          </template>
+        </el-alert>
         <el-form label-width="100px" label-position="right">
           <el-form-item v-if="currentTaskDatabases.length > 0 && currentTask.task_type === 'sql'" label="数据库连接">
             <el-select v-model="executeDatabaseId" placeholder="全部数据库（默认）" clearable style="width: 100%">
@@ -1701,5 +1782,190 @@ async function handleSaveEnums() {
   border-radius: 4px;
   padding: 10px;
   background: #fafafa;
+}
+
+/* Param Source Script Styles */
+.param-source-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.param-source-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #909399;
+  font-size: 12px;
+}
+
+.param-source-card {
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  background: #fafafa;
+  padding: 16px;
+  margin-top: 8px;
+  animation: param-source-fade-in 0.2s ease-out;
+}
+
+@keyframes param-source-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.param-source-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.param-source-card-header i {
+  color: #409eff;
+  font-size: 14px;
+}
+
+.param-source-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+  margin: 16px 0 8px;
+  padding-top: 12px;
+  border-top: 1px solid #ebeef5;
+}
+
+.param-source-divider i {
+  color: #e6a23c;
+}
+
+.param-source-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  color: #c0c4cc;
+  font-size: 13px;
+  background: #f5f7fa;
+  border: 1px dashed #dcdfe6;
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
+.param-source-empty i {
+  font-size: 18px;
+}
+
+.param-source-mapping-list {
+  margin-bottom: 12px;
+}
+
+.param-source-mapping-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  background: #fff;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  transition: all 0.2s ease;
+}
+
+.param-source-mapping-row:hover {
+  border-color: #c6e2ff;
+  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.08);
+}
+
+.mapping-field {
+  flex: 1;
+  max-width: 220px;
+}
+
+.mapping-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #909399;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.mapping-arrow i {
+  transition: transform 0.2s ease;
+}
+
+.param-source-mapping-row:hover .mapping-arrow i {
+  transform: translateX(2px);
+  color: #409eff;
+}
+
+.mapping-delete {
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.param-source-mapping-row:hover .mapping-delete {
+  opacity: 1;
+}
+
+.mapping-delete:hover {
+  background: #fef0f0 !important;
+  border-color: #fde2e2 !important;
+  color: #f56c6c !important;
+}
+
+.param-source-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  justify-content: center;
+  padding: 10px;
+  border: 1px dashed #c6e2ff;
+  color: #409eff;
+  background: #f0f9ff;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+  margin-top: 4px;
+}
+
+.param-source-add-btn:hover {
+  background: #e6f7ff;
+  border-color: #409eff;
+  color: #409eff;
+}
+
+.param-source-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #fdf6ec;
+  border: 1px solid #f5e7d0;
+  border-radius: 6px;
+  color: #e6a23c;
+  font-size: 12px;
+  margin-top: 12px;
+}
+
+.param-source-warning i {
+  font-size: 14px;
+  flex-shrink: 0;
 }
 </style>
