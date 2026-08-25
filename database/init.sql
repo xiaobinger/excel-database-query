@@ -222,6 +222,7 @@ CREATE TABLE IF NOT EXISTS ai_configs (
     temperature FLOAT DEFAULT 0.7 COMMENT '温度参数',
     system_prompt TEXT COMMENT '系统提示词',
     description VARCHAR(500) COMMENT '描述',
+    logo_url VARCHAR(500) COMMENT '自定义Logo URL(自动适配或用户填写,留空走内置品牌匹配)',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_provider (provider),

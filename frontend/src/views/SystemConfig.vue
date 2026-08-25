@@ -125,7 +125,7 @@
               <el-table-column prop="name" label="名称" min-width="120">
                 <template #default="{ row }">
                   <div style="display: flex; align-items: center; gap: 6px">
-                    <ProviderLogo :provider="row.provider" :api-base="row.api_base" :model-name="row.model_name" :size="16" />
+                    <ProviderLogo :provider="row.provider" :api-base="row.api_base" :model-name="row.model_name" :logo-url="row.logo_url" :size="16" />
                     <span>{{ row.name }}</span>
                   </div>
                 </template>
@@ -554,6 +554,7 @@ import { ref, reactive, onMounted, nextTick } from 'vue'
 import api from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import ProviderLogo from '../components/ProviderLogo.vue'
+import { autoFetchLogo } from '../utils/providerLogo.js'
 
 const activeTab = ref('email')
 const saving = ref(false)
@@ -944,6 +945,11 @@ async function handleSaveAiConfig() {
   try {
     const payload = { ...aiConfigForm, models: currentModels.value }
     if (!payload.api_key) delete payload.api_key
+    // 保存前自动适配 logo：若当前 provider/api_base/model_name 未匹配内置品牌，
+    // 则尝试从聚合平台/厂商网站抓取 logo 图片 URL 并回写
+    if (!payload.logo_url) {
+      payload.logo_url = await autoFetchLogo(payload.provider, payload.api_base, payload.model_name)
+    }
     if (isEditAiConfig.value) {
       await api.ai.updateConfig(editAiConfigId.value, payload)
       ElMessage.success('更新成功')

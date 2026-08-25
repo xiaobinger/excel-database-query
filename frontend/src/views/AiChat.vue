@@ -547,7 +547,7 @@
             <!-- Selected model tag -->
             <div v-if="selectedModel" class="model-tag-bar">
               <el-tag closable type="success" effect="dark" @close="removeSelectedModel">
-                <ProviderLogo :provider="selectedModel.provider" :api-base="selectedModel.api_base" :model-name="selectedModel.model_name" :size="13" style="margin-right: 4px" />@{{ selectedModel.name }}
+                <ProviderLogo :provider="selectedModel.provider" :api-base="selectedModel.api_base" :model-name="selectedModel.model_name" :logo-url="selectedModel.logo_url" :size="13" style="margin-right: 4px" />@{{ selectedModel.name }}
                 <span style="opacity: 0.7; margin-left: 4px">{{ selectedModel.model_name }}</span>
                 <span v-if="selectedModel.enable_streaming" class="thinking-badge" title="流式输出">
                   <i class="fas fa-bolt"></i>
@@ -588,7 +588,7 @@
                     class="mention-item"
                     @mousedown.prevent="selectMentionModel(model)"
                   >
-                    <ProviderLogo :provider="model.provider" :api-base="model.api_base" :model-name="model.model_name" :size="16" />
+                    <ProviderLogo :provider="model.provider" :api-base="model.api_base" :model-name="model.model_name" :logo-url="model.logo_url" :size="16" />
                     <span class="mention-name">{{ model.name }}</span>
                     <span class="mention-model">{{ model.model_name }}</span>
                     <el-tag size="small" type="info" effect="plain" style="margin-left: 4px">{{ model.provider }}</el-tag>
@@ -621,7 +621,7 @@
               </el-dropdown>
               <el-dropdown v-if="canSwitchModel" trigger="click" @command="selectDropdownModel" class="model-dropdown">
                 <div class="model-dropdown-trigger" :class="{ 'model-selected': selectedModel }">
-                  <ProviderLogo v-if="selectedModel" :provider="selectedModel.provider" :api-base="selectedModel.api_base" :model-name="selectedModel.model_name" :size="15" />
+                  <ProviderLogo v-if="selectedModel" :provider="selectedModel.provider" :api-base="selectedModel.api_base" :model-name="selectedModel.model_name" :logo-url="selectedModel.logo_url" :size="15" />
                   <i v-else class="fas fa-magic"></i>
                   <span class="model-dropdown-label">{{ selectedModel ? selectedModel.name : 'Auto' }}</span>
                   <i class="fas fa-chevron-down model-dropdown-arrow"></i>
@@ -637,7 +637,7 @@
                     </el-dropdown-item>
                     <el-dropdown-item v-for="model in activeModels" :key="model.id" :command="model.id" :class="{ 'is-active': selectedModel?.id === model.id }">
                       <div class="model-option">
-                        <ProviderLogo :provider="model.provider" :api-base="model.api_base" :model-name="model.model_name" :size="16" />
+                        <ProviderLogo :provider="model.provider" :api-base="model.api_base" :model-name="model.model_name" :logo-url="model.logo_url" :size="16" />
                         <span class="model-option-name">{{ model.name }}</span>
                         <span class="model-option-desc">{{ model.model_name }}</span>
                         <i v-if="model.enable_streaming" class="fas fa-bolt" style="color: #e6a23c; margin-left: 4px" title="流式输出"></i>

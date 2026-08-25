@@ -126,7 +126,8 @@ def get_active_models():
              'enable_thinking': c.enable_thinking or False,
              'enable_streaming': c.enable_streaming if c.enable_streaming is not None else True,
              'context_window': c.context_window or 128000,
-             'is_default': c.is_default or False}
+             'is_default': c.is_default or False,
+             'logo_url': c.logo_url or '',}
             for c in allowed_models
         ],
         'can_switch_model': can_switch,
@@ -156,6 +157,7 @@ def create_config():
             enable_thinking=data.get('enable_thinking', False),
             enable_streaming=data.get('enable_streaming', True),
             is_free=data.get('is_free', False),
+            logo_url=data.get('logo_url', '') or '',
         )
         if data.get('api_key'):
             config.set_api_key(data['api_key'])
@@ -188,7 +190,7 @@ def update_config(config_id):
     try:
         simple_fields = ['name', 'provider', 'api_base', 'model_name', 'is_default',
                          'is_active', 'max_tokens', 'context_window', 'temperature', 'system_prompt',
-                         'description', 'enable_thinking', 'enable_streaming', 'is_free']
+                         'description', 'enable_thinking', 'enable_streaming', 'is_free', 'logo_url']
         for key in simple_fields:
             if key in data:
                 setattr(config, key, data[key])

@@ -1,6 +1,15 @@
 <template>
   <span class="provider-logo" :style="{ width: size + 'px', height: size + 'px', flexShrink: 0 }" :title="brand.title">
-    <svg v-if="brand.path" viewBox="0 0 24 24" :width="size" :height="size" :fill="brand.color" aria-hidden="true">
+    <img
+      v-if="customImage"
+      class="logo-img"
+      :src="customImage"
+      :alt="brand.title"
+      :width="size"
+      :height="size"
+      @error="onImageError"
+    >
+    <svg v-else-if="brand.path" viewBox="0 0 24 24" :width="size" :height="size" :fill="brand.color" aria-hidden="true">
       <path :d="brand.path" />
     </svg>
     <span v-else-if="brand.svg" class="logo-svg" :class="{ 'logo-self-bg': brand.selfBg }" :style="{ width: size + 'px', height: size + 'px' }" v-html="brand.svg"></span>
@@ -13,12 +22,13 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 
 const props = defineProps({
   provider: { type: String, default: '' },
   apiBase: { type: String, default: '' },
   modelName: { type: String, default: '' },
+  logoUrl: { type: String, default: '' },
   size: { type: Number, default: 14 },
 })
 
@@ -186,10 +196,24 @@ function detectBrandKey(provider, apiBase, modelName) {
   return 'generic'
 }
 
+defineExpose({ detectBrandKey, BRANDS })
+
 const brand = computed(() => {
   const key = detectBrandKey(props.provider, props.apiBase, props.modelName)
   return BRANDS[key] || BRANDS.generic
 })
+
+// 自定义logo图片：优先使用后端存储的logo_url（自动适配或用户填写），
+// 加载失败时（如远程图片404）回退到内置品牌匹配
+const customImageFailed = ref(false)
+const customImage = computed(() => {
+  if (customImageFailed.value) return ''
+  const url = (props.logoUrl || '').trim()
+  return url
+})
+function onImageError() {
+  customImageFailed.value = true
+}
 </script>
 
 <style scoped>
@@ -199,6 +223,12 @@ const brand = computed(() => {
   justify-content: center;
   vertical-align: middle;
   line-height: 1;
+}
+.logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 4px;
 }
 
 .logo-svg {
