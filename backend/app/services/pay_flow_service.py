@@ -195,6 +195,14 @@ def advance_flow(execution_id, _is_recursive=False):
         logger.warning(f'流程 {execution_id} 状态为 {execution.status}，跳过执行')
         return
 
+    # 防重入检查：如果最近 10 秒内已经分发过该执行，说明有另一个进程正在处理，跳过
+    # 递归调用时跳过此检查（递归调用在同一请求/线程内，无需防重入）
+    if not _is_recursive and execution.last_dispatched_at:
+        elapsed = (datetime.utcnow() - execution.last_dispatched_at).total_seconds()
+        if elapsed < 10:
+            logger.warning(f'流程 {execution_id} 10秒内已被分发(last={elapsed:.1f}s)，跳过防重入')
+            return
+
     # 对于 waiting 状态，检查是否到达下次执行时间
     if not _is_recursive and execution.status == 'waiting':
         if execution.next_run_at and execution.next_run_at > datetime.utcnow():
@@ -269,6 +277,10 @@ def advance_flow(execution_id, _is_recursive=False):
 
     # 执行节点
     now = datetime.utcnow()
+
+    # 更新分发时间戳（防重入）
+    execution.last_dispatched_at = datetime.utcnow()
+    db.session.commit()
 
     # 防重复执行检查：同一节点同一attempt不应有多个running记录
     existing_running = PayFlowNodeExecution.query.filter_by(
@@ -556,22 +568,37 @@ def _send_node_notification(execution, node, node_exec, notify_type, result=None
     - 上下文节点结果: {nodeId.fieldName} 格式引用任意节点的结果字段
     """
     action = node.get('action', {})
-    to_addresses = action.get('to_addresses', [])
+    notify_template_id = action.get('notify_template_id')
 
-    # 支持从 to_addresses_str 解析
-    if not to_addresses:
-        to_addresses_str = action.get('to_addresses_str', '')
-        if to_addresses_str:
-            to_addresses = [addr.strip() for addr in to_addresses_str.split(',') if addr.strip()]
+    # 如果配置了通知模板ID，从模板获取配置
+    if notify_template_id:
+        from app.models.pay_flow import PayFlowNotifyTemplate
+        tpl = PayFlowNotifyTemplate.query.get(notify_template_id)
+        if tpl and tpl.is_enabled:
+            to_addresses = []
+            receivers = tpl.receivers or ''
+            if receivers:
+                to_addresses = [addr.strip() for addr in receivers.split(',') if addr.strip()]
+            subject = tpl.title or f'【代付流程{notify_type}】{execution.template_name}'
+            content = tpl.content or ''
+        else:
+            node_exec.add_log(f'通知模板ID={notify_template_id}不存在或已禁用，跳过{notify_type}通知', level='warning')
+            return
+    else:
+        to_addresses = action.get('to_addresses', [])
 
-    if not to_addresses:
-        node_exec.add_log(f'未配置收件人，跳过{notify_type}通知', level='warning')
-        return
+        # 支持从 to_addresses_str 解析
+        if not to_addresses:
+            to_addresses_str = action.get('to_addresses_str', '')
+            if to_addresses_str:
+                to_addresses = [addr.strip() for addr in to_addresses_str.split(',') if addr.strip()]
 
-    # 构建通知内容
-    subject_prefix = '【代付流程失败】' if notify_type == '失败' else '【代付流程完成】'
-    subject = action.get('subject', f'{subject_prefix} {execution.template_name}')
-    content = action.get('content', '')
+        if not to_addresses:
+            node_exec.add_log(f'未配置收件人，跳过{notify_type}通知', level='warning')
+            return
+
+        subject = action.get('subject', f'【代付流程{notify_type}】{execution.template_name}')
+        content = action.get('content', '')
 
     # 替换变量
     row_data = execution.get_row_data()

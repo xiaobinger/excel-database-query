@@ -97,22 +97,22 @@
         <div class="flow-chart">
           <div class="chart-title"><i class="fa fa-project-diagram"></i> 流程走势</div>
           <div class="chart-nodes">
-            <div
-              v-for="(node, idx) in detailData.template_nodes"
-              :key="node.id"
-              class="chart-node"
-              :class="getNodeStatusClass(detailData, idx)"
-            >
-              <div class="chart-node-icon">
-                <i :class="node.type === 'pay' ? 'fa fa-credit-card' : 'fa fa-bell'"></i>
+            <template v-for="(node, idx) in detailData.template_nodes" :key="node.id">
+              <div
+                class="chart-node"
+                :class="getNodeStatusClass(detailData, idx)"
+              >
+                <div class="chart-node-icon">
+                  <i :class="node.type === 'pay' ? 'fa fa-credit-card' : 'fa fa-bell'"></i>
+                </div>
+                <div class="chart-node-name">{{ node.name }}</div>
+                <div class="chart-node-status">{{ getNodeStatusLabel(detailData, idx) }}</div>
+                <div v-if="node.loop?.enabled" class="chart-node-loop"><i class="fa fa-repeat"></i> 循环</div>
               </div>
-              <div class="chart-node-name">{{ node.name }}</div>
-              <div class="chart-node-status">{{ getNodeStatusLabel(detailData, idx) }}</div>
-              <div v-if="node.loop?.enabled" class="chart-node-loop"><i class="fa fa-repeat"></i> 循环</div>
-            </div>
-            <div v-for="i in (detailData.template_nodes.length - 1)" :key="'arrow-' + i" class="chart-arrow">
-              <i class="fa fa-arrow-down"></i>
-            </div>
+              <div v-if="idx < detailData.template_nodes.length - 1" class="chart-arrow">
+                <i class="fa fa-arrow-right"></i>
+              </div>
+            </template>
           </div>
         </div>
 
@@ -338,8 +338,8 @@ onUnmounted(() => {
 .summary-box { margin-bottom: 16px; }
 .chart-title { font-size: 14px; font-weight: 600; margin-bottom: 10px; }
 .flow-chart { margin-bottom: 20px; }
-.chart-nodes { display: flex; flex-direction: column; align-items: center; gap: 0; }
-.chart-node { width: 200px; padding: 12px; border-radius: 8px; border: 2px solid #dcdfe6; background: #fff; text-align: center; transition: all 0.3s; position: relative; }
+.chart-nodes { display: flex; flex-direction: row; align-items: center; gap: 0; overflow-x: auto; padding: 8px 0; }
+.chart-node { width: 180px; min-width: 180px; padding: 12px; border-radius: 8px; border: 2px solid #dcdfe6; background: #fff; text-align: center; transition: all 0.3s; position: relative; flex-shrink: 0; }
 .chart-node.node-pending { border-color: #dcdfe6; background: #fafafa; }
 .chart-node.node-running { border-color: #409eff; background: #ecf5ff; animation: pulse 1.5s infinite; }
 .chart-node.node-completed { border-color: #67c23a; background: #f0f9eb; }
@@ -349,7 +349,7 @@ onUnmounted(() => {
 .chart-node-name { font-weight: 600; font-size: 13px; }
 .chart-node-status { font-size: 12px; color: #909399; margin-top: 2px; }
 .chart-node-loop { font-size: 11px; color: #e6a23c; margin-top: 2px; }
-.chart-arrow { color: #c0c4cc; font-size: 16px; padding: 4px 0; }
+.chart-arrow { color: #c0c4cc; font-size: 16px; padding: 0 8px; display: flex; align-items: center; flex-shrink: 0; }
 .log-node-title { display: flex; align-items: center; }
 .loop-count { color: #e6a23c; font-size: 12px; margin-left: 8px; }
 .log-detail { padding: 8px 0; }

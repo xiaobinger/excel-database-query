@@ -8,6 +8,9 @@
             <el-button type="primary" @click="openTemplateDialog()">
               <i class="fa fa-plus"></i> 新建模板
             </el-button>
+            <el-button type="success" @click="openNotifyTemplateListDialog">
+              <i class="fa fa-envelope-open-text"></i> 通知模板
+            </el-button>
             <el-button @click="loadTemplates">
               <i class="fa fa-refresh"></i> 刷新
             </el-button>
@@ -171,29 +174,46 @@
                           <el-switch v-model="node.notify_on_end" active-text="开启" inactive-text="关闭" />
                         </el-form-item>
                       </el-col>
-                      <el-col :span="6">
-                        <el-form-item label="通知类型">
-                          <el-select v-model="node.action.notify_type" style="width:100%">
-                            <el-option label="邮件" value="email" />
+                      <el-col :span="12">
+                        <el-form-item label="通知模板">
+                          <el-select v-model="node.action.notify_template_id" placeholder="选择通知模板（留空使用下方自定义配置）" style="width:100%" clearable>
+                            <el-option v-for="t in notifyTemplates" :key="t.id" :label="t.name" :value="t.id" />
                           </el-select>
                         </el-form-item>
                       </el-col>
-                      <el-col :span="6">
-                        <el-form-item label="收件人">
-                          <el-input v-model="node.action.to_addresses_str" placeholder="多个用逗号分隔" />
-                        </el-form-item>
-                      </el-col>
                     </el-row>
-                    <el-form-item label="主题">
-                      <el-input v-model="node.action.subject" placeholder="邮件主题" />
-                    </el-form-item>
-                    <el-form-item label="内容">
-                      <el-input v-model="node.action.content" type="textarea" :rows="4" placeholder="邮件内容模板，支持变量替换" />
-                      <div class="variable-help">
-                        <span class="help-label">可用变量：</span>
-                        <el-tag size="small" v-for="v in notificationVariables" :key="v.value" class="var-tag" @click="insertVariable(node, v.value)">{{ v.label }}</el-tag>
+                    <template v-if="!node.action.notify_template_id">
+                      <el-row :gutter="12">
+                        <el-col :span="8">
+                          <el-form-item label="通知类型">
+                            <el-select v-model="node.action.notify_type" style="width:100%">
+                              <el-option label="邮件" value="email" />
+                            </el-select>
+                          </el-form-item>
+                        </el-col>
+                        <el-col :span="16">
+                          <el-form-item label="收件人">
+                            <el-input v-model="node.action.to_addresses_str" placeholder="多个用逗号分隔" />
+                          </el-form-item>
+                        </el-col>
+                      </el-row>
+                      <el-form-item label="主题">
+                        <el-input v-model="node.action.subject" placeholder="邮件主题" />
+                      </el-form-item>
+                      <el-form-item label="内容">
+                        <el-input v-model="node.action.content" type="textarea" :rows="4" placeholder="邮件内容模板，支持变量替换" />
+                        <div class="variable-help">
+                          <span class="help-label">可用变量：</span>
+                          <el-tag size="small" v-for="v in notificationVariables" :key="v.value" class="var-tag" @click="insertVariable(node, v.value)">{{ v.label }}</el-tag>
+                        </div>
+                      </el-form-item>
+                    </template>
+                    <template v-else>
+                      <div class="notify-template-hint">
+                        <i class="fa fa-info-circle"></i>
+                        当前引用通知模板：<strong>{{ getNotifyTemplateNameById(node.action.notify_template_id) }}</strong>
                       </div>
-                    </el-form-item>
+                    </template>
                   </el-form>
                 </div>
 
@@ -287,6 +307,71 @@
         <el-button type="primary" :loading="saving" @click="saveTemplate">保存模板</el-button>
       </template>
     </el-dialog>
+
+    <!-- 通知模板管理 Dialog -->
+    <el-dialog v-model="notifyTemplateListDialogVisible" title="通知模板管理" width="900px" :close-on-click-modal="false">
+      <div class="notify-template-toolbar">
+        <el-button type="primary" size="small" @click="openNotifyTemplateDialog()">
+          <i class="fa fa-plus"></i> 新建模板
+        </el-button>
+        <el-button size="small" @click="loadNotifyTemplates">
+          <i class="fa fa-refresh"></i> 刷新
+        </el-button>
+      </div>
+      <el-table :data="notifyTemplates" stripe border style="width:100%;margin-top:12px" empty-text="暂无通知模板">
+        <el-table-column prop="name" label="模板名称" width="150" />
+        <el-table-column prop="title" label="通知标题" width="200" show-overflow-tooltip />
+        <el-table-column label="接收人" width="180" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.receivers || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="70" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.is_enabled ? 'success' : 'info'" size="small">{{ row.is_enabled ? '启用' : '禁用' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="创建时间" width="160">
+          <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="160" fixed="right">
+          <template #default="{ row }">
+            <el-button size="small" type="primary" @click="openNotifyTemplateDialog(row)">编辑</el-button>
+            <el-button size="small" type="danger" @click="deleteNotifyTemplate(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
+
+    <!-- 通知模板编辑 Dialog -->
+    <el-dialog v-model="notifyTemplateDialogVisible" :title="editingNotifyTemplate ? '编辑通知模板' : '新建通知模板'" width="600px" :close-on-click-modal="false">
+      <el-form :model="notifyTemplateForm" label-width="100px">
+        <el-form-item label="模板名称" required>
+          <el-input v-model="notifyTemplateForm.name" placeholder="如: 代付失败通知" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="notifyTemplateForm.description" placeholder="模板用途说明" />
+        </el-form-item>
+        <el-form-item label="通知标题">
+          <el-input v-model="notifyTemplateForm.title" placeholder="如: 【代付流程{notify_type}】{template_name}" />
+        </el-form-item>
+        <el-form-item label="接收人">
+          <el-input v-model="notifyTemplateForm.receivers" placeholder="多个用逗号分隔，如: a@b.com,c@d.com" />
+        </el-form-item>
+        <el-form-item label="通知内容">
+          <el-input v-model="notifyTemplateForm.content" type="textarea" :rows="6" placeholder="通知正文模板，支持变量替换" />
+          <div class="variable-help">
+            <span class="help-label">可用变量：</span>
+            <el-tag size="small" v-for="v in notificationVariables" :key="v.value" class="var-tag" @click="insertVarToTplForm(v.value)">{{ v.label }}</el-tag>
+          </div>
+        </el-form-item>
+        <el-form-item label="启用">
+          <el-switch v-model="notifyTemplateForm.is_enabled" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="notifyTemplateDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="notifyTemplateSaving" @click="saveNotifyTemplate">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -303,6 +388,23 @@ const templateDialogVisible = ref(false)
 const editingTemplate = ref(null)
 const saving = ref(false)
 const selectedNodeIdx = ref(null)
+
+// 通知模板管理
+const notifyTemplates = ref([])
+const notifyTemplateListDialogVisible = ref(false)
+const notifyTemplateDialogVisible = ref(false)
+const editingNotifyTemplate = ref(null)
+const notifyTemplateSaving = ref(false)
+
+const notifyTemplateForm = reactive({
+  name: '',
+  description: '',
+  title: '',
+  content: '',
+  webhook_url: '',
+  receivers: '',
+  is_enabled: true,
+})
 
 const templateForm = reactive({
   name: '',
@@ -513,6 +615,7 @@ function addNode() {
       environment: 'test',
       real_time: '是',
       execute_type: firstChannel?.execute_types?.[0] || '创建代付',
+      notify_template_id: null,
       notify_type: 'email',
       to_addresses: [],
       to_addresses_str: '',
@@ -614,10 +717,100 @@ async function deleteTemplate(row) {
   }
 }
 
+async function loadNotifyTemplates() {
+  try {
+    const res = await api.payFlow.getNotifyTemplates({ per_page: 100 })
+    notifyTemplates.value = res.data.items || []
+  } catch (e) {
+    ElMessage.error('加载通知模板失败')
+  }
+}
+
+function openNotifyTemplateListDialog() {
+  loadNotifyTemplates()
+  notifyTemplateListDialogVisible.value = true
+}
+
+function openNotifyTemplateDialog(row) {
+  editingNotifyTemplate.value = row
+  if (row) {
+    notifyTemplateForm.name = row.name
+    notifyTemplateForm.description = row.description || ''
+    notifyTemplateForm.title = row.title || ''
+    notifyTemplateForm.content = row.content || ''
+    notifyTemplateForm.webhook_url = row.webhook_url || ''
+    notifyTemplateForm.receivers = row.receivers || ''
+    notifyTemplateForm.is_enabled = row.is_enabled
+  } else {
+    notifyTemplateForm.name = ''
+    notifyTemplateForm.description = ''
+    notifyTemplateForm.title = ''
+    notifyTemplateForm.content = ''
+    notifyTemplateForm.webhook_url = ''
+    notifyTemplateForm.receivers = ''
+    notifyTemplateForm.is_enabled = true
+  }
+  notifyTemplateDialogVisible.value = true
+}
+
+async function saveNotifyTemplate() {
+  if (!notifyTemplateForm.name) { ElMessage.warning('请填写模板名称'); return }
+  notifyTemplateSaving.value = true
+  try {
+    const payload = {
+      name: notifyTemplateForm.name,
+      description: notifyTemplateForm.description,
+      title: notifyTemplateForm.title,
+      content: notifyTemplateForm.content,
+      webhook_url: notifyTemplateForm.webhook_url,
+      receivers: notifyTemplateForm.receivers,
+      is_enabled: notifyTemplateForm.is_enabled,
+    }
+    if (editingNotifyTemplate.value) {
+      await api.payFlow.updateNotifyTemplate(editingNotifyTemplate.value.id, payload)
+      ElMessage.success('模板更新成功')
+    } else {
+      await api.payFlow.createNotifyTemplate(payload)
+      ElMessage.success('模板创建成功')
+    }
+    notifyTemplateDialogVisible.value = false
+    loadNotifyTemplates()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '保存失败')
+  } finally {
+    notifyTemplateSaving.value = false
+  }
+}
+
+async function deleteNotifyTemplate(row) {
+  await ElMessageBox.confirm(`确定删除通知模板 "${row.name}"？`, '提示', { type: 'warning' })
+  try {
+    await api.payFlow.deleteNotifyTemplate(row.id)
+    ElMessage.success('已删除')
+    loadNotifyTemplates()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '删除失败')
+  }
+}
+
+function getNotifyTemplateNameById(id) {
+  const tpl = notifyTemplates.value.find(t => t.id === id)
+  return tpl ? tpl.name : '未知模板'
+}
+
+function insertVarToTplForm(variable) {
+  if (!notifyTemplateForm.content) {
+    notifyTemplateForm.content = variable
+  } else {
+    notifyTemplateForm.content += variable
+  }
+}
+
 onMounted(() => {
   loadTemplates()
   loadChannels()
   loadNodeFields()
+  loadNotifyTemplates()
 })
 </script>
 
@@ -657,4 +850,6 @@ onMounted(() => {
 .help-label { font-size: 12px; color: #909399; }
 .var-tag { cursor: pointer; font-size: 11px; }
 .var-tag:hover { background: #ecf5ff; }
+.notify-template-toolbar { display: flex; gap: 8px; }
+.notify-template-hint { font-size: 12px; color: #67c23a; padding: 6px 8px; background: #f0f9eb; border-radius: 4px; display: flex; align-items: center; gap: 6px; }
 </style>

@@ -341,6 +341,11 @@ const payFlow = {
   batchDeleteExecutions: (ids) => http.post('/pay-flow/executions/batch-delete', { ids }),
   batchSummary: (batchId) => http.get(`/pay-flow/batches/${batchId}/summary`),
   batchExecutions: (batchId, params) => http.get(`/pay-flow/batches/${batchId}/executions`, { params }),
+  getNotifyTemplates: (params) => http.get('/pay-flow/notify-templates', { params }),
+  getNotifyTemplate: (id) => http.get(`/pay-flow/notify-templates/${id}`),
+  createNotifyTemplate: (data) => http.post('/pay-flow/notify-templates', data),
+  updateNotifyTemplate: (id, data) => http.put(`/pay-flow/notify-templates/${id}`, data),
+  deleteNotifyTemplate: (id) => http.delete(`/pay-flow/notify-templates/${id}`),
 }
 
 const mcp = {

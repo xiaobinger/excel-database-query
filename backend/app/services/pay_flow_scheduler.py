@@ -51,10 +51,19 @@ def _check_and_advance(app):
         from app import db
         from app.models.pay_flow import PayFlowExecution
         from app.services.pay_flow_service import advance_flow
+        from datetime import datetime, timedelta
 
         now = datetime.utcnow()
+        # 只分发 10 秒内未被分发过的 pending 实例（防重入）
+        cutoff = now - timedelta(seconds=10)
 
-        pending = PayFlowExecution.query.filter_by(status='pending').all()
+        pending = PayFlowExecution.query.filter(
+            PayFlowExecution.status == 'pending',
+            db.or_(
+                PayFlowExecution.last_dispatched_at == None,
+                PayFlowExecution.last_dispatched_at < cutoff,
+            ),
+        ).all()
         for execution in pending:
             try:
                 advance_flow(execution.execution_id)

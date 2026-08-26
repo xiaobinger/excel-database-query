@@ -76,6 +76,86 @@ def node_fields():
 
 
 # ---------------------------------------------------------------------------
+# 通知模板管理
+# ---------------------------------------------------------------------------
+
+@pay_flow_bp.route('/notify-templates', methods=['GET'])
+@login_required
+def list_notify_templates():
+    from app.models.pay_flow import PayFlowNotifyTemplate
+    keyword = request.args.get('keyword')
+    query = PayFlowNotifyTemplate.query
+    if keyword:
+        query = query.filter(PayFlowNotifyTemplate.name.contains(keyword))
+    items = query.order_by(PayFlowNotifyTemplate.id.desc()).all()
+    return jsonify({'success': True, 'data': [t.to_dict() for t in items]})
+
+
+@pay_flow_bp.route('/notify-templates/<int:tpl_id>', methods=['GET'])
+@login_required
+def get_notify_template(tpl_id):
+    from app.models.pay_flow import PayFlowNotifyTemplate
+    t = PayFlowNotifyTemplate.query.get(tpl_id)
+    if not t:
+        return jsonify({'success': False, 'message': '通知模板不存在'}), 404
+    return jsonify({'success': True, 'data': t.to_dict()})
+
+
+@pay_flow_bp.route('/notify-templates', methods=['POST'])
+@login_required
+def create_notify_template():
+    from flask import g
+    from app.models.pay_flow import PayFlowNotifyTemplate
+    from app import db
+    data = request.get_json()
+    if not data or not data.get('name'):
+        return jsonify({'success': False, 'message': '请填写模板名称'}), 400
+    user_id = g.get('user_id') if hasattr(g, 'user_id') else None
+    t = PayFlowNotifyTemplate(
+        name=data['name'],
+        description=data.get('description', ''),
+        title=data.get('title', ''),
+        content=data.get('content', ''),
+        webhook_url=data.get('webhook_url', ''),
+        receivers=data.get('receivers', ''),
+        is_enabled=data.get('is_enabled', True),
+        created_by=user_id,
+    )
+    db.session.add(t)
+    db.session.commit()
+    return jsonify({'success': True, 'data': t.to_dict()})
+
+
+@pay_flow_bp.route('/notify-templates/<int:tpl_id>', methods=['PUT'])
+@login_required
+def update_notify_template(tpl_id):
+    from app.models.pay_flow import PayFlowNotifyTemplate
+    from app import db
+    data = request.get_json()
+    t = PayFlowNotifyTemplate.query.get(tpl_id)
+    if not t:
+        return jsonify({'success': False, 'message': '通知模板不存在'}), 404
+    for field in ('name', 'description', 'title', 'content', 'webhook_url', 'receivers', 'is_enabled'):
+        if field in data:
+            setattr(t, field, data[field])
+    db.session.commit()
+    return jsonify({'success': True, 'data': t.to_dict()})
+
+
+@pay_flow_bp.route('/notify-templates/<int:tpl_id>', methods=['DELETE'])
+@login_required
+def delete_notify_template(tpl_id):
+    from app.models.pay_flow import PayFlowNotifyTemplate
+    from app import db
+    t = PayFlowNotifyTemplate.query.get(tpl_id)
+    if not t:
+        return jsonify({'success': False, 'message': '通知模板不存在'}), 404
+    db.session.delete(t)
+    db.session.commit()
+    return jsonify({'success': True, 'message': '已删除'})
+
+
+# ---------------------------------------------------------------------------
 # 发起流程
 # ---------------------------------------------------------------------------
 
