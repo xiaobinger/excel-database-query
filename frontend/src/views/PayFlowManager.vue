@@ -116,27 +116,43 @@
                   <div class="config-title">代付动作配置</div>
                   <el-form label-width="90px" size="small">
                     <el-row :gutter="12">
-                      <el-col :span="8">
+                      <el-col :span="6">
                         <el-form-item label="渠道" required>
-                          <el-select v-model="node.action.channel" style="width:100%" placeholder="选择渠道">
+                          <el-select v-model="node.action.channel" style="width:100%" placeholder="选择渠道" @change="onNodeChannelChange(node)">
                             <el-option v-for="c in channels" :key="c.channel" :label="c.name" :value="c.channel" />
                           </el-select>
                         </el-form-item>
                       </el-col>
-                      <el-col :span="8">
+                      <el-col :span="6">
                         <el-form-item label="接口类型">
-                          <el-select v-model="node.action.interface_type" style="width:100%">
-                            <el-option label="代付" value="代付" />
-                            <el-option label="查询" value="查询" />
+                          <el-select v-model="node.action.interface_type" style="width:100%" @change="onInterfaceTypeChange(node)">
+                            <el-option v-for="t in currentNodeChannel(node)?.interface_types || []" :key="t" :label="t" :value="t" />
                           </el-select>
                         </el-form-item>
                       </el-col>
-                      <el-col :span="8">
+                      <el-col :span="6">
                         <el-form-item label="环境">
                           <el-radio-group v-model="node.action.environment" size="small">
                             <el-radio-button label="test">测试</el-radio-button>
                             <el-radio-button label="pro">生产</el-radio-button>
                           </el-radio-group>
+                        </el-form-item>
+                      </el-col>
+                      <el-col :span="6" v-if="node.action.interface_type === '代付' && currentNodeChannel(node)?.real_time">
+                        <el-form-item label="实时代付">
+                          <el-select v-model="node.action.real_time" style="width:100%">
+                            <el-option label="是" value="是" />
+                            <el-option label="否" value="否" />
+                          </el-select>
+                        </el-form-item>
+                      </el-col>
+                    </el-row>
+                    <el-row :gutter="12" v-if="node.action.interface_type === '代付' && node.action.real_time === '否' && currentNodeChannel(node)?.execute_types?.length">
+                      <el-col :span="8">
+                        <el-form-item label="跑批步骤">
+                          <el-select v-model="node.action.execute_type" style="width:100%">
+                            <el-option v-for="t in currentNodeChannel(node)?.execute_types || []" :key="t" :label="t" :value="t" />
+                          </el-select>
                         </el-form-item>
                       </el-col>
                     </el-row>
@@ -214,7 +230,7 @@
                   <div v-if="!node.transitions.length" class="empty-tips">无条件设置时，顺序执行下一节点</div>
                   <div v-for="(trans, tIdx) in node.transitions" :key="tIdx" class="transition-row">
                     <span class="trans-label">条件 {{ tIdx + 1 }}:</span>
-                    <el-select v-model="trans.condition.field" placeholder="字段" size="small" style="width:140px" @change="onFieldChange(trans)">
+                    <el-select v-model="trans.condition.field" placeholder="选择或输入字段" size="small" style="width:160px" filterable allow-create @change="onFieldChange(trans)">
                       <el-option v-for="f in availableFields" :key="f.value" :label="f.label" :value="f.value" />
                     </el-select>
                     <el-select v-model="trans.condition.operator" placeholder="操作符" size="small" style="width:120px">
@@ -228,6 +244,10 @@
                       <el-option v-for="(n, nIdx) in templateForm.nodes" :key="nIdx" :value="nIdx" :label="`跳转到: ${n.name}`" :disabled="nIdx <= idx" />
                     </el-select>
                     <el-button type="danger" size="small" circle @click="node.transitions.splice(tIdx, 1)"><i class="fa fa-times"></i></el-button>
+                  </div>
+                  <div v-if="availableFields.length" class="field-tips">
+                    <i class="fa fa-info-circle"></i> 可选字段（来自前面节点结果）:
+                    <el-tag v-for="f in availableFields" :key="f.value" size="small" class="field-tag" @click="copyField(f.value)">{{ f.label }}</el-tag>
                   </div>
                   <el-button size="small" @click="addTransition(node)" style="margin-top:4px">
                     <i class="fa fa-plus"></i> 添加条件
@@ -269,22 +289,56 @@ const templateForm = reactive({
 })
 
 const availableFields = computed(() => {
-  const prevNodes = templateForm.nodes.slice(0, selectedNodeIdx.value)
+  const prevNodes = selectedNodeIdx.value != null ? templateForm.nodes.slice(0, selectedNodeIdx.value) : []
   const fields = []
+  const fieldSet = new Set()
   for (const n of prevNodes) {
     if (n.type === 'pay') {
-      fields.push(
-        { value: `${n.id}.success`, label: `${n.name} → 成功` },
-        { value: `${n.id}.message`, label: `${n.name} → 消息` },
-        { value: `${n.id}.retCode`, label: `${n.name} → retCode` },
-        { value: `${n.id}.orderStatus`, label: `${n.name} → orderStatus` },
-        { value: `${n.id}.error_code`, label: `${n.name} → error_code` },
-        { value: `${n.id}.state`, label: `${n.name} → state` },
-      )
+      const nodeFields = [
+        { value: `${n.id}.success`, label: `${n.name}.success` },
+        { value: `${n.id}.message`, label: `${n.name}.message` },
+        { value: `${n.id}.retCode`, label: `${n.name}.retCode` },
+        { value: `${n.id}.orderStatus`, label: `${n.name}.orderStatus` },
+        { value: `${n.id}.error_code`, label: `${n.name}.error_code` },
+        { value: `${n.id}.state`, label: `${n.name}.state` },
+        { value: `${n.id}.error_msg`, label: `${n.name}.error_msg` },
+        { value: `${n.id}.data.orderNo`, label: `${n.name}.data.orderNo` },
+        { value: `${n.id}.data.amount`, label: `${n.name}.data.amount` },
+      ]
+      for (const f of nodeFields) {
+        if (!fieldSet.has(f.value)) {
+          fieldSet.add(f.value)
+          fields.push(f)
+        }
+      }
     }
   }
   return fields
 })
+
+function copyField(fieldValue) {
+  navigator.clipboard?.writeText(fieldValue)
+}
+
+function currentNodeChannel(node) {
+  return channels.value.find(c => c.channel === node?.action?.channel)
+}
+
+function onNodeChannelChange(node) {
+  const ch = currentNodeChannel(node)
+  if (ch) {
+    node.action.interface_type = ch.interface_types?.[0] || '代付'
+    node.action.real_time = ch.real_time ? '是' : '是'
+    node.action.execute_type = ch.execute_types?.[0] || '创建代付'
+  }
+}
+
+function onInterfaceTypeChange(node) {
+  if (node.action.interface_type !== '代付') {
+    node.action.real_time = '是'
+    node.action.execute_type = '创建代付'
+  }
+}
 
 function formatTime(ts) {
   return ts ? dayjs(ts).format('YYYY-MM-DD HH:mm:ss') : '-'
@@ -330,11 +384,23 @@ function openTemplateDialog(row) {
 
 function addNode() {
   const idx = templateForm.nodes.length
+  const firstChannel = channels.value[0]
   templateForm.nodes.push({
     id: `node_${Date.now()}`,
     name: `节点 ${idx + 1}`,
     type: 'pay',
-    action: { channel: '', interface_type: '代付', environment: 'test', real_time: '是', execute_type: '创建代付', notify_type: 'email', to_addresses: [], to_addresses_str: '', subject: '', content: '' },
+    action: {
+      channel: firstChannel?.channel || '',
+      interface_type: firstChannel?.interface_types?.[0] || '代付',
+      environment: 'test',
+      real_time: '是',
+      execute_type: firstChannel?.execute_types?.[0] || '创建代付',
+      notify_type: 'email',
+      to_addresses: [],
+      to_addresses_str: '',
+      subject: '',
+      content: '',
+    },
     loop: { enabled: false, interval_seconds: 60, max_iterations: 10, exit_condition_op: 'success', exit_field: '', exit_value: '' },
     transitions: [],
   })
@@ -456,5 +522,8 @@ onMounted(() => {
 .transition-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
 .trans-label { font-size: 12px; color: #606266; min-width: 50px; }
 .trans-arrow { color: #909399; font-size: 12px; }
+.field-tips { font-size: 12px; color: #909399; margin: 6px 0; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.field-tag { cursor: pointer; }
+.field-tag:hover { background: #ecf5ff; }
 .template-meta { margin-bottom: 8px; }
 </style>
