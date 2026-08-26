@@ -171,10 +171,23 @@ def advance_flow(execution_id):
     2. 条件判断决定下一节点
     3. 循环节点处理
     4. 完成/失败处理
+
+    安全：通过状态检查防止同一执行实例被重复处理（资金安全）
     """
     execution = PayFlowExecution.query.filter_by(execution_id=execution_id).first()
     if not execution:
         return
+
+    # 安全检查：只处理 pending 或 waiting 状态的实例
+    # 防止同一行数据被重复执行（涉及资金安全）
+    if execution.status not in ('pending', 'waiting'):
+        logger.warning(f'流程 {execution_id} 状态为 {execution.status}，跳过执行')
+        return
+
+    # 对于 waiting 状态，检查是否到达下次执行时间
+    if execution.status == 'waiting':
+        if execution.next_run_at and execution.next_run_at > datetime.utcnow():
+            return
 
     template = PayFlowTemplate.query.get(execution.template_id)
     if not template:
@@ -231,6 +244,17 @@ def advance_flow(execution_id):
             advance_flow(execution_id)
             return
 
+    # 安全检查：检查是否已有该节点的 running 记录（防止重复执行）
+    # 这是资金安全的最后一道防线
+    existing_running = PayFlowNodeExecution.query.filter_by(
+        execution_id=execution_id,
+        node_id=node_id,
+        status='running'
+    ).first()
+    if existing_running:
+        logger.warning(f'流程 {execution_id} 节点 {node_name} 已有 running 记录，跳过重复执行')
+        return
+
     # 执行节点
     now = datetime.utcnow()
     node_exec = PayFlowNodeExecution(
@@ -275,6 +299,9 @@ def advance_flow(execution_id):
         transitions = node.get('transitions', [])
         next_idx = _resolve_next_node(execution, nodes, current_idx, transitions, result)
 
+        # 检查是否为结束节点
+        is_end_node = node.get('is_end_node', False)
+
         if is_loop and next_idx == current_idx:
             # 检查是否满足退出条件
             if _evaluate_loop_exit(loop_cfg, result, result.get('fields', {}), execution.get_context()):
@@ -297,6 +324,16 @@ def advance_flow(execution_id):
             execution.status = 'failed'
             execution.error_message = f'节点 {node_name} 无匹配的流转条件'
             execution.completed_at = datetime.utcnow()
+            # 发送失败通知
+            if node.get('notify_on_failure'):
+                _send_node_notification(execution, node, node_exec, '失败')
+        elif is_end_node:
+            # 结束节点：流程完成
+            execution.current_node_index = current_idx + 1
+            _complete_flow(execution, f'流程完成（结束节点: {node_name}）')
+            # 发送结束通知
+            if node.get('notify_on_end'):
+                _send_node_notification(execution, node, node_exec, '完成')
         elif next_idx >= len(nodes):
             # 到达末尾
             execution.current_node_index = next_idx
@@ -452,6 +489,116 @@ def _send_email_notification(execution, action, node_exec):
     return {'success': True, 'message': '邮件通知已发送', 'fields': {'to': to_addresses, 'subject': subject}}
 
 
+def _send_node_notification(execution, node, node_exec, notify_type):
+    """发送节点通知（失败通知/结束通知）
+
+    Args:
+        execution: 流程实例
+        node: 节点配置
+        node_exec: 节点执行记录
+        notify_type: '失败' 或 '完成'
+    """
+    action = node.get('action', {})
+    to_addresses = action.get('to_addresses', [])
+
+    # 支持从 to_addresses_str 解析
+    if not to_addresses:
+        to_addresses_str = action.get('to_addresses_str', '')
+        if to_addresses_str:
+            to_addresses = [addr.strip() for addr in to_addresses_str.split(',') if addr.strip()]
+
+    if not to_addresses:
+        node_exec.add_log(f'未配置收件人，跳过{notify_type}通知', level='warning')
+        return
+
+    # 构建通知内容
+    subject_prefix = '【代付流程失败】' if notify_type == '失败' else '【代付流程完成】'
+    subject = action.get('subject', f'{subject_prefix} {execution.template_name}')
+    content = action.get('content', '')
+
+    # 替换变量
+    row_data = execution.get_row_data()
+    row_dict = {
+        'accountName': row_data[2] if len(row_data) > 2 else '',
+        'businessNo': row_data[3] if len(row_data) > 3 else '',
+        'amount': row_data[8] if len(row_data) > 8 else '',
+    }
+    for key, val in row_dict.items():
+        content = content.replace(f'{{{key}}}', str(val))
+    content = content.replace('{execution_id}', execution.execution_id)
+    content = content.replace('{template_name}', execution.template_name)
+    content = content.replace('{status}', execution.status)
+    content = content.replace('{node_name}', node.get('name', ''))
+    content = content.replace('{notify_type}', notify_type)
+    content = content.replace('{error_message}', node_exec.error_message or '')
+
+    # 构建邮件内容
+    if not content:
+        content = f'''
+        <html>
+        <body>
+            <h3>代付流程{notify_type}通知</h3>
+            <p><strong>模板名称:</strong> {execution.template_name}</p>
+            <p><strong>执行ID:</strong> {execution.execution_id}</p>
+            <p><strong>节点名称:</strong> {node.get('name', '')}</p>
+            <p><strong>行序号:</strong> {execution.row_index}</p>
+            <p><strong>状态:</strong> {execution.status}</p>
+            <p><strong>时间:</strong> {beijing_isoformat(datetime.utcnow())}</p>
+            {f'<p><strong>错误信息:</strong> {node_exec.error_message}</p>' if node_exec.error_message else ''}
+        </body>
+        </html>
+        '''
+
+    # 发送邮件
+    from app.models.system_config import SystemConfig
+
+    smtp_host_config = SystemConfig.query.filter_by(config_key=SystemConfig.EMAIL_SMTP_HOST).first()
+    smtp_port_config = SystemConfig.query.filter_by(config_key=SystemConfig.EMAIL_SMTP_PORT).first()
+    smtp_user_config = SystemConfig.query.filter_by(config_key=SystemConfig.EMAIL_SMTP_USER).first()
+    smtp_password_config = SystemConfig.query.filter_by(config_key=SystemConfig.EMAIL_SMTP_PASSWORD).first()
+    smtp_ssl_config = SystemConfig.query.filter_by(config_key=SystemConfig.EMAIL_SMTP_SSL).first()
+    from_name_config = SystemConfig.query.filter_by(config_key=SystemConfig.EMAIL_FROM_NAME).first()
+    from_address_config = SystemConfig.query.filter_by(config_key=SystemConfig.EMAIL_FROM_ADDRESS).first()
+
+    if not smtp_host_config or not smtp_host_config.config_value:
+        node_exec.add_log('SMTP主机未配置，无法发送通知', level='warning')
+        return
+
+    host = smtp_host_config.config_value
+    port = int(smtp_port_config.config_value) if smtp_port_config and smtp_port_config.config_value else 465
+    user = smtp_user_config.config_value if smtp_user_config and smtp_user_config.config_value else ''
+    password = smtp_password_config.get_encrypted_value() if smtp_password_config else ''
+    use_ssl = smtp_ssl_config.config_value.lower() in ('true', '1', 'yes') if smtp_ssl_config and smtp_ssl_config.config_value else True
+    sender_name = from_name_config.config_value if from_name_config and from_name_config.config_value else '代付流程系统'
+    sender_address = from_address_config.config_value if from_address_config and from_address_config.config_value else user
+
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = formataddr((sender_name, sender_address))
+        msg['To'] = ', '.join(to_addresses)
+        msg['Subject'] = subject
+        msg['Date'] = formatdate(localtime=True)
+        msg['Message-ID'] = make_msgid(domain=sender_address.split('@')[-1] if '@' in sender_address else 'localhost')
+        msg['MIME-Version'] = '1.0'
+        msg.attach(MIMEText(content, 'html', 'utf-8'))
+
+        if use_ssl:
+            server = smtplib.SMTP_SSL(host, port, timeout=30)
+        else:
+            server = smtplib.SMTP(host, port, timeout=30)
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+
+        server.login(user, password)
+        server.sendmail(sender_address, to_addresses, msg.as_string())
+        server.quit()
+
+        node_exec.add_log(f'{notify_type}通知已发送至 {", ".join(to_addresses)}')
+    except Exception as e:
+        node_exec.add_log(f'发送{notify_type}通知失败: {e}', level='error')
+
+
 def _resolve_next_node(execution, nodes, current_idx, transitions, result):
     """根据流转条件决定下一个节点索引
 
@@ -464,10 +611,15 @@ def _resolve_next_node(execution, nodes, current_idx, transitions, result):
     target_node_index:
         - int: 跳转到指定索引
         - null: 流程失败
-        - 缺省: 顺序执行下一个节点
+        - 缺省: 顺序执行下一节点（仅当当前节点成功时）
+
+    重要：当前节点失败时，若无匹配流转条件，流程应停止（返回 None）
     """
+    is_success = result.get('success', False)
+
     if not transitions:
-        return current_idx + 1
+        # 无流转条件时：成功则继续下一节点，失败则流程停止
+        return current_idx + 1 if is_success else None
 
     result_fields = result.get('fields', {})
     context = execution.get_context()
@@ -479,8 +631,8 @@ def _resolve_next_node(execution, nodes, current_idx, transitions, result):
         if _evaluate_condition(condition, result, result_fields, context):
             return target
 
-    # 无匹配条件，顺序执行
-    return current_idx + 1
+    # 无匹配条件时：成功则继续下一节点，失败则流程停止
+    return current_idx + 1 if is_success else None
 
 
 def _evaluate_condition(condition, result, result_fields, context=None):

@@ -79,7 +79,7 @@
               <div class="node-card-header" @click="selectedNodeIdx = idx">
                 <span class="node-index">{{ idx + 1 }}</span>
                 <span class="node-name">{{ node.name }}</span>
-                <el-tag :type="node.type === 'pay' ? 'warning' : 'success'" size="small">{{ node.type === 'pay' ? '代付' : '通知' }}</el-tag>
+                <el-tag v-if="node.is_end_node" type="danger" size="small">结束节点</el-tag>
                 <i v-if="node.loop?.enabled" class="fa fa-repeat loop-icon" title="循环节点"></i>
                 <i class="fa fa-chevron-down node-arrow"></i>
               </div>
@@ -94,25 +94,22 @@
                       </el-form-item>
                     </el-col>
                     <el-col :span="8">
-                      <el-form-item label="节点类型">
-                        <el-select v-model="node.type" style="width:100%">
-                          <el-option label="代付动作" value="pay" />
-                          <el-option label="通知" value="notify" />
-                        </el-select>
-                      </el-form-item>
-                    </el-col>
-                    <el-col :span="8">
                       <el-form-item label="操作">
                         <el-button type="danger" size="small" @click="removeNode(idx)">删除节点</el-button>
                         <el-button size="small" @click="moveNode(idx, -1)" :disabled="idx === 0">上移</el-button>
                         <el-button size="small" @click="moveNode(idx, 1)" :disabled="idx === templateForm.nodes.length - 1">下移</el-button>
                       </el-form-item>
                     </el-col>
+                    <el-col :span="8">
+                      <el-form-item label="结束节点">
+                        <el-switch v-model="node.is_end_node" active-text="是" inactive-text="否" />
+                      </el-form-item>
+                    </el-col>
                   </el-row>
                 </el-form>
 
-                <!-- 代付节点配置 -->
-                <div v-if="node.type === 'pay'" class="node-config">
+                <!-- 代付动作配置 -->
+                <div class="node-config">
                   <div class="config-title">代付动作配置</div>
                   <el-form label-width="90px" size="small">
                     <el-row :gutter="12">
@@ -159,19 +156,29 @@
                   </el-form>
                 </div>
 
-                <!-- 通知节点配置 -->
-                <div v-else class="node-config">
+                <!-- 通知配置 -->
+                <div class="node-config">
                   <div class="config-title">通知配置</div>
                   <el-form label-width="90px" size="small">
                     <el-row :gutter="12">
-                      <el-col :span="12">
+                      <el-col :span="6">
+                        <el-form-item label="失败通知">
+                          <el-switch v-model="node.notify_on_failure" active-text="开启" inactive-text="关闭" />
+                        </el-form-item>
+                      </el-col>
+                      <el-col :span="6" v-if="node.is_end_node">
+                        <el-form-item label="结束通知">
+                          <el-switch v-model="node.notify_on_end" active-text="开启" inactive-text="关闭" />
+                        </el-form-item>
+                      </el-col>
+                      <el-col :span="6">
                         <el-form-item label="通知类型">
                           <el-select v-model="node.action.notify_type" style="width:100%">
                             <el-option label="邮件" value="email" />
                           </el-select>
                         </el-form-item>
                       </el-col>
-                      <el-col :span="12">
+                      <el-col :span="6">
                         <el-form-item label="收件人">
                           <el-input v-model="node.action.to_addresses_str" placeholder="多个用逗号分隔" />
                         </el-form-item>
@@ -444,6 +451,9 @@ function addNode() {
     id: `node_${Date.now()}`,
     name: `节点 ${idx + 1}`,
     type: 'pay',
+    is_end_node: false,
+    notify_on_failure: false,
+    notify_on_end: false,
     action: {
       channel: firstChannel?.channel || '',
       interface_type: firstChannel?.interface_types?.[0] || '代付',
