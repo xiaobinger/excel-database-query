@@ -64,6 +64,7 @@ def create_app(config_name='default'):
         _recover_stale_ai_tickets(app)
 
     _start_auto_export_scheduler(app)
+    _start_pay_flow_scheduler(app)
 
     @app.route('/api/health', methods=['GET'])
     def health_check():
@@ -190,6 +191,7 @@ def _register_blueprints(app):
     from app.routes.task_routes import task_bp
     from app.routes.ticket_routes import ticket_bp
     from app.routes.pay_routes import pay_bp
+    from app.routes.pay_flow_routes import pay_flow_bp
 
     app.register_blueprint(ssh_bp)
     app.register_blueprint(database_bp)
@@ -216,6 +218,7 @@ def _register_blueprints(app):
     app.register_blueprint(task_bp)
     app.register_blueprint(ticket_bp)
     app.register_blueprint(pay_bp)
+    app.register_blueprint(pay_flow_bp)
 
 
 def _register_error_handlers(app):
@@ -308,6 +311,11 @@ def _init_rate_limiter(app):
 def _start_auto_export_scheduler(app):
     from app.services.auto_export_scheduler import start_auto_export_scheduler
     start_auto_export_scheduler(app)
+
+
+def _start_pay_flow_scheduler(app):
+    from app.services.pay_flow_scheduler import start_pay_flow_scheduler
+    start_pay_flow_scheduler(app)
 
 
 def _auto_migrate(app):

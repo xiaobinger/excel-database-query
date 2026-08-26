@@ -35,6 +35,8 @@ const routes = [
       { path: 'system-tasks', name: 'SystemTasks', component: () => import('../views/SystemTaskManager.vue'), meta: { menu: 'system_tasks', title: '系统任务' } },
       { path: 'tickets', name: 'Tickets', component: () => import('../views/TicketManager.vue'), meta: { menu: 'tickets', title: '工单管理' } },
       { path: 'pay-withdraw', name: 'PayWithdraw', component: () => import('../views/PayWithdraw.vue'), meta: { menu: 'pay_withdraw', title: '代付提现' } },
+      { path: 'pay-flow', name: 'PayFlowManager', component: () => import('../views/PayFlowManager.vue'), meta: { menu: 'pay_flow', title: '代付流程编排' } },
+      { path: 'pay-flow-executions', name: 'PayFlowExecutions', component: () => import('../views/PayFlowExecutions.vue'), meta: { menu: 'pay_flow', title: '代付流程执行记录' } },
       { path: 'ticket-analytics', name: 'TicketAnalytics', component: () => import('../views/TicketAnalytics.vue'), meta: { menu: 'ticket_analytics', title: '工单统计' } },
       { path: 'system-map', name: 'SystemMap', component: () => import('../views/SystemMap.vue'), meta: { menu: 'system_map', title: '系统地图' } }
     ]

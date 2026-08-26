@@ -29,6 +29,15 @@
 - AI技能管理（系统/用户/自动学习）
 - AI对话（Markdown渲染）
 
+### 代付流程编排
+- **流程模板管理**：步骤列表式配置，支持拖拽排序节点
+- **节点类型**：支付节点（通道/接口/环境）、通知节点（邮件模板）
+- **条件流转**：基于节点结果字段值判断（等于/不等于/包含/大于/小于/成功/失败等）
+- **循环执行**：节点可配置定时循环，自定义间隔频次与退出条件
+- **执行记录**：每笔数据独立流程实例，实时查看执行状态与节点日志
+- **流程走势动画**：可视化展示流程进度，直观查看成功/失败状态与失败原因
+- **后台调度**：守护线程每5秒检查待执行实例，驱动循环节点与流程推进
+
 ### 其他
 - 5套主题切换（默认蓝、粉色甜美、阳光橙色、暗黑、豆绿养眼）
 - 性别自动主题匹配
@@ -66,7 +75,8 @@ excel-database-query/
 │   │   │   │   ├── business_system.py # 业务系统
 │   │   │   │   ├── mcp_server.py  # MCP服务器
 │   │   │   │   ├── pay_config.py  # 代付配置
-│   │   │   │   ├── system_task.py # 系统任务（含响应字段映射）
+│   │   │   ├── pay_flow.py    # 代付流程编排（模板/实例/节点执行记录）
+│   │   │   ├── system_task.py # 系统任务（含响应字段映射）
 │   │   │   │   ├── ticket.py      # 工单
 │   │   │   │   ├── tool_memory.py # 工具记忆
 │   │   │   │   └── user_behavior.py # 用户行为
@@ -94,6 +104,7 @@ excel-database-query/
 │   │   │   ├── mcp_routes.py      # MCP服务器管理
 │   │   │   ├── open_api_routes.py # 开放API（/v1/*）
 │   │   │   ├── pay_routes.py      # 代付提现
+│   │   │   ├── pay_flow_routes.py # 代付流程编排API
 │   │   │   ├── profit_share_routes.py # 分润
 │   │   │   ├── system_task_routes.py # 系统任务
 │   │   │   ├── task_routes.py     # 查询/导出任务
@@ -111,6 +122,8 @@ excel-database-query/
 │   │   │   ├── mcp_marketplace.py     # MCP市场
 │   │   │   ├── open_api_service.py    # 开放API服务
 │   │   │   ├── pay_service.py         # 代付服务
+│   │   │   ├── pay_flow_service.py    # 代付流程引擎（节点推进/条件流转/循环）
+│   │   │   ├── pay_flow_scheduler.py  # 代付流程后台调度器
 │   │   │   ├── profit_share_service.py # 分润服务
 │   │   │   └── system_task_service.py # 系统任务服务
 │   │   └── utils/             # 工具类
@@ -163,6 +176,8 @@ excel-database-query/
 │   │   │   ├── BusinessSystemManager.vue   # 业务系统管理
 │   │   │   ├── McpManager.vue              # MCP服务器管理
 │   │   │   ├── PayManager.vue              # 代付提现
+│   │   │   ├── PayFlowManager.vue          # 代付流程编排管理
+│   │   │   ├── PayFlowExecutions.vue       # 代付流程执行记录
 │   │   │   ├── ProfitShare.vue             # 分润管理
 │   │   │   ├── SystemTaskManager.vue       # 系统任务管理
 │   │   │   └── TicketManager.vue           # 工单管理
@@ -312,8 +327,35 @@ WHERE merchant_id = :value
 | 系统配置 | `/api/system/*` | 邮件/同义词/AI配置 |
 | AI | `/api/ai/*` | AI模型、技能、对话 |
 | 开放API | `/api/open-api/*` | 开放API调用、日志、统计、会话聚合 |
+| 代付流程 | `/api/pay-flow/*` | 流程模板CRUD、发起流程、执行记录、走势动画 |
 
 ## 近期新增功能
+
+### 代付流程编排系统 (v2.2+)
+
+支持用户自定义代付流程的走势与流转条件，实现灵活的多步骤自动化处理：
+
+**核心能力**：
+- **步骤列表式配置**：卡片式节点管理，支持添加/删除/排序
+- **双节点类型**：支付节点（通道/接口/环境配置）+ 通知节点（邮件模板变量）
+- **条件流转引擎**：基于节点结果字段值判断（eq/neq/contains/gt/lt/success/fail等运算符）
+- **定时循环执行**：节点可配置循环间隔、最大次数、退出条件，满足条件后继续流转
+- **每笔数据独立实例**：每行Excel数据创建独立流程实例，互不影响
+- **可视化走势动画**：实时展示流程进度，脉冲动画标识当前运行节点
+- **执行日志详情**：每个节点记录完整执行日志，支持查看失败原因
+- **后台调度驱动**：守护线程每5秒检查待执行实例，自动推进流程
+
+**数据模型**：
+- `PayFlowTemplate`：流程模板（节点定义、流转条件）
+- `PayFlowExecution`：流程实例（每笔数据一个，含循环状态）
+- `PayFlowNodeExecution`：节点执行记录（日志、结果、时间戳）
+
+**API端点**：
+- `GET/POST/PUT/DELETE /api/pay-flow/templates`：模板CRUD
+- `POST /api/pay-flow/start`：发起流程（基于file_path + sheet_index）
+- `GET /api/pay-flow/executions`：执行记录列表
+- `GET /api/pay-flow/executions/{id}`：执行详情（含节点日志）
+- `POST /api/pay-flow/executions/{id}/cancel|retry`：取消/重试
 
 ### AI模型Logo自动适配 (v2.1+)
 
@@ -384,5 +426,6 @@ API类型和本地脚本类型的系统任务支持**从SQL脚本动态获取参
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-08-26 | v2.2 | 代付流程编排系统：步骤列表式配置、双节点类型（支付/通知）、条件流转引擎、定时循环执行、每笔数据独立实例、可视化走势动画、后台调度驱动 |
 | 2026-08-25 | v2.1 | AI模型Logo自动适配（内置15+品牌+DuckDuckGo Favicon兜底）；系统任务响应字段映射支持业务状态判断；开放API调用记录新增session_id会话聚合；调用方IP修复（IPv4映射IPv6/带端口/链路本地过滤） |
 | 2026-08-24 | v2.0 | 开放API调用记录与统计优化（会话聚合/统计随筛选/卡片化展示）；MCP服务器管理；代付提现增强；系统任务JSON输入框支持美化/压缩/转义 |

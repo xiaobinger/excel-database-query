@@ -780,3 +780,330 @@ def execute_pay_withdraw(channel, interface_type, environment, file_path, sheet_
         log(f'执行失败: {e}')
         if on_complete:
             on_complete('failed', str(e), logs, None)
+
+
+# ---------------------------------------------------------------------------
+# 单笔执行（供流程引擎调用）
+# ---------------------------------------------------------------------------
+
+def execute_single_row(channel, cfg, row, params, log=None):
+    """执行单笔代付/查询，返回结构化字段 dict 供流程引擎条件判断
+
+    返回字段统一包含:
+        success: bool        - 是否成功
+        channel: str         - 渠道标识
+        raw_response: str    - 原始响应文本
+        fields: dict         - 渠道特定字段（如 retCode, orderStatus, error_code 等）
+        message: str         - 结果描述
+    """
+    if log is None:
+        log = lambda msg: None
+
+    interface_type = params.get('interface_type', '代付')
+    real_time = params.get('real_time', '是')
+    execute_type = params.get('execute_type', '创建代付')
+
+    base = {
+        'channel': channel,
+        'interface_type': interface_type,
+        'environment': params.get('environment', 'test'),
+    }
+
+    try:
+        if channel == 'helipay':
+            return _helipay_single(cfg, row, params, log, base)
+        elif channel == 'dianyin':
+            if interface_type == '查询':
+                return _dianyin_query_single(cfg, row, params, log, base)
+            return _dianyin_pay_single(cfg, row, params, log, base)
+        elif channel in ('lepass', 'kls'):
+            if interface_type == '查询':
+                return _lsp_query_single(cfg, row, params, log, base)
+            if channel == 'lepass' or real_time == '是':
+                return _lsp_realtime_single(cfg, row, params, log, base)
+            if execute_type == '创建代付':
+                return _kls_create_single(cfg, row, params, log, base)
+            elif execute_type == '查询代付':
+                return _kls_query_single(cfg, row, params, log, base)
+            else:
+                return _kls_withdraw_single(cfg, row, params, log, base)
+        else:
+            return {**base, 'success': False, 'message': f'未知渠道: {channel}', 'fields': {}, 'raw_response': ''}
+    except Exception as e:
+        log(f'单笔执行异常: {e}')
+        return {**base, 'success': False, 'message': f'异常: {e}', 'fields': {}, 'raw_response': ''}
+
+
+def _helipay_single(cfg, row, params, log, base):
+    business_no = _to_str(_cell(row, 3))
+    account_name = _to_str(_cell(row, 2))
+    bank_card_no = _to_str(_cell(row, 6))
+    amount_fen = _to_int(_cell(row, 8))
+    amount_yuan = format_amount_to_yuan(amount_fen)
+
+    payload = {
+        'agentNo': cfg.get('agentNo'),
+        'data': {
+            'agentNo': cfg.get('agentNo'),
+            'userId': cfg.get('userId'),
+            'withdrawAmount': amount_yuan,
+            'cardNo': bank_card_no,
+            'payerName': account_name,
+            'bankCode': params.get('bank_code', 'CCB'),
+            'orderNum': business_no,
+            'onlineBankType': params.get('online_bank_type', 'B2C'),
+        },
+        'userId': cfg.get('userId'),
+        'url': cfg.get('helipayUrl', '') + '/mpos-trx/rest/withdraw/agentApply.action',
+    }
+    resp = _post_json(cfg.get('baseUrl', '') + '/test/heliPay/sendRequest', payload, log=log)
+    text = resp.text
+    result_json = json.loads(text)
+    ret_code = result_json.get('retCode', '')
+    success = ret_code == '0000'
+    return {
+        **base,
+        'success': success,
+        'retCode': ret_code,
+        'retMsg': result_json.get('retMsg', ''),
+        'orderNum': business_no,
+        'amount': amount_yuan,
+        'fields': {
+            'retCode': ret_code,
+            'retMsg': result_json.get('retMsg', ''),
+            'orderNum': business_no,
+            'amount': amount_yuan,
+        },
+        'raw_response': text[:2000],
+        'message': '成功' if success else f'失败: {result_json.get("retMsg", ret_code)}',
+    }
+
+
+def _dianyin_pay_single(cfg, row, params, log, base):
+    order_no = _to_str(_cell(row, 3))
+    amount = _to_str(_cell(row, 8))
+    id_name = _to_str(_cell(row, 2))
+    bank_phone = _to_str(_cell(row, 4))
+    bank_account = _to_str(_cell(row, 6))
+    id_card_no = _to_str(_cell(row, 5))
+    account_report_obj = {
+        "bankAccount": bank_account,
+        "bankCityCode": cfg.get('bankCityCode', '371700'),
+        "bankDistrictCode": cfg.get('bankDistrictCode', '371702'),
+        "bankPhone": bank_phone,
+        "bankProvinceCode": cfg.get('bankProvinceCode', '370000'),
+        "branchName": cfg.get('branchName', '中国工商银行'),
+        "idCardNo": id_card_no,
+        "idName": id_name,
+    }
+    flag = dianyin_withdraw(cfg, order_no, amount, json.dumps(account_report_obj, ensure_ascii=False), log)
+    return {
+        **base,
+        'success': flag,
+        'orderNo': order_no,
+        'amount': amount,
+        'fields': {
+            'orderNo': order_no,
+            'amount': amount,
+            'withdrawResult': 'ONTHEWAY' if flag else 'FAIL',
+        },
+        'raw_response': f'withdraw_result={"ONTHEWAY" if flag else "FAIL"}',
+        'message': '成功' if flag else '报备/提现失败',
+    }
+
+
+def _dianyin_query_single(cfg, row, params, log, base):
+    order_no = _to_str(_cell(row, 3))
+    result = dianyin_query(cfg, order_no, log)
+    data = result.json()
+    order_status = data.get("data", {}).get("orderStatus", "UNKNOWN")
+    success = order_status == 'SUCCESS'
+    return {
+        **base,
+        'success': success,
+        'orderNo': order_no,
+        'orderStatus': order_status,
+        'remitMsg': data.get("data", {}).get("remitMsg", ""),
+        'fields': {
+            'orderNo': order_no,
+            'orderStatus': order_status,
+            'remitMsg': data.get("data", {}).get("remitMsg", ""),
+            'code': data.get("code"),
+            'msg': data.get("msg", ""),
+        },
+        'raw_response': json.dumps(data, ensure_ascii=False)[:2000],
+        'message': f'查询结果: {order_status}',
+    }
+
+
+def _lsp_realtime_single(cfg, row, params, log, base):
+    channel_code = params.get('channel_code') or 'lepass'
+    transfer_mode = params.get('transfer_mode') or '7'
+    id_card_no = _to_str(_cell(row, 5))
+    if _check_without_agent(cfg, id_card_no):
+        return {**base, 'success': False, 'message': '历史有出款异常,跳过', 'fields': {'skip': True}, 'raw_response': ''}
+
+    business_no = generate_unique_id(_to_str(_cell(row, 3)))
+    bank_card_no = _to_str(_cell(row, 6))
+    object_dst_id = _get_sub_agent_id(cfg, bank_card_no, channel_code, log)
+    if not bank_card_no or not object_dst_id:
+        return {**base, 'success': False, 'message': '需要创建子代理', 'fields': {'needSubAgent': True}, 'raw_response': ''}
+
+    amount = _to_int(_cell(row, 8))
+    pay_result = json.loads(_lsp_transfer(cfg, business_no, object_dst_id, amount, transfer_mode, log))
+    if pay_result.get("error_code") != 0:
+        return {
+            **base, 'success': False, 'businessNo': business_no, 'objectDstId': object_dst_id,
+            'fields': {'error_code': pay_result.get('error_code'), 'error_msg': pay_result.get('error_msg', '')},
+            'raw_response': json.dumps(pay_result, ensure_ascii=False)[:2000],
+            'message': f'代付失败: {pay_result.get("error_msg")}',
+        }
+
+    order_info = _lsp_query_order(cfg, business_no, log)
+    withdraw_biz_no = business_no + str(amount)
+    withdraw_result = json.loads(_lsp_withdraw(cfg, withdraw_biz_no, object_dst_id, amount, log))
+    withdraw_ok = withdraw_result.get("error_code") == 0 and withdraw_result.get("error_msg") == "成功"
+    apply_id = withdraw_result.get("data", {}).get("applyId", "")
+    withdraw_query = ""
+    if withdraw_ok:
+        withdraw_query = _lsp_query_withdraw(cfg, object_dst_id, apply_id, log)
+
+    return {
+        **base,
+        'success': withdraw_ok,
+        'businessNo': business_no,
+        'objectDstId': object_dst_id,
+        'applyId': apply_id,
+        'amount': amount,
+        'fields': {
+            'error_code': withdraw_result.get('error_code'),
+            'error_msg': withdraw_result.get('error_msg', ''),
+            'businessNo': business_no,
+            'objectDstId': object_dst_id,
+            'applyId': apply_id,
+            'transferState': pay_result.get('data', {}).get('state'),
+        },
+        'raw_response': json.dumps(withdraw_result, ensure_ascii=False)[:2000],
+        'message': '代付+提现成功' if withdraw_ok else f'提现失败: {withdraw_result.get("error_msg")}',
+    }
+
+
+def _lsp_query_single(cfg, row, params, log, base):
+    object_dst_id = _to_str(_cell(row, 12))
+    apply_id = _to_str(_cell(row, 13))
+    if not apply_id:
+        return {**base, 'success': False, 'message': '无applyId', 'fields': {'noApplyId': True}, 'raw_response': ''}
+
+    result = json.loads(_lsp_query_withdraw(cfg, object_dst_id, apply_id, log))
+    f_state = result.get("data", {}).get("F_state")
+    success = f_state == "9"
+    paying = f_state in (-1, "6", 6)
+    return {
+        **base,
+        'success': success,
+        'applyId': apply_id,
+        'objectDstId': object_dst_id,
+        'F_state': f_state,
+        'fields': {
+            'error_code': result.get('error_code'),
+            'error_msg': result.get('error_msg', ''),
+            'F_state': f_state,
+            'applyId': apply_id,
+            'objectDstId': object_dst_id,
+            'isPaying': paying,
+        },
+        'raw_response': json.dumps(result, ensure_ascii=False)[:2000],
+        'message': '成功' if success else ('打款中' if paying else f'失败({f_state})'),
+    }
+
+
+def _kls_create_single(cfg, row, params, log, base):
+    busi_type = params.get('busi_type') or '144'
+    channel_code = params.get('channel_code') or 'kls'
+    business_no = generate_unique_id(_to_str(_cell(row, 3)))
+    bank_card_no = _to_str(_cell(row, 6))
+    object_dst_id = _get_sub_agent_id(cfg, bank_card_no, channel_code, log)
+    if not bank_card_no or not object_dst_id:
+        return {**base, 'success': False, 'message': '需要创建子代理', 'fields': {'needSubAgent': True}, 'raw_response': ''}
+
+    amount = _to_int(_cell(row, 8))
+    pay_result = json.loads(_lsp_create_pay(cfg, business_no, object_dst_id, amount, busi_type, log))
+    success = pay_result.get("error_code") == 0
+    req_id = str(pay_result.get("data", "")) if success else ""
+    return {
+        **base,
+        'success': success,
+        'businessNo': business_no,
+        'objectDstId': object_dst_id,
+        'reqId': req_id,
+        'amount': amount,
+        'fields': {
+            'error_code': pay_result.get('error_code'),
+            'error_msg': pay_result.get('error_msg', ''),
+            'businessNo': business_no,
+            'objectDstId': object_dst_id,
+            'reqId': req_id,
+        },
+        'raw_response': json.dumps(pay_result, ensure_ascii=False)[:2000],
+        'message': f'创建代付成功 reqId={req_id}' if success else f'创建代付失败: {pay_result.get("error_msg")}',
+    }
+
+
+def _kls_query_single(cfg, row, params, log, base):
+    busi_type = params.get('busi_type') or '144'
+    req_id = _to_str(_cell(row, 14))
+    if not req_id:
+        return {**base, 'success': False, 'message': '创建代付未成功', 'fields': {'noReqId': True}, 'raw_response': ''}
+
+    pay_result = json.loads(_lsp_query_pay(cfg, req_id, busi_type, log))
+    if pay_result.get("error_code") != 0:
+        return {
+            **base, 'success': False, 'reqId': req_id,
+            'fields': {'error_code': pay_result.get('error_code'), 'error_msg': pay_result.get('error_msg', '')},
+            'raw_response': json.dumps(pay_result, ensure_ascii=False)[:2000],
+            'message': f'查询失败: {pay_result.get("error_msg")}',
+        }
+
+    state = int(pay_result.get("data", {}).get("state", 0))
+    success = state == 3
+    return {
+        **base,
+        'success': success,
+        'reqId': req_id,
+        'state': state,
+        'fields': {
+            'error_code': pay_result.get('error_code'),
+            'error_msg': pay_result.get('error_msg', ''),
+            'state': state,
+            'reqId': req_id,
+        },
+        'raw_response': json.dumps(pay_result, ensure_ascii=False)[:2000],
+        'message': '成功' if success else ('失败' if state in (2, 4) else f'代付中({state})'),
+    }
+
+
+def _kls_withdraw_single(cfg, row, params, log, base):
+    channel_code = params.get('channel_code') or 'kls'
+    business_no = generate_unique_id(_to_str(_cell(row, 3)))
+    amount = _to_int(_cell(row, 8))
+    object_dst_id = _to_str(_cell(row, 12))
+    withdraw_result = json.loads(_lsp_withdraw(cfg, business_no, object_dst_id, amount, log))
+    success = withdraw_result.get("error_code") == 0 and withdraw_result.get("error_msg") == "成功"
+    apply_id = withdraw_result.get("data", {}).get("applyId", "") if success else ""
+    return {
+        **base,
+        'success': success,
+        'businessNo': business_no,
+        'objectDstId': object_dst_id,
+        'applyId': apply_id,
+        'amount': amount,
+        'fields': {
+            'error_code': withdraw_result.get('error_code'),
+            'error_msg': withdraw_result.get('error_msg', ''),
+            'businessNo': business_no,
+            'objectDstId': object_dst_id,
+            'applyId': apply_id,
+        },
+        'raw_response': json.dumps(withdraw_result, ensure_ascii=False)[:2000],
+        'message': f'发起提现成功 applyId={apply_id}' if success else f'发起提现失败: {withdraw_result.get("error_msg")}',
+    }

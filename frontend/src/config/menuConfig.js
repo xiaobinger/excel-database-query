@@ -30,6 +30,8 @@ export const ALL_MENU_ITEMS = [
   { path: '/system-tasks', title: '系统任务', icon: 'fa-cogs', permission: 'system_tasks' },
   { path: '/tickets', title: '工单管理', icon: 'fa-ticket', permission: 'tickets' },
   { path: '/pay-withdraw', title: '代付提现', icon: 'fa-money-bill-wave', permission: 'pay_withdraw' },
+  { path: '/pay-flow', title: '代付流程编排', icon: 'fa-project-diagram', permission: 'pay_flow' },
+  { path: '/pay-flow-executions', title: '代付流程执行记录', icon: 'fa-stream', permission: 'pay_flow' },
   { path: '/ticket-analytics', title: '工单统计', icon: 'fa-chart-bar', permission: 'ticket_analytics' },
   { path: '/system-map', title: '系统地图', icon: 'fa-sitemap', permission: 'system_map' },
 ]
@@ -65,6 +67,8 @@ export const DEFAULT_MENU_CONFIG = [
     { path: '/system-tasks', title: '系统任务', icon: 'fa-cogs', permission: 'system_tasks', visible: true },
     { path: '/tickets', title: '工单管理', icon: 'fa-ticket', permission: 'tickets', visible: true },
     { path: '/pay-withdraw', title: '代付提现', icon: 'fa-money-bill-wave', permission: 'pay_withdraw', visible: true },
+    { path: '/pay-flow', title: '代付流程编排', icon: 'fa-project-diagram', permission: 'pay_flow', visible: true },
+    { path: '/pay-flow-executions', title: '代付流程执行记录', icon: 'fa-stream', permission: 'pay_flow', visible: true },
     { path: '/ticket-analytics', title: '工单统计', icon: 'fa-chart-bar', permission: 'ticket_analytics', visible: true },
     { path: '/system-map', title: '系统地图', icon: 'fa-sitemap', permission: 'system_map', visible: true },
   ]},

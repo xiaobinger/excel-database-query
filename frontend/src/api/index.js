@@ -325,6 +325,22 @@ const pay = {
   execute: (formData) => http.post('/pay/execute', formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 600000 }),
 }
 
+const payFlow = {
+  templates: (params) => http.get('/pay-flow/templates', { params }),
+  getTemplate: (id) => http.get(`/pay-flow/templates/${id}`),
+  createTemplate: (data) => http.post('/pay-flow/templates', data),
+  updateTemplate: (id, data) => http.put(`/pay-flow/templates/${id}`, data),
+  deleteTemplate: (id) => http.delete(`/pay-flow/templates/${id}`),
+  nodeFields: () => http.get('/pay-flow/node-fields'),
+  start: (data) => http.post('/pay-flow/start', data),
+  executions: (params) => http.get('/pay-flow/executions', { params }),
+  getExecution: (id) => http.get(`/pay-flow/executions/${id}`),
+  cancelExecution: (id) => http.post(`/pay-flow/executions/${id}/cancel`),
+  retryExecution: (id) => http.post(`/pay-flow/executions/${id}/retry`),
+  batchSummary: (batchId) => http.get(`/pay-flow/batches/${batchId}/summary`),
+  batchExecutions: (batchId, params) => http.get(`/pay-flow/batches/${batchId}/executions`, { params }),
+}
+
 const mcp = {
   list: () => http.get('/mcp'),
   create: (data) => http.post('/mcp', data),
@@ -356,4 +372,4 @@ const openApi = {
   getStats: (params) => http.get('/open-api/stats', { params }),
 }
 
-export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, mcp, openApi, business, systemTask, lookup, profitShare, tickets, pay }
+export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, mcp, openApi, business, systemTask, lookup, profitShare, tickets, pay, payFlow }

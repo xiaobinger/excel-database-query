@@ -87,9 +87,64 @@
         <el-button type="primary" :loading="executing" :disabled="!canExecute" @click="doExecute">
           <i class="fa fa-play"></i> 执行{{ form.interface_type }}
         </el-button>
+        <el-button type="success" :loading="startingFlow" :disabled="!canExecute" @click="openStartFlowDialog">
+          <i class="fa fa-project-diagram"></i> 发起代付流程
+        </el-button>
         <el-button @click="resetForm">重置</el-button>
         <span v-if="form.environment === 'pro'" class="pro-warn"><i class="fa fa-exclamation-triangle"></i> 生产环境，请谨慎操作</span>
       </div>
+
+      <!-- 发起代付流程 Dialog -->
+      <el-dialog v-model="startFlowDialogVisible" title="发起代付流程" width="600px" :close-on-click-modal="false">
+        <el-form :model="startFlowForm" label-width="100px">
+          <el-form-item label="流程模板" required>
+            <el-select v-model="startFlowForm.template_id" placeholder="请选择流程模板" style="width:100%" filterable>
+              <el-option v-for="t in flowTemplates" :key="t.id" :label="t.name" :value="t.id" :disabled="!t.is_enabled">
+                <span>{{ t.name }}</span>
+                <span v-if="!t.is_enabled" style="color:#909399;font-size:12px;margin-left:8px">(已禁用)</span>
+              </el-option>
+            </el-select>
+          </el-form-item>
+          <el-form-item label="渠道" required>
+            <el-select v-model="startFlowForm.channel" placeholder="选择渠道" style="width:100%">
+              <el-option v-for="c in channels" :key="c.channel" :label="c.name" :value="c.channel" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="环境" required>
+            <el-radio-group v-model="startFlowForm.environment">
+              <el-radio-button label="test">测试</el-radio-button>
+              <el-radio-button label="pro">生产</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="接口类型">
+            <el-select v-model="startFlowForm.interface_type" style="width:100%">
+              <el-option label="代付" value="代付" />
+              <el-option label="查询" value="查询" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="数据行数">
+            <el-tag type="info">{{ sheetList[selectedSheetIndex]?.row_count || 0 }} 行</el-tag>
+          </el-form-item>
+          <el-form-item>
+            <template #label>
+              <span>管理流程</span>
+              <el-tooltip content="前往流程编排页面管理模板" placement="top">
+                <i class="fa fa-question-circle" style="margin-left:4px;cursor:help"></i>
+              </el-tooltip>
+            </template>
+            <el-button size="small" @click="$router.push('/pay-flow')">
+              <i class="fa fa-cog"></i> 流程编排
+            </el-button>
+            <el-button size="small" @click="$router.push('/pay-flow-executions')">
+              <i class="fa fa-stream"></i> 执行记录
+            </el-button>
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="startFlowDialogVisible = false">取消</el-button>
+          <el-button type="success" :loading="startingFlow" :disabled="!startFlowForm.template_id || !startFlowForm.channel" @click="doStartFlow">发起流程</el-button>
+        </template>
+      </el-dialog>
 
       <!-- 结果区 -->
       <el-divider v-if="result" />
@@ -117,6 +172,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
+import { useRouter } from 'vue-router'
 
 const channels = ref([])
 const fileList = ref([])
@@ -228,6 +284,65 @@ async function doExecute() {
 function downloadResult() {
   if (result.value?.result_url) {
     window.open(result.value.result_url, '_blank')
+  }
+}
+
+const router = useRouter()
+const flowTemplates = ref([])
+const startFlowDialogVisible = ref(false)
+const startingFlow = ref(false)
+
+const startFlowForm = reactive({
+  template_id: null,
+  channel: '',
+  environment: 'test',
+  interface_type: '代付',
+})
+
+async function loadFlowTemplates() {
+  try {
+    const res = await api.payFlow.templates({ per_page: 100 })
+    flowTemplates.value = res.data.items || []
+  } catch (e) { /* ignore */ }
+}
+
+function openStartFlowDialog() {
+  if (!form.channel) { ElMessage.warning('请选择渠道'); return }
+  if (!sheetList.value.length) { ElMessage.warning('请等待工作表识别完成'); return }
+  startFlowForm.template_id = null
+  startFlowForm.channel = form.channel
+  startFlowForm.environment = form.environment
+  startFlowForm.interface_type = form.interface_type
+  startFlowDialogVisible.value = true
+  loadFlowTemplates()
+}
+
+async function doStartFlow() {
+  if (!startFlowForm.template_id) { ElMessage.warning('请选择流程模板'); return }
+  if (!startFlowForm.channel) { ElMessage.warning('请选择渠道'); return }
+  if (!sheetList.value.length) { ElMessage.warning('请等待工作表识别完成'); return }
+  startingFlow.value = true
+  try {
+    const res = await api.payFlow.start({
+      template_id: startFlowForm.template_id,
+      file_path: uploadedFilePath.value,
+      sheet_index: selectedSheetIndex.value,
+      params: {
+        channel: startFlowForm.channel,
+        environment: startFlowForm.environment,
+        interface_type: startFlowForm.interface_type,
+        real_time: form.real_time,
+        execute_type: form.execute_type,
+      },
+    })
+    const d = res.data
+    ElMessage.success(`流程已发起，共 ${d.total} 笔数据`)
+    startFlowDialogVisible.value = false
+    router.push('/pay-flow-executions')
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '发起流程失败')
+  } finally {
+    startingFlow.value = false
   }
 }
 
