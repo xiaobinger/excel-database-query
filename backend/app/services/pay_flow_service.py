@@ -219,6 +219,18 @@ def advance_flow(execution_id):
             advance_flow(execution_id)
             return
 
+        # 检查是否满足退出条件
+        result_fields = {}
+        context = execution.get_context()
+        if _evaluate_loop_exit(loop_cfg, {'success': True}, result_fields, context):
+            logger.info(f'流程 {execution_id} 节点 {node_name} 满足退出条件，退出循环')
+            execution.loop_node_id = None
+            execution.loop_count = 0
+            execution.current_node_index = current_idx + 1
+            db.session.commit()
+            advance_flow(execution_id)
+            return
+
     # 执行节点
     now = datetime.utcnow()
     node_exec = PayFlowNodeExecution(
@@ -264,6 +276,15 @@ def advance_flow(execution_id):
         next_idx = _resolve_next_node(execution, nodes, current_idx, transitions, result)
 
         if is_loop and next_idx == current_idx:
+            # 检查是否满足退出条件
+            if _evaluate_loop_exit(loop_cfg, result, result.get('fields', {}), execution.get_context()):
+                logger.info(f'流程 {execution_id} 节点 {node_name} 满足退出条件，退出循环')
+                execution.loop_node_id = None
+                execution.loop_count = 0
+                execution.current_node_index = current_idx + 1
+                db.session.commit()
+                advance_flow(execution_id)
+                return
             # 循环：设置下次执行时间
             execution.loop_node_id = node_id
             execution.loop_count = execution.loop_count + 1
@@ -436,8 +457,8 @@ def _resolve_next_node(execution, nodes, current_idx, transitions, result):
 
     transitions 格式:
     [
-        {"condition": {"field": "retCode", "operator": "eq", "value": "0000"}, "target_node_index": 2},
-        {"condition": {"field": "retCode", "operator": "neq", "value": "0000"}, "target_node_index": null},
+        {"condition": {"field": "nodeId.retCode", "operator": "eq", "value": "0000"}, "target_node_index": 2},
+        {"condition": {"field": "nodeId.retCode", "operator": "neq", "value": "0000"}, "target_node_index": null},
     ]
 
     target_node_index:
@@ -449,20 +470,26 @@ def _resolve_next_node(execution, nodes, current_idx, transitions, result):
         return current_idx + 1
 
     result_fields = result.get('fields', {})
+    context = execution.get_context()
 
     for trans in transitions:
         condition = trans.get('condition', {})
         target = trans.get('target_node_index', current_idx + 1)
 
-        if _evaluate_condition(condition, result, result_fields):
+        if _evaluate_condition(condition, result, result_fields, context):
             return target
 
     # 无匹配条件，顺序执行
     return current_idx + 1
 
 
-def _evaluate_condition(condition, result, result_fields):
-    """评估单个条件"""
+def _evaluate_condition(condition, result, result_fields, context=None):
+    """评估单个条件
+
+    支持两种字段引用方式:
+    - 简单字段名: "retCode" - 从当前节点结果中查找
+    - 节点引用: "nodeId.retCode" - 从上下文中指定节点的结果中查找
+    """
     field_name = condition.get('field', '')
     operator = condition.get('operator', 'eq')
     expected = condition.get('value')
@@ -473,11 +500,32 @@ def _evaluate_condition(condition, result, result_fields):
     if operator == 'fail':
         return result.get('success', False) == False
 
-    actual = result_fields.get(field_name)
+    actual = _resolve_field_value(field_name, result_fields, context)
 
     if actual is None:
         return False
 
+    return _compare_values(actual, operator, expected)
+
+
+def _resolve_field_value(field_name, result_fields, context):
+    """解析字段值，支持 nodeId.fieldName 格式"""
+    if not field_name:
+        return None
+
+    if '.' in field_name:
+        node_id, sub_field = field_name.split('.', 1)
+        if context and node_id in context:
+            node_result = context[node_id]
+            if isinstance(node_result, dict):
+                return node_result.get(sub_field)
+        return None
+    else:
+        return result_fields.get(field_name)
+
+
+def _compare_values(actual, operator, expected):
+    """比较值"""
     actual_str = str(actual)
     expected_str = str(expected) if expected is not None else ''
 
@@ -510,11 +558,52 @@ def _evaluate_condition(condition, result, result_fields):
         except (ValueError, TypeError):
             return False
     elif operator == 'in':
-        return actual_str in [str(v) for v in (expected if isinstance(expected, list) else [expected])]
+        if isinstance(expected, list):
+            return actual_str in [str(v) for v in expected]
+        elif isinstance(expected, str):
+            return actual_str in [v.strip() for v in expected.split(',')]
+        return actual_str == expected_str
     elif operator == 'not_in':
-        return actual_str not in [str(v) for v in (expected if isinstance(expected, list) else [expected])]
+        if isinstance(expected, list):
+            return actual_str not in [str(v) for v in expected]
+        elif isinstance(expected, str):
+            return actual_str not in [v.strip() for v in expected.split(',')]
+        return actual_str != expected_str
 
     return False
+
+
+def _evaluate_loop_exit(loop_cfg, result, result_fields, context):
+    """评估循环退出条件
+
+    支持多个条件，通过 exit_logic (and/or) 组合
+
+    loop_cfg 格式:
+    {
+        "enabled": true,
+        "interval_seconds": 60,
+        "max_iterations": 10,
+        "exit_logic": "and",
+        "exit_conditions": [
+            {"field": "nodeId.orderStatus", "operator": "eq", "value": "1"},
+            {"field": "nodeId.retCode", "operator": "neq", "value": "0000"}
+        ]
+    }
+    """
+    exit_conditions = loop_cfg.get('exit_conditions', [])
+    if not exit_conditions:
+        return False
+
+    exit_logic = loop_cfg.get('exit_logic', 'and')
+
+    results = []
+    for cond in exit_conditions:
+        results.append(_evaluate_condition(cond, result, result_fields, context))
+
+    if exit_logic == 'or':
+        return any(results)
+    else:
+        return all(results)
 
 
 def _complete_flow(execution, message):

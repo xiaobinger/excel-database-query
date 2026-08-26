@@ -206,21 +206,33 @@
                           </el-form-item>
                         </el-col>
                         <el-col :span="8">
-                          <el-form-item label="退出条件">
-                            <el-select v-model="node.loop.exit_condition_op" style="width:100%">
-                              <el-option label="代付成功" value="success" />
-                              <el-option label="代付失败" value="fail" />
-                              <el-option label="等于指定值" value="eq" />
-                            </el-select>
+                          <el-form-item label="条件关系">
+                            <el-radio-group v-model="node.loop.exit_logic" size="small">
+                              <el-radio-button label="and">全部满足(AND)</el-radio-button>
+                              <el-radio-button label="or">任一满足(OR)</el-radio-button>
+                            </el-radio-group>
                           </el-form-item>
                         </el-col>
                       </el-row>
-                      <el-form-item v-if="node.loop.exit_condition_op === 'eq'" label="退出字段">
-                        <el-input v-model="node.loop.exit_field" placeholder="如: orderStatus" style="width:180px" />
-                        <span style="margin:0 8px">=</span>
-                        <el-input v-model="node.loop.exit_value" placeholder="如: 1" style="width:180px" />
-                      </el-form-item>
                     </el-form>
+                    <div class="loop-exit-conditions">
+                      <div class="config-subtitle">退出条件（满足时退出循环）</div>
+                      <div v-if="!node.loop.exit_conditions?.length" class="empty-tips">暂无退出条件，将按最大循环次数执行</div>
+                      <div v-for="(cond, cIdx) in node.loop.exit_conditions" :key="cIdx" class="transition-row">
+                        <span class="trans-label">条件 {{ cIdx + 1 }}:</span>
+                        <el-select v-model="cond.field" placeholder="选择或输入字段" size="small" style="width:160px" filterable allow-create>
+                          <el-option v-for="f in availableFields" :key="f.value" :label="f.label" :value="f.value" />
+                        </el-select>
+                        <el-select v-model="cond.operator" placeholder="操作符" size="small" style="width:120px">
+                          <el-option v-for="(label, val) in operators" :key="val" :label="label" :value="val" />
+                        </el-select>
+                        <el-input v-if="!['success','fail'].includes(cond.operator)" v-model="cond.value" placeholder="值（多个值用逗号分隔）" size="small" style="width:180px" />
+                        <el-button type="danger" size="small" circle @click="node.loop.exit_conditions.splice(cIdx, 1)"><i class="fa fa-times"></i></el-button>
+                      </div>
+                      <el-button size="small" @click="addExitCondition(node)" style="margin-top:4px">
+                        <i class="fa fa-plus"></i> 添加退出条件
+                      </el-button>
+                    </div>
                   </div>
                 </div>
 
@@ -246,7 +258,7 @@
                     <el-button type="danger" size="small" circle @click="node.transitions.splice(tIdx, 1)"><i class="fa fa-times"></i></el-button>
                   </div>
                   <div v-if="availableFields.length" class="field-tips">
-                    <i class="fa fa-info-circle"></i> 可选字段（来自前面节点结果）:
+                    <i class="fa fa-info-circle"></i> 可选字段（本节点+前面节点结果，点击复制）:
                     <el-tag v-for="f in availableFields" :key="f.value" size="small" class="field-tag" @click="copyField(f.value)">{{ f.label }}</el-tag>
                   </div>
                   <el-button size="small" @click="addTransition(node)" style="margin-top:4px">
@@ -288,27 +300,70 @@ const templateForm = reactive({
   nodes: [],
 })
 
+const CHANNEL_RESPONSE_FIELDS = {
+  kls: [
+    { value: 'retCode', label: 'retCode' },
+    { value: 'orderStatus', label: 'orderStatus' },
+    { value: 'error_code', label: 'error_code' },
+    { value: 'error_msg', label: 'error_msg' },
+    { value: 'message', label: 'message' },
+    { value: 'state', label: 'state' },
+    { value: 'data.orderNo', label: 'data.orderNo' },
+    { value: 'data.amount', label: 'data.amount' },
+  ],
+  lep: [
+    { value: 'retCode', label: 'retCode' },
+    { value: 'error_code', label: 'error_code' },
+    { value: 'error_msg', label: 'error_msg' },
+    { value: 'message', label: 'message' },
+    { value: 'data.orderNo', label: 'data.orderNo' },
+  ],
+  lstop: [
+    { value: 'retCode', label: 'retCode' },
+    { value: 'error_code', label: 'error_code' },
+    { value: 'error_msg', label: 'error_msg' },
+    { value: 'message', label: 'message' },
+    { value: 'data.orderNo', label: 'data.orderNo' },
+  ],
+}
+
+const DEFAULT_RESPONSE_FIELDS = [
+  { value: 'retCode', label: 'retCode' },
+  { value: 'orderStatus', label: 'orderStatus' },
+  { value: 'error_code', label: 'error_code' },
+  { value: 'error_msg', label: 'error_msg' },
+  { value: 'message', label: 'message' },
+  { value: 'state', label: 'state' },
+  { value: 'data.orderNo', label: 'data.orderNo' },
+  { value: 'data.amount', label: 'data.amount' },
+]
+
 const availableFields = computed(() => {
-  const prevNodes = selectedNodeIdx.value != null ? templateForm.nodes.slice(0, selectedNodeIdx.value) : []
+  if (selectedNodeIdx.value == null) return []
+  const currentNodeId = templateForm.nodes[selectedNodeIdx.value]?.id
   const fields = []
   const fieldSet = new Set()
+
+  const currentChannel = templateForm.nodes[selectedNodeIdx.value]?.action?.channel
+  const currentFields = CHANNEL_RESPONSE_FIELDS[currentChannel] || DEFAULT_RESPONSE_FIELDS
+  for (const f of currentFields) {
+    const fieldValue = `${currentNodeId}.${f.value}`
+    if (!fieldSet.has(fieldValue)) {
+      fieldSet.add(fieldValue)
+      fields.push({ value: fieldValue, label: `${f.label}` })
+    }
+  }
+
+  const prevNodes = templateForm.nodes.slice(0, selectedNodeIdx.value)
   for (const n of prevNodes) {
     if (n.type === 'pay') {
-      const nodeFields = [
-        { value: `${n.id}.success`, label: `${n.name}.success` },
-        { value: `${n.id}.message`, label: `${n.name}.message` },
-        { value: `${n.id}.retCode`, label: `${n.name}.retCode` },
-        { value: `${n.id}.orderStatus`, label: `${n.name}.orderStatus` },
-        { value: `${n.id}.error_code`, label: `${n.name}.error_code` },
-        { value: `${n.id}.state`, label: `${n.name}.state` },
-        { value: `${n.id}.error_msg`, label: `${n.name}.error_msg` },
-        { value: `${n.id}.data.orderNo`, label: `${n.name}.data.orderNo` },
-        { value: `${n.id}.data.amount`, label: `${n.name}.data.amount` },
-      ]
-      for (const f of nodeFields) {
-        if (!fieldSet.has(f.value)) {
-          fieldSet.add(f.value)
-          fields.push(f)
+      const prevChannel = n.action?.channel
+      const prevFields = CHANNEL_RESPONSE_FIELDS[prevChannel] || DEFAULT_RESPONSE_FIELDS
+      for (const f of prevFields) {
+        const fieldValue = `${n.id}.${f.value}`
+        if (!fieldSet.has(fieldValue)) {
+          fieldSet.add(fieldValue)
+          fields.push({ value: fieldValue, label: `${n.name}.${f.value}` })
         }
       }
     }
@@ -401,10 +456,17 @@ function addNode() {
       subject: '',
       content: '',
     },
-    loop: { enabled: false, interval_seconds: 60, max_iterations: 10, exit_condition_op: 'success', exit_field: '', exit_value: '' },
+    loop: { enabled: false, interval_seconds: 60, max_iterations: 10, exit_logic: 'and', exit_conditions: [] },
     transitions: [],
   })
   selectedNodeIdx.value = idx
+}
+
+function addExitCondition(node) {
+  if (!node.loop.exit_conditions) {
+    node.loop.exit_conditions = []
+  }
+  node.loop.exit_conditions.push({ field: '', operator: 'eq', value: '' })
 }
 
 function removeNode(idx) {
@@ -525,5 +587,7 @@ onMounted(() => {
 .field-tips { font-size: 12px; color: #909399; margin: 6px 0; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
 .field-tag { cursor: pointer; }
 .field-tag:hover { background: #ecf5ff; }
+.config-subtitle { font-size: 13px; color: #606266; font-weight: 500; margin: 8px 0; padding-left: 8px; border-left: 3px solid #e6a23c; }
+.loop-exit-conditions { background: #fafafa; padding: 10px; border-radius: 4px; margin-top: 8px; }
 .template-meta { margin-bottom: 8px; }
 </style>
