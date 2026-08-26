@@ -180,6 +180,28 @@ def retry_execution(execution_id):
     return jsonify({'success': True, 'message': '已重试'})
 
 
+@pay_flow_bp.route('/executions/<execution_id>', methods=['DELETE'])
+@login_required
+def delete_execution(execution_id):
+    ok = flow_service.delete_execution(execution_id)
+    if not ok:
+        return jsonify({'success': False, 'message': '删除失败，执行记录不存在或正在运行中'}), 400
+    return jsonify({'success': True, 'message': '已删除'})
+
+
+@pay_flow_bp.route('/executions/batch-delete', methods=['POST'])
+@login_required
+def batch_delete_executions():
+    data = request.get_json()
+    if not data or not isinstance(data.get('ids'), list):
+        return jsonify({'success': False, 'message': '请提供要删除的执行ID列表'}), 400
+    ids = data['ids']
+    deleted, skipped = flow_service.batch_delete_executions(ids)
+    if deleted == 0:
+        return jsonify({'success': False, 'message': '未删除任何记录，可能记录不存在或正在运行中', 'skipped': skipped}), 400
+    return jsonify({'success': True, 'message': f'已删除 {deleted} 条记录', 'deleted': deleted, 'skipped': skipped})
+
+
 # ---------------------------------------------------------------------------
 # 批次
 # ---------------------------------------------------------------------------

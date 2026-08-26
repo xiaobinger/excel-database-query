@@ -966,3 +966,52 @@ def retry_execution(execution_id):
     execution.completed_at = None
     db.session.commit()
     return True
+
+
+# ---------------------------------------------------------------------------
+# 执行记录删除
+# ---------------------------------------------------------------------------
+
+def _delete_execution_record(execution: PayFlowExecution):
+    """删除单个执行实例及其节点执行记录"""
+    PayFlowNodeExecution.query.filter_by(execution_id=execution.execution_id).delete()
+    db.session.delete(execution)
+
+
+def delete_execution(execution_id):
+    """删除单条执行记录（含节点执行日志）"""
+    execution = PayFlowExecution.query.filter_by(execution_id=execution_id).first()
+    if not execution:
+        return False
+    if execution.status in ('running', 'waiting'):
+        return False
+    _delete_execution_record(execution)
+    db.session.commit()
+    logger.info(f'删除代付流程执行记录: {execution_id}')
+    return True
+
+
+def batch_delete_executions(execution_ids):
+    """批量删除执行记录（含节点执行日志）
+
+    Returns:
+        (deleted_count, skipped_ids) - 成功删除数量与被跳过的ID列表（运行中/不存在）
+    """
+    if not execution_ids:
+        return 0, []
+    deleted = 0
+    skipped = []
+    executions = PayFlowExecution.query.filter(PayFlowExecution.execution_id.in_(execution_ids)).all()
+    found_ids = {e.execution_id for e in executions}
+    for eid in execution_ids:
+        if eid not in found_ids:
+            skipped.append(eid)
+    for execution in executions:
+        if execution.status in ('running', 'waiting'):
+            skipped.append(execution.execution_id)
+            continue
+        _delete_execution_record(execution)
+        deleted += 1
+    db.session.commit()
+    logger.info(f'批量删除代付流程执行记录: 删除{deleted}条, 跳过{len(skipped)}条')
+    return deleted, skipped

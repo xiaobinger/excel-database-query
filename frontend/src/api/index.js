@@ -337,6 +337,8 @@ const payFlow = {
   getExecution: (id) => http.get(`/pay-flow/executions/${id}`),
   cancelExecution: (id) => http.post(`/pay-flow/executions/${id}/cancel`),
   retryExecution: (id) => http.post(`/pay-flow/executions/${id}/retry`),
+  deleteExecution: (id) => http.delete(`/pay-flow/executions/${id}`),
+  batchDeleteExecutions: (ids) => http.post('/pay-flow/executions/batch-delete', { ids }),
   batchSummary: (batchId) => http.get(`/pay-flow/batches/${batchId}/summary`),
   batchExecutions: (batchId, params) => http.get(`/pay-flow/batches/${batchId}/executions`, { params }),
 }

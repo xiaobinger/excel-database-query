@@ -29,7 +29,8 @@
       </el-form>
 
       <!-- 执行记录表格 -->
-      <el-table :data="executions" stripe border style="width:100%" empty-text="暂无执行记录">
+      <el-table :data="executions" stripe border style="width:100%" empty-text="暂无执行记录" @selection-change="onSelectionChange">
+        <el-table-column type="selection" width="45" />
         <el-table-column prop="execution_id" label="执行ID" width="220" show-overflow-tooltip />
         <el-table-column prop="template_name" label="模板" width="140" />
         <el-table-column label="行号" width="60" align="center">
@@ -52,14 +53,21 @@
         <el-table-column label="创建时间" width="170">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right">
+        <el-table-column label="操作" width="280" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="primary" @click="viewDetail(row)">详情</el-button>
             <el-button v-if="row.status === 'running' || row.status === 'waiting'" size="small" type="warning" @click="cancelExecution(row)">取消</el-button>
             <el-button v-if="row.status === 'failed' || row.status === 'cancelled'" size="small" type="success" @click="retryExecution(row)">重试</el-button>
+            <el-button size="small" type="danger" @click="deleteSingle(row)" :disabled="row.status === 'running' || row.status === 'waiting'">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
+
+      <!-- 批量操作栏 -->
+      <div v-if="selectedRows.length > 0" class="batch-bar">
+        <span>已选 {{ selectedRows.length }} 条</span>
+        <el-button type="danger" size="small" @click="batchDelete"><i class="fa fa-trash"></i> 批量删除</el-button>
+      </div>
 
       <el-pagination
         v-if="total > pageSize"
@@ -147,7 +155,7 @@
 
 <script setup>
 import { ref, reactive, onMounted, onUnmounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import dayjs from 'dayjs'
 
@@ -158,6 +166,7 @@ const pageSize = ref(20)
 const detailVisible = ref(false)
 const detailData = ref(null)
 const activeLogIdx = ref([])
+const selectedRows = ref([])
 let pollTimer = null
 
 const filters = reactive({ batch_id: '', status: '' })
@@ -248,6 +257,52 @@ async function retryExecution(row) {
   }
 }
 
+function onSelectionChange(rows) {
+  selectedRows.value = rows
+}
+
+async function deleteSingle(row) {
+  try {
+    await ElMessageBox.confirm(`确定删除执行记录「${row.execution_id.slice(0, 12)}…」吗？该操作不可恢复`, '删除确认', { type: 'warning' })
+  } catch {
+    return
+  }
+  try {
+    await api.payFlow.deleteExecution(row.execution_id)
+    ElMessage.success('已删除')
+    selectedRows.value = []
+    loadExecutions()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '删除失败')
+  }
+}
+
+async function batchDelete() {
+  if (selectedRows.value.length === 0) return
+  const running = selectedRows.value.filter(r => r.status === 'running' || r.status === 'waiting')
+  if (running.length > 0) {
+    ElMessage.warning(`已自动跳过 ${running.length} 条运行中的记录`)
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定删除选中的 ${selectedRows.value.length} 条执行记录吗？${running.length > 0 ? `\n(运行中的 ${running.length} 条将被跳过)` : ''}`,
+      '批量删除确认', { type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  try {
+    const ids = selectedRows.value.map(r => r.execution_id)
+    const res = await api.payFlow.batchDeleteExecutions(ids)
+    const skipped = res?.skipped?.length || 0
+    ElMessage.success(`已删除 ${res.deleted} 条${skipped ? `，跳过 ${skipped} 条` : ''}`)
+    selectedRows.value = []
+    loadExecutions()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '批量删除失败')
+  }
+}
+
 function startPolling() {
   if (pollTimer) clearInterval(pollTimer)
   pollTimer = setInterval(() => {
@@ -276,6 +331,7 @@ onUnmounted(() => {
 .card-header { display: flex; align-items: center; justify-content: space-between; }
 .card-header > span:first-child { font-size: 15px; font-weight: 600; }
 .filter-bar { margin-bottom: 12px; }
+.batch-bar { display: flex; align-items: center; gap: 12px; margin-top: 12px; padding: 8px 12px; background: #f0f9eb; border-radius: 6px; font-size: 13px; }
 .pagination { margin-top: 16px; justify-content: center; }
 .loop-badge { color: #e6a23c; font-weight: 600; }
 .detail-container { max-height: 70vh; overflow-y: auto; }
