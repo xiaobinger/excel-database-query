@@ -321,6 +321,9 @@ const menuOptions = [
   { value: 'cache_stats', label: '缓存统计' },
   { value: 'business_systems', label: '业务系统' },
   { value: 'tickets', label: '工单管理' },
+  { value: 'pay_withdraw', label: '代付提现' },
+  { value: 'pay_flow', label: '代付流程编排' },
+  { value: 'pay_flow_executions', label: '代付流程执行记录' },
   { value: 'ticket_analytics', label: '工单统计' },
   { value: 'system_map', label: '系统地图' }
 ]
