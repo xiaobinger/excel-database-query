@@ -326,14 +326,14 @@ def advance_flow(execution_id):
             execution.completed_at = datetime.utcnow()
             # 发送失败通知
             if node.get('notify_on_failure'):
-                _send_node_notification(execution, node, node_exec, '失败')
+                _send_node_notification(execution, node, node_exec, '失败', result)
         elif is_end_node:
             # 结束节点：流程完成
             execution.current_node_index = current_idx + 1
             _complete_flow(execution, f'流程完成（结束节点: {node_name}）')
             # 发送结束通知
             if node.get('notify_on_end'):
-                _send_node_notification(execution, node, node_exec, '完成')
+                _send_node_notification(execution, node, node_exec, '完成', result)
         elif next_idx >= len(nodes):
             # 到达末尾
             execution.current_node_index = next_idx
@@ -489,7 +489,7 @@ def _send_email_notification(execution, action, node_exec):
     return {'success': True, 'message': '邮件通知已发送', 'fields': {'to': to_addresses, 'subject': subject}}
 
 
-def _send_node_notification(execution, node, node_exec, notify_type):
+def _send_node_notification(execution, node, node_exec, notify_type, result=None):
     """发送节点通知（失败通知/结束通知）
 
     Args:
@@ -497,6 +497,13 @@ def _send_node_notification(execution, node, node_exec, notify_type):
         node: 节点配置
         node_exec: 节点执行记录
         notify_type: '失败' 或 '完成'
+        result: 当前节点执行结果（可选，用于模板变量替换）
+
+    支持的模板变量:
+    - 基础信息: {execution_id}, {template_name}, {status}, {node_name}, {notify_type}, {error_message}, {row_index}, {batch_id}
+    - 行数据: {accountName}, {businessNo}, {amount}
+    - 执行结果: {result.success}, {result.message}, 以及 result.fields 中的所有字段
+    - 上下文节点结果: {nodeId.fieldName} 格式引用任意节点的结果字段
     """
     action = node.get('action', {})
     to_addresses = action.get('to_addresses', [])
@@ -531,9 +538,55 @@ def _send_node_notification(execution, node, node_exec, notify_type):
     content = content.replace('{node_name}', node.get('name', ''))
     content = content.replace('{notify_type}', notify_type)
     content = content.replace('{error_message}', node_exec.error_message or '')
+    content = content.replace('{row_index}', str(execution.row_index))
+    content = content.replace('{batch_id}', execution.batch_id or '')
+
+    # 替换当前节点执行结果变量
+    if result:
+        content = content.replace('{result.success}', str(result.get('success', '')))
+        content = content.replace('{result.message}', str(result.get('message', '')))
+        # 替换 result.fields 中的所有字段
+        result_fields = result.get('fields', {})
+        if isinstance(result_fields, dict):
+            for field_key, field_val in result_fields.items():
+                content = content.replace(f'{{result.fields.{field_key}}}', str(field_val))
+
+    # 替换上下文节点结果变量（nodeId.fieldName 格式）
+    context = execution.get_context()
+    if context:
+        # 收集所有 nodeId.fieldName 格式的变量引用
+        import re
+        pattern = r'\{([a-zA-Z0-9_]+)\.([a-zA-Z0-9_.]+)\}'
+        matches = re.findall(pattern, content)
+        for node_id, field_path in matches:
+            if node_id in context:
+                node_result = context[node_id]
+                if isinstance(node_result, dict):
+                    # 支持嵌套路径如 data.orderNo
+                    val = node_result
+                    for part in field_path.split('.'):
+                        if isinstance(val, dict):
+                            val = val.get(part, '')
+                        else:
+                            val = ''
+                            break
+                    placeholder = '{' + node_id + '.' + field_path + '}'
+                    content = content.replace(placeholder, str(val))
 
     # 构建邮件内容
     if not content:
+        # 构建结果字段信息
+        result_info = ''
+        if result:
+            result_info += f'<p><strong>执行结果:</strong> {"成功" if result.get("success") else "失败"}</p>'
+            result_info += f'<p><strong>结果消息:</strong> {result.get("message", "")}</p>'
+            result_fields = result.get('fields', {})
+            if result_fields:
+                result_info += '<p><strong>结果字段:</strong></p><ul>'
+                for k, v in result_fields.items():
+                    result_info += f'<li>{k}: {v}</li>'
+                result_info += '</ul>'
+
         content = f'''
         <html>
         <body>
@@ -544,7 +597,11 @@ def _send_node_notification(execution, node, node_exec, notify_type):
             <p><strong>行序号:</strong> {execution.row_index}</p>
             <p><strong>状态:</strong> {execution.status}</p>
             <p><strong>时间:</strong> {beijing_isoformat(datetime.utcnow())}</p>
+            <p><strong>账户名:</strong> {row_dict.get('accountName', '')}</p>
+            <p><strong>商户号:</strong> {row_dict.get('businessNo', '')}</p>
+            <p><strong>金额:</strong> {row_dict.get('amount', '')}</p>
             {f'<p><strong>错误信息:</strong> {node_exec.error_message}</p>' if node_exec.error_message else ''}
+            {result_info}
         </body>
         </html>
         '''

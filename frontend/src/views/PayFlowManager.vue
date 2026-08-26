@@ -188,7 +188,11 @@
                       <el-input v-model="node.action.subject" placeholder="邮件主题" />
                     </el-form-item>
                     <el-form-item label="内容">
-                      <el-input v-model="node.action.content" type="textarea" :rows="3" placeholder="支持变量: {accountName} {businessNo} {amount} {execution_id} {template_name} {status}" />
+                      <el-input v-model="node.action.content" type="textarea" :rows="4" placeholder="邮件内容模板，支持变量替换" />
+                      <div class="variable-help">
+                        <span class="help-label">可用变量：</span>
+                        <el-tag size="small" v-for="v in notificationVariables" :key="v.value" class="var-tag" @click="insertVariable(node, v.value)">{{ v.label }}</el-tag>
+                      </div>
                     </el-form-item>
                   </el-form>
                 </div>
@@ -377,6 +381,55 @@ const availableFields = computed(() => {
   }
   return fields
 })
+
+const notificationVariables = computed(() => {
+  const vars = [
+    { value: '{execution_id}', label: '执行ID' },
+    { value: '{template_name}', label: '模板名称' },
+    { value: '{status}', label: '状态' },
+    { value: '{node_name}', label: '节点名称' },
+    { value: '{notify_type}', label: '通知类型' },
+    { value: '{error_message}', label: '错误信息' },
+    { value: '{row_index}', label: '行序号' },
+    { value: '{batch_id}', label: '批次ID' },
+    { value: '{accountName}', label: '账户名' },
+    { value: '{businessNo}', label: '商户号' },
+    { value: '{amount}', label: '金额' },
+    { value: '{result.success}', label: '结果.成功' },
+    { value: '{result.message}', label: '结果.消息' },
+  ]
+
+  // 添加当前节点和前面节点的结果字段作为模板变量
+  if (selectedNodeIdx.value != null) {
+    const currentNodeId = templateForm.nodes[selectedNodeIdx.value]?.id
+    const currentChannel = templateForm.nodes[selectedNodeIdx.value]?.action?.channel
+    const currentFields = CHANNEL_RESPONSE_FIELDS[currentChannel] || DEFAULT_RESPONSE_FIELDS
+    for (const f of currentFields) {
+      vars.push({ value: `{result.fields.${f.value}}`, label: `结果.${f.label}` })
+    }
+
+    const prevNodes = templateForm.nodes.slice(0, selectedNodeIdx.value)
+    for (const n of prevNodes) {
+      if (n.type === 'pay') {
+        const prevChannel = n.action?.channel
+        const prevFields = CHANNEL_RESPONSE_FIELDS[prevChannel] || DEFAULT_RESPONSE_FIELDS
+        for (const f of prevFields) {
+          vars.push({ value: `{${n.id}.${f.value}}`, label: `${n.name}.${f.label}` })
+        }
+      }
+    }
+  }
+
+  return vars
+})
+
+function insertVariable(node, variable) {
+  if (!node.action.content) {
+    node.action.content = variable
+  } else {
+    node.action.content += variable
+  }
+}
 
 function copyField(fieldValue) {
   navigator.clipboard?.writeText(fieldValue)
@@ -600,4 +653,8 @@ onMounted(() => {
 .config-subtitle { font-size: 13px; color: #606266; font-weight: 500; margin: 8px 0; padding-left: 8px; border-left: 3px solid #e6a23c; }
 .loop-exit-conditions { background: #fafafa; padding: 10px; border-radius: 4px; margin-top: 8px; }
 .template-meta { margin-bottom: 8px; }
+.variable-help { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.help-label { font-size: 12px; color: #909399; }
+.var-tag { cursor: pointer; font-size: 11px; }
+.var-tag:hover { background: #ecf5ff; }
 </style>
