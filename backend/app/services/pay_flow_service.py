@@ -163,7 +163,7 @@ def start_flow(template_id, rows, params, created_by=None):
 # 流程推进
 # ---------------------------------------------------------------------------
 
-def advance_flow(execution_id):
+def advance_flow(execution_id, _is_recursive=False):
     """推进单个流程实例到下一个节点
 
     由调度器调用，处理：
@@ -172,21 +172,42 @@ def advance_flow(execution_id):
     3. 循环节点处理
     4. 完成/失败处理
 
-    安全：通过状态检查防止同一执行实例被重复处理（资金安全）
+    安全：通过行级锁防止同一执行实例被重复处理（资金安全）
+
+    Args:
+        execution_id: 执行实例ID
+        _is_recursive: 是否为递归调用（内部使用，递归调用时跳过状态检查）
     """
-    execution = PayFlowExecution.query.filter_by(execution_id=execution_id).first()
+    from app import db
+
+    # 使用行级锁防止并发重复执行（资金安全）
+    # 注意：SQLite 不支持 with_for_update，需要通过其他方式防护
+    execution = db.session.query(PayFlowExecution).filter(
+        PayFlowExecution.execution_id == execution_id
+    ).with_for_update().first()
+
     if not execution:
         return
 
     # 安全检查：只处理 pending 或 waiting 状态的实例
-    # 防止同一行数据被重复执行（涉及资金安全）
-    if execution.status not in ('pending', 'waiting'):
+    # 递归调用时跳过此检查（因为递归调用前状态已设置为 pending）
+    if not _is_recursive and execution.status not in ('pending', 'waiting'):
         logger.warning(f'流程 {execution_id} 状态为 {execution.status}，跳过执行')
         return
 
     # 对于 waiting 状态，检查是否到达下次执行时间
-    if execution.status == 'waiting':
+    if not _is_recursive and execution.status == 'waiting':
         if execution.next_run_at and execution.next_run_at > datetime.utcnow():
+            return
+
+    # 防重复执行检查：如果当前有正在运行的节点执行记录，说明正在处理中
+    if not _is_recursive:
+        running_node = PayFlowNodeExecution.query.filter_by(
+            execution_id=execution_id,
+            status='running'
+        ).first()
+        if running_node:
+            logger.warning(f'流程 {execution_id} 有正在处理的节点 {running_node.node_name}，跳过执行')
             return
 
     template = PayFlowTemplate.query.get(execution.template_id)
@@ -228,8 +249,9 @@ def advance_flow(execution_id):
             execution.loop_node_id = None
             execution.loop_count = 0
             execution.current_node_index = current_idx + 1
+            execution.status = 'pending'
             db.session.commit()
-            advance_flow(execution_id)
+            advance_flow(execution_id, _is_recursive=True)
             return
 
         # 检查是否满足退出条件
@@ -240,23 +262,24 @@ def advance_flow(execution_id):
             execution.loop_node_id = None
             execution.loop_count = 0
             execution.current_node_index = current_idx + 1
+            execution.status = 'pending'
             db.session.commit()
-            advance_flow(execution_id)
+            advance_flow(execution_id, _is_recursive=True)
             return
 
-    # 安全检查：检查是否已有该节点的 running 记录（防止重复执行）
-    # 这是资金安全的最后一道防线
+    # 执行节点
+    now = datetime.utcnow()
+
+    # 防重复执行检查：同一节点同一attempt不应有多个running记录
     existing_running = PayFlowNodeExecution.query.filter_by(
         execution_id=execution_id,
         node_id=node_id,
         status='running'
     ).first()
     if existing_running:
-        logger.warning(f'流程 {execution_id} 节点 {node_name} 已有 running 记录，跳过重复执行')
+        logger.warning(f'流程 {execution_id} 节点 {node_name} 已有正在执行的记录，跳过执行')
         return
 
-    # 执行节点
-    now = datetime.utcnow()
     node_exec = PayFlowNodeExecution(
         execution_id=execution_id,
         node_id=node_id,
@@ -309,8 +332,9 @@ def advance_flow(execution_id):
                 execution.loop_node_id = None
                 execution.loop_count = 0
                 execution.current_node_index = current_idx + 1
+                execution.status = 'pending'
                 db.session.commit()
-                advance_flow(execution_id)
+                advance_flow(execution_id, _is_recursive=True)
                 return
             # 循环：设置下次执行时间
             execution.loop_node_id = node_id
@@ -320,31 +344,33 @@ def advance_flow(execution_id):
             execution.status = 'waiting'
             node_exec.add_log(f'循环等待中，间隔 {interval}s，下次执行: {beijing_isoformat(execution.next_run_at)}')
         elif next_idx is None:
-            # 无匹配条件，流程失败
+            # 节点失败或无匹配条件，流程失败
+            # 重要：节点失败时必须立即停止流程，不允许继续执行
             execution.status = 'failed'
-            execution.error_message = f'节点 {node_name} 无匹配的流转条件'
+            execution.error_message = f'节点 {node_name} 执行失败'
             execution.completed_at = datetime.utcnow()
-            # 发送失败通知
-            if node.get('notify_on_failure'):
-                _send_node_notification(execution, node, node_exec, '失败', result)
+            db.session.commit()
+            # 发送失败通知（在commit之后，确保状态已保存）
+            _send_failure_notification(execution, node, node_exec, result)
         elif is_end_node:
             # 结束节点：流程完成
             execution.current_node_index = current_idx + 1
             _complete_flow(execution, f'流程完成（结束节点: {node_name}）')
             # 发送结束通知
-            if node.get('notify_on_end'):
-                _send_node_notification(execution, node, node_exec, '完成', result)
+            _send_end_notification(execution, node, node_exec, result)
         elif next_idx >= len(nodes):
             # 到达末尾
             execution.current_node_index = next_idx
             _complete_flow(execution, f'流程完成，最后节点: {node_name}')
         else:
+            # 成功流转到下一节点
             execution.current_node_index = next_idx
             execution.loop_node_id = None
             execution.loop_count = 0
+            execution.status = 'pending'  # 设置为 pending 允许递归调用继续处理
             db.session.commit()
-            # 立即推进下一节点
-            advance_flow(execution_id)
+            # 立即推进下一节点（递归调用）
+            advance_flow(execution_id, _is_recursive=True)
             return
 
         db.session.commit()
@@ -359,6 +385,30 @@ def advance_flow(execution_id):
         execution.error_message = f'节点 {node_name} 异常: {e}'
         execution.completed_at = datetime.utcnow()
         db.session.commit()
+        # 异常时也发送失败通知
+        _send_failure_notification(execution, node, node_exec, {'success': False, 'message': str(e), 'fields': {}})
+
+
+def _send_failure_notification(execution, node, node_exec, result):
+    """发送失败通知"""
+    if not node.get('notify_on_failure'):
+        return
+    try:
+        _send_node_notification(execution, node, node_exec, '失败', result)
+        logger.info(f'已发送失败通知: execution={execution.execution_id}, node={node.get("name", "")}')
+    except Exception as notify_err:
+        logger.error(f'发送失败通知异常: {notify_err}')
+
+
+def _send_end_notification(execution, node, node_exec, result):
+    """发送结束通知"""
+    if not node.get('notify_on_end'):
+        return
+    try:
+        _send_node_notification(execution, node, node_exec, '完成', result)
+        logger.info(f'已发送结束通知: execution={execution.execution_id}, node={node.get("name", "")}')
+    except Exception as notify_err:
+        logger.error(f'发送结束通知异常: {notify_err}')
 
 
 def _execute_pay_node(execution, node, node_exec):
@@ -670,13 +720,18 @@ def _resolve_next_node(execution, nodes, current_idx, transitions, result):
         - null: 流程失败
         - 缺省: 顺序执行下一节点（仅当当前节点成功时）
 
-    重要：当前节点失败时，若无匹配流转条件，流程应停止（返回 None）
+    重要：当前节点失败时，流程必须立即停止（返回 None）
+    资金安全：失败节点不允许通过流转条件继续执行
     """
     is_success = result.get('success', False)
 
+    # 节点失败时，流程必须立即停止，不允许通过流转条件继续
+    if not is_success:
+        return None
+
     if not transitions:
-        # 无流转条件时：成功则继续下一节点，失败则流程停止
-        return current_idx + 1 if is_success else None
+        # 无流转条件时：成功则继续下一节点
+        return current_idx + 1
 
     result_fields = result.get('fields', {})
     context = execution.get_context()
@@ -688,8 +743,8 @@ def _resolve_next_node(execution, nodes, current_idx, transitions, result):
         if _evaluate_condition(condition, result, result_fields, context):
             return target
 
-    # 无匹配条件时：成功则继续下一节点，失败则流程停止
-    return current_idx + 1 if is_success else None
+    # 无匹配条件时：成功则顺序继续下一节点
+    return current_idx + 1
 
 
 def _evaluate_condition(condition, result, result_fields, context=None):
