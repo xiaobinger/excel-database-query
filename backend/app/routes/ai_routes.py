@@ -1795,6 +1795,12 @@ def send_message_stream(chat_id):
                 from app.services.ai_service import _apply_cache_control
                 cached_messages = _apply_cache_control(messages, config_provider, api_base)
 
+                # Headroom 上下文压缩（如果启用）
+                from app.services.headroom_service import compress_if_enabled
+                cached_messages, headroom_stats = compress_if_enabled(ai_config, cached_messages)
+                if headroom_stats:
+                    logger.info(f'Headroom 压缩: 原始 {headroom_stats["original_tokens"]} tokens, 压缩后 {headroom_stats["compressed_tokens"]} tokens, 节省 {headroom_stats["saved_tokens"]} tokens')
+
                 payload = {
                     'model': config_model_name,
                     'messages': cached_messages,
@@ -1806,6 +1812,10 @@ def send_message_stream(chat_id):
                 # 添加工具定义（根据Agent的enabled_tools过滤）
                 payload['tools'] = stream_filtered_tools
                 payload['tool_choice'] = 'auto'
+
+                # 添加 stream_options 以获取 usage 数据（token统计）
+                if config_enable_streaming:
+                    payload['stream_options'] = {'include_usage': True}
 
                 if config_enable_streaming:
                     # 流式请求AI API
@@ -2219,6 +2229,10 @@ def send_message_stream(chat_id):
                         'tool_choice': 'auto',
                     }
 
+                    # 添加 stream_options 以获取 usage 数据（token统计）
+                    if config_enable_streaming:
+                        payload_next['stream_options'] = {'include_usage': True}
+
                     try:
                         if config_enable_streaming:
                             logger.info(f'流式请求第{round_num + 1}轮开始(attempt={_attempt_n + 1}): model={config_model_name}')
@@ -2401,6 +2415,9 @@ def send_message_stream(chat_id):
                     cache_creation_tokens=cache_creation_tokens_used,
                     cache_read_tokens=cache_read_tokens_used,
                     elapsed=elapsed,
+                    headroom_original_tokens=headroom_stats['original_tokens'] if headroom_stats else 0,
+                    headroom_saved_tokens=headroom_stats['saved_tokens'] if headroom_stats else 0,
+                    headroom_compression_ratio=headroom_stats['compression_ratio'] if headroom_stats else 0,
                 )
                 if thinking_content:
                     assistant_message.msg_metadata = json.dumps({
@@ -2462,7 +2479,7 @@ def send_message_stream(chat_id):
                 _finished_streams[chat_id] = (stream_info, time.time())
 
             # 发送完成信号
-            yield f"data: {json.dumps({'type': 'done', 'message_id': msg_id, 'user_message_id': stream_user_message_id, 'tokens': tokens_used, 'prompt_tokens': prompt_tokens_used, 'completion_tokens': completion_tokens_used, 'cache_creation_tokens': cache_creation_tokens_used, 'cache_read_tokens': cache_read_tokens_used, 'elapsed': elapsed, 'model': config_model_name}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'message_id': msg_id, 'user_message_id': stream_user_message_id, 'tokens': tokens_used, 'prompt_tokens': prompt_tokens_used, 'completion_tokens': completion_tokens_used, 'cache_creation_tokens': cache_creation_tokens_used, 'cache_read_tokens': cache_read_tokens_used, 'elapsed': elapsed, 'model': config_model_name, 'headroom_original_tokens': headroom_stats['original_tokens'] if headroom_stats else 0, 'headroom_saved_tokens': headroom_stats['saved_tokens'] if headroom_stats else 0, 'headroom_compression_ratio': headroom_stats['compression_ratio'] if headroom_stats else 0}, ensure_ascii=False)}\n\n"
 
         except requests.exceptions.HTTPError as e:
             # HTTP错误：透传API返回的具体错误信息（如400参数错误）
@@ -2509,17 +2526,20 @@ def send_message_stream(chat_id):
                     if elapsed < 0.01:
                         elapsed = 0.01
                     partial_message = AiChatMessage(
-                        chat_id=chat_id,
-                        agent_id=stream_agent_id,
-                        role='assistant',
-                        content=full_content + '\n\n*（回复因连接中断已截断）*',
-                        tokens_used=tokens_used,
-                        prompt_tokens=prompt_tokens_used,
-                        completion_tokens=completion_tokens_used,
-                        cache_creation_tokens=cache_creation_tokens_used,
-                        cache_read_tokens=cache_read_tokens_used,
-                        elapsed=elapsed,
-                    )
+                    chat_id=chat_id,
+                    agent_id=stream_agent_id,
+                    role='assistant',
+                    content=full_content + '\n\n*（回复因连接中断已截断）*',
+                    tokens_used=tokens_used,
+                    prompt_tokens=prompt_tokens_used,
+                    completion_tokens=completion_tokens_used,
+                    cache_creation_tokens=cache_creation_tokens_used,
+                    cache_read_tokens=cache_read_tokens_used,
+                    elapsed=elapsed,
+                    headroom_original_tokens=headroom_stats['original_tokens'] if headroom_stats else 0,
+                    headroom_saved_tokens=headroom_stats['saved_tokens'] if headroom_stats else 0,
+                    headroom_compression_ratio=headroom_stats['compression_ratio'] if headroom_stats else 0,
+                )
                     if thinking_content:
                         partial_message.msg_metadata = json.dumps({
                             'thinking_content': thinking_content,

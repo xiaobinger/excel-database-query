@@ -338,11 +338,15 @@
                     <i class="fas fa-bolt"></i> 缓存: 写入{{ msg.cache_creation_tokens || 0 }} / 命中{{ msg.cache_read_tokens || 0 }}
                   </span>
                   <span v-if="msg.headroom_saved_tokens > 0" class="headroom-info headroom-success">
-                    <i class="fas fa-compress-alt"></i> Headroom: {{ msg.headroom_original_tokens }} → {{ msg.headroom_original_tokens - msg.headroom_saved_tokens }} tokens, 节省{{ msg.headroom_saved_tokens }} (压缩率{{ (msg.headroom_compression_ratio * 100).toFixed(1) }}%)
-                  </span>
-                  <span v-else-if="msg.headroom_original_tokens > 0" class="headroom-info headroom-none">
-                    <i class="fas fa-compress-alt"></i> Headroom: 已分析，当前上下文无可压缩内容
-                  </span>
+<i class="fas fa-compress-alt"></i> Headroom: {{ msg.headroom_original_tokens }} → {{ msg.headroom_original_tokens - msg.headroom_saved_tokens }} tokens, 节省{{ msg.headroom_saved_tokens }} (压缩率{{ (msg.headroom_compression_ratio * 100).toFixed(1) }}%)
+</span>
+<span v-else-if="msg.headroom_original_tokens > 0" class="headroom-info headroom-none">
+<i class="fas fa-compress-alt"></i> Headroom: 已分析，当前上下文无可压缩内容
+</span>
+<!-- 未启用 Headroom 时也显示占位信息 -->
+<span v-else-if="selectedModel?.enable_headroom" class="headroom-info headroom-none">
+<i class="fas fa-compress-alt"></i> Headroom: 0 K (压缩率 0.0%), 节省 0 K
+</span>
                 </div>
                 <!-- 重试按钮：仅AI文本消息且非流式中、非卡片类型、非临时错误消息 -->
                 <div v-if="msg.role === 'assistant' && !msg._streaming && !msg._type && msg.content.trim() && !msg._no_retry" class="message-retry">
@@ -2794,19 +2798,22 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
               // 处理工具调用结果（渲染为卡片）
               handleToolResults(event.tool_results)
             } else if (event.type === 'done') {
-              streamMsg._streaming = false
-              streamMsg._thinking_done = true
-              streamMsg.id = event.message_id || streamMsg.id
-              streamMsg._tokens = event.tokens || 0
-              streamMsg._prompt_tokens = event.prompt_tokens || 0
-              streamMsg._completion_tokens = event.completion_tokens || 0
-              streamMsg.cache_creation_tokens = event.cache_creation_tokens || 0
-              streamMsg.cache_read_tokens = event.cache_read_tokens || 0
-              streamMsg._elapsed = event.elapsed || 0
-              streamMsg._model = event.model || streamMsg._model
-              // 同步真实用户消息ID（用于重新发送时复用原消息）
-              if (event.user_message_id && onUserMessageId) onUserMessageId(event.user_message_id)
-            } else if (event.type === 'truncated') {
+ streamMsg._streaming = false
+ streamMsg._thinking_done = true
+ streamMsg.id = event.message_id || streamMsg.id
+ streamMsg._tokens = event.tokens || 0
+ streamMsg._prompt_tokens = event.prompt_tokens || 0
+ streamMsg._completion_tokens = event.completion_tokens || 0
+ streamMsg.cache_creation_tokens = event.cache_creation_tokens || 0
+ streamMsg.cache_read_tokens = event.cache_read_tokens || 0
+ streamMsg.headroom_original_tokens = event.headroom_original_tokens || 0
+ streamMsg.headroom_saved_tokens = event.headroom_saved_tokens || 0
+ streamMsg.headroom_compression_ratio = event.headroom_compression_ratio || 0
+ streamMsg._elapsed = event.elapsed || 0
+ streamMsg._model = event.model || streamMsg._model
+ // 同步真实用户消息ID（用于重新发送时复用原消息）
+ if (event.user_message_id && onUserMessageId) onUserMessageId(event.user_message_id)
+} else if (event.type === 'truncated') {
               // 输出因max_tokens上限被截断，追加提示
               streamMsg.content += (streamMsg.content ? '\n\n' : '') + `*${event.content || 'AI输出因token上限被截断'}*`
             } else if (event.type === 'error') {
@@ -2844,16 +2851,21 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
           if (event.type === 'content') {
             streamMsg.content += event.content
           } else if (event.type === 'done') {
-            streamMsg._streaming = false
-            streamMsg._thinking_done = true
-            streamMsg.id = event.message_id || streamMsg.id
-            streamMsg._tokens = event.tokens || 0
-            streamMsg._prompt_tokens = event.prompt_tokens || 0
-            streamMsg._completion_tokens = event.completion_tokens || 0
-            streamMsg._elapsed = event.elapsed || 0
-            streamMsg._model = event.model || streamMsg._model
-            if (event.user_message_id && onUserMessageId) onUserMessageId(event.user_message_id)
-          } else if (event.type === 'error') {
+ streamMsg._streaming = false
+ streamMsg._thinking_done = true
+ streamMsg.id = event.message_id || streamMsg.id
+ streamMsg._tokens = event.tokens || 0
+ streamMsg._prompt_tokens = event.prompt_tokens || 0
+ streamMsg._completion_tokens = event.completion_tokens || 0
+ streamMsg.cache_creation_tokens = event.cache_creation_tokens || 0
+ streamMsg.cache_read_tokens = event.cache_read_tokens || 0
+ streamMsg.headroom_original_tokens = event.headroom_original_tokens || 0
+ streamMsg.headroom_saved_tokens = event.headroom_saved_tokens || 0
+ streamMsg.headroom_compression_ratio = event.headroom_compression_ratio || 0
+ streamMsg._elapsed = event.elapsed || 0
+ streamMsg._model = event.model || streamMsg._model
+ if (event.user_message_id && onUserMessageId) onUserMessageId(event.user_message_id)
+} else if (event.type === 'error') {
             streamMsg._streaming = false
             streamMsg.content = event.content || 'AI服务调用失败'
             streamMsg._no_retry = true

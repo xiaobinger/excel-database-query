@@ -17,7 +17,6 @@ class HeadroomCompressor:
     参考：https://github.com/headroomlabs-ai/headroom
     """
 
-    # 高价值关键词（日志/文本中保留）
     HIGH_VALUE_KEYWORDS = [
         'error', 'ERROR', 'Error',
         'exception', 'Exception', 'EXCEPTION',
@@ -40,7 +39,6 @@ class HeadroomCompressor:
         'abort', 'Abort', 'ABORT',
     ]
 
-    # 日志噪音模式（可压缩）
     LOG_NOISE_PATTERNS = [
         r'^\s*INFO\s', r'^\s*DEBUG\s', r'^\s*PASS\s',
         r'^\s*OK\s', r'^\s*SUCCESS\s', r'^\s*DONE\s',
@@ -53,7 +51,6 @@ class HeadroomCompressor:
         """估算 token 数量（简化版：中文约1.5字符/token，英文约4字符/token）"""
         if not text:
             return 0
-        # 简单估算：总字符数 / 2.5（中英文混合的平均值）
         return max(1, len(text) // 2)
 
     @staticmethod
@@ -85,17 +82,14 @@ class HeadroomCompressor:
             role = msg.get('role', '')
             content = msg.get('content', '')
 
-            # system 消息和短消息不压缩（阈值降低到50字符，让更多内容被压缩）
             if role == 'system' or not content or len(content) < 50:
                 compressed_messages.append(msg)
                 total_original_tokens += HeadroomCompressor.estimate_tokens(content)
                 total_compressed_tokens += HeadroomCompressor.estimate_tokens(content)
                 continue
 
-            # 压缩内容
             compressed_content, msg_stats = HeadroomCompressor._compress_content(content)
 
-            # 调试日志：记录压缩效果
             logger.debug(
                 f'Headroom 压缩消息: role={role}, '
                 f'original={msg_stats["original_tokens"]} tokens, '
@@ -131,25 +125,20 @@ class HeadroomCompressor:
         """压缩单个内容，返回压缩后的内容和统计信息"""
         original_tokens = HeadroomCompressor.estimate_tokens(content)
 
-        # 尝试识别内容类型并应用对应的压缩策略
         compressed = content
 
-        # 1. 尝试作为 JSON 数组压缩
         json_result = HeadroomCompressor._try_compress_json_array(content)
         if json_result is not None:
             compressed = json_result
         else:
-            # 2. 尝试作为日志压缩
             log_result = HeadroomCompressor._try_compress_log(content)
             if log_result is not None:
                 compressed = log_result
             else:
-                # 3. 尝试作为代码压缩
                 code_result = HeadroomCompressor._try_compress_code(content)
                 if code_result is not None:
                     compressed = code_result
                 else:
-                    # 4. 纯文本压缩
                     compressed = HeadroomCompressor._compress_text(content)
 
         compressed_tokens = HeadroomCompressor.estimate_tokens(compressed)
@@ -178,11 +167,9 @@ class HeadroomCompressor:
         if not isinstance(data, list) or len(data) < 3:
             return None
 
-        # 只处理对象数组
         if not all(isinstance(item, dict) for item in data):
             return None
 
-        # 统计字段方差
         field_values = {}
         for item in data:
             for key, value in item.items():
@@ -190,24 +177,20 @@ class HeadroomCompressor:
                     field_values[key] = []
                 field_values[key].append(str(value))
 
-        # 计算每个字段的方差（取值多样性）
         field_variance = {}
         for key, values in field_values.items():
             unique_ratio = len(set(values)) / len(values) if values else 0
             field_variance[key] = unique_ratio
 
-        # 保留高方差字段（取值多样，信息量大），压缩低方差字段
         high_variance_fields = {k for k, v in field_variance.items() if v > 0.3}
         low_variance_fields = {k for k, v in field_variance.items() if v <= 0.3}
 
-        # 压缩：高方差字段保留，低方差字段只保留前3个
         compressed_data = []
         for item in data:
             compressed_item = {}
             for key in high_variance_fields:
                 if key in item:
                     compressed_item[key] = item[key]
-            # 低方差字段只保留前3个不同的值
             for key in low_variance_fields:
                 if key in item:
                     if key not in compressed_item:
@@ -216,7 +199,6 @@ class HeadroomCompressor:
                         break
             compressed_data.append(compressed_item)
 
-        # 如果压缩效果不明显，返回原内容
         compressed_str = json.dumps(compressed_data, ensure_ascii=False)
         if len(compressed_str) > len(content) * 0.7:
             return None
@@ -230,7 +212,6 @@ class HeadroomCompressor:
         if len(lines) < 5:
             return None
 
-        # 检测是否为日志格式（包含时间戳、日志级别等）
         log_pattern = re.compile(
             r'(\d{4}[-/]\d{2}[-/]\d{2}|\d{2}:\d{2}:\d{2}|'
             r'INFO|DEBUG|WARN|ERROR|FATAL|TRACE|'
@@ -242,7 +223,6 @@ class HeadroomCompressor:
         if log_lines < len(lines) * 0.3:
             return None
 
-        # 保留高价值行（包含错误、异常等），压缩噪音行
         high_value_lines = []
         noise_lines = []
 
@@ -257,17 +237,14 @@ class HeadroomCompressor:
             else:
                 high_value_lines.append(line)
 
-        # 保留所有高价值行，噪音行只保留前20%
         max_noise = max(1, int(len(noise_lines) * 0.2))
         kept_noise = noise_lines[:max_noise]
 
-        # 重新组合（保持原始顺序）
         kept_lines = high_value_lines + kept_noise
         kept_lines.sort(key=lambda x: lines.index(x) if x in lines else 999999)
 
         compressed = '\n'.join(kept_lines)
 
-        # 如果压缩效果不明显，返回原内容
         if len(compressed) > len(content) * 0.6:
             return None
 
@@ -280,7 +257,6 @@ class HeadroomCompressor:
         if len(lines) < 10:
             return None
 
-        # 检测是否为代码（包含常见代码模式）
         code_patterns = [
             r'^\s*(def|class|function|const|let|var|import|from|if|for|while)\s',
             r'^\s*[\{\}\[\]\(\)]\s*$',
@@ -300,12 +276,11 @@ class HeadroomCompressor:
         if code_lines < len(lines) * 0.3:
             return None
 
-        # 保留结构行（import、函数定义、类定义等），压缩函数体
         structure_patterns = [
             r'^\s*(import|from|require)\s',
             r'^\s*(def|class|function)\s+\w+',
             r'^\s*(public|private|protected)\s',
-            r'^\s*@\w+',  # 装饰器
+            r'^\s*@\w+',
         ]
 
         compressed_lines = []
@@ -321,18 +296,16 @@ class HeadroomCompressor:
                 function_body_lines = 0
             elif in_function_body and line.strip() and not line.strip().startswith('#'):
                 function_body_lines += 1
-                # 函数体只保留前3行和最后1行
                 if function_body_lines <= 3:
                     compressed_lines.append(line)
                 elif line.strip() in ['}', 'end', '})', '});']:
                     compressed_lines.append(line)
                     in_function_body = False
-            else:
-                compressed_lines.append(line)
+                else:
+                    compressed_lines.append(line)
 
         compressed = '\n'.join(compressed_lines)
 
-        # 如果压缩效果不明显，返回原内容
         if len(compressed) > len(content) * 0.7:
             return None
 
@@ -340,28 +313,82 @@ class HeadroomCompressor:
 
     @staticmethod
     def _compress_text(content: str) -> str:
-        """压缩纯文本（TextCrusher 理念）"""
-        # 移除多余空行
+        """压缩纯文本（TextCrusher 理念）
+
+        策略：
+        1. 移除多余空行（3+连续空行 -> 2个）
+        2. 移除行尾空格
+        3. 合并连续空格
+        4. 长度 > 500：去重短句
+        5. 长度 > 800：按段落压缩，保留首尾段落，省略中间
+        6. 长度 > 1500：合并连续重复行
+        """
+        if not content:
+            return content
+
         compressed = re.sub(r'\n{3,}', '\n\n', content)
-
-        # 移除行尾空格
         compressed = re.sub(r'[ \t]+\n', '\n', compressed)
-
-        # 移除多余空格（连续空格合并为单个）
         compressed = re.sub(r' {2,}', ' ', compressed)
 
-        # 如果文本较长，移除重复段落
         if len(compressed) > 500:
             sentences = re.split(r'(?<=[。！？.!?])\s+', compressed)
             seen = set()
             unique_sentences = []
             for s in sentences:
                 s_normalized = s.strip().lower()
-                # 短句子（<10字符）不去重，保留所有
                 if s_normalized not in seen or len(s_normalized) < 10:
                     seen.add(s_normalized)
                     unique_sentences.append(s)
             compressed = ' '.join(unique_sentences)
+
+        if len(compressed) > 800:
+            paragraphs = [p for p in compressed.split('\n\n') if p.strip()]
+            if len(paragraphs) > 3:
+                head_count = max(1, len(paragraphs) // 3)
+                tail_count = max(1, len(paragraphs) // 3)
+                head_part = '\n\n'.join(paragraphs[:head_count])
+                tail_part = '\n\n'.join(paragraphs[-tail_count:])
+                removed = len(paragraphs) - head_count - tail_count
+                middle_chars = len(compressed) - len(head_part) - len(tail_part)
+                compressed = (
+                    f"{head_part}\n\n"
+                    f"[... 已省略 {removed} 个段落（约 {middle_chars} 字符）...]\n\n"
+                    f"{tail_part}"
+                )
+            elif len(paragraphs) == 1 and len(compressed) > 800:
+                # 单段落长文本：按句子截断，保留首尾部分
+                sentences = re.split(r'(?<=[。！？.!?])\s+', compressed)
+                if len(sentences) > 4:
+                    head_count = max(2, len(sentences) // 3)
+                    tail_count = max(2, len(sentences) // 3)
+                    head_part = ' '.join(sentences[:head_count])
+                    tail_part = ' '.join(sentences[-tail_count:])
+                    removed = len(sentences) - head_count - tail_count
+                    compressed = (
+                        f"{head_part}\n\n"
+                        f"[... 已省略 {removed} 个句子（约 {len(compressed) - len(head_part) - len(tail_part)} 字符）...]\n\n"
+                        f"{tail_part}"
+                    )
+
+        if len(compressed) > 1500:
+            lines = compressed.split('\n')
+            deduped_lines = []
+            prev_line = None
+            repeat_count = 0
+            for line in lines:
+                if line.strip() and line.strip() == prev_line:
+                    repeat_count += 1
+                    if repeat_count <= 1:
+                        deduped_lines.append(line)
+                else:
+                    if prev_line is not None and repeat_count > 1:
+                        deduped_lines.append(f"(... {repeat_count} 行重复内容已省略 ...)")
+                    deduped_lines.append(line)
+                    repeat_count = 0
+                    prev_line = line.strip() if line.strip() else prev_line
+            if repeat_count > 1:
+                deduped_lines.append(f"(... {repeat_count} 行重复内容已省略 ...)")
+            compressed = '\n'.join(deduped_lines)
 
         return compressed
 

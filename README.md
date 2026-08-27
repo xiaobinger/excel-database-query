@@ -346,7 +346,7 @@ WHERE merchant_id = :value
 - **SmartCrusher（JSON压缩）**：基于字段方差统计，高方差字段完整保留，低方差字段提取值列表，节省70-90% token
 - **LogCompressor（日志压缩）**：保留ERROR/FATAL/WARN级别日志行，压缩DEBUG/INFO冗余行，节省85-95% token
 - **CodeCompressor（代码压缩）**：保留函数签名、类定义、导入语句等结构信息，压缩函数体实现，节省40-70% token
-- **TextCrusher（文本压缩）**：去除重复段落、冗余格式、无意义填充词，节省30-60% token
+- **TextCrusher（文本压缩）**：去除重复段落、冗余格式、无意义填充词；单段落长文本按句子截断保留首尾；多段落长文本保留首尾段落省略中间；重复行合并，节省30-99% token
 - **按模型独立配置**：每个AI模型可单独启用/禁用Headroom压缩
 - **实时统计展示**：对话消息、缓存统计页面实时展示压缩率和节省token数
 - **对外API支持**：外部API调用（OpenAI兼容端点、自定义端点）同样支持Headroom压缩，响应中返回压缩统计（`headroom`字段），调用日志记录压缩指标和节省token
@@ -375,8 +375,9 @@ WHERE merchant_id = :value
 - 文本压缩阈值：500字符以上触发压缩
 
 **技术实现**：
-- `backend/app/services/headroom_service.py`：HeadroomCompressor核心实现
-- `backend/app/services/ai_service.py`：集成压缩入口 `compress_if_enabled()`
+- `backend/app/services/headroom_service.py`：HeadroomCompressor核心实现（含单段落长文本句子截断策略）
+- `backend/app/services/ai_service.py`：集成压缩入口 `compress_if_enabled()`（非流式路径）
+- `backend/app/routes/ai_routes.py`：流式对话路径 `send_message_stream` → `generate()` 中调用 `compress_if_enabled()`，done事件和消息保存传递 `headroom_stats`；流式请求添加 `stream_options: {include_usage: True}` 确保token统计正确
 - `backend/app/models/ai_config.py`：`enable_headroom`配置字段
 - `backend/app/models/ai_chat.py`：`headroom_original_tokens`/`headroom_saved_tokens`/`headroom_compression_ratio`统计字段
 - `backend/app/services/open_api_service.py`：对外API调用时应用Headroom压缩（`_chat_single`/`chat_once`/`stream_chat`）
@@ -489,6 +490,7 @@ API类型和本地脚本类型的系统任务支持**从SQL脚本动态获取参
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-08-27 | v2.3.5 | 修复流式对话路径Headroom压缩缺失：流式对话（`send_message_stream`）完全未调用`compress_if_enabled`，导致headroom在流式对话中不生效；修复后在`_attempt`循环中添加压缩调用，并在done事件和消息保存中传递`headroom_stats`（original_tokens/saved_tokens/compression_ratio）；修复token统计不工作：流式请求缺少`stream_options: {include_usage: True}`导致OpenAI流式API不返回usage数据，在两处流式请求中添加`stream_options`；删除工具循环中重复的usage提取代码（避免token统计翻倍）；增强纯文本压缩策略：新增单段落长文本按句子截断策略 |
 | 2026-08-27 | v2.3.4 | Headroom压缩指标始终展示：对话消息下方和缓存统计页面即使未压缩也显示压缩指标（0 tokens/0%）；输入栏区分"将压缩"/"太短不压缩"/"未启用压缩"三种状态 |
 | 2026-08-27 | v2.3.3 | AI对话输入框实时统计：输入区域下方展示已输入字符数、预计消耗token数、是否触发headroom压缩（绿色"将压缩"/灰色"不压缩"） |
 | 2026-08-27 | v2.3.2 | 对外API支持Headroom压缩：外部API调用（OpenAI兼容端点、自定义端点）同样应用Headroom上下文压缩逻辑，响应中返回`headroom`统计字段（original_tokens/saved_tokens/compression_ratio），调用日志记录压缩指标和节省token |
