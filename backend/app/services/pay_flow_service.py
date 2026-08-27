@@ -163,7 +163,7 @@ def start_flow(template_id, rows, params, created_by=None):
 # 流程推进
 # ---------------------------------------------------------------------------
 
-def advance_flow(execution_id, _is_recursive=False):
+def advance_flow(execution_id):
     """推进单个流程实例到下一个节点
 
     由调度器调用，处理：
@@ -172,51 +172,45 @@ def advance_flow(execution_id, _is_recursive=False):
     3. 循环节点处理
     4. 完成/失败处理
 
-    安全：通过行级锁防止同一执行实例被重复处理（资金安全）
-
-    Args:
-        execution_id: 执行实例ID
-        _is_recursive: 是否为递归调用（内部使用，递归调用时跳过状态检查）
+    安全：通过数据库原子抢占（CAS）防止同一实例被并发重复执行（资金安全）。
+    UPDATE ... WHERE status IN ('pending','waiting') 是数据库级原子操作：
+    即使多个后端进程、多个线程同时分发同一实例，也只有一个能抢占成功，
+    其余全部跳过。抢占成功后 status='running' 立即提交落库，
+    任何后续分发都会因状态不匹配而失败。
     """
     from app import db
 
-    # 使用行级锁防止并发重复执行（资金安全）
-    # 注意：SQLite 不支持 with_for_update，需要通过其他方式防护
     execution = db.session.query(PayFlowExecution).filter(
         PayFlowExecution.execution_id == execution_id
-    ).with_for_update().first()
+    ).first()
 
     if not execution:
         return
 
-    # 安全检查：只处理 pending 或 waiting 状态的实例
-    # 递归调用时跳过此检查（因为递归调用前状态已设置为 pending）
-    if not _is_recursive and execution.status not in ('pending', 'waiting'):
-        logger.warning(f'流程 {execution_id} 状态为 {execution.status}，跳过执行')
-        return
-
-    # 防重入检查：如果最近 10 秒内已经分发过该执行，说明有另一个进程正在处理，跳过
-    # 递归调用时跳过此检查（递归调用在同一请求/线程内，无需防重入）
-    if not _is_recursive and execution.last_dispatched_at:
-        elapsed = (datetime.utcnow() - execution.last_dispatched_at).total_seconds()
-        if elapsed < 10:
-            logger.warning(f'流程 {execution_id} 10秒内已被分发(last={elapsed:.1f}s)，跳过防重入')
-            return
-
-    # 对于 waiting 状态，检查是否到达下次执行时间
-    if not _is_recursive and execution.status == 'waiting':
+    # waiting 状态：未到下次执行时间则不推进
+    if execution.status == 'waiting':
         if execution.next_run_at and execution.next_run_at > datetime.utcnow():
             return
 
-    # 防重复执行检查：如果当前有正在运行的节点执行记录，说明正在处理中
-    if not _is_recursive:
-        running_node = PayFlowNodeExecution.query.filter_by(
-            execution_id=execution_id,
-            status='running'
-        ).first()
-        if running_node:
-            logger.warning(f'流程 {execution_id} 有正在处理的节点 {running_node.node_name}，跳过执行')
-            return
+    # 原子抢占：将 pending/waiting 置为 running，同一时刻只有一个调用方能成功
+    claimed = db.session.query(PayFlowExecution).filter(
+        PayFlowExecution.execution_id == execution_id,
+        PayFlowExecution.status.in_(('pending', 'waiting')),
+    ).update({
+        'status': 'running',
+        'last_dispatched_at': datetime.utcnow(),
+    }, synchronize_session=False)
+    db.session.commit()
+
+    if claimed == 0:
+        logger.info(f'流程 {execution_id} 抢占失败(状态不允许或已被其他线程/进程处理)，跳过')
+        return
+
+    # bulk update 不会同步 session 内对象，重新加载最新状态
+    db.session.expire_all()
+    execution = db.session.query(PayFlowExecution).filter(
+        PayFlowExecution.execution_id == execution_id
+    ).first()
 
     template = PayFlowTemplate.query.get(execution.template_id)
     if not template:
@@ -259,7 +253,7 @@ def advance_flow(execution_id, _is_recursive=False):
             execution.current_node_index = current_idx + 1
             execution.status = 'pending'
             db.session.commit()
-            advance_flow(execution_id, _is_recursive=True)
+            advance_flow(execution_id)
             return
 
         # 检查是否满足退出条件
@@ -272,25 +266,12 @@ def advance_flow(execution_id, _is_recursive=False):
             execution.current_node_index = current_idx + 1
             execution.status = 'pending'
             db.session.commit()
-            advance_flow(execution_id, _is_recursive=True)
+            advance_flow(execution_id)
             return
 
-    # 执行节点
+    # 执行节点（此时 status='running' 已由原子抢占提交落库，
+    # 其他线程/进程的重复分发会在抢占阶段被直接拦截）
     now = datetime.utcnow()
-
-    # 更新分发时间戳（防重入）
-    execution.last_dispatched_at = datetime.utcnow()
-    db.session.commit()
-
-    # 防重复执行检查：同一节点同一attempt不应有多个running记录
-    existing_running = PayFlowNodeExecution.query.filter_by(
-        execution_id=execution_id,
-        node_id=node_id,
-        status='running'
-    ).first()
-    if existing_running:
-        logger.warning(f'流程 {execution_id} 节点 {node_name} 已有正在执行的记录，跳过执行')
-        return
 
     node_exec = PayFlowNodeExecution(
         execution_id=execution_id,
@@ -304,7 +285,6 @@ def advance_flow(execution_id, _is_recursive=False):
     db.session.add(node_exec)
     db.session.flush()
 
-    execution.status = 'running'
     if not execution.started_at:
         execution.started_at = now
 
@@ -346,7 +326,7 @@ def advance_flow(execution_id, _is_recursive=False):
                 execution.current_node_index = current_idx + 1
                 execution.status = 'pending'
                 db.session.commit()
-                advance_flow(execution_id, _is_recursive=True)
+                advance_flow(execution_id)
                 return
             # 循环：设置下次执行时间
             execution.loop_node_id = node_id
@@ -382,7 +362,7 @@ def advance_flow(execution_id, _is_recursive=False):
             execution.status = 'pending'  # 设置为 pending 允许递归调用继续处理
             db.session.commit()
             # 立即推进下一节点（递归调用）
-            advance_flow(execution_id, _is_recursive=True)
+            advance_flow(execution_id)
             return
 
         db.session.commit()

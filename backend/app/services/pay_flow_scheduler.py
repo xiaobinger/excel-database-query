@@ -51,19 +51,14 @@ def _check_and_advance(app):
         from app import db
         from app.models.pay_flow import PayFlowExecution
         from app.services.pay_flow_service import advance_flow
-        from datetime import datetime, timedelta
+        from datetime import datetime
 
         now = datetime.utcnow()
-        # 只分发 10 秒内未被分发过的 pending 实例（防重入）
-        cutoff = now - timedelta(seconds=10)
 
-        pending = PayFlowExecution.query.filter(
-            PayFlowExecution.status == 'pending',
-            db.or_(
-                PayFlowExecution.last_dispatched_at == None,
-                PayFlowExecution.last_dispatched_at < cutoff,
-            ),
-        ).all()
+        # 防重入由 advance_flow 内部的原子抢占(CAS)保证：
+        # 即使多个后端进程同时轮询到同一实例，数据库原子 UPDATE
+        # 也只允许一个执行，其余直接跳过。
+        pending = PayFlowExecution.query.filter_by(status='pending').all()
         for execution in pending:
             try:
                 advance_flow(execution.execution_id)
