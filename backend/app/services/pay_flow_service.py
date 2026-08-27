@@ -1175,17 +1175,17 @@ def get_batch_summary(batch_id):
 
 def get_batches(page=1, per_page=20, keyword=None):
     """获取批次列表（按 batch_id 聚合）"""
-    from sqlalchemy import func
+    from sqlalchemy import func, case
 
     # 子查询：获取每个 batch_id 的统计信息
     subq = db.session.query(
         PayFlowExecution.batch_id,
         func.count(PayFlowExecution.id).label('total'),
-        func.sum(func.case([(PayFlowExecution.status == 'completed', 1), (True, 0)])).label('completed'),
-        func.sum(func.case([(PayFlowExecution.status == 'failed', 1), (True, 0)])).label('failed'),
-        func.sum(func.case([(PayFlowExecution.status.in_(['running', 'waiting']), 1), (True, 0)])).label('running'),
-        func.sum(func.case([(PayFlowExecution.status == 'pending', 1), (True, 0)])).label('pending'),
-        func.sum(func.case([(PayFlowExecution.status == 'cancelled', 1), (True, 0)])).label('cancelled'),
+        func.sum(case((PayFlowExecution.status == 'completed', 1), else_=0)).label('completed'),
+        func.sum(case((PayFlowExecution.status == 'failed', 1), else_=0)).label('failed'),
+        func.sum(case((PayFlowExecution.status.in_(['running', 'waiting']), 1), else_=0)).label('running'),
+        func.sum(case((PayFlowExecution.status == 'pending', 1), else_=0)).label('pending'),
+        func.sum(case((PayFlowExecution.status == 'cancelled', 1), else_=0)).label('cancelled'),
         func.max(PayFlowExecution.created_at).label('created_at'),
         func.max(PayFlowExecution.template_name).label('template_name'),
     ).group_by(PayFlowExecution.batch_id).subquery()
@@ -1200,12 +1200,12 @@ def get_batches(page=1, per_page=20, keyword=None):
     batch_list = []
     for item in items:
         batch_id = item.batch_id
-        total_count = item.total or 0
-        completed = item.completed or 0
-        failed = item.failed or 0
-        running = item.running or 0
-        pending = item.pending or 0
-        cancelled = item.cancelled or 0
+        total_count = int(item.total or 0)
+        completed = int(item.completed or 0)
+        failed = int(item.failed or 0)
+        running = int(item.running or 0)
+        pending = int(item.pending or 0)
+        cancelled = int(item.cancelled or 0)
 
         # 检查是否所有失败实例都在第一个节点失败
         can_batch_retry = False
