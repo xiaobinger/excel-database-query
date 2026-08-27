@@ -159,10 +159,16 @@
                   </el-form>
                 </div>
 
-                <!-- 通知配置 -->
+                <!-- 通知配置（可插拔模块） -->
                 <div class="node-config">
-                  <div class="config-title">通知配置</div>
-                  <el-form label-width="90px" size="small">
+                  <div class="config-title">
+                    通知配置
+                    <el-switch v-model="node.notify_enabled" size="small" style="margin-left:8px" active-text="启用" inactive-text="禁用" />
+                    <el-tooltip content="启用后，节点执行失败或结束时会发送通知；若发起流程时选择了「汇总通知」，节点通知将不生效" placement="top">
+                      <i class="fa fa-question-circle" style="margin-left:6px;cursor:help;color:#909399;font-size:12px"></i>
+                    </el-tooltip>
+                  </div>
+                  <el-form v-if="node.notify_enabled" label-width="90px" size="small">
                     <el-row :gutter="12">
                       <el-col :span="6">
                         <el-form-item label="失败通知">
@@ -215,6 +221,9 @@
                       </div>
                     </template>
                   </el-form>
+                  <div v-else class="notify-disabled-hint">
+                    <i class="fa fa-info-circle"></i> 通知模块已禁用，该节点不会发送任何通知
+                  </div>
                 </div>
 
                 <!-- 循环配置 -->
@@ -499,6 +508,14 @@ const notificationVariables = computed(() => {
     { value: '{amount}', label: '金额' },
     { value: '{result.success}', label: '结果.成功' },
     { value: '{result.message}', label: '结果.消息' },
+    // 汇总通知专用变量（发起流程时启用汇总通知后生效）
+    { value: '{summary.total}', label: '汇总.总笔数' },
+    { value: '{summary.success_count}', label: '汇总.成功笔数' },
+    { value: '{summary.fail_count}', label: '汇总.失败笔数' },
+    { value: '{summary.success_amount}', label: '汇总.成功金额' },
+    { value: '{summary.fail_amount}', label: '汇总.失败金额' },
+    { value: '{summary.success_list}', label: '汇总.成功明细' },
+    { value: '{summary.fail_list}', label: '汇总.失败明细' },
   ]
 
   // 添加当前节点和前面节点的结果字段作为模板变量
@@ -609,6 +626,7 @@ function addNode() {
     is_end_node: false,
     notify_on_failure: false,
     notify_on_end: false,
+    notify_enabled: false,
     action: {
       channel: firstChannel?.channel || '',
       interface_type: firstChannel?.interface_types?.[0] || '代付',

@@ -119,6 +119,11 @@ class PayFlowExecution(db.Model):
     loop_count = db.Column(db.Integer, default=0, comment='当前节点已循环次数')
     last_dispatched_at = db.Column(db.DateTime, comment='调度器最后分发时间(防重入)')
 
+    # 汇总通知配置（发起流程时设置，批次内所有实例共享）
+    summary_notify_enabled = db.Column(db.Boolean, default=False, comment='是否启用汇总通知')
+    summary_notify_template_id = db.Column(db.Integer, db.ForeignKey('pay_flow_notify_templates.id'), comment='汇总通知模板ID')
+    summary_notify_sent = db.Column(db.Boolean, default=False, comment='汇总通知是否已发送')
+
     # 上下文（累积字段，供流转条件判断）
     context = db.Column(db.Text, comment='执行上下文字段(JSON dict)')
 
@@ -166,6 +171,9 @@ class PayFlowExecution(db.Model):
             'next_run_at': beijing_isoformat(self.next_run_at),
             'loop_node_id': self.loop_node_id,
             'loop_count': self.loop_count,
+            'summary_notify_enabled': self.summary_notify_enabled,
+            'summary_notify_template_id': self.summary_notify_template_id,
+            'summary_notify_sent': self.summary_notify_sent,
             'context': self.get_context(),
             'result_message': self.result_message,
             'error_message': self.error_message,

@@ -346,8 +346,9 @@ WHERE merchant_id = :value
 - **条件流转引擎**：基于当前节点响应字段值判断（eq/neq/contains/gt/lt/success/fail/in/not_in等运算符），支持引用任意节点结果（`nodeId.fieldName`）
 - **定时循环执行**：节点可配置循环间隔、最大次数、多退出条件（AND/OR逻辑），满足条件后继续流转
 - **失败即停机制**：节点失败时流程立即停止，不会继续执行下一节点（资金安全）
-- **防重复执行**：多重安全检查确保同一行数据不会被重复处理（状态检查/时间检查/运行记录检查）
+- **防重复执行**：多重安全检查确保同一行数据不会被重复处理（状态检查/时间检查/运行记录检查/调度防重入）
 - **节点通知配置**：每个节点可配置失败通知、结束节点标记及结束通知，支持邮件模板变量替换
+- **汇总通知**：发起流程时可选启用汇总通知，批次结束后一次性发送汇总邮件（总笔数、成功/失败笔数、成功/失败金额、明细列表），节点级单独通知自动失效
 - **每笔数据独立实例**：每行Excel数据创建独立流程实例，互不影响
 - **可视化走势动画**：实时展示流程进度，脉冲动画标识当前运行节点
 - **执行日志详情**：每个节点记录完整执行日志，支持查看失败原因
@@ -355,12 +356,12 @@ WHERE merchant_id = :value
 
 **数据模型**：
 - `PayFlowTemplate`：流程模板（节点定义、流转条件）
-- `PayFlowExecution`：流程实例（每笔数据一个，含循环状态）
+- `PayFlowExecution`：流程实例（每笔数据一个，含循环状态、汇总通知字段）
 - `PayFlowNodeExecution`：节点执行记录（日志、结果、时间戳）
 
 **API端点**：
 - `GET/POST/PUT/DELETE /api/pay-flow/templates`：模板CRUD
-- `POST /api/pay-flow/start`：发起流程（基于file_path + sheet_index）
+- `POST /api/pay-flow/start`：发起流程（支持 `summary_notify_enabled` / `summary_notify_template_id` 参数）
 - `GET /api/pay-flow/executions`：执行记录列表
 - `GET /api/pay-flow/executions/{id}`：执行详情（含节点日志）
 - `POST /api/pay-flow/executions/{id}/cancel|retry`：取消/重试

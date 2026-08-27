@@ -125,6 +125,23 @@
           <el-form-item label="数据行数">
             <el-tag type="info">{{ sheetList[selectedSheetIndex]?.row_count || 0 }} 行</el-tag>
           </el-form-item>
+          <el-form-item label="汇总通知">
+            <el-switch v-model="startFlowForm.summary_notify_enabled" active-text="启用" inactive-text="关闭" />
+            <el-tooltip content="启用后，所有流程执行完毕时发送一条汇总通知（成功/失败笔数、金额、明细），节点上的单笔通知将不生效" placement="top">
+              <i class="fa fa-question-circle" style="margin-left:8px;cursor:help;color:#909399"></i>
+            </el-tooltip>
+          </el-form-item>
+          <el-form-item v-if="startFlowForm.summary_notify_enabled" label="通知模板">
+            <el-select v-model="startFlowForm.summary_notify_template_id" placeholder="选择汇总通知模板" style="width:100%" filterable>
+              <el-option v-for="t in notifyTemplates" :key="t.id" :label="t.name" :value="t.id">
+                <span>{{ t.name }}</span>
+                <span v-if="!t.is_enabled" style="color:#909399;font-size:12px;margin-left:8px">(已禁用)</span>
+              </el-option>
+            </el-select>
+            <div style="margin-top:6px;font-size:12px;color:#909399">
+              可用变量：{summary.total} {summary.success_count} {summary.fail_count} {summary.success_amount} {summary.fail_amount} {summary.success_list} {summary.fail_list}
+            </div>
+          </el-form-item>
           <el-form-item>
             <template #label>
               <span>管理流程</span>
@@ -289,6 +306,7 @@ function downloadResult() {
 
 const router = useRouter()
 const flowTemplates = ref([])
+const notifyTemplates = ref([])
 const startFlowDialogVisible = ref(false)
 const startingFlow = ref(false)
 
@@ -297,12 +315,22 @@ const startFlowForm = reactive({
   channel: '',
   environment: 'test',
   interface_type: '代付',
+  summary_notify_enabled: false,
+  summary_notify_template_id: null,
 })
 
 async function loadFlowTemplates() {
   try {
     const res = await api.payFlow.templates({ per_page: 100 })
     flowTemplates.value = res.data.items || []
+  } catch (e) { /* ignore */ }
+}
+
+async function loadNotifyTemplates() {
+  try {
+    const res = await api.payFlow.getNotifyTemplates({ per_page: 100 })
+    const d = res.data
+    notifyTemplates.value = Array.isArray(d) ? d : (d.items || [])
   } catch (e) { /* ignore */ }
 }
 
@@ -313,14 +341,20 @@ function openStartFlowDialog() {
   startFlowForm.channel = form.channel
   startFlowForm.environment = form.environment
   startFlowForm.interface_type = form.interface_type
+  startFlowForm.summary_notify_enabled = false
+  startFlowForm.summary_notify_template_id = null
   startFlowDialogVisible.value = true
   loadFlowTemplates()
+  loadNotifyTemplates()
 }
 
 async function doStartFlow() {
   if (!startFlowForm.template_id) { ElMessage.warning('请选择流程模板'); return }
   if (!startFlowForm.channel) { ElMessage.warning('请选择渠道'); return }
   if (!sheetList.value.length) { ElMessage.warning('请等待工作表识别完成'); return }
+  if (startFlowForm.summary_notify_enabled && !startFlowForm.summary_notify_template_id) {
+    ElMessage.warning('启用汇总通知时，请选择通知模板'); return
+  }
   startingFlow.value = true
   try {
     const res = await api.payFlow.start({
@@ -333,10 +367,16 @@ async function doStartFlow() {
         interface_type: startFlowForm.interface_type,
         real_time: form.real_time,
         execute_type: form.execute_type,
+        summary_notify_enabled: startFlowForm.summary_notify_enabled,
+        summary_notify_template_id: startFlowForm.summary_notify_template_id,
       },
     })
     const d = res.data
-    ElMessage.success(`流程已发起，共 ${d.total} 笔数据`)
+    let msg = `流程已发起，共 ${d.total} 笔数据`
+    if (d.summary_notify_enabled) {
+      msg += '（已启用汇总通知）'
+    }
+    ElMessage.success(msg)
     startFlowDialogVisible.value = false
     router.push('/pay-flow-executions')
   } catch (e) {

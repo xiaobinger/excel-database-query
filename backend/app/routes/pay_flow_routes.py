@@ -210,6 +210,7 @@ def start_flow():
                 'batch_id': batch_id,
                 'execution_ids': execution_ids,
                 'total': len(execution_ids),
+                'summary_notify_enabled': bool(params.get('summary_notify_enabled')),
             }
         })
     except ValueError as e:

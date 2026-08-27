@@ -17,7 +17,7 @@ from email.mime.multipart import MIMEMultipart
 from email.utils import formataddr, formatdate, make_msgid
 
 from app import db
-from app.models.pay_flow import PayFlowTemplate, PayFlowExecution, PayFlowNodeExecution
+from app.models.pay_flow import PayFlowTemplate, PayFlowExecution, PayFlowNodeExecution, PayFlowNotifyTemplate
 from app.models.pay_config import PayConfig
 from app.utils.helpers import beijing_now, beijing_isoformat
 
@@ -125,6 +125,8 @@ def start_flow(template_id, rows, params, created_by=None):
         template_id: 模板ID
         rows: list[list] - Excel 数据行列表
         params: dict - 执行参数（channel, interface_type, environment 等）
+            - summary_notify_enabled: 是否启用汇总通知
+            - summary_notify_template_id: 汇总通知模板ID
         created_by: 创建用户ID
 
     Returns:
@@ -137,6 +139,9 @@ def start_flow(template_id, rows, params, created_by=None):
     batch_id = uuid.uuid4().hex
     execution_ids = []
 
+    summary_notify_enabled = bool(params.get('summary_notify_enabled'))
+    summary_notify_template_id = params.get('summary_notify_template_id') if summary_notify_enabled else None
+
     for idx, row in enumerate(rows):
         execution_id = uuid.uuid4().hex
         execution = PayFlowExecution(
@@ -148,6 +153,8 @@ def start_flow(template_id, rows, params, created_by=None):
             status='pending',
             current_node_index=0,
             created_by=created_by,
+            summary_notify_enabled=summary_notify_enabled,
+            summary_notify_template_id=summary_notify_template_id,
         )
         execution.set_row_data(row)
         execution.set_context({})
@@ -155,7 +162,7 @@ def start_flow(template_id, rows, params, created_by=None):
         execution_ids.append(execution_id)
 
     db.session.commit()
-    logger.info(f'发起代付流程: template={template.name} batch_id={batch_id} 数据行数={len(rows)}')
+    logger.info(f'发起代付流程: template={template.name} batch_id={batch_id} 数据行数={len(rows)} 汇总通知={summary_notify_enabled}')
     return batch_id, execution_ids
 
 
@@ -344,16 +351,22 @@ def advance_flow(execution_id):
             db.session.commit()
             # 发送失败通知（在commit之后，确保状态已保存）
             _send_failure_notification(execution, node, node_exec, result)
+            # 检查是否需要触发汇总通知
+            _try_trigger_summary_notification(execution)
         elif is_end_node:
             # 结束节点：流程完成
             execution.current_node_index = current_idx + 1
             _complete_flow(execution, f'流程完成（结束节点: {node_name}）')
             # 发送结束通知
             _send_end_notification(execution, node, node_exec, result)
+            # 检查是否需要触发汇总通知
+            _try_trigger_summary_notification(execution)
         elif next_idx >= len(nodes):
             # 到达末尾
             execution.current_node_index = next_idx
             _complete_flow(execution, f'流程完成，最后节点: {node_name}')
+            # 检查是否需要触发汇总通知
+            _try_trigger_summary_notification(execution)
         else:
             # 成功流转到下一节点
             execution.current_node_index = next_idx
@@ -379,11 +392,15 @@ def advance_flow(execution_id):
         db.session.commit()
         # 异常时也发送失败通知
         _send_failure_notification(execution, node, node_exec, {'success': False, 'message': str(e), 'fields': {}})
+        # 检查是否需要触发汇总通知
+        _try_trigger_summary_notification(execution)
 
 
 def _send_failure_notification(execution, node, node_exec, result):
-    """发送失败通知"""
+    """发送失败通知（启用汇总通知时跳过单笔通知）"""
     if not node.get('notify_on_failure'):
+        return
+    if execution.summary_notify_enabled:
         return
     try:
         _send_node_notification(execution, node, node_exec, '失败', result)
@@ -393,14 +410,209 @@ def _send_failure_notification(execution, node, node_exec, result):
 
 
 def _send_end_notification(execution, node, node_exec, result):
-    """发送结束通知"""
+    """发送结束通知（启用汇总通知时跳过单笔通知）"""
     if not node.get('notify_on_end'):
+        return
+    if execution.summary_notify_enabled:
         return
     try:
         _send_node_notification(execution, node, node_exec, '完成', result)
         logger.info(f'已发送结束通知: execution={execution.execution_id}, node={node.get("name", "")}')
     except Exception as notify_err:
         logger.error(f'发送结束通知异常: {notify_err}')
+
+
+def _try_trigger_summary_notification(execution):
+    """检查批次是否全部完成，若是则触发汇总通知
+
+    使用 CAS 确保并发下只有一个实例触发汇总通知：
+    UPDATE ... WHERE summary_notify_sent=False 是原子操作，
+    即使多个实例同时完成，也只有一个能成功抢占。
+    """
+    if not execution.summary_notify_enabled:
+        return
+    if execution.summary_notify_sent:
+        return
+
+    from app import db
+
+    batch_id = execution.batch_id
+    terminal_statuses = ('completed', 'failed', 'cancelled')
+
+    # 检查批次内是否全部完成
+    all_done = db.session.query(PayFlowExecution).filter(
+        PayFlowExecution.batch_id == batch_id,
+        ~PayFlowExecution.status.in_(terminal_statuses),
+    ).count() == 0
+
+    if not all_done:
+        return
+
+    # CAS 抢占：将 summary_notify_sent 从 False 置为 True，确保只触发一次
+    claimed = db.session.query(PayFlowExecution).filter(
+        PayFlowExecution.batch_id == batch_id,
+        PayFlowExecution.summary_notify_sent == False,  # noqa: E712
+    ).update({
+        'summary_notify_sent': True,
+    }, synchronize_session=False)
+    db.session.commit()
+
+    if claimed == 0:
+        return
+
+    try:
+        _send_summary_notification(batch_id)
+    except Exception as notify_err:
+        logger.error(f'发送汇总通知异常: {notify_err}', exc_info=True)
+
+
+def _send_summary_notification(batch_id):
+    """发送汇总通知
+
+    汇总批次内所有执行结果：总数、成功数、失败数、成功金额、失败金额、明细列表。
+    """
+    from app import db
+
+    executions = PayFlowExecution.query.filter_by(batch_id=batch_id).order_by(PayFlowExecution.row_index).all()
+    if not executions:
+        return
+
+    tpl_id = executions[0].summary_notify_template_id
+    if not tpl_id:
+        return
+
+    tpl = PayFlowNotifyTemplate.query.get(tpl_id)
+    if not tpl or not tpl.is_enabled:
+        logger.warning(f'汇总通知模板ID={tpl_id}不存在或已禁用，跳过')
+        return
+
+    receivers = []
+    if tpl.receivers:
+        receivers = [addr.strip() for addr in tpl.receivers.split(',') if addr.strip()]
+    if not receivers:
+        logger.warning(f'汇总通知模板ID={tpl_id}未配置收件人，跳过')
+        return
+
+    # 汇总统计
+    total = len(executions)
+    success_list = []
+    fail_list = []
+    success_amount = 0.0
+    fail_amount = 0.0
+
+    for e in executions:
+        row = e.get_row_data()
+        amount_fen = 0.0
+        try:
+            amount_fen = float(row[8]) if len(row) > 8 and row[8] else 0.0
+        except (ValueError, TypeError):
+            amount_fen = 0.0
+        amount = amount_fen / 100
+
+        item = {
+            'row_index': e.row_index,
+            'status': e.status,
+            'amount': amount,
+            'accountName': row[2] if len(row) > 2 else '',
+            'businessNo': row[3] if len(row) > 3 else '',
+            'error_message': e.error_message or '',
+        }
+
+        if e.status == 'completed':
+            success_list.append(item)
+            success_amount += amount
+        else:
+            fail_list.append(item)
+            fail_amount += amount
+
+    success_count = len(success_list)
+    fail_count = len(fail_list)
+
+    # 构建汇总文本
+    success_lines = []
+    for item in success_list:
+        success_lines.append(f"  行{item['row_index']}: {item['accountName']} {item['businessNo']} 金额{item['amount']:.2f}")
+    fail_lines = []
+    for item in fail_list:
+        fail_lines.append(f"  行{item['row_index']}: {item['accountName']} {item['businessNo']} 金额{item['amount']:.2f} 原因:{item['error_message']}")
+
+    success_list_text = '\n'.join(success_lines) if success_lines else '  无'
+    fail_list_text = '\n'.join(fail_lines) if fail_lines else '  无'
+
+    # 替换模板变量
+    subject = tpl.title or f'【代付流程汇总通知】{executions[0].template_name}'
+    content = tpl.content or ''
+
+    summary_vars = {
+        'summary.total': str(total),
+        'summary.success_count': str(success_count),
+        'summary.fail_count': str(fail_count),
+        'summary.success_amount': f'{success_amount:.2f}',
+        'summary.fail_amount': f'{fail_amount:.2f}',
+        'summary.success_list': success_list_text,
+        'summary.fail_list': fail_list_text,
+        'batch_id': batch_id,
+        'template_name': executions[0].template_name,
+    }
+    for key, val in summary_vars.items():
+        content = content.replace(f'{{{key}}}', val)
+        subject = subject.replace(f'{{{key}}}', val)
+
+    # 发送邮件
+    _send_email(receivers, subject, content)
+    logger.info(f'已发送汇总通知: batch_id={batch_id} 总{total}笔 成功{success_count}笔 失败{fail_count}笔')
+
+
+def _send_email(to_addresses, subject, content):
+    """发送邮件（从 SystemConfig 读取 SMTP 配置）"""
+    from app.models.system_config import SystemConfig
+
+    smtp_host_config = SystemConfig.query.filter_by(config_key=SystemConfig.EMAIL_SMTP_HOST).first()
+    smtp_port_config = SystemConfig.query.filter_by(config_key=SystemConfig.EMAIL_SMTP_PORT).first()
+    smtp_user_config = SystemConfig.query.filter_by(config_key=SystemConfig.EMAIL_SMTP_USER).first()
+    smtp_password_config = SystemConfig.query.filter_by(config_key=SystemConfig.EMAIL_SMTP_PASSWORD).first()
+    smtp_ssl_config = SystemConfig.query.filter_by(config_key=SystemConfig.EMAIL_SMTP_SSL).first()
+    from_name_config = SystemConfig.query.filter_by(config_key=SystemConfig.EMAIL_FROM_NAME).first()
+    from_address_config = SystemConfig.query.filter_by(config_key=SystemConfig.EMAIL_FROM_ADDRESS).first()
+
+    if not smtp_host_config or not smtp_host_config.config_value:
+        logger.error('SMTP主机未配置，无法发送邮件')
+        return
+    if not smtp_user_config or not smtp_user_config.config_value:
+        logger.error('SMTP用户未配置，无法发送邮件')
+        return
+
+    host = smtp_host_config.config_value
+    port = int(smtp_port_config.config_value) if smtp_port_config and smtp_port_config.config_value else 465
+    user = smtp_user_config.config_value
+    password = smtp_password_config.get_encrypted_value() if smtp_password_config else ''
+    use_ssl = smtp_ssl_config.config_value.lower() in ('true', '1', 'yes') if smtp_ssl_config and smtp_ssl_config.config_value else True
+    sender_name = from_name_config.config_value if from_name_config and from_name_config.config_value else '代付流程系统'
+    sender_address = from_address_config.config_value if from_address_config and from_address_config.config_value else user
+
+    if not all([host, user, password]):
+        logger.error('邮件配置不完整，无法发送邮件')
+        return
+
+    msg = MIMEMultipart()
+    msg['From'] = formataddr((sender_name, sender_address))
+    msg['To'] = ', '.join(to_addresses)
+    msg['Subject'] = subject
+    msg['Date'] = formatdate(localtime=True)
+    msg['Message-ID'] = make_msgid()
+    msg.attach(MIMEText(content, 'plain', 'utf-8'))
+
+    import ssl
+    context = ssl.create_default_context()
+    if use_ssl and port == 465:
+        with smtplib.SMTP_SSL(host, port, context=context) as server:
+            server.login(user, password)
+            server.sendmail(user, to_addresses, msg.as_string())
+    else:
+        with smtplib.SMTP(host, port) as server:
+            server.starttls(context=context)
+            server.login(user, password)
+            server.sendmail(user, to_addresses, msg.as_string())
 
 
 def _execute_pay_node(execution, node, node_exec):
