@@ -337,8 +337,11 @@
                   <span v-if="(msg.cache_creation_tokens > 0 || msg.cache_read_tokens > 0)" class="cache-info">
                     <i class="fas fa-bolt"></i> 缓存: 写入{{ msg.cache_creation_tokens || 0 }} / 命中{{ msg.cache_read_tokens || 0 }}
                   </span>
-                  <span v-if="msg.headroom_saved_tokens > 0" class="headroom-info">
-                    <i class="fas fa-compress-alt"></i> Headroom: 节省{{ msg.headroom_saved_tokens }} tokens (压缩率{{ (msg.headroom_compression_ratio * 100).toFixed(1) }}%)
+                  <span v-if="msg.headroom_original_tokens > 0 || msg.headroom_saved_tokens > 0 || msg.headroom_compression_ratio > 0" class="headroom-info">
+                    <i class="fas fa-compress-alt"></i> Headroom: {{ msg.headroom_original_tokens || 0 }} → {{ (msg.headroom_original_tokens || 0) - (msg.headroom_saved_tokens || 0) }} tokens, 节省{{ msg.headroom_saved_tokens || 0 }} (压缩率{{ ((msg.headroom_compression_ratio || 0) * 100).toFixed(1) }}%)
+                  </span>
+                  <span v-else-if="selectedModel?.enable_headroom" class=" headroom-info headroom-none">
+                    <i class="fas fa-compress-alt"></i> Headroom: 未触发压缩
                   </span>
                 </div>
                 <!-- 重试按钮：仅AI文本消息且非流式中、非卡片类型、非临时错误消息 -->
@@ -607,11 +610,14 @@
             <div v-if="inputText.length > 0" class="input-stats-bar">
               <span class="stat-item"><i class="fas fa-keyboard"></i> {{ inputText.length }} 字符</span>
               <span class="stat-item"><i class="fas fa-coins"></i> ≈ {{ estimateTokens(inputText) }} tokens</span>
-              <span v-if="selectedModel?.enable_headroom" class="stat-item headroom-will-compress">
+              <span v-if="selectedModel?.enable_headroom && inputText.length >= 50" class="stat-item headroom-will-compress">
                 <i class="fas fa-compress-alt"></i> 将压缩
               </span>
-              <span v-else-if="inputText.length >= 50" class="stat-item headroom-no-compress">
-                <i class="fas fa-compress-alt"></i> 不压缩
+              <span v-else-if="selectedModel?.enable_headroom && inputText.length < 50" class="stat-item headroom-no-compress">
+                <i class="fas fa-compress-alt"></i> 太短不压缩
+              </span>
+              <span v-else class="stat-item headroom-no-compress">
+                <i class="fas fa-compress-alt"></i> 未启用压缩
               </span>
             </div>
             <div class="input-bottom-bar">
@@ -4954,6 +4960,10 @@ onActivated(() => {
 
 .headroom-info {
   color: #e6a23c;
+}
+
+.headroom-none {
+  color: #c0c4cc;
 }
 
 .message-retry {

@@ -63,7 +63,7 @@
     </el-row>
 
     <!-- Headroom 压缩统计 -->
-    <el-row :gutter="16" class="stats-cards" v-if="overview.total_headroom_original_tokens > 0">
+    <el-row :gutter="16" class="stats-cards">
       <el-col :span="6">
         <el-card shadow="hover" class="stat-card stat-headroom-original">
           <div class="stat-icon"><i class="fas fa-file-alt"></i></div>
