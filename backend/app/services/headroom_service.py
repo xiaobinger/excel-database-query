@@ -383,9 +383,11 @@ def compress_if_enabled(config, messages: list) -> Tuple[list, Optional[dict]]:
     try:
         compressed_messages, stats = HeadroomCompressor.compress_messages(messages)
 
-        # 如果压缩没有节省 token，返回原消息
         if stats['saved_tokens'] <= 0:
-            return messages, None
+            logger.debug(
+                f'Headroom 已分析但未节省空间: 原始 {stats["original_tokens"]} tokens'
+            )
+            return messages, stats
 
         logger.info(
             f'Headroom 压缩: 原始 {stats["original_tokens"]} tokens, '
