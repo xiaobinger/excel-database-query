@@ -531,6 +531,63 @@ def _send_email_notification(execution, action, node_exec):
     return {'success': True, 'message': '邮件通知已发送', 'fields': {'to': to_addresses, 'subject': subject}}
 
 
+def _replace_template_vars(text, execution, node, node_exec, notify_type, result=None):
+    """替换模板变量
+
+    支持变量:
+    - 基础信息: {execution_id}, {template_name}, {status}, {node_name}, {notify_type}, {error_message}, {row_index}, {batch_id}
+    - 行数据: {accountName}, {businessNo}, {amount}
+    - 执行结果: {result.success}, {result.message}, {result.fields.xxx}
+    - 上下文节点结果: {nodeId.fieldName}
+    """
+    if not text:
+        return text
+    row_data = execution.get_row_data()
+    row_dict = {
+        'accountName': row_data[2] if len(row_data) > 2 else '',
+        'businessNo': row_data[3] if len(row_data) > 3 else '',
+        'amount': row_data[8] if len(row_data) > 8 else '',
+    }
+    for key, val in row_dict.items():
+        text = text.replace(f'{{{key}}}', str(val))
+    text = text.replace('{execution_id}', execution.execution_id)
+    text = text.replace('{template_name}', execution.template_name)
+    text = text.replace('{status}', execution.status)
+    text = text.replace('{node_name}', node.get('name', ''))
+    text = text.replace('{notify_type}', notify_type)
+    text = text.replace('{error_message}', node_exec.error_message or '')
+    text = text.replace('{row_index}', str(execution.row_index))
+    text = text.replace('{batch_id}', execution.batch_id or '')
+
+    if result:
+        text = text.replace('{result.success}', str(result.get('success', '')))
+        text = text.replace('{result.message}', str(result.get('message', '')))
+        result_fields = result.get('fields', {})
+        if isinstance(result_fields, dict):
+            for field_key, field_val in result_fields.items():
+                text = text.replace(f'{{result.fields.{field_key}}}', str(field_val))
+
+    context = execution.get_context()
+    if context:
+        import re
+        pattern = r'\{([a-zA-Z0-9_]+)\.([a-zA-Z0-9_.]+)\}'
+        matches = re.findall(pattern, text)
+        for node_id, field_path in matches:
+            if node_id in context:
+                node_result = context[node_id]
+                if isinstance(node_result, dict):
+                    val = node_result
+                    for part in field_path.split('.'):
+                        if isinstance(val, dict):
+                            val = val.get(part, '')
+                        else:
+                            val = ''
+                            break
+                    placeholder = '{' + node_id + '.' + field_path + '}'
+                    text = text.replace(placeholder, str(val))
+    return text
+
+
 def _send_node_notification(execution, node, node_exec, notify_type, result=None):
     """发送节点通知（失败通知/结束通知）
 
@@ -540,12 +597,6 @@ def _send_node_notification(execution, node, node_exec, notify_type, result=None
         node_exec: 节点执行记录
         notify_type: '失败' 或 '完成'
         result: 当前节点执行结果（可选，用于模板变量替换）
-
-    支持的模板变量:
-    - 基础信息: {execution_id}, {template_name}, {status}, {node_name}, {notify_type}, {error_message}, {row_index}, {batch_id}
-    - 行数据: {accountName}, {businessNo}, {amount}
-    - 执行结果: {result.success}, {result.message}, 以及 result.fields 中的所有字段
-    - 上下文节点结果: {nodeId.fieldName} 格式引用任意节点的结果字段
     """
     action = node.get('action', {})
     notify_template_id = action.get('notify_template_id')
@@ -580,55 +631,9 @@ def _send_node_notification(execution, node, node_exec, notify_type, result=None
         subject = action.get('subject', f'【代付流程{notify_type}】{execution.template_name}')
         content = action.get('content', '')
 
-    # 替换变量
-    row_data = execution.get_row_data()
-    row_dict = {
-        'accountName': row_data[2] if len(row_data) > 2 else '',
-        'businessNo': row_data[3] if len(row_data) > 3 else '',
-        'amount': row_data[8] if len(row_data) > 8 else '',
-    }
-    for key, val in row_dict.items():
-        content = content.replace(f'{{{key}}}', str(val))
-    content = content.replace('{execution_id}', execution.execution_id)
-    content = content.replace('{template_name}', execution.template_name)
-    content = content.replace('{status}', execution.status)
-    content = content.replace('{node_name}', node.get('name', ''))
-    content = content.replace('{notify_type}', notify_type)
-    content = content.replace('{error_message}', node_exec.error_message or '')
-    content = content.replace('{row_index}', str(execution.row_index))
-    content = content.replace('{batch_id}', execution.batch_id or '')
-
-    # 替换当前节点执行结果变量
-    if result:
-        content = content.replace('{result.success}', str(result.get('success', '')))
-        content = content.replace('{result.message}', str(result.get('message', '')))
-        # 替换 result.fields 中的所有字段
-        result_fields = result.get('fields', {})
-        if isinstance(result_fields, dict):
-            for field_key, field_val in result_fields.items():
-                content = content.replace(f'{{result.fields.{field_key}}}', str(field_val))
-
-    # 替换上下文节点结果变量（nodeId.fieldName 格式）
-    context = execution.get_context()
-    if context:
-        # 收集所有 nodeId.fieldName 格式的变量引用
-        import re
-        pattern = r'\{([a-zA-Z0-9_]+)\.([a-zA-Z0-9_.]+)\}'
-        matches = re.findall(pattern, content)
-        for node_id, field_path in matches:
-            if node_id in context:
-                node_result = context[node_id]
-                if isinstance(node_result, dict):
-                    # 支持嵌套路径如 data.orderNo
-                    val = node_result
-                    for part in field_path.split('.'):
-                        if isinstance(val, dict):
-                            val = val.get(part, '')
-                        else:
-                            val = ''
-                            break
-                    placeholder = '{' + node_id + '.' + field_path + '}'
-                    content = content.replace(placeholder, str(val))
+    # 替换标题和正文中的模板变量
+    subject = _replace_template_vars(subject, execution, node, node_exec, notify_type, result)
+    content = _replace_template_vars(content, execution, node, node_exec, notify_type, result)
 
     # 构建邮件内容
     if not content:
