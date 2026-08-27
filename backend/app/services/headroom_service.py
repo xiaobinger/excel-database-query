@@ -85,8 +85,8 @@ class HeadroomCompressor:
             role = msg.get('role', '')
             content = msg.get('content', '')
 
-            # system 消息和短消息不压缩
-            if role == 'system' or not content or len(content) < 200:
+            # system 消息和短消息不压缩（阈值降低到50字符，让更多内容被压缩）
+            if role == 'system' or not content or len(content) < 50:
                 compressed_messages.append(msg)
                 total_original_tokens += HeadroomCompressor.estimate_tokens(content)
                 total_compressed_tokens += HeadroomCompressor.estimate_tokens(content)
@@ -94,6 +94,14 @@ class HeadroomCompressor:
 
             # 压缩内容
             compressed_content, msg_stats = HeadroomCompressor._compress_content(content)
+
+            # 调试日志：记录压缩效果
+            logger.debug(
+                f'Headroom 压缩消息: role={role}, '
+                f'original={msg_stats["original_tokens"]} tokens, '
+                f'compressed={msg_stats["compressed_tokens"]} tokens, '
+                f'saved={msg_stats["saved_tokens"]} tokens'
+            )
 
             if msg_stats['saved_tokens'] > 0:
                 compressed_count += 1
@@ -167,7 +175,7 @@ class HeadroomCompressor:
         except (json.JSONDecodeError, TypeError):
             return None
 
-        if not isinstance(data, list) or len(data) < 5:
+        if not isinstance(data, list) or len(data) < 3:
             return None
 
         # 只处理对象数组
@@ -219,7 +227,7 @@ class HeadroomCompressor:
     def _try_compress_log(content: str) -> Optional[str]:
         """尝试压缩日志内容（LogCompressor 理念）"""
         lines = content.split('\n')
-        if len(lines) < 10:
+        if len(lines) < 5:
             return None
 
         # 检测是否为日志格式（包含时间戳、日志级别等）
@@ -269,7 +277,7 @@ class HeadroomCompressor:
     def _try_compress_code(content: str) -> Optional[str]:
         """尝试压缩代码内容（CodeCompressor 理念）"""
         lines = content.split('\n')
-        if len(lines) < 20:
+        if len(lines) < 10:
             return None
 
         # 检测是否为代码（包含常见代码模式）
@@ -339,14 +347,18 @@ class HeadroomCompressor:
         # 移除行尾空格
         compressed = re.sub(r'[ \t]+\n', '\n', compressed)
 
-        # 如果文本很长，移除重复段落
-        if len(compressed) > 1000:
+        # 移除多余空格（连续空格合并为单个）
+        compressed = re.sub(r' {2,}', ' ', compressed)
+
+        # 如果文本较长，移除重复段落
+        if len(compressed) > 500:
             sentences = re.split(r'(?<=[。！？.!?])\s+', compressed)
             seen = set()
             unique_sentences = []
             for s in sentences:
                 s_normalized = s.strip().lower()
-                if s_normalized not in seen or len(s_normalized) < 20:
+                # 短句子（<10字符）不去重，保留所有
+                if s_normalized not in seen or len(s_normalized) < 10:
                     seen.add(s_normalized)
                     unique_sentences.append(s)
             compressed = ' '.join(unique_sentences)

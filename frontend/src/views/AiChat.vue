@@ -558,6 +558,9 @@
                 <span v-if="selectedModel.enable_thinking" class="thinking-badge" title="深度思考">
                   <i class="fas fa-brain"></i>
                 </span>
+                <span v-if="selectedModel.enable_headroom" class="headroom-badge" title="Headroom上下文压缩已启用">
+                  <i class="fas fa-compress-alt"></i>
+                </span>
               </el-tag>
             </div>
             <div v-if="uploadedFile" class="file-attachment">
@@ -6206,6 +6209,12 @@ onActivated(() => {
 .thinking-badge {
   margin-left: 6px;
   color: #a78bfa;
+  font-size: 12px;
+}
+
+.headroom-badge {
+  margin-left: 6px;
+  color: #34d399;
   font-size: 12px;
 }
 
