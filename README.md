@@ -440,6 +440,7 @@ API类型和本地脚本类型的系统任务支持**从SQL脚本动态获取参
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-08-27 | v2.3.0 | 修复批次重试后不再次触发汇总通知：`retry_batch`/`retry_execution` 重置实例时未重置`summary_notify_sent`标记，首次通知后标记为True，重试执行完成后被`_try_trigger_summary_notification`跳过；两处重试逻辑均补充重置标记 |
 | 2026-08-27 | v2.2.9 | 修复汇总通知邮件HTML标签不渲染问题：汇总通知邮件误用plain纯文本格式发送（节点通知均为html格式），模板中的HTML标签直接显示为原始文本；改为html格式发送，明细列表换行符由\n改为\<br\> |
 | 2026-08-27 | v2.2.8 | 修复批次明细展开不显示问题：点击行首展开箭头未触发明细加载（executions始终为null）；"展开"按钮未调用表格toggleRowExpansion导致行不展开；轮询刷新后展开状态丢失。改为受控展开（expand-row-keys + expand-change事件统一处理数据加载与状态同步） |
 | 2026-08-27 | v2.2.7 | 修复批次列表API 500错误：`func.case()`为非法SQLAlchemy用法导致生成非法SQL，改为标准`sqlalchemy.case()`；SUM结果由Decimal转为int避免JSON序列化问题 |

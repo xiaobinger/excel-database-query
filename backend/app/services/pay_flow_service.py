@@ -1293,6 +1293,8 @@ def retry_batch(batch_id):
         execution.completed_at = None
         execution.context = None
         execution.result_message = None
+        # 重置汇总通知标记，批次重新完成后可再次触发汇总通知
+        execution.summary_notify_sent = False
         # 清除节点执行记录
         PayFlowNodeExecution.query.filter_by(execution_id=execution.execution_id).delete()
 
@@ -1327,6 +1329,8 @@ def retry_execution(execution_id):
     execution.loop_count = 0
     execution.next_run_at = None
     execution.completed_at = None
+    # 重置汇总通知标记，批次重新完成后可再次触发汇总通知
+    execution.summary_notify_sent = False
     db.session.commit()
     return True
 
