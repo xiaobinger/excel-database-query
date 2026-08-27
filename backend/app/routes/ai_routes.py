@@ -125,6 +125,7 @@ def get_active_models():
              'api_base': c.api_base,
              'enable_thinking': c.enable_thinking or False,
              'enable_streaming': c.enable_streaming if c.enable_streaming is not None else True,
+             'enable_headroom': c.enable_headroom or False,
              'context_window': c.context_window or 128000,
              'is_default': c.is_default or False,
              'logo_url': c.logo_url or '',}
