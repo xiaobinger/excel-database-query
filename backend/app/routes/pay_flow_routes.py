@@ -287,11 +287,39 @@ def batch_delete_executions():
 # 批次
 # ---------------------------------------------------------------------------
 
+@pay_flow_bp.route('/batches', methods=['GET'])
+@login_required
+def list_batches():
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 20, type=int)
+    keyword = request.args.get('keyword')
+    result = flow_service.get_batches(page=page, per_page=per_page, keyword=keyword)
+    return jsonify({'success': True, 'data': result})
+
+
 @pay_flow_bp.route('/batches/<batch_id>/summary', methods=['GET'])
 @login_required
 def batch_summary(batch_id):
     summary = flow_service.get_batch_summary(batch_id)
     return jsonify({'success': True, 'data': summary})
+
+
+@pay_flow_bp.route('/batches/<batch_id>/detail', methods=['GET'])
+@login_required
+def batch_detail(batch_id):
+    detail = flow_service.get_batch_detail(batch_id)
+    if not detail:
+        return jsonify({'success': False, 'message': '批次不存在或无执行记录'}), 404
+    return jsonify({'success': True, 'data': detail})
+
+
+@pay_flow_bp.route('/batches/<batch_id>/retry', methods=['POST'])
+@login_required
+def retry_batch(batch_id):
+    success, message = flow_service.retry_batch(batch_id)
+    if not success:
+        return jsonify({'success': False, 'message': message}), 400
+    return jsonify({'success': True, 'message': message})
 
 
 @pay_flow_bp.route('/batches/<batch_id>/executions', methods=['GET'])

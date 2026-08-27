@@ -1150,6 +1150,15 @@ def get_batch_summary(batch_id):
     failed = sum(1 for e in executions if e.status == 'failed')
     running = sum(1 for e in executions if e.status in ('running', 'waiting'))
     pending = sum(1 for e in executions if e.status == 'pending')
+    cancelled = sum(1 for e in executions if e.status == 'cancelled')
+
+    # 检查是否所有失败实例都在第一个节点失败（用于判断是否允许批次重试）
+    all_failed_at_first_node = True
+    if failed > 0:
+        for e in executions:
+            if e.status == 'failed' and e.current_node_index != 0:
+                all_failed_at_first_node = False
+                break
 
     return {
         'batch_id': batch_id,
@@ -1158,8 +1167,138 @@ def get_batch_summary(batch_id):
         'failed': failed,
         'running': running,
         'pending': pending,
+        'cancelled': cancelled,
         'progress': round((completed + failed) / total * 100, 1) if total > 0 else 0,
+        'can_batch_retry': all_failed_at_first_node and failed > 0 and running == 0 and pending == 0,
     }
+
+
+def get_batches(page=1, per_page=20, keyword=None):
+    """获取批次列表（按 batch_id 聚合）"""
+    from sqlalchemy import func
+
+    # 子查询：获取每个 batch_id 的统计信息
+    subq = db.session.query(
+        PayFlowExecution.batch_id,
+        func.count(PayFlowExecution.id).label('total'),
+        func.sum(func.case([(PayFlowExecution.status == 'completed', 1), (True, 0)])).label('completed'),
+        func.sum(func.case([(PayFlowExecution.status == 'failed', 1), (True, 0)])).label('failed'),
+        func.sum(func.case([(PayFlowExecution.status.in_(['running', 'waiting']), 1), (True, 0)])).label('running'),
+        func.sum(func.case([(PayFlowExecution.status == 'pending', 1), (True, 0)])).label('pending'),
+        func.sum(func.case([(PayFlowExecution.status == 'cancelled', 1), (True, 0)])).label('cancelled'),
+        func.max(PayFlowExecution.created_at).label('created_at'),
+        func.max(PayFlowExecution.template_name).label('template_name'),
+    ).group_by(PayFlowExecution.batch_id).subquery()
+
+    query = db.session.query(subq)
+    if keyword:
+        query = query.filter(subq.c.template_name.contains(keyword))
+
+    total = query.count()
+    items = query.order_by(subq.c.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
+
+    batch_list = []
+    for item in items:
+        batch_id = item.batch_id
+        total_count = item.total or 0
+        completed = item.completed or 0
+        failed = item.failed or 0
+        running = item.running or 0
+        pending = item.pending or 0
+        cancelled = item.cancelled or 0
+
+        # 检查是否所有失败实例都在第一个节点失败
+        can_batch_retry = False
+        if failed > 0 and running == 0 and pending == 0:
+            failed_executions = PayFlowExecution.query.filter_by(batch_id=batch_id, status='failed').all()
+            can_batch_retry = all(e.current_node_index == 0 for e in failed_executions)
+
+        batch_list.append({
+            'batch_id': batch_id,
+            'template_name': item.template_name or '',
+            'total': total_count,
+            'completed': completed,
+            'failed': failed,
+            'running': running,
+            'pending': pending,
+            'cancelled': cancelled,
+            'progress': round((completed + failed) / total_count * 100, 1) if total_count > 0 else 0,
+            'created_at': beijing_isoformat(item.created_at),
+            'can_batch_retry': can_batch_retry,
+        })
+
+    return {
+        'items': batch_list,
+        'total': total,
+        'page': page,
+        'pages': (total + per_page - 1) // per_page if total > 0 else 0,
+    }
+
+
+def get_batch_detail(batch_id):
+    """获取批次详情（含所有执行记录）"""
+    summary = get_batch_summary(batch_id)
+    if summary['total'] == 0:
+        return None
+
+    executions = PayFlowExecution.query.filter_by(batch_id=batch_id).order_by(
+        PayFlowExecution.row_index.asc()
+    ).all()
+
+    return {
+        **summary,
+        'executions': [e.to_dict() for e in executions],
+    }
+
+
+def retry_batch(batch_id):
+    """批次重试
+
+    前提条件：批次内所有执行实例都必须在第一个节点失败
+    （current_node_index == 0 且 status == 'failed'），且没有运行中/待执行的实例。
+
+    Returns:
+        (success: bool, message: str)
+    """
+    executions = PayFlowExecution.query.filter_by(batch_id=batch_id).all()
+    if not executions:
+        return False, '批次不存在或无执行记录'
+
+    # 检查是否有运行中/待执行的实例
+    running = [e for e in executions if e.status in ('running', 'waiting')]
+    if running:
+        return False, f'批次中有 {len(running)} 个实例正在运行中，无法重试'
+
+    pending = [e for e in executions if e.status == 'pending']
+    if pending:
+        return False, f'批次中有 {len(pending)} 个实例待执行，无法重试'
+
+    # 检查所有失败实例是否都在第一个节点
+    failed_executions = [e for e in executions if e.status == 'failed']
+    if not failed_executions:
+        return False, '批次中没有失败的实例，无需重试'
+
+    not_first_node = [e for e in failed_executions if e.current_node_index != 0]
+    if not_first_node:
+        return False, f'有 {len(not_first_node)} 个实例在非首节点失败，不满足批次重试条件（所有失败实例必须在第一个节点失败）'
+
+    # 重置所有失败实例
+    for execution in failed_executions:
+        execution.status = 'pending'
+        execution.error_message = None
+        execution.current_node_index = 0
+        execution.loop_node_id = None
+        execution.loop_count = 0
+        execution.next_run_at = None
+        execution.completed_at = None
+        execution.context = None
+        execution.result_message = None
+        # 清除节点执行记录
+        PayFlowNodeExecution.query.filter_by(execution_id=execution.execution_id).delete()
+
+    db.session.commit()
+    logger.info(f'批次重试: batch_id={batch_id} 重置 {len(failed_executions)} 个实例')
+    return True, f'已重置 {len(failed_executions)} 个实例，等待调度器执行'
 
 
 def cancel_execution(execution_id):
