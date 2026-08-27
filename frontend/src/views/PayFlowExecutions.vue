@@ -19,7 +19,15 @@
       </el-form>
 
       <!-- 批次列表表格 -->
-      <el-table :data="batches" stripe border style="width:100%" empty-text="暂无执行批次" row-key="batch_id">
+      <el-table
+        ref="tableRef"
+        :data="batches"
+        stripe border style="width:100%"
+        empty-text="暂无执行批次"
+        row-key="batch_id"
+        :expand-row-keys="expandedKeys"
+        @expand-change="onExpandChange"
+      >
         <el-table-column type="expand">
           <template #default="{ row }">
             <div class="expand-content">
@@ -108,7 +116,7 @@
         </el-table-column>
         <el-table-column label="操作" width="100" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" type="primary" @click="toggleExpand(row)">展开</el-button>
+            <el-button size="small" type="primary" @click="toggleExpand(row)">{{ expandedBatches.has(row.batch_id) ? '收起' : '展开' }}</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -198,7 +206,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import dayjs from 'dayjs'
@@ -210,7 +218,9 @@ const pageSize = ref(20)
 const detailVisible = ref(false)
 const detailData = ref(null)
 const activeLogIdx = ref([])
+const tableRef = ref(null)
 const expandedBatches = ref(new Set())
+const expandedKeys = computed(() => Array.from(expandedBatches.value))
 let pollTimer = null
 
 const filters = reactive({ keyword: '' })
@@ -297,16 +307,19 @@ async function loadBatchExecutions(batch) {
   }
 }
 
-async function toggleExpand(batch) {
-  if (expandedBatches.value.has(batch.batch_id)) {
-    expandedBatches.value.delete(batch.batch_id)
-    batch.executions = null
+async function onExpandChange(row, expandedRows) {
+  // 同步展开状态集合（expandRows 为当前所有展开行）
+  expandedBatches.value = new Set(expandedRows.map(r => r.batch_id))
+  if (expandedBatches.value.has(row.batch_id)) {
+    await loadBatchExecutions(row)
   } else {
-    expandedBatches.value.add(batch.batch_id)
-    await loadBatchExecutions(batch)
+    row.executions = null
   }
-  // 触发表格重新渲染
-  batches.value = [...batches.value]
+}
+
+function toggleExpand(row) {
+  // 通过表格实例切换展开（会触发 expand-change 完成数据加载）
+  tableRef.value?.toggleRowExpansion(row)
 }
 
 function onPageChange(p) {
