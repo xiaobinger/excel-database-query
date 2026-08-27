@@ -349,6 +349,7 @@ WHERE merchant_id = :value
 - **TextCrusher（文本压缩）**：去除重复段落、冗余格式、无意义填充词，节省30-60% token
 - **按模型独立配置**：每个AI模型可单独启用/禁用Headroom压缩
 - **实时统计展示**：对话消息、缓存统计页面实时展示压缩率和节省token数
+- **对外API支持**：外部API调用（OpenAI兼容端点、自定义端点）同样支持Headroom压缩，响应中返回压缩统计（`headroom`字段），调用日志记录压缩指标和节省token
 
 **压缩策略对比**：
 
@@ -378,6 +379,9 @@ WHERE merchant_id = :value
 - `backend/app/services/ai_service.py`：集成压缩入口 `compress_if_enabled()`
 - `backend/app/models/ai_config.py`：`enable_headroom`配置字段
 - `backend/app/models/ai_chat.py`：`headroom_original_tokens`/`headroom_saved_tokens`/`headroom_compression_ratio`统计字段
+- `backend/app/services/open_api_service.py`：对外API调用时应用Headroom压缩（`_chat_single`/`chat_once`/`stream_chat`）
+- `backend/app/routes/open_api_routes.py`：对外API响应中包含`headroom`统计字段
+- `backend/app/models/api_call_log.py`：调用日志记录`headroom_original_tokens`/`headroom_saved_tokens`/`headroom_compression_ratio`
 - 前端配置页：`SystemConfig.vue`
 - 前端统计展示：`CacheManager.vue`、`AiChat.vue`
 
@@ -485,6 +489,7 @@ API类型和本地脚本类型的系统任务支持**从SQL脚本动态获取参
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-08-27 | v2.3.2 | 对外API支持Headroom压缩：外部API调用（OpenAI兼容端点、自定义端点）同样应用Headroom上下文压缩逻辑，响应中返回`headroom`统计字段（original_tokens/saved_tokens/compression_ratio），调用日志记录压缩指标和节省token |
 | 2026-08-27 | v2.3.1 | Headroom上下文压缩优化：降低压缩阈值（内容50字符/JSON 3项/日志5行/代码10行/文本500字符）使更多消息被压缩；新增模型标签栏绿色压缩图标指示器（`headroom-badge`）；新增消息发送区域Headroom启用状态实时展示 |
 | 2026-08-27 | v2.3.0 | 修复批次重试后不再次触发汇总通知：`retry_batch`/`retry_execution` 重置实例时未重置`summary_notify_sent`标记，首次通知后标记为True，重试执行完成后被`_try_trigger_summary_notification`跳过；两处重试逻辑均补充重置标记 |
 | 2026-08-27 | v2.2.9 | 修复汇总通知邮件HTML标签不渲染问题：汇总通知邮件误用plain纯文本格式发送（节点通知均为html格式），模板中的HTML标签直接显示为原始文本；改为html格式发送，明细列表换行符由\n改为\<br\> |

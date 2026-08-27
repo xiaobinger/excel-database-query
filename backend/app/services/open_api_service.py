@@ -267,8 +267,9 @@ def compute_session_id(api_key_id, messages) -> str:
 
 def _chat_single(cfg, messages: list, extras: dict = None):
     """单模型非流式调用（支持工具调用透传）。
-    返回 (content, tool_calls, finish_reason, tokens, p, c, cc, cr)"""
+    返回 (content, tool_calls, finish_reason, tokens, p, c, cc, cr, headroom_stats)"""
     from app.services.ai_service import post_chat_completions, _apply_cache_control
+    from app.services.headroom_service import compress_if_enabled
     api_key_val = cfg.get_api_key()
     if not api_key_val:
         raise ValueError('API密钥未配置')
@@ -276,6 +277,8 @@ def _chat_single(cfg, messages: list, extras: dict = None):
     url = f"{api_base.rstrip('/')}/chat/completions"
     headers = {'Authorization': f'Bearer {api_key_val}', 'Content-Type': 'application/json'}
     base_messages = _apply_cache_control(messages, cfg.provider, api_base)
+    # Headroom 上下文压缩（如果启用）
+    base_messages, headroom_stats = compress_if_enabled(cfg, base_messages)
     payload = {
         'model': cfg.model_name or 'gpt-3.5-turbo',
         'messages': base_messages,
@@ -294,15 +297,16 @@ def _chat_single(cfg, messages: list, extras: dict = None):
     usage = result.get('usage') or {}
     p_tokens, c_tokens, cc, cr = _extract_usage(usage)
     tokens = usage.get('total_tokens') or (p_tokens + c_tokens)
-    return content, tool_calls, finish_reason, tokens, p_tokens, c_tokens, cc, cr
+    return content, tool_calls, finish_reason, tokens, p_tokens, c_tokens, cc, cr, headroom_stats
 
 
 def _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
               messages, response_content, tokens, p_tokens, c_tokens, cc, cr,
-              elapsed, is_success, error_msg=None, session_id=None):
+              elapsed, is_success, error_msg=None, session_id=None, headroom_stats=None):
     """写调用记录（可在任意线程，自带 app context）。
 
     超长内容按字节安全截断；写入失败时降级（去掉内容重试）确保统计不丢。
+    headroom_stats: {original_tokens, saved_tokens, compression_ratio} 或 None
     """
     with app.app_context():
         try:
@@ -323,6 +327,9 @@ def _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
                 completion_tokens=c_tokens or 0,
                 cache_creation_tokens=cc or 0,
                 cache_read_tokens=cr or 0,
+                headroom_original_tokens=headroom_stats.get('original_tokens', 0) if headroom_stats else 0,
+                headroom_saved_tokens=headroom_stats.get('saved_tokens', 0) if headroom_stats else 0,
+                headroom_compression_ratio=headroom_stats.get('compression_ratio', 0) if headroom_stats else 0,
                 elapsed=round(elapsed, 2),
                 is_success=is_success,
                 error_msg=_truncate_bytes(error_msg, 2000) if error_msg else None,
@@ -353,6 +360,9 @@ def _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
                     completion_tokens=c_tokens or 0,
                     cache_creation_tokens=cc or 0,
                     cache_read_tokens=cr or 0,
+                    headroom_original_tokens=headroom_stats.get('original_tokens', 0) if headroom_stats else 0,
+                    headroom_saved_tokens=headroom_stats.get('saved_tokens', 0) if headroom_stats else 0,
+                    headroom_compression_ratio=headroom_stats.get('compression_ratio', 0) if headroom_stats else 0,
                     elapsed=round(elapsed, 2),
                     is_success=is_success,
                     error_msg=_truncate_bytes(f'{error_msg or ""}|日志降级保存（内容过大）: {e}', 2000),
@@ -372,7 +382,7 @@ def _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
 
 def chat_once(api_key, endpoint, model_name, messages, caller_ip, extras=None, session_id=None):
     """非流式对话（支持工具调用透传）。
-    返回 dict: {success, content, tool_calls, finish_reason, model, usage, elapsed} 或 {success, error}"""
+    返回 dict: {success, content, tool_calls, finish_reason, model, usage, elapsed, headroom} 或 {success, error}"""
     from flask import current_app
     app = current_app._get_current_object()
     start = time.time()
@@ -385,6 +395,7 @@ def chat_once(api_key, endpoint, model_name, messages, caller_ip, extras=None, s
     finish_reason = 'stop'
     model_used = ''
     tokens = p_tokens = c_tokens = cc = cr = 0
+    headroom_stats = None
     error = None
 
     try:
@@ -398,7 +409,7 @@ def chat_once(api_key, endpoint, model_name, messages, caller_ip, extras=None, s
         last_err = None
         for cfg in configs:
             try:
-                content, tool_calls, finish_reason, tokens, p_tokens, c_tokens, cc, cr = \
+                content, tool_calls, finish_reason, tokens, p_tokens, c_tokens, cc, cr, headroom_stats = \
                     _chat_single(cfg, messages, extras)
                 model_used = cfg.model_name or ''
                 last_err = None
@@ -415,8 +426,9 @@ def chat_once(api_key, endpoint, model_name, messages, caller_ip, extras=None, s
         elapsed = time.time() - start
         _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
                   messages, _content_with_tool_calls(content, tool_calls),
-                  tokens, p_tokens, c_tokens, cc, cr, elapsed, True, session_id=session_id)
-        return {
+                  tokens, p_tokens, c_tokens, cc, cr, elapsed, True, session_id=session_id,
+                  headroom_stats=headroom_stats)
+        result = {
             'success': True,
             'content': content,
             'tool_calls': tool_calls,
@@ -431,6 +443,9 @@ def chat_once(api_key, endpoint, model_name, messages, caller_ip, extras=None, s
             },
             'elapsed': round(elapsed, 2),
         }
+        if headroom_stats:
+            result['headroom'] = headroom_stats
+        return result
     except Exception as e:
         elapsed = time.time() - start
         _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
@@ -476,8 +491,10 @@ def stream_chat(api_key, endpoint, model_name, messages, caller_ip, app=None, ex
                     raise ValueError('没有可用的AI模型配置')
 
             from app.services.ai_service import post_chat_completions, _apply_cache_control
+            from app.services.headroom_service import compress_if_enabled
 
             last_err = None
+            headroom_stats = None
             for idx, cfg in enumerate(configs):
                 try:
                     api_key_val = cfg.get_api_key()
@@ -487,6 +504,8 @@ def stream_chat(api_key, endpoint, model_name, messages, caller_ip, app=None, ex
                     url = f"{api_base.rstrip('/')}/chat/completions"
                     headers = {'Authorization': f'Bearer {api_key_val}', 'Content-Type': 'application/json'}
                     base_messages = _apply_cache_control(messages, cfg.provider, api_base)
+                    # Headroom 上下文压缩（如果启用）
+                    base_messages, headroom_stats = compress_if_enabled(cfg, base_messages)
                     payload = {
                         'model': cfg.model_name or 'gpt-3.5-turbo',
                         'messages': base_messages,
@@ -604,8 +623,9 @@ def stream_chat(api_key, endpoint, model_name, messages, caller_ip, app=None, ex
             tool_calls = [tool_calls_accum[k] for k in sorted(tool_calls_accum)]
             _log_call(app, api_key, endpoint, model_requested, model_used, caller_ip,
                       messages, _content_with_tool_calls(content, tool_calls),
-                      tokens, p_tokens, c_tokens_out, cc, cr, elapsed, True, session_id=session_id)
-            yield '', True, {
+                      tokens, p_tokens, c_tokens_out, cc, cr, elapsed, True, session_id=session_id,
+                      headroom_stats=headroom_stats)
+            meta = {
                 'model': model_used,
                 'finish_reason': finish_reason,
                 'tool_calls': tool_calls,
@@ -618,6 +638,9 @@ def stream_chat(api_key, endpoint, model_name, messages, caller_ip, app=None, ex
                 },
                 'elapsed': round(elapsed, 2),
             }
+            if headroom_stats:
+                meta['headroom'] = headroom_stats
+            yield '', True, meta
         except Exception as e:
             error = str(e)
             elapsed = time.time() - start
