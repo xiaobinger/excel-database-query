@@ -156,6 +156,7 @@ def create_config():
             description=data.get('description', ''),
             enable_thinking=data.get('enable_thinking', False),
             enable_streaming=data.get('enable_streaming', True),
+            enable_headroom=data.get('enable_headroom', False),
             is_free=data.get('is_free', False),
             logo_url=data.get('logo_url', '') or '',
         )
@@ -190,7 +191,7 @@ def update_config(config_id):
     try:
         simple_fields = ['name', 'provider', 'api_base', 'model_name', 'is_default',
                          'is_active', 'max_tokens', 'context_window', 'temperature', 'system_prompt',
-                         'description', 'enable_thinking', 'enable_streaming', 'is_free', 'logo_url']
+                         'description', 'enable_thinking', 'enable_streaming', 'enable_headroom', 'is_free', 'logo_url']
         for key in simple_fields:
             if key in data:
                 setattr(config, key, data[key])
@@ -1068,6 +1069,7 @@ def send_message(chat_id):
         completion_tokens = ai_response.get('completion_tokens', 0)
         cache_creation_tokens = ai_response.get('cache_creation_tokens', 0) if isinstance(ai_response, dict) else 0
         cache_read_tokens = ai_response.get('cache_read_tokens', 0) if isinstance(ai_response, dict) else 0
+        headroom_stats = ai_response.get('headroom_stats', None) if isinstance(ai_response, dict) else None
 
         # If AI wants to call tools, execute them
         tool_results = []
@@ -1272,6 +1274,17 @@ def send_message(chat_id):
                     completion_tokens += ai_response2.get('completion_tokens', 0)
                     cache_creation_tokens += ai_response2.get('cache_creation_tokens', 0) if isinstance(ai_response2, dict) else 0
                     cache_read_tokens += ai_response2.get('cache_read_tokens', 0) if isinstance(ai_response2, dict) else 0
+                    # 合并二次回复的 headroom 统计
+                    headroom_stats2 = ai_response2.get('headroom_stats', None) if isinstance(ai_response2, dict) else None
+                    if headroom_stats2:
+                        if headroom_stats:
+                            headroom_stats['original_tokens'] += headroom_stats2.get('original_tokens', 0)
+                            headroom_stats['compressed_tokens'] += headroom_stats2.get('compressed_tokens', 0)
+                            headroom_stats['saved_tokens'] += headroom_stats2.get('saved_tokens', 0)
+                            if headroom_stats['original_tokens'] > 0:
+                                headroom_stats['compression_ratio'] = round(headroom_stats['saved_tokens'] / headroom_stats['original_tokens'], 4)
+                        else:
+                            headroom_stats = headroom_stats2
                     logger.info(f'普通路由-AI二次回复完成: response_text长度={len(response_text or "")}, second_tool_calls={len(second_tool_calls or [])}')
 
                     # 如果AI在二次回复中调用了工具，执行它们
@@ -1385,6 +1398,9 @@ def send_message(chat_id):
                 completion_tokens=completion_tokens,
                 cache_creation_tokens=cache_creation_tokens,
                 cache_read_tokens=cache_read_tokens,
+                headroom_original_tokens=headroom_stats.get('original_tokens', 0) if headroom_stats else 0,
+                headroom_saved_tokens=headroom_stats.get('saved_tokens', 0) if headroom_stats else 0,
+                headroom_compression_ratio=headroom_stats.get('compression_ratio', 0) if headroom_stats else 0,
                 elapsed=elapsed,
             )
             if model_used:

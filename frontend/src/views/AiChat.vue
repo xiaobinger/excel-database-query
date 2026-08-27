@@ -337,6 +337,9 @@
                   <span v-if="(msg.cache_creation_tokens > 0 || msg.cache_read_tokens > 0)" class="cache-info">
                     <i class="fas fa-bolt"></i> 缓存: 写入{{ msg.cache_creation_tokens || 0 }} / 命中{{ msg.cache_read_tokens || 0 }}
                   </span>
+                  <span v-if="msg.headroom_saved_tokens > 0" class="headroom-info">
+                    <i class="fas fa-compress-alt"></i> Headroom: 节省{{ msg.headroom_saved_tokens }} tokens (压缩率{{ (msg.headroom_compression_ratio * 100).toFixed(1) }}%)
+                  </span>
                 </div>
                 <!-- 重试按钮：仅AI文本消息且非流式中、非卡片类型、非临时错误消息 -->
                 <div v-if="msg.role === 'assistant' && !msg._streaming && !msg._type && msg.content.trim() && !msg._no_retry" class="message-retry">
@@ -4934,6 +4937,10 @@ onActivated(() => {
 
 .cache-info {
   color: #67c23a;
+}
+
+.headroom-info {
+  color: #e6a23c;
 }
 
 .message-retry {

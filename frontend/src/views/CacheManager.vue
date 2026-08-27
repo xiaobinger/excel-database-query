@@ -62,6 +62,46 @@
       </el-col>
     </el-row>
 
+    <!-- Headroom 压缩统计 -->
+    <el-row :gutter="16" class="stats-cards" v-if="overview.total_headroom_original_tokens > 0">
+      <el-col :span="6">
+        <el-card shadow="hover" class="stat-card stat-headroom-original">
+          <div class="stat-icon"><i class="fas fa-file-alt"></i></div>
+          <div class="stat-info">
+            <div class="stat-value">{{ formatNumber(overview.total_headroom_original_tokens) }}</div>
+            <div class="stat-label">压缩前Tokens</div>
+          </div>
+        </el-card>
+      </el-col>
+      <el-col :span="6">
+        <el-card shadow="hover" class="stat-card stat-headroom-saved">
+          <div class="stat-icon"><i class="fas fa-piggy-bank"></i></div>
+          <div class="stat-info">
+            <div class="stat-value">{{ formatNumber(overview.total_headroom_saved_tokens) }}</div>
+            <div class="stat-label">节省Tokens</div>
+          </div>
+        </el-card>
+      </el-col>
+      <el-col :span="6">
+        <el-card shadow="hover" class="stat-card stat-headroom-ratio">
+          <div class="stat-icon"><i class="fas fa-compress-alt"></i></div>
+          <div class="stat-info">
+            <div class="stat-value">{{ (overview.headroom_compression_ratio * 100).toFixed(1) }}%</div>
+            <div class="stat-label">压缩率</div>
+          </div>
+        </el-card>
+      </el-col>
+      <el-col :span="6">
+        <el-card shadow="hover" class="stat-card stat-headroom-effective">
+          <div class="stat-icon"><i class="fas fa-chart-line"></i></div>
+          <div class="stat-info">
+            <div class="stat-value">{{ formatNumber(overview.total_headroom_original_tokens - overview.total_headroom_saved_tokens) }}</div>
+            <div class="stat-label">实际消耗Tokens</div>
+          </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
     <!-- Agent Stats Table -->
     <el-card class="section-card">
       <template #header>
@@ -152,6 +192,9 @@ const overview = ref({
   completion_tokens: 0,
   cache_creation_tokens: 0,
   cache_read_tokens: 0,
+  total_headroom_original_tokens: 0,
+  total_headroom_saved_tokens: 0,
+  headroom_compression_ratio: 0,
   message_count: 0,
 })
 const agentStats = ref([])
@@ -197,6 +240,9 @@ async function fetchStats() {
       completion_tokens: raw.total_completion_tokens || 0,
       cache_creation_tokens: raw.total_cache_creation_tokens || 0,
       cache_read_tokens: raw.total_cache_read_tokens || 0,
+      total_headroom_original_tokens: raw.total_headroom_original_tokens || 0,
+      total_headroom_saved_tokens: raw.total_headroom_saved_tokens || 0,
+      headroom_compression_ratio: raw.headroom_compression_ratio || 0,
       message_count: raw.total_messages || 0,
     }
     agentStats.value = data.by_agent || []
@@ -336,5 +382,25 @@ onMounted(fetchStats)
 .token-cache-read {
   color: #67c23a;
   font-weight: 500;
+}
+
+.stat-headroom-original .stat-icon {
+  background: rgba(64, 158, 255, 0.1);
+  color: #409eff;
+}
+
+.stat-headroom-saved .stat-icon {
+  background: rgba(103, 194, 58, 0.1);
+  color: #67c23a;
+}
+
+.stat-headroom-ratio .stat-icon {
+  background: rgba(230, 162, 60, 0.1);
+  color: #e6a23c;
+}
+
+.stat-headroom-effective .stat-icon {
+  background: rgba(144, 147, 153, 0.1);
+  color: #909399;
 }
 </style>

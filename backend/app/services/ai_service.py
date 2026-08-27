@@ -648,11 +648,11 @@ class AiService:
                         db.session.commit()
                     return result
                 else:
-                    content, tokens, p_tokens, c_tokens, cache_create, cache_read = AiService.chat(config, messages)
+                    content, tokens, p_tokens, c_tokens, cache_create, cache_read, headroom_stats = AiService.chat(config, messages)
                     if strategy and tokens:
                         strategy.record_token_usage(config.id, tokens)
                         db.session.commit()
-                    return content, tokens, p_tokens, c_tokens, cache_create, cache_read
+                    return content, tokens, p_tokens, c_tokens, cache_create, cache_read, headroom_stats
             except Exception as e:
                 last_error = e
                 logger.warning(f"模型 {config.name} 调用失败: {str(e)}，尝试下一个")
@@ -674,6 +674,10 @@ class AiService:
 
         # 应用缓存控制
         messages = _apply_cache_control(messages, config.provider, api_base)
+
+        # Headroom 上下文压缩（如果启用）
+        from app.services.headroom_service import compress_if_enabled
+        messages, headroom_stats = compress_if_enabled(config, messages)
 
         headers = {
             'Authorization': f'Bearer {api_key}',
@@ -711,7 +715,7 @@ class AiService:
         if isinstance(prompt_details, dict) and 'cached_tokens' in prompt_details:
             cache_read_tokens = prompt_details.get('cached_tokens', 0)
 
-        return content, tokens, prompt_tokens, completion_tokens, cache_creation_tokens, cache_read_tokens
+        return content, tokens, prompt_tokens, completion_tokens, cache_creation_tokens, cache_read_tokens, headroom_stats
 
     @staticmethod
     def build_chat_context(user_id: int, chat_id: int = None, agent_id: int = None) -> str:
@@ -859,6 +863,10 @@ class AiService:
         # 应用缓存控制
         messages = _apply_cache_control(messages, config.provider, api_base)
 
+        # Headroom 上下文压缩（如果启用）
+        from app.services.headroom_service import compress_if_enabled
+        messages, headroom_stats = compress_if_enabled(config, messages)
+
         headers = {
             'Authorization': f'Bearer {api_key}',
             'Content-Type': 'application/json',
@@ -919,6 +927,7 @@ class AiService:
             'cache_read_tokens': cache_read_tokens,
             'finish_reason': finish_reason,
             'model': config.model_name or '',
+            'headroom_stats': headroom_stats,
         }
 
     @staticmethod

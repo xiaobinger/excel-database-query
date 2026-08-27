@@ -336,6 +336,10 @@
                   <el-switch v-model="aiConfigForm.enable_streaming" active-text="是" inactive-text="否" />
                   <span style="margin-left: 12px; color: #909399; font-size: 12px">启用后逐字打印AI回复内容</span>
                 </el-form-item>
+                <el-form-item label="Headroom压缩">
+                  <el-switch v-model="aiConfigForm.enable_headroom" active-text="是" inactive-text="否" />
+                  <span style="margin-left: 12px; color: #909399; font-size: 12px">启用后对上下文进行智能压缩，节省60-95%输入token（JSON/日志/代码等）</span>
+                </el-form-item>
                 <el-form-item label="免费模型">
                   <el-switch v-model="aiConfigForm.is_free" active-text="是" inactive-text="否" />
                   <span style="margin-left: 12px; color: #909399; font-size: 12px">标记为免费模型，可配合路由策略的「仅免费」过滤使用</span>
@@ -855,6 +859,7 @@ const defaultAiConfigForm = {
   is_active: true,
   enable_thinking: false,
   enable_streaming: true,
+  enable_headroom: false,
   is_free: false,
   system_prompt: '',
 }
@@ -926,6 +931,7 @@ function openAiConfigDialog(row) {
       is_active: row.is_active !== false,
       enable_thinking: row.enable_thinking || false,
       enable_streaming: row.enable_streaming || false,
+      enable_headroom: row.enable_headroom || false,
       is_free: row.is_free || false,
       system_prompt: row.system_prompt || '',
     })

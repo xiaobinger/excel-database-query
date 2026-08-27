@@ -28,6 +28,7 @@
 - 用户行为追踪与自主学习
 - AI技能管理（系统/用户/自动学习）
 - AI对话（Markdown渲染）
+- **Headroom上下文压缩**：智能识别内容类型（JSON/日志/代码/文本），应用针对性压缩策略，节省60-95%输入token；支持按模型独立启用，实时展示压缩率和节省token统计
 
 ### 代付流程编排
 - **流程模板管理**：步骤列表式配置，支持拖拽排序节点
@@ -336,6 +337,43 @@ WHERE merchant_id = :value
 
 ## 近期新增功能
 
+### Headroom上下文压缩 (v2.3+)
+
+基于内容感知的智能上下文压缩层，自动识别消息内容类型并应用最优压缩策略，大幅降低AI对话的输入token消耗：
+
+**核心能力**：
+- **内容类型识别**：自动识别JSON数组、日志、代码、文本四种内容类型
+- **SmartCrusher（JSON压缩）**：基于字段方差统计，高方差字段完整保留，低方差字段提取值列表，节省70-90% token
+- **LogCompressor（日志压缩）**：保留ERROR/FATAL/WARN级别日志行，压缩DEBUG/INFO冗余行，节省85-95% token
+- **CodeCompressor（代码压缩）**：保留函数签名、类定义、导入语句等结构信息，压缩函数体实现，节省40-70% token
+- **TextCrusher（文本压缩）**：去除重复段落、冗余格式、无意义填充词，节省30-60% token
+- **按模型独立配置**：每个AI模型可单独启用/禁用Headroom压缩
+- **实时统计展示**：对话消息、缓存统计页面实时展示压缩率和节省token数
+
+**压缩策略对比**：
+
+| 内容类型 | 压缩策略 | 节省率 | 保留内容 |
+|---------|---------|--------|---------|
+| JSON数组 | SmartCrusher | 70-90% | 高方差字段完整、低方差字段值列表 |
+| 日志 | LogCompressor | 85-95% | ERROR/FATAL/WARN行、关键上下文 |
+| 代码 | CodeCompressor | 40-70% | 函数签名、类定义、导入语句 |
+| 文本 | TextCrusher | 30-60% | 关键信息、去重段落 |
+
+**使用方式**：
+1. 在「系统配置 → AI模型配置」中编辑目标模型
+2. 开启「Headroom压缩」开关
+3. 保存后，该模型的AI对话将自动应用压缩
+4. 在「缓存管理」页面查看压缩统计卡片（压缩前Tokens、节省Tokens、压缩率、实际消耗Tokens）
+5. 在AI对话页面消息下方查看单条消息的压缩统计
+
+**技术实现**：
+- `backend/app/services/headroom_service.py`：HeadroomCompressor核心实现
+- `backend/app/services/ai_service.py`：集成压缩入口 `compress_if_enabled()`
+- `backend/app/models/ai_config.py`：`enable_headroom`配置字段
+- `backend/app/models/ai_chat.py`：`headroom_original_tokens`/`headroom_saved_tokens`/`headroom_compression_ratio`统计字段
+- 前端配置页：`SystemConfig.vue`
+- 前端统计展示：`CacheManager.vue`、`AiChat.vue`
+
 ### 代付流程编排系统 (v2.2+)
 
 支持用户自定义代付流程的走势与流转条件，实现灵活的多步骤自动化处理：
@@ -440,6 +478,7 @@ API类型和本地脚本类型的系统任务支持**从SQL脚本动态获取参
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-08-27 | v2.3.1 | Headroom上下文压缩：基于内容感知的智能压缩层，自动识别JSON/日志/代码/文本类型并应用最优压缩策略（SmartCrusher/LogCompressor/CodeCompressor/TextCrusher），节省60-95%输入token；支持按模型独立启用，缓存统计和对话消息实时展示压缩率和节省token数 |
 | 2026-08-27 | v2.3.0 | 修复批次重试后不再次触发汇总通知：`retry_batch`/`retry_execution` 重置实例时未重置`summary_notify_sent`标记，首次通知后标记为True，重试执行完成后被`_try_trigger_summary_notification`跳过；两处重试逻辑均补充重置标记 |
 | 2026-08-27 | v2.2.9 | 修复汇总通知邮件HTML标签不渲染问题：汇总通知邮件误用plain纯文本格式发送（节点通知均为html格式），模板中的HTML标签直接显示为原始文本；改为html格式发送，明细列表换行符由\n改为\<br\> |
 | 2026-08-27 | v2.2.8 | 修复批次明细展开不显示问题：点击行首展开箭头未触发明细加载（executions始终为null）；"展开"按钮未调用表格toggleRowExpansion导致行不展开；轮询刷新后展开状态丢失。改为受控展开（expand-row-keys + expand-change事件统一处理数据加载与状态同步） |

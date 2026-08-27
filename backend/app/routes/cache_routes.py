@@ -21,6 +21,8 @@ def get_cache_stats():
         func.sum(AiChatMessage.completion_tokens).label('total_completion_tokens'),
         func.sum(AiChatMessage.cache_creation_tokens).label('total_cache_creation_tokens'),
         func.sum(AiChatMessage.cache_read_tokens).label('total_cache_read_tokens'),
+        func.sum(AiChatMessage.headroom_original_tokens).label('total_headroom_original_tokens'),
+        func.sum(AiChatMessage.headroom_saved_tokens).label('total_headroom_saved_tokens'),
         func.count(AiChatMessage.id).label('total_messages'),
     ).filter(AiChatMessage.role == 'assistant').first()
 
@@ -68,6 +70,11 @@ def get_cache_stats():
     # 这里只做统计展示，实际费用取决于各API提供商的定价
     total_cache_creation = total_stats.total_cache_creation_tokens or 0
 
+    # Headroom 压缩统计
+    total_headroom_original = total_stats.total_headroom_original_tokens or 0
+    total_headroom_saved = total_stats.total_headroom_saved_tokens or 0
+    headroom_compression_ratio = round(total_headroom_saved / total_headroom_original, 4) if total_headroom_original > 0 else 0
+
     return jsonify({
         'success': True,
         'data': {
@@ -76,6 +83,9 @@ def get_cache_stats():
                 'total_completion_tokens': total_stats.total_completion_tokens or 0,
                 'total_cache_creation_tokens': total_cache_creation,
                 'total_cache_read_tokens': total_cache_read,
+                'total_headroom_original_tokens': total_headroom_original,
+                'total_headroom_saved_tokens': total_headroom_saved,
+                'headroom_compression_ratio': headroom_compression_ratio,
                 'total_messages': total_stats.total_messages or 0,
                 'cache_hit_rate': cache_hit_rate,
             },
