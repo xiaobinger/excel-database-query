@@ -604,6 +604,16 @@
                 </div>
               </div>
             </div>
+            <div v-if="inputText.length > 0" class="input-stats-bar">
+              <span class="stat-item"><i class="fas fa-keyboard"></i> {{ inputText.length }} 字符</span>
+              <span class="stat-item"><i class="fas fa-coins"></i> ≈ {{ estimateTokens(inputText) }} tokens</span>
+              <span v-if="selectedModel?.enable_headroom" class="stat-item headroom-will-compress">
+                <i class="fas fa-compress-alt"></i> 将压缩
+              </span>
+              <span v-else-if="inputText.length >= 50" class="stat-item headroom-no-compress">
+                <i class="fas fa-compress-alt"></i> 不压缩
+              </span>
+            </div>
             <div class="input-bottom-bar">
               <el-dropdown v-if="canSwitchAgent" trigger="click" @command="selectDropdownAgent" class="agent-dropdown">
                 <div class="agent-dropdown-trigger" :class="{ 'agent-selected': selectedAgent && !selectedAgent.is_default }">
@@ -5943,6 +5953,30 @@ onActivated(() => {
 .input-text-wrapper :deep(.el-textarea__inner):focus {
   border: none;
   box-shadow: none !important;
+}
+
+/* 输入统计栏 */
+.input-stats-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+  font-size: 12px;
+  color: #909399;
+}
+.input-stats-bar .stat-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.input-stats-bar .stat-item i {
+  font-size: 11px;
+}
+.input-stats-bar .headroom-will-compress {
+  color: #34d399;
+}
+.input-stats-bar .headroom-no-compress {
+  color: #c0c4cc;
 }
 
 /* 模型下拉选择 */

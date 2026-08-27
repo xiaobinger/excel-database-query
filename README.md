@@ -489,6 +489,7 @@ API类型和本地脚本类型的系统任务支持**从SQL脚本动态获取参
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-08-27 | v2.3.3 | AI对话输入框实时统计：输入区域下方展示已输入字符数、预计消耗token数、是否触发headroom压缩（绿色"将压缩"/灰色"不压缩"） |
 | 2026-08-27 | v2.3.2 | 对外API支持Headroom压缩：外部API调用（OpenAI兼容端点、自定义端点）同样应用Headroom上下文压缩逻辑，响应中返回`headroom`统计字段（original_tokens/saved_tokens/compression_ratio），调用日志记录压缩指标和节省token |
 | 2026-08-27 | v2.3.1 | Headroom上下文压缩优化：降低压缩阈值（内容50字符/JSON 3项/日志5行/代码10行/文本500字符）使更多消息被压缩；新增模型标签栏绿色压缩图标指示器（`headroom-badge`）；新增消息发送区域Headroom启用状态实时展示 |
 | 2026-08-27 | v2.3.0 | 修复批次重试后不再次触发汇总通知：`retry_batch`/`retry_execution` 重置实例时未重置`summary_notify_sent`标记，首次通知后标记为True，重试执行完成后被`_try_trigger_summary_notification`跳过；两处重试逻辑均补充重置标记 |
