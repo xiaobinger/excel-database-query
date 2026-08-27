@@ -528,16 +528,16 @@ def _send_summary_notification(batch_id):
     success_count = len(success_list)
     fail_count = len(fail_list)
 
-    # 构建汇总文本
+    # 构建汇总文本（HTML 邮件用 <br> 换行）
     success_lines = []
     for item in success_list:
-        success_lines.append(f"  行{item['row_index']}: {item['accountName']} {item['businessNo']} 金额{item['amount']:.2f}")
+        success_lines.append(f"行{item['row_index']}: {item['accountName']} {item['businessNo']} 金额{item['amount']:.2f}")
     fail_lines = []
     for item in fail_list:
-        fail_lines.append(f"  行{item['row_index']}: {item['accountName']} {item['businessNo']} 金额{item['amount']:.2f} 原因:{item['error_message']}")
+        fail_lines.append(f"行{item['row_index']}: {item['accountName']} {item['businessNo']} 金额{item['amount']:.2f} 原因:{item['error_message']}")
 
-    success_list_text = '\n'.join(success_lines) if success_lines else '  无'
-    fail_list_text = '\n'.join(fail_lines) if fail_lines else '  无'
+    success_list_text = '<br>'.join(success_lines) if success_lines else '无'
+    fail_list_text = '<br>'.join(fail_lines) if fail_lines else '无'
 
     # 替换模板变量
     subject = tpl.title or f'【代付流程汇总通知】{executions[0].template_name}'
@@ -600,7 +600,7 @@ def _send_email(to_addresses, subject, content):
     msg['Subject'] = subject
     msg['Date'] = formatdate(localtime=True)
     msg['Message-ID'] = make_msgid()
-    msg.attach(MIMEText(content, 'plain', 'utf-8'))
+    msg.attach(MIMEText(content, 'html', 'utf-8'))
 
     import ssl
     context = ssl.create_default_context()
