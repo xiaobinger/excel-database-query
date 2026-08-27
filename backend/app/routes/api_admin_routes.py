@@ -412,13 +412,14 @@ def batch_delete_logs():
 @open_api_admin_bp.route('/stats', methods=['GET'])
 @permission_required('system')
 def get_stats():
-    """汇总统计（跟随筛选条件）：总量/成功率/token/缓存/耗时 + 按模型与按key分组"""
+    """汇总统计（跟随筛选条件）：总量/成功率/token/缓存/耗时/headroom + 按模型与按key分组"""
     base = _apply_log_filters(ApiCallLog.query)
     total = base.count()
     if total == 0:
         return jsonify({'success': True, 'data': {
             'total': 0, 'success_rate': 0, 'total_tokens': 0, 'cache_tokens': 0,
             'avg_elapsed': 0, 'by_model': [], 'by_key': [],
+            'headroom_original_tokens': 0, 'headroom_saved_tokens': 0,
         }})
     success_count = base.filter_by(is_success=True).count()
     agg = _apply_log_filters(db.session.query(
@@ -426,6 +427,8 @@ def get_stats():
         func.coalesce(func.sum(ApiCallLog.cache_creation_tokens), 0),
         func.coalesce(func.sum(ApiCallLog.cache_read_tokens), 0),
         func.coalesce(func.avg(ApiCallLog.elapsed), 0),
+        func.coalesce(func.sum(ApiCallLog.headroom_original_tokens), 0),
+        func.coalesce(func.sum(ApiCallLog.headroom_saved_tokens), 0),
     )).filter(ApiCallLog.is_success == True).first()
 
     by_model = _apply_log_filters(db.session.query(
@@ -449,6 +452,8 @@ def get_stats():
         'cache_creation_tokens': int(agg[1] or 0),
         'cache_read_tokens': int(agg[2] or 0),
         'avg_elapsed': round(float(agg[3] or 0), 2),
+        'headroom_original_tokens': int(agg[4] or 0),
+        'headroom_saved_tokens': int(agg[5] or 0),
         'by_model': [{'model': m or '(未知)', 'count': c, 'tokens': int(t)} for m, c, t in by_model],
         'by_key': [{'api_key_id': kid, 'name': n or f'#{kid}', 'count': c, 'tokens': int(t)} for kid, n, c, t in by_key],
     }})
