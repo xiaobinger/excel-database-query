@@ -720,7 +720,8 @@ async function deleteTemplate(row) {
 async function loadNotifyTemplates() {
   try {
     const res = await api.payFlow.getNotifyTemplates({ per_page: 100 })
-    notifyTemplates.value = res.data.items || []
+    const d = res.data
+    notifyTemplates.value = Array.isArray(d) ? d : (d.items || [])
   } catch (e) {
     ElMessage.error('加载通知模板失败')
   }
