@@ -868,7 +868,13 @@ onBeforeUnmount(() => {
 .source-tab:hover { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
 .source-tab.active { background: var(--el-color-primary); color: #fff; border-color: var(--el-color-primary); }
 
-/* ── 表格美化 ── */
+/* 表格样式见下方非 scoped <style> 块（innerHTML 生成的 DOM 需要全局选择器） */
+
+.fullscreen-chart { width: 100%; height: 72vh; min-height: 480px; }
+</style>
+
+<!-- 非 scoped 样式：innerHTML 生成的 DOM 没有 data-v-xxx 属性，scoped 选择器无法匹配 -->
+<style>
 .table-wrap { overflow: auto; max-height: 420px; border-radius: 6px; border: 1px solid var(--el-border-color-lighter); }
 .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .data-table thead { position: sticky; top: 0; z-index: 1; }
@@ -883,6 +889,5 @@ onBeforeUnmount(() => {
 .pct-bar { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); height: 6px; width: 60px; border-radius: 3px; background: var(--el-fill-color); overflow: hidden; }
 .pct-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--el-color-success-light-5), var(--el-color-success)); transition: width 0.3s; }
 .pct-val { position: relative; z-index: 1; font-variant-numeric: tabular-nums; font-size: 12px; color: var(--el-color-success); font-weight: 500; margin-left: 66px; }
-
-.fullscreen-chart { width: 100%; height: 72vh; min-height: 480px; }
+.data-dashboard .empty-hint { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--el-text-color-placeholder); }
 </style>
