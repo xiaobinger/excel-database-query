@@ -112,6 +112,14 @@
           <el-button v-if="chartAt(i - 1).chartType !== 'table'" size="small" text :icon="Camera" @click="saveChartImage(i - 1)" title="保存图片" />
           <el-button v-else size="small" text :icon="Download" @click="exportExcel(i - 1)" title="导出Excel" />
         </div>
+        <!-- 多数据源切换 tabs -->
+        <div v-if="sourceNames.length > 1" class="source-tabs">
+          <span class="source-tab" :class="{ active: chartAt(i - 1).activeSource === '' }"
+            @click="chartAt(i - 1).activeSource = ''; renderChart(i - 1)">全部</span>
+          <span v-for="sn in sourceNames" :key="sn" class="source-tab"
+            :class="{ active: chartAt(i - 1).activeSource === sn }"
+            @click="chartAt(i - 1).activeSource = sn; renderChart(i - 1)">{{ sn }}</span>
+        </div>
         <div class="chart-body" :ref="el => setChartRef(i - 1, el)"></div>
       </div>
     </div>
@@ -204,12 +212,31 @@ const availableColumns = computed(() => {
   return lastResult.value.columns.filter(c => !META_COLS.has(c))
 })
 
+// 多数据源名称列表（从 _source 列提取去重）
+const sourceNames = computed(() => {
+  if (!lastResult.value) return []
+  const srcIdx = lastResult.value.columns.indexOf('_source')
+  if (srcIdx < 0) return []
+  const names = [...new Set(lastResult.value.rows.map(r => r[srcIdx]).filter(Boolean))]
+  return names.sort()
+})
+
 // 模板安全访问图表配置：索引越界时自动补全默认配置，杜绝 undefined.xxx 崩溃
 function chartAt(idx) {
   if (!chartConfigs.value[idx]) {
-    chartConfigs.value[idx] = { xCol: '', yCols: [], chartType: 'line' }
+    chartConfigs.value[idx] = { xCol: '', yCols: [], chartType: 'line', activeSource: '' }
   }
   return chartConfigs.value[idx]
+}
+
+// 按当前图表选中的数据源过滤结果（_source 列）
+function getFilteredResult(cfg) {
+  if (!lastResult.value) return null
+  if (!cfg.activeSource) return lastResult.value
+  const srcIdx = lastResult.value.columns.indexOf('_source')
+  if (srcIdx < 0) return lastResult.value
+  const rows = lastResult.value.rows.filter(r => r[srcIdx] === cfg.activeSource)
+  return { ...lastResult.value, rows, row_count: rows.length }
 }
 
 function setChartRef(idx, el) {
@@ -354,7 +381,7 @@ function autoAssignColumns() {
 
 function ensureChartConfigs() {
   while (chartConfigs.value.length < state.layoutCount) {
-    chartConfigs.value.push({ xCol: '', yCols: [], chartType: 'line' })
+    chartConfigs.value.push({ xCol: '', yCols: [], chartType: 'line', activeSource: '' })
   }
   chartConfigs.value.length = state.layoutCount
 }
@@ -523,14 +550,15 @@ function renderChart(idx) {
   if (!el || !cfg || !lastResult.value) return
   if (chartInstances[idx]) { chartInstances[idx].dispose(); delete chartInstances[idx] }
 
+  const result = getFilteredResult(cfg)
   if (cfg.chartType === 'table') {
-    el.innerHTML = buildTableHtml(lastResult.value, cfg)
+    el.innerHTML = buildTableHtml(result, cfg)
     return
   }
   el.innerHTML = ''
   const inst = echarts.init(el)
   chartInstances[idx] = inst
-  const option = buildChartOption(lastResult.value, cfg)
+  const option = buildChartOption(result, cfg)
   if (option) {
     inst.setOption(option, true)
     inst.off('dblclick')
@@ -558,28 +586,45 @@ function escapeHtml(v) {
 }
 
 function buildTableHtml(result, cfg) {
+  if (!result) return '<div class="empty-hint">暂无数据</div>'
   const { columns, rows } = result
   if (!rows?.length) return '<div class="empty-hint">暂无数据</div>'
   const displayCols = [cfg.xCol, ...cfg.yCols.filter(c => columns.includes(c))]
   const pctCols = new Set()
+  const numCols = new Set()
   cfg.yCols.forEach(col => {
     const idx = columns.indexOf(col); if (idx < 0) return
     if (isPctCol(rows.map(r => r[idx]))) pctCols.add(col)
+    else {
+      const vals = rows.map(r => r[idx])
+      if (vals.filter(v => !isNaN(parseNum(v))).length > vals.length * 0.3) numCols.add(col)
+    }
   })
+
   let html = '<div class="table-wrap"><table class="data-table"><thead><tr>'
-  displayCols.forEach(col => { html += `<th>${escapeHtml(col)}</th>` })
+  displayCols.forEach((col, ci) => {
+    const align = ci === 0 ? 'left' : 'right'
+    html += `<th style="text-align:${align}">${escapeHtml(col)}</th>`
+  })
   html += '</tr></thead><tbody>'
-  rows.forEach(row => {
-    html += '<tr>'
+  rows.forEach((row, ri) => {
+    html += `<tr class="${ri % 2 === 0 ? 'even' : 'odd'}">`
     displayCols.forEach((col, ci) => {
       const idx = columns.indexOf(col)
       const raw = idx >= 0 ? row[idx] : ''
       const numV = parseNum(raw)
       const isNum = !isNaN(numV) && ci > 0
-      if (ci === 0) html += `<td>${raw != null ? escapeHtml(raw) : ''}</td>`
-      else if (pctCols.has(col)) html += `<td class="pct">${raw != null ? escapeHtml(raw) : ''}</td>`
-      else if (isNum) html += `<td class="num">${escapeHtml(fmtNum(numV))}</td>`
-      else html += `<td>${raw != null ? escapeHtml(raw) : ''}</td>`
+      if (ci === 0) {
+        html += `<td class="cell-label">${raw != null ? escapeHtml(raw) : ''}</td>`
+      } else if (pctCols.has(col)) {
+        const pct = parseFloat(String(raw).replace(/[%％]/g, ''))
+        const barW = isNaN(pct) ? 0 : Math.min(Math.abs(pct), 100)
+        html += `<td class="cell-pct"><div class="pct-bar"><div class="pct-fill" style="width:${barW}%"></div></div><span class="pct-val">${raw != null ? escapeHtml(raw) : ''}</span></td>`
+      } else if (numCols.has(col)) {
+        html += `<td class="cell-num">${escapeHtml(fmtNum(numV))}</td>`
+      } else {
+        html += `<td>${raw != null ? escapeHtml(raw) : ''}</td>`
+      }
     })
     html += '</tr>'
   })
@@ -675,13 +720,14 @@ function openFullscreen(idx) {
     if (fullscreenInst.value) { fullscreenInst.value.dispose(); fullscreenInst.value = null }
     const cfg = chartConfigs.value[idx]
     if (!cfg) return
+    const result = getFilteredResult(cfg)
     if (cfg.chartType === 'table') {
-      fullscreenChartRef.value.innerHTML = buildTableHtml(lastResult.value, cfg)
+      fullscreenChartRef.value.innerHTML = buildTableHtml(result, cfg)
       return
     }
     fullscreenChartRef.value.innerHTML = ''
     fullscreenInst.value = echarts.init(fullscreenChartRef.value)
-    const option = buildChartOption(lastResult.value, cfg)
+    const option = buildChartOption(result, cfg)
     if (option) fullscreenInst.value.setOption(option, true)
   })
 }
@@ -816,12 +862,27 @@ onBeforeUnmount(() => {
 .chart-body { flex: 1; min-height: 320px; width: 100%; }
 .empty-hint { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--el-text-color-placeholder); }
 
-.table-wrap { overflow: auto; max-height: 420px; }
-.data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.data-table th, .data-table td { border: 1px solid var(--el-border-color-lighter); padding: 6px 8px; text-align: left; white-space: nowrap; }
-.data-table th { background: var(--el-fill-color-light); position: sticky; top: 0; }
-.data-table td.num, .data-table td.pct { text-align: right; font-variant-numeric: tabular-nums; }
-.data-table td.pct { color: var(--el-color-success); }
+/* ── 数据源切换 tabs ── */
+.source-tabs { display: flex; gap: 4px; padding: 4px 0 6px; flex-wrap: wrap; }
+.source-tab { padding: 3px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; background: var(--el-fill-color-lighter); color: var(--el-text-color-secondary); transition: all 0.2s; border: 1px solid transparent; }
+.source-tab:hover { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
+.source-tab.active { background: var(--el-color-primary); color: #fff; border-color: var(--el-color-primary); }
+
+/* ── 表格美化 ── */
+.table-wrap { overflow: auto; max-height: 420px; border-radius: 6px; border: 1px solid var(--el-border-color-lighter); }
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.data-table thead { position: sticky; top: 0; z-index: 1; }
+.data-table th { background: linear-gradient(135deg, var(--el-color-primary-light-7), var(--el-color-primary-light-8)); color: #fff; font-weight: 600; padding: 10px 14px; border: none; font-size: 12px; letter-spacing: 0.3px; white-space: nowrap; }
+.data-table td { padding: 9px 14px; border-bottom: 1px solid var(--el-border-color-extra-light); white-space: nowrap; }
+.data-table tr.even { background: var(--el-bg-color); }
+.data-table tr.odd { background: var(--el-fill-color-blank); }
+.data-table tbody tr:hover { background: var(--el-color-primary-light-9) !important; }
+.data-table .cell-label { font-weight: 500; color: var(--el-text-color-primary); max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.data-table .cell-num { text-align: right; font-variant-numeric: tabular-nums; font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace; color: var(--el-text-color-regular); font-size: 12px; }
+.data-table .cell-pct { text-align: right; position: relative; min-width: 110px; }
+.pct-bar { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); height: 6px; width: 60px; border-radius: 3px; background: var(--el-fill-color); overflow: hidden; }
+.pct-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--el-color-success-light-5), var(--el-color-success)); transition: width 0.3s; }
+.pct-val { position: relative; z-index: 1; font-variant-numeric: tabular-nums; font-size: 12px; color: var(--el-color-success); font-weight: 500; margin-left: 66px; }
 
 .fullscreen-chart { width: 100%; height: 72vh; min-height: 480px; }
 </style>
