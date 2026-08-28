@@ -491,7 +491,7 @@ def _process_ticket_with_ai_async(ticket_id, app):
                 # 执行工具调用
                 tool_results = []
                 # 检测是否有需要确认执行的SQL系统任务或生产环境代付提现
-                pending_system_task = None
+                pending_system_tasks = []
                 pending_pay_withdraw = None
                 for tc in tool_calls:
                     func_name = tc.get('function', {}).get('name', '')
@@ -532,7 +532,7 @@ def _process_ticket_with_ai_async(ticket_id, app):
                                 task_type = result.get('task_type', 'sql')
                                 if task_type == 'sql':
                                     # SQL数据变更类任务，需用户确认后执行
-                                    pending_system_task = {
+                                    pending_system_tasks.append({
                                         'func_name': func_name,
                                         'func_args': func_args,
                                         'task_id': result.get('task_id'),
@@ -543,7 +543,7 @@ def _process_ticket_with_ai_async(ticket_id, app):
                                         'database_id': result.get('database_id'),
                                         'description': result.get('description', ''),
                                         'confirm_message': result.get('confirm_message', ''),
-                                    }
+                                    })
                                     result_summary = f"SQL系统任务「{result.get('task_name', '')}」需用户确认后执行"
                                 else:
                                     task_id = result.get('task_id', '')
@@ -594,12 +594,20 @@ def _process_ticket_with_ai_async(ticket_id, app):
                     tool_log.append(f'**调用工具**: `{func_name}` → {result_summary}')
 
                 # 如果检测到需要确认的SQL系统任务，暂停处理，等待用户确认
-                if pending_system_task:
-                    ticket.set_pending_action(pending_system_task)
+                if pending_system_tasks:
+                    ticket.set_pending_action({'tasks': pending_system_tasks})
                     ticket.status = STATUS_PENDING_CONFIRMATION
+                    # 构建任务列表描述
+                    task_lines = []
+                    for i, t in enumerate(pending_system_tasks, 1):
+                        task_lines.append(
+                            f"**{i}. {t['task_name']}**\n"
+                            f"   参数：{json.dumps(t['params_values'], ensure_ascii=False)}"
+                        )
+                    tasks_text = '\n\n'.join(task_lines)
                     ticket.ai_result = (
-                        f"AI识别到需要执行数据变更类操作：**{pending_system_task['task_name']}**\n\n"
-                        f"**参数：** {json.dumps(pending_system_task['params_values'], ensure_ascii=False)}\n\n"
+                        f"AI识别到需要执行数据变更类操作（共{len(pending_system_tasks)}个任务）：\n\n"
+                        f"{tasks_text}\n\n"
                         f"⚠️ 此操作会直接影响生产数据，请提交人确认后执行。\n"
                         f"可在下方评论「同意」、「确认执行」或点击「确认执行」按钮继续。"
                     )
@@ -607,9 +615,10 @@ def _process_ticket_with_ai_async(ticket_id, app):
                         tool_log_text = '\n\n'.join(tool_log)
                         ticket.ai_result = f'{ticket.ai_result}\n\n---\n**处理过程：**\n{tool_log_text}'
                     _add_comment(ticket, None, ticket.ai_result, 'ai_process', is_ai=True)
-                    _add_comment(ticket, None, '工单状态已转为「待确认」，等待提交人确认后执行数据变更操作', 'status_change', is_ai=True)
+                    _add_comment(ticket, None, f'工单状态已转为「待确认」，等待提交人确认后执行{len(pending_system_tasks)}个数据变更操作', 'status_change', is_ai=True)
                     db.session.commit()
-                    logger.info(f'工单 {ticket.ticket_no} AI处理暂停，需用户确认执行SQL系统任务: {pending_system_task["task_name"]}')
+                    task_names = ', '.join(t['task_name'] for t in pending_system_tasks)
+                    logger.info(f'工单 {ticket.ticket_no} AI处理暂停，需用户确认执行SQL系统任务: {task_names}')
                     return
 
                 # 如果检测到生产环境代付提现，暂停处理，等待用户确认
@@ -952,7 +961,10 @@ def _execute_pending_pay_withdraw(ticket, app):
 
 
 def _execute_pending_action_async(ticket_id, app):
-    """后台线程：执行待确认的数据变更操作（SQL系统任务 或 生产环境代付提现）"""
+    """后台线程：执行待确认的数据变更操作（SQL系统任务 或 生产环境代付提现）
+
+    支持多任务顺序执行：pending_action 可能为 {'tasks': [...]}（多任务）或单任务字典（兼容旧数据）。
+    """
     with app.app_context():
         try:
             ticket = Ticket.query.get(ticket_id)
@@ -968,89 +980,116 @@ def _execute_pending_action_async(ticket_id, app):
                 _execute_pending_pay_withdraw(ticket, app)
                 return
 
-            task_id = pending_action.get('task_id')
-            params_values = pending_action.get('params_values', {})
-            database_id = pending_action.get('database_id')
+            # 兼容新旧格式：新格式 {'tasks': [...]}，旧格式单任务字典
+            if 'tasks' in pending_action:
+                tasks = pending_action.get('tasks') or []
+            else:
+                tasks = [pending_action]
 
-            logger.info(f'工单 {ticket.ticket_no} 开始执行待确认的SQL系统任务: task_id={task_id}')
+            if not tasks:
+                raise Exception('没有待确认执行的任务信息')
 
             from app.models.system_task import SystemTask, SystemTaskExecution
             from app.services.system_task_service import SystemTaskService
-
-            system_task = SystemTask.query.get(task_id) if task_id else None
-            if not system_task:
-                raise Exception(f'系统任务不存在(ID={task_id})')
-
-            # 创建执行记录并异步执行SQL任务
-            execution = SystemTaskService.create_execution(
-                system_task_id=system_task.id,
-                params_values=params_values,
-                created_by=ticket.created_by,
-            )
-            # 设置任务类型
-            execution.task_type = 'sql'
-            execution.status = 'running'
-            execution.started_at = datetime.utcnow()
-            db.session.commit()
-
-            # 异步执行
-            SystemTaskService.execute_async(
-                execution_id=execution.execution_id,
-                system_task_id=system_task.id,
-                params_values=params_values,
-                database_id=database_id,
-            )
-
-            # 等待执行完成（轮询检查状态，最多等待5分钟）
             import time
-            max_wait = 300  # 5分钟
-            waited = 0
-            while waited < max_wait:
-                db.session.expire(execution)
+
+            logger.info(f'工单 {ticket.ticket_no} 开始执行待确认的SQL系统任务，共{len(tasks)}个')
+
+            results = []  # 每个任务的执行结果摘要
+            all_success = True
+            failed_task_name = ''
+
+            for idx, task_info in enumerate(tasks, 1):
+                task_id = task_info.get('task_id')
+                params_values = task_info.get('params_values', {})
+                database_id = task_info.get('database_id')
+                task_name = task_info.get('task_name', f'任务{idx}')
+
+                logger.info(f'工单 {ticket.ticket_no} 执行第{idx}/{len(tasks)}个SQL系统任务: {task_name}(task_id={task_id})')
+
+                system_task = SystemTask.query.get(task_id) if task_id else None
+                if not system_task:
+                    results.append(f'❌ 第{idx}个任务「{task_name}」失败：系统任务不存在(ID={task_id})')
+                    all_success = False
+                    failed_task_name = task_name
+                    break
+
+                # 创建执行记录并异步执行SQL任务
+                execution = SystemTaskService.create_execution(
+                    system_task_id=system_task.id,
+                    params_values=params_values,
+                    created_by=ticket.created_by,
+                )
+                execution.task_type = 'sql'
+                execution.status = 'running'
+                execution.started_at = datetime.utcnow()
+                db.session.commit()
+
+                # 异步执行
+                SystemTaskService.execute_async(
+                    execution_id=execution.execution_id,
+                    system_task_id=system_task.id,
+                    params_values=params_values,
+                    database_id=database_id,
+                )
+
+                # 等待执行完成（轮询检查状态，最多等待5分钟）
+                max_wait = 300
+                waited = 0
+                while waited < max_wait:
+                    db.session.expire(execution)
+                    execution = SystemTaskExecution.query.filter_by(execution_id=execution.execution_id).first()
+                    if not execution:
+                        break
+                    if execution.status in ('completed', 'failed', 'cancelled'):
+                        break
+                    time.sleep(2)
+                    waited += 2
+
                 execution = SystemTaskExecution.query.filter_by(execution_id=execution.execution_id).first()
                 if not execution:
+                    results.append(f'❌ 第{idx}个任务「{task_name}」失败：执行记录丢失')
+                    all_success = False
+                    failed_task_name = task_name
                     break
-                if execution.status in ('completed', 'failed', 'cancelled'):
-                    break
-                time.sleep(2)
-                waited += 2
 
-            # 获取执行结果
-            execution = SystemTaskExecution.query.filter_by(execution_id=execution.execution_id).first()
-            if not execution:
-                raise Exception('执行记录丢失')
+                result_data = execution.get_result_data()
 
-            # 构建结果摘要
-            result_data = execution.get_result_data()
-            logs = execution.get_logs()
+                if execution.status == 'completed':
+                    task_summary = f'SQL系统任务执行成功'
+                    if isinstance(result_data, dict):
+                        affected = result_data.get('total_affected', 0)
+                        if affected:
+                            task_summary = f'SQL系统任务执行成功，影响{affected}行数据'
+                        elif result_data.get('message'):
+                            task_summary = f'SQL系统任务执行成功：{result_data["message"]}'
+                    results.append(f'✅ 第{idx}个任务「{task_name}」成功：{task_summary}（执行ID: {execution.execution_id[:8]}...）')
+                else:
+                    error_msg = execution.error_message or '执行失败'
+                    results.append(f'❌ 第{idx}个任务「{task_name}」失败：{error_msg}')
+                    all_success = False
+                    failed_task_name = task_name
+                    break  # 遇到失败立即停止后续任务
 
-            if execution.status == 'completed':
-                # 执行成功
-                result_summary = 'SQL系统任务执行成功'
-                if isinstance(result_data, dict):
-                    affected = result_data.get('total_affected', 0)
-                    if affected:
-                        result_summary = f'SQL系统任务执行成功，影响{affected}行数据'
-                    elif result_data.get('message'):
-                        result_summary = f'SQL系统任务执行成功：{result_data["message"]}'
+            # 汇总结果
+            results_text = '\n\n'.join(results)
 
+            if all_success:
                 ticket.status = STATUS_PROCESSED
                 ticket.processed_at = datetime.utcnow()
-                ticket.ai_result = f'✅ {result_summary}\n\n**任务名称：** {system_task.name}\n**执行ID：** {execution.execution_id[:8]}...'
+                ticket.ai_result = f'✅ 全部{len(tasks)}个数据变更任务执行成功\n\n{results_text}'
                 ticket.clear_pending_action()
                 _add_comment(ticket, None, ticket.ai_result, 'ai_process', is_ai=True)
-                _add_comment(ticket, None, 'AI已完成数据变更操作，等待提交人核实', 'status_change', is_ai=True)
+                _add_comment(ticket, None, 'AI已完成所有数据变更操作，等待提交人核实', 'status_change', is_ai=True)
             else:
-                # 执行失败
-                error_msg = execution.error_message or '执行失败'
                 ticket.status = STATUS_PENDING_ASSIGNMENT
-                ticket.ai_result = f'❌ SQL系统任务执行失败：{error_msg}'
+                ticket.ai_result = f'❌ 数据变更任务执行失败（在任务「{failed_task_name}」处中止）\n\n{results_text}'
                 ticket.clear_pending_action()
                 _add_comment(ticket, None, ticket.ai_result, 'ai_process', is_ai=True)
                 _add_comment(ticket, None, '数据变更操作执行失败，工单已转为「待指派」，请重新指派或重试', 'status_change', is_ai=True)
 
             db.session.commit()
-            logger.info(f'工单 {ticket.ticket_no} 待确认任务执行完成，状态: {execution.status}')
+            logger.info(f'工单 {ticket.ticket_no} 待确认任务执行完成，结果: {"全部成功" if all_success else "失败"}')
 
         except Exception as e:
             logger.error(f'工单待确认任务执行失败 ticket_id={ticket_id}: {e}', exc_info=True)
@@ -1752,10 +1791,14 @@ def cancel_ticket_action(ticket_id):
     if ticket.status != STATUS_PENDING_CONFIRMATION:
         return jsonify({'success': False, 'message': f'当前状态({STATUS_LABELS.get(ticket.status, ticket.status)})不允许取消操作'}), 400
 
-    task_name = ticket.get_pending_action().get('task_name', '')
+    pending_action = ticket.get_pending_action() or {}
+    if 'tasks' in pending_action and isinstance(pending_action['tasks'], list):
+        task_names = '、'.join(t.get('task_name', '未命名任务') for t in pending_action['tasks']) if pending_action['tasks'] else '数据变更操作'
+    else:
+        task_names = pending_action.get('task_name', '') or '数据变更操作'
     ticket.status = STATUS_PENDING_ASSIGNMENT
     ticket.clear_pending_action()
-    _add_comment(ticket, current_user.id, f'提交人取消了数据变更操作「{task_name}」，工单转为待指派', 'status_change')
+    _add_comment(ticket, current_user.id, f'提交人取消了数据变更操作「{task_names}」，工单转为待指派', 'status_change')
     db.session.commit()
 
     return jsonify({

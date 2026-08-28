@@ -191,7 +191,18 @@
             <div class="pending-confirmation-info">
               <div class="pending-confirmation-title">⚠️ AI需执行数据变更操作，等待您确认</div>
               <div class="pending-confirmation-detail" v-if="detailData.pending_action">
-                任务：{{ detailData.pending_action.task_name }} | 参数：{{ JSON.stringify(detailData.pending_action.params_values) }}
+                <template v-if="Array.isArray(detailData.pending_action.tasks)">
+                  共 {{ detailData.pending_action.tasks.length }} 个待确认任务：
+                  <ul style="margin: 4px 0; padding-left: 20px">
+                    <li v-for="(t, i) in detailData.pending_action.tasks" :key="i">
+                      {{ i + 1 }}. {{ t.task_name || '未命名任务' }}
+                      <span style="color: #999; font-size: 12px">（{{ JSON.stringify(t.params_values) }}）</span>
+                    </li>
+                  </ul>
+                </template>
+                <template v-else>
+                  任务：{{ detailData.pending_action.task_name }} | 参数：{{ JSON.stringify(detailData.pending_action.params_values) }}
+                </template>
               </div>
               <div class="pending-confirmation-hint">请在下方评论「同意」或「确认执行」，或点击下方按钮确认执行</div>
             </div>
@@ -1139,17 +1150,22 @@ async function handleRetryAi() {
 
 // 确认执行待确认的数据变更操作
 async function handleConfirmAction() {
-  const taskName = detailData.value.pending_action?.task_name || ''
+  const action = detailData.value.pending_action || {}
+  let confirmMsg = ''
+  if (Array.isArray(action.tasks)) {
+    const names = action.tasks.map((t, i) => `${i + 1}. ${t.task_name}`).join('\n')
+    confirmMsg = `确定要执行以下 ${action.tasks.length} 个数据变更操作吗？\n\n${names}\n\n此操作会直接影响生产数据，请谨慎确认！`
+  } else {
+    const taskName = action.task_name || ''
+    confirmMsg = `确定要执行数据变更操作「${taskName}」吗？\n此操作会直接影响生产数据，请谨慎确认！`
+  }
   try {
-    await ElMessageBox.confirm(
-      `确定要执行数据变更操作「${taskName}」吗？\n此操作会直接影响生产数据，请谨慎确认！`,
-      '确认执行数据变更',
-      {
-        confirmButtonText: '确认执行',
-        cancelButtonText: '取消',
-        type: 'warning',
-      }
-    )
+    await ElMessageBox.confirm(confirmMsg, '确认执行数据变更', {
+      confirmButtonText: '确认执行',
+      cancelButtonText: '取消',
+      type: 'warning',
+      dangerouslyUseHTMLString: false,
+    })
   } catch {
     return
   }
