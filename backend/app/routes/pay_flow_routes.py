@@ -23,7 +23,8 @@ def list_templates():
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 20, type=int)
     keyword = request.args.get('keyword')
-    result = flow_service.get_templates(page=page, per_page=per_page, keyword=keyword)
+    is_enabled = request.args.get('is_enabled', type=bool)
+    result = flow_service.get_templates(page=page, per_page=per_page, keyword=keyword, is_enabled=is_enabled)
     return jsonify({'success': True, 'data': result})
 
 

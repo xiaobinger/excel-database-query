@@ -3,14 +3,33 @@
     <el-card shadow="hover">
       <template #header>
         <div class="card-header">
-          <span><i class="fas fa-ticket"></i> 工单管理</span>
+          <span><i class="fas fa-tasks"></i> 工单管理</span>
           <div class="header-actions">
             <el-select v-model="statusFilter" placeholder="状态筛选" clearable style="width: 130px" @change="fetchTickets">
               <el-option v-for="(label, key) in statusLabels" :key="key" :label="label" :value="key" />
             </el-select>
+            <el-select v-model="assigneeFilter" placeholder="指派人" clearable style="width: 150px" @change="fetchTickets">
+              <el-option label="未指派" :value="''" />
+              <el-option v-for="u in assignees" :key="u.id" :label="u.name || u.username" :value="u.id" />
+            </el-select>
+            <el-select v-model="businessSystemFilter" placeholder="涉及系统" clearable style="width: 150px" @change="fetchTickets">
+              <el-option label="全部系统" :value="''" />
+              <el-option v-for="sys in businessSystems" :key="sys.id" :label="sys.name" :value="sys.id" />
+            </el-select>
+            <el-date-picker
+              v-model="dateFilter"
+              type="daterange"
+              range-separator="至"
+              start-placeholder="开始日期"
+              end-placeholder="结束日期"
+              value-format="YYYY-MM-DD"
+              style="width: 280px"
+              @change="fetchTickets"
+            />
             <el-input v-model="keyword" placeholder="搜索工单编号/标题" clearable style="width: 220px" @keyup.enter="fetchTickets" @clear="fetchTickets">
               <template #prefix><i class="fas fa-search"></i></template>
             </el-input>
+            <el-button @click="resetTicketFilters" style="margin-left: 8px">重置</el-button>
             <el-button type="primary" v-hasPermi="['ticket:create']" @click="openCreateDialog">
               <i class="fas fa-plus"></i> 提交工单
             </el-button>
@@ -539,6 +558,12 @@ async function fetchTickets(silent = false) {
     const params = { page: currentPage.value, per_page: pageSize.value }
     if (statusFilter.value) params.status = statusFilter.value
     if (keyword.value.trim()) params.keyword = keyword.value.trim()
+    if (assigneeFilter.value !== '' && assigneeFilter.value !== null) params.assignee_id = assigneeFilter.value
+    if (businessSystemFilter.value !== '' && businessSystemFilter.value !== null) params.business_system_id = businessSystemFilter.value
+    if (dateFilter.value && dateFilter.value.length === 2) {
+      params.start_date = dateFilter.value[0]
+      params.end_date = dateFilter.value[1]
+    }
     const res = await api.tickets.list(params)
     const data = res.data || res || {}
     const oldList = tickets.value

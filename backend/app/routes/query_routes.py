@@ -244,13 +244,47 @@ def get_tasks():
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 20, type=int)
     status_filter = request.args.get('status')
-
     task_type = request.args.get('type')
+    keyword = request.args.get('keyword', '').strip()
+
+    # 时间范围筛选
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+
     query = QueryTask.query
     if task_type:
         query = query.filter_by(type=task_type)
     if status_filter:
         query = query.filter_by(status=status_filter)
+    if keyword:
+        # 按脚本名称或任务ID搜索
+        from app.models.script import Script
+        script_ids = Script.query.filter(Script.name.contains(keyword)).with_entities(Script.id).all()
+        script_id_list = [s[0] for s in script_ids]
+        if script_id_list:
+            query = query.filter(db.or_(
+                QueryTask.script_id.in_(script_id_list),
+                QueryTask.task_id.contains(keyword)
+            ))
+        else:
+            query = query.filter(QueryTask.task_id.contains(keyword))
+
+    if start_date:
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(start_date, '%Y-%m-%d')
+            query = query.filter(QueryTask.created_at >= dt)
+        except (ValueError, TypeError):
+            pass
+
+    if end_date:
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(end_date, '%Y-%m-%d')
+            dt = dt.replace(hour=23, minute=59, second=59)
+            query = query.filter(QueryTask.created_at <= dt)
+        except (ValueError, TypeError):
+            pass
 
     current_user = get_current_user()
     if current_user and not current_user.is_admin():

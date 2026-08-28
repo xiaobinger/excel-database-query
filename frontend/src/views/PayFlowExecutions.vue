@@ -3,7 +3,7 @@
     <el-card class="page-card">
       <template #header>
         <div class="card-header">
-          <span><i class="fa fa-stream"></i> 代付流程执行记录</span>
+          <span><i class="fa fa-list-check"></i> 代付流程执行记录</span>
           <el-button @click="loadBatches"><i class="fa fa-refresh"></i> 刷新</el-button>
         </div>
       </template>
@@ -11,10 +11,23 @@
       <!-- 筛选 -->
       <el-form :inline="true" class="filter-bar">
         <el-form-item label="模板">
-          <el-input v-model="filters.keyword" placeholder="模板名称" clearable style="width:220px" @keyup.enter="loadBatches" />
+          <el-input v-model="filters.keyword" placeholder="模板名称" clearable style="width:200px" @keyup.enter="loadBatches" />
+        </el-form-item>
+        <el-form-item label="时间范围">
+          <el-date-picker
+            v-model="filters.dateRange"
+            type="daterange"
+            range-separator="至"
+            start-placeholder="开始日期"
+            end-placeholder="结束日期"
+            value-format="YYYY-MM-DD"
+            style="width: 280px"
+            @change="loadBatches"
+          />
         </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="loadBatches">查询</el-button>
+          <el-button @click="resetFilters">重置</el-button>
         </el-form-item>
       </el-form>
 
@@ -223,7 +236,13 @@ const expandedBatches = ref(new Set())
 const expandedKeys = computed(() => Array.from(expandedBatches.value))
 let pollTimer = null
 
-const filters = reactive({ keyword: '' })
+const filters = reactive({ keyword: '', dateRange: null })
+
+function resetFilters() {
+  filters.keyword = ''
+  filters.dateRange = null
+  loadBatches()
+}
 
 function formatTime(ts) {
   return ts ? dayjs(ts).format('YYYY-MM-DD HH:mm:ss') : '-'
@@ -274,6 +293,10 @@ async function loadBatches() {
   try {
     const params = { page: page.value, per_page: pageSize.value }
     if (filters.keyword) params.keyword = filters.keyword
+    if (filters.dateRange && filters.dateRange.length === 2) {
+      params.start_date = filters.dateRange[0]
+      params.end_date = filters.dateRange[1]
+    }
     const res = await api.payFlow.batches(params)
     const items = res.data.items || []
     // 保留已展开批次的明细

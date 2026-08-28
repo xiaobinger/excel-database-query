@@ -54,10 +54,12 @@ OPERATORS = {
 # 模板 CRUD
 # ---------------------------------------------------------------------------
 
-def get_templates(page=1, per_page=20, keyword=None):
+def get_templates(page=1, per_page=20, keyword=None, is_enabled=None):
     query = PayFlowTemplate.query
     if keyword:
         query = query.filter(PayFlowTemplate.name.contains(keyword))
+    if is_enabled is not None:
+        query = query.filter(PayFlowTemplate.is_enabled == is_enabled)
     pagination = query.order_by(PayFlowTemplate.created_at.desc()).paginate(
         page=page, per_page=per_page, error_out=False)
     return {
@@ -1173,12 +1175,29 @@ def get_batch_summary(batch_id):
     }
 
 
-def get_batches(page=1, per_page=20, keyword=None):
+def get_batches(page=1, per_page=20, keyword=None, start_date=None, end_date=None):
     """获取批次列表（按 batch_id 聚合）"""
     from sqlalchemy import func, case
 
     # 子查询：获取每个 batch_id 的统计信息
-    subq = db.session.query(
+    query_base = db.session.query(PayFlowExecution)
+    if start_date:
+        from datetime import datetime
+        try:
+            dt = datetime.strptime(start_date, '%Y-%m-%d')
+            query_base = query_base.filter(PayFlowExecution.created_at >= dt)
+        except (ValueError, TypeError):
+            pass
+    if end_date:
+        from datetime import datetime
+        try:
+            dt = datetime.strptime(end_date, '%Y-%m-%d')
+            dt = dt.replace(hour=23, minute=59, second=59)
+            query_base = query_base.filter(PayFlowExecution.created_at <= dt)
+        except (ValueError, TypeError):
+            pass
+
+    subq = query_base.with_entities(
         PayFlowExecution.batch_id,
         func.count(PayFlowExecution.id).label('total'),
         func.sum(case((PayFlowExecution.status == 'completed', 1), else_=0)).label('completed'),

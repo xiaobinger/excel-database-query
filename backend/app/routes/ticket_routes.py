@@ -1159,6 +1159,26 @@ def list_tickets():
             db.or_(Ticket.title.contains(keyword), Ticket.ticket_no.contains(keyword))
         )
 
+    # 时间范围筛选
+    start_date = request.args.get('start_date')
+    if start_date:
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(start_date, '%Y-%m-%d')
+            query = query.filter(Ticket.created_at >= dt)
+        except (ValueError, TypeError):
+            pass
+
+    end_date = request.args.get('end_date')
+    if end_date:
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(end_date, '%Y-%m-%d')
+            dt = dt.replace(hour=23, minute=59, second=59)
+            query = query.filter(Ticket.created_at <= dt)
+        except (ValueError, TypeError):
+            pass
+
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 20, type=int)
 

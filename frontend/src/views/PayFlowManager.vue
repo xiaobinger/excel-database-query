@@ -3,8 +3,15 @@
     <el-card class="page-card">
       <template #header>
         <div class="card-header">
-          <span><i class="fa fa-project-diagram"></i> 代付流程编排</span>
+          <span><i class="fa fa-route"></i> 代付流程编排</span>
           <div class="header-actions">
+            <el-input v-model="templateFilter.keyword" placeholder="搜索模板名称" clearable style="width: 200px" @input="filteredTemplates">
+              <template #prefix><i class="fa fa-search"></i></template>
+            </el-input>
+            <el-select v-model="templateFilter.enabled" placeholder="状态" clearable style="width: 120px" @change="filteredTemplates">
+              <el-option label="启用" :value="true" />
+              <el-option label="禁用" :value="false" />
+            </el-select>
             <el-button type="primary" @click="openTemplateDialog()">
               <i class="fa fa-plus"></i> 新建模板
             </el-button>
@@ -18,7 +25,7 @@
         </div>
       </template>
 
-      <el-table :data="templates" stripe border style="width:100%" empty-text="暂无流程模板">
+      <el-table :data="filteredTemplatesList" stripe border style="width:100%" empty-text="暂无流程模板">
         <el-table-column prop="name" label="模板名称" width="180" />
         <el-table-column prop="description" label="描述" />
         <el-table-column label="节点数" width="80" align="center">
@@ -397,6 +404,20 @@ const templateDialogVisible = ref(false)
 const editingTemplate = ref(null)
 const saving = ref(false)
 const selectedNodeIdx = ref(null)
+
+// 筛选条件
+const templateFilter = reactive({ keyword: '', enabled: null })
+const filteredTemplatesList = computed(() => {
+  let list = templates.value
+  if (templateFilter.keyword) {
+    const kw = templateFilter.keyword.toLowerCase()
+    list = list.filter(t => (t.name || '').toLowerCase().includes(kw))
+  }
+  if (templateFilter.enabled !== null && templateFilter.enabled !== '') {
+    list = list.filter(t => t.is_enabled === templateFilter.enabled)
+  }
+  return list
+})
 
 // 通知模板管理
 const notifyTemplates = ref([])
