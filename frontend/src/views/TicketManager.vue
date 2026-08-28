@@ -233,6 +233,44 @@
           <div class="reason-content" v-html="renderMarkdown(detailData.ai_result)"></div>
         </div>
 
+        <!-- AI Token 消耗指标 -->
+        <div v-if="hasAiTokenUsage" class="reason-block ai-token-usage">
+          <div class="reason-title"><i class="fas fa-chart-bar"></i> AI Token 消耗指标</div>
+          <div class="token-metrics">
+            <div class="token-metrics-header">
+              <el-tag type="primary" size="small" effect="dark">
+                <i class="fas fa-coins"></i> 总消耗 {{ formatTokens(detailData.ai_total_tokens) }}
+              </el-tag>
+              <el-tag v-if="detailData.ai_models_used && detailData.ai_models_used.length" type="info" size="small" effect="plain">
+                <i class="fas fa-microchip"></i> 参与模型：{{ detailData.ai_models_used.join(', ') }}
+              </el-tag>
+            </div>
+            <el-descriptions :column="3" border size="small" class="token-descriptions">
+              <el-descriptions-item label="Prompt Tokens">
+                <span class="token-value">{{ formatTokens(detailData.ai_prompt_tokens) }}</span>
+              </el-descriptions-item>
+              <el-descriptions-item label="Completion Tokens">
+                <span class="token-value">{{ formatTokens(detailData.ai_completion_tokens) }}</span>
+              </el-descriptions-item>
+              <el-descriptions-item label="缓存创建">
+                <span class="token-value">{{ formatTokens(detailData.ai_cache_creation_tokens) }}</span>
+              </el-descriptions-item>
+              <el-descriptions-item label="缓存读取">
+                <span class="token-value">{{ formatTokens(detailData.ai_cache_read_tokens) }}</span>
+              </el-descriptions-item>
+              <el-descriptions-item label="Headroom 原始">
+                <span class="token-value">{{ formatTokens(detailData.ai_headroom_original_tokens) }}</span>
+              </el-descriptions-item>
+              <el-descriptions-item label="Headroom 节省">
+                <span class="token-value highlight-saved">{{ formatTokens(detailData.ai_headroom_saved_tokens) }}</span>
+                <el-tag v-if="detailData.ai_headroom_compression_ratio > 0" type="success" size="small" effect="plain" style="margin-left: 6px">
+                  压缩 {{ (detailData.ai_headroom_compression_ratio * 100).toFixed(1) }}%
+                </el-tag>
+              </el-descriptions-item>
+            </el-descriptions>
+          </div>
+        </div>
+
         <!-- 拒绝/申诉信息 -->
         <div v-if="detailData.reject_reason" class="reason-block reject">
           <div class="reason-title"><i class="fas fa-ban"></i> 拒绝原因</div>
@@ -715,6 +753,29 @@ const isAiProcessing = computed(() =>
 const isPendingConfirmation = computed(() =>
   detailData.value.assignee_type === 'ai' && detailData.value.status === 'pending_confirmation'
 )
+
+// AI 是否产生了 token 消耗（用于控制是否渲染 token 指标区块）
+const hasAiTokenUsage = computed(() => {
+  const d = detailData.value
+  if (!d) return false
+  return (d.ai_total_tokens || 0) > 0
+    || (d.ai_prompt_tokens || 0) > 0
+    || (d.ai_completion_tokens || 0) > 0
+    || (d.ai_cache_creation_tokens || 0) > 0
+    || (d.ai_cache_read_tokens || 0) > 0
+    || (d.ai_headroom_original_tokens || 0) > 0
+    || (d.ai_headroom_saved_tokens || 0) > 0
+})
+
+// 格式化 token 数字（千分位 + 简写）
+function formatTokens(n) {
+  if (n == null || isNaN(n)) return '0'
+  const v = Number(n)
+  if (v < 1000) return String(v)
+  if (v < 10000) return v.toLocaleString()
+  if (v < 1000000) return `${(v / 1000).toFixed(1)}K`
+  return `${(v / 1000000).toFixed(2)}M`
+}
 
 // 进度条当前步骤
 const currentStep = computed(() => {
@@ -1386,6 +1447,36 @@ onUnmounted(() => {
 .reason-block.ai-result {
   background: #f6f0ff;
   border: 1px solid #d9d2ec;
+}
+
+.reason-block.ai-token-usage {
+  background: #f0f9ff;
+  border: 1px solid #cfe8ff;
+}
+
+.reason-block.ai-token-usage .reason-title {
+  color: #1677ff;
+}
+
+.token-metrics {
+  margin-top: 8px;
+}
+
+.token-metrics-header {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.token-descriptions .token-value {
+  font-weight: 600;
+  font-family: 'Consolas', 'Monaco', monospace;
+  color: #303133;
+}
+
+.token-descriptions .token-value.highlight-saved {
+  color: #67c23a;
 }
 
 .reason-title {

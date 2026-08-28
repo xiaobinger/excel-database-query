@@ -41,6 +41,17 @@ class Ticket(db.Model):
     ai_result = db.Column(db.Text, comment='AI处理结果')
     pending_action = db.Column(db.Text, comment='待确认执行的任务信息(JSON)，AI遇到数据变更类任务时存储')
 
+    # AI处理消耗的token指标（指派给AI时记录）
+    ai_total_tokens = db.Column(db.Integer, default=0, comment='AI处理总消耗token')
+    ai_prompt_tokens = db.Column(db.Integer, default=0, comment='AI处理Prompt token消耗')
+    ai_completion_tokens = db.Column(db.Integer, default=0, comment='AI处理Completion token消耗')
+    ai_cache_creation_tokens = db.Column(db.Integer, default=0, comment='AI处理缓存创建token消耗')
+    ai_cache_read_tokens = db.Column(db.Integer, default=0, comment='AI处理缓存读取token消耗')
+    ai_headroom_original_tokens = db.Column(db.Integer, default=0, comment='Headroom压缩前原始token')
+    ai_headroom_saved_tokens = db.Column(db.Integer, default=0, comment='Headroom压缩节省token')
+    ai_headroom_compression_ratio = db.Column(db.Float, default=0.0, comment='Headroom压缩比例')
+    ai_models_used = db.Column(db.Text, comment='AI处理使用过的模型列表(JSON数组)')
+
     submitted_at = db.Column(db.DateTime, comment='提交时间')
     received_at = db.Column(db.DateTime, comment='接收时间')
     processed_at = db.Column(db.DateTime, comment='处理完成时间')
@@ -75,6 +86,39 @@ class Ticket(db.Model):
     def clear_pending_action(self):
         """清空待确认执行的任务信息"""
         self.pending_action = None
+
+    def accumulate_ai_token_usage(self, usage: dict):
+        """累加AI处理的token消耗指标（支持多次调用累加）
+
+        usage: dict，来自 chat_with_tools/chat_with_failover 返回值，包含
+        tokens, prompt_tokens, completion_tokens, cache_creation_tokens,
+        cache_read_tokens, headroom_stats, model
+        """
+        if not usage:
+            return
+        self.ai_total_tokens = (self.ai_total_tokens or 0) + (usage.get('tokens') or usage.get('total_tokens') or 0)
+        self.ai_prompt_tokens = (self.ai_prompt_tokens or 0) + (usage.get('prompt_tokens') or 0)
+        self.ai_completion_tokens = (self.ai_completion_tokens or 0) + (usage.get('completion_tokens') or 0)
+        self.ai_cache_creation_tokens = (self.ai_cache_creation_tokens or 0) + (usage.get('cache_creation_tokens') or 0)
+        self.ai_cache_read_tokens = (self.ai_cache_read_tokens or 0) + (usage.get('cache_read_tokens') or 0)
+
+        # Headroom压缩指标累加
+        headroom = usage.get('headroom_stats') or {}
+        if headroom:
+            self.ai_headroom_original_tokens = (self.ai_headroom_original_tokens or 0) + (headroom.get('original_tokens') or 0)
+            self.ai_headroom_saved_tokens = (self.ai_headroom_saved_tokens or 0) + (headroom.get('saved_tokens') or 0)
+            # 压缩比例需要重新计算（节省/原始）
+            orig = self.ai_headroom_original_tokens or 0
+            saved = self.ai_headroom_saved_tokens or 0
+            self.ai_headroom_compression_ratio = round(saved / orig, 4) if orig > 0 else 0.0
+
+        # 记录参与模型（去重）
+        model = usage.get('model') or usage.get('model_name')
+        if model:
+            models = json.loads(self.ai_models_used) if self.ai_models_used else []
+            if model not in models:
+                models.append(model)
+            self.ai_models_used = json.dumps(models, ensure_ascii=False)
 
     def to_dict(self, include_comments=False) -> dict:
         # 指派人名称
@@ -111,6 +155,16 @@ class Ticket(db.Model):
             'closed_at': beijing_isoformat(self.closed_at),
             'created_at': beijing_isoformat(self.created_at),
             'updated_at': beijing_isoformat(self.updated_at),
+            # AI处理token指标
+            'ai_total_tokens': self.ai_total_tokens or 0,
+            'ai_prompt_tokens': self.ai_prompt_tokens or 0,
+            'ai_completion_tokens': self.ai_completion_tokens or 0,
+            'ai_cache_creation_tokens': self.ai_cache_creation_tokens or 0,
+            'ai_cache_read_tokens': self.ai_cache_read_tokens or 0,
+            'ai_headroom_original_tokens': self.ai_headroom_original_tokens or 0,
+            'ai_headroom_saved_tokens': self.ai_headroom_saved_tokens or 0,
+            'ai_headroom_compression_ratio': self.ai_headroom_compression_ratio or 0.0,
+            'ai_models_used': json.loads(self.ai_models_used) if self.ai_models_used else [],
         }
         if include_comments:
             data['comments'] = [c.to_dict() for c in (self.comments or [])]

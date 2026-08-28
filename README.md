@@ -337,6 +337,28 @@ WHERE merchant_id = :value
 
 ## 近期新增功能
 
+### 工单AI处理Token消耗统计 (v2.3.6+)
+
+工单指派给AI处理时，统计并展示该工单在整个AI处理过程中消耗的token相关指标，包括Headroom压缩指标和参与的AI模型：
+
+**统计指标**：
+- **总消耗Token**：AI处理该工单所有调用（工具循环、归总回复、最终回复）的token合计
+- **Prompt Tokens**：输入token消耗合计
+- **Completion Tokens**：输出token消耗合计
+- **缓存创建/读取**：Cache Creation / Cache Read token消耗
+- **Headroom原始Token**：压缩前原始token合计
+- **Headroom节省Token**：压缩节省token合计 + 压缩比例
+- **参与AI模型**：去重记录所有参与处理的AI模型列表
+
+**展示位置**：
+1. **工单详情对话框**（TicketManager.vue）：在"AI处理结果"下方展示"AI Token 消耗指标"区块，含总消耗标签、参与模型标签、6项细分指标
+2. **工单统计页**（TicketAnalytics.vue）：AI Agent处理统计表格新增"Token消耗"和"Headroom节省"两列；汇总行新增"Token总消耗"和"Headroom节省+压缩比例"标签
+
+**技术实现**：
+- `backend/app/models/ticket.py`：Ticket模型新增9个字段（`ai_total_tokens`/`ai_prompt_tokens`/`ai_completion_tokens`/`ai_cache_creation_tokens`/`ai_cache_read_tokens`/`ai_headroom_original_tokens`/`ai_headroom_saved_tokens`/`ai_headroom_compression_ratio`/`ai_models_used`）+ `accumulate_ai_token_usage()` 累加方法
+- `backend/app/routes/ticket_routes.py`：`_process_ticket_with_ai_async()` 中3处 `chat_with_failover()` 调用后捕获并累加token指标；`/analytics` 接口新增按Agent聚合的token统计查询和汇总
+- 前端：`TicketManager.vue` + `TicketAnalytics.vue` 展示组件
+
 ### Headroom上下文压缩 (v2.3+)
 
 基于内容感知的智能上下文压缩层，自动识别消息内容类型并应用最优压缩策略，大幅降低AI对话的输入token消耗：
@@ -490,6 +512,7 @@ API类型和本地脚本类型的系统任务支持**从SQL脚本动态获取参
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-08-28 | v2.3.7 | 工单AI处理Token消耗统计：工单指派给AI时，统计并展示AI处理过程消耗的token指标（总Token/Prompt/Completion/缓存创建/缓存读取），Headroom压缩指标（原始/节省/压缩率），参与的AI模型列表；工单详情对话框新增"AI Token 消耗指标"区块；工单统计页AI Agent表格新增Token消耗和Headroom节省列，汇总行新增Token总消耗标签 |
 | 2026-08-27 | v2.3.5 | 修复流式对话路径Headroom压缩缺失：流式对话（`send_message_stream`）完全未调用`compress_if_enabled`，导致headroom在流式对话中不生效；修复后在`_attempt`循环中添加压缩调用，并在done事件和消息保存中传递`headroom_stats`（original_tokens/saved_tokens/compression_ratio）；修复token统计不工作：流式请求缺少`stream_options: {include_usage: True}`导致OpenAI流式API不返回usage数据，在两处流式请求中添加`stream_options`；删除工具循环中重复的usage提取代码（避免token统计翻倍）；增强纯文本压缩策略：新增单段落长文本按句子截断策略 |
 | 2026-08-27 | v2.3.4 | Headroom压缩指标始终展示：对话消息下方和缓存统计页面即使未压缩也显示压缩指标（0 tokens/0%）；输入栏区分"将压缩"/"太短不压缩"/"未启用压缩"三种状态 |
 | 2026-08-27 | v2.3.6 | AI会话管理对话详情展示完整指标：在会话管理页面"查看对话详情"对话框中，每条 assistant 消息下方展示耗时、token（输入/输出）、缓存（写入/命中）、Headroom 压缩指标（原文/压缩后/节省/压缩率），与实时对话页保持一致 |

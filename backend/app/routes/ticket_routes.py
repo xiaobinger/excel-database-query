@@ -478,6 +478,8 @@ def _process_ticket_with_ai_async(ticket_id, app):
                 )
                 content = ai_response.get('content', '') or ''
                 tool_calls = ai_response.get('tool_calls', []) or []
+                # 累加token消耗指标（多轮调用合计）
+                ticket.accumulate_ai_token_usage(ai_response)
 
                 if not tool_calls:
                     # AI没有调用工具，直接返回文本回复
@@ -677,8 +679,15 @@ def _process_ticket_with_ai_async(ticket_id, app):
                             'content': json.dumps(tr['result'], ensure_ascii=False),
                         })
                     try:
-                        summary_content, _, _, _, _, _ = AiService.chat_with_failover(messages, use_tools=False, scope='ticket')
+                        summary_content, tokens, prompt_tokens, completion_tokens, cache_creation, cache_read, headroom_stats = AiService.chat_with_failover(messages, use_tools=False, scope='ticket')
                         final_content = summary_content or ''
+                        ticket.accumulate_ai_token_usage({
+                            'tokens': tokens, 'prompt_tokens': prompt_tokens,
+                            'completion_tokens': completion_tokens,
+                            'cache_creation_tokens': cache_creation,
+                            'cache_read_tokens': cache_read,
+                            'headroom_stats': headroom_stats,
+                        })
                     except Exception as se:
                         logger.warning(f'工单{ticket.ticket_no} AI归总回复失败: {se}')
                         final_content = '已触发相关任务执行，请到对应模块查看执行结果。'
@@ -700,8 +709,15 @@ def _process_ticket_with_ai_async(ticket_id, app):
                 # 最后一轮，请求AI生成最终回复（不带工具）
                 if round_idx == max_rounds - 1:
                     try:
-                        final_content, _, _, _, _, _ = AiService.chat_with_failover(messages, use_tools=False, scope='ticket')
+                        final_content, tokens, prompt_tokens, completion_tokens, cache_creation, cache_read, headroom_stats = AiService.chat_with_failover(messages, use_tools=False, scope='ticket')
                         final_content = final_content or ''
+                        ticket.accumulate_ai_token_usage({
+                            'tokens': tokens, 'prompt_tokens': prompt_tokens,
+                            'completion_tokens': completion_tokens,
+                            'cache_creation_tokens': cache_creation,
+                            'cache_read_tokens': cache_read,
+                            'headroom_stats': headroom_stats,
+                        })
                     except Exception as se:
                         logger.warning(f'工单{ticket.ticket_no} AI最终回复失败: {se}')
                         final_content = content or '处理完成'
@@ -2050,6 +2066,23 @@ def get_analytics():
     )
     ai_duration_rows = ai_duration_query.all()
 
+    # AI Token 消耗明细（按 agent 聚合）
+    ai_token_query = processed_base.filter(
+        ai_assignee_filter,
+        Ticket.assignee_agent_id.isnot(None),
+        Ticket.ai_total_tokens > 0,
+    ).with_entities(
+        Ticket.assignee_agent_id.label('agent_id'),
+        func.sum(Ticket.ai_total_tokens).label('total_tokens'),
+        func.sum(Ticket.ai_prompt_tokens).label('prompt_tokens'),
+        func.sum(Ticket.ai_completion_tokens).label('completion_tokens'),
+        func.sum(Ticket.ai_cache_creation_tokens).label('cache_creation_tokens'),
+        func.sum(Ticket.ai_cache_read_tokens).label('cache_read_tokens'),
+        func.sum(Ticket.ai_headroom_original_tokens).label('headroom_original_tokens'),
+        func.sum(Ticket.ai_headroom_saved_tokens).label('headroom_saved_tokens'),
+    ).group_by(Ticket.assignee_agent_id)
+    ai_token_rows = ai_token_query.all()
+
     # 汇总到用户维度
     user_map = {}  # user_id -> {submitted, assigned, completed, avg_duration, durations}
 
@@ -2086,6 +2119,17 @@ def get_analytics():
             delta_sec = (row.processed_at - start_time).total_seconds()
             if delta_sec > 0:
                 agent_map.setdefault(aid, {}).setdefault('durations', []).append(delta_sec)
+
+    # AI Token 消耗汇总到 agent_map
+    for row in ai_token_rows:
+        aid = row.agent_id
+        agent_map.setdefault(aid, {})['total_tokens'] = row.total_tokens or 0
+        agent_map.setdefault(aid, {})['prompt_tokens'] = row.prompt_tokens or 0
+        agent_map.setdefault(aid, {})['completion_tokens'] = row.completion_tokens or 0
+        agent_map.setdefault(aid, {})['cache_creation_tokens'] = row.cache_creation_tokens or 0
+        agent_map.setdefault(aid, {})['cache_read_tokens'] = row.cache_read_tokens or 0
+        agent_map.setdefault(aid, {})['headroom_original_tokens'] = row.headroom_original_tokens or 0
+        agent_map.setdefault(aid, {})['headroom_saved_tokens'] = row.headroom_saved_tokens or 0
 
     # 获取用户信息
     user_ids = list(user_map.keys())
@@ -2163,6 +2207,13 @@ def get_analytics():
             'completion_rate': completion_rate,
             'avg_duration_seconds': avg_sec,
             'processed_count': len(durations),
+            'total_tokens': stats.get('total_tokens', 0),
+            'prompt_tokens': stats.get('prompt_tokens', 0),
+            'completion_tokens': stats.get('completion_tokens', 0),
+            'cache_creation_tokens': stats.get('cache_creation_tokens', 0),
+            'cache_read_tokens': stats.get('cache_read_tokens', 0),
+            'headroom_original_tokens': stats.get('headroom_original_tokens', 0),
+            'headroom_saved_tokens': stats.get('headroom_saved_tokens', 0),
         })
 
     # AI 按指派数降序
@@ -2185,6 +2236,14 @@ def get_analytics():
     ai_completion_rate = round(ai_total_completed / ai_total_assigned * 100, 2) if ai_total_assigned > 0 else 0
     ai_durations = [a['avg_duration_seconds'] for a in ai_stats if a['avg_duration_seconds'] > 0]
     ai_avg_sec = round(sum(ai_durations) / len(ai_durations), 1) if ai_durations else 0
+    # AI Token 总览
+    ai_total_tokens = sum(a['total_tokens'] for a in ai_stats)
+    ai_total_prompt_tokens = sum(a['prompt_tokens'] for a in ai_stats)
+    ai_total_completion_tokens = sum(a['completion_tokens'] for a in ai_stats)
+    ai_total_cache_creation_tokens = sum(a['cache_creation_tokens'] for a in ai_stats)
+    ai_total_cache_read_tokens = sum(a['cache_read_tokens'] for a in ai_stats)
+    ai_total_headroom_original_tokens = sum(a['headroom_original_tokens'] for a in ai_stats)
+    ai_total_headroom_saved_tokens = sum(a['headroom_saved_tokens'] for a in ai_stats)
 
     return jsonify({
         'success': True,
@@ -2211,6 +2270,13 @@ def get_analytics():
                 'ai_completion_rate': ai_completion_rate,
                 'ai_avg_duration_seconds': ai_avg_sec,
                 'ai_agent_count': len(ai_stats),
+                'ai_total_tokens': ai_total_tokens,
+                'ai_total_prompt_tokens': ai_total_prompt_tokens,
+                'ai_total_completion_tokens': ai_total_completion_tokens,
+                'ai_total_cache_creation_tokens': ai_total_cache_creation_tokens,
+                'ai_total_cache_read_tokens': ai_total_cache_read_tokens,
+                'ai_total_headroom_original_tokens': ai_total_headroom_original_tokens,
+                'ai_total_headroom_saved_tokens': ai_total_headroom_saved_tokens,
             },
             'status_labels': STATUS_LABELS,
         }
