@@ -337,6 +337,25 @@ WHERE merchant_id = :value
 
 ## 近期新增功能
 
+### 运营数据看板崩溃根治：渲染异常 + 全站污染 + keep-alive 资源泄漏 (v2.3.12)
+
+彻底修复运营数据看板打开报错、且崩溃后拖垮其他页面（需刷新整站）的三层叠加问题：
+
+**根因分析**：
+1. **首次渲染必崩**：`chartConfigs` 初始为空数组，而 `ensureChartConfigs()` 要等 `onMounted` 的异步加载完成后才执行——模板渲染 `chartConfigs[i - 1].xCol` 时取到 `undefined`，直接抛 `TypeError`，组件挂载即崩溃
+2. **崩溃扩散全站**：`Layout.vue` 用 `<keep-alive>` 缓存所有页面，且 `main.js` 无全局错误处理——渲染异常未捕获沿组件树冒泡，破坏 Vue 内部状态后任何路由切换都渲染失败，表现为全站白屏需刷新
+3. **keep-alive 资源泄漏**：`onBeforeUnmount` 在 keep-alive 缓存下永不触发，`resize` 事件监听器与 echarts 实例永不清理
+
+**前端修复**（`frontend/src/views/DataDashboard.vue`）：
+- `chartConfigs` 初始值直接填充 1 个默认配置，且 `ensureChartConfigs()` 提前到 `onMounted` 同步段执行
+- 新增 `chartAt(idx)` 安全访问函数：模板所有 `chartConfigs[i].xxx` 访问改为 `chartAt(i).xxx`，索引越界自动补全默认配置，从机制上杜绝 `undefined` 属性访问
+- 新增 `onDeactivated`/`onActivated` 适配 keep-alive：切走时移除 `resize` 监听并 `dispose` 全部图表实例；切回时恢复监听并重新渲染（`lastResult` 有值时）
+- 统一 `disposeAllCharts()` 清理函数（失活/卸载共用）；`setChartRef` 在元素卸载（`el` 为 null）时删除引用
+- `renderChart`/`handleDrill`/`exportExcel`/`openFullscreen` 增加配置缺失防御；`layoutCount` 缩小时 dispose 超出范围的图表实例
+
+**全局兜底**（`frontend/src/main.js`）：
+- 新增 `app.config.errorHandler`：单页组件渲染出错时仅记录控制台日志并拦截冒泡，不再破坏整站组件树——单页崩溃只影响单页，刷新该页即可恢复
+
 ### 运营数据看板脚本统一到 scripts 表 (v2.3.11)
 
 废弃旧的 `dashboard_scripts` 表，看板脚本 CRUD 全面切换到统一的 `scripts` 表（`type='dashboard'`），与脚本管理页同源：
@@ -554,6 +573,7 @@ API类型和本地脚本类型的系统任务支持**从SQL脚本动态获取参
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-08-28 | v2.3.12 | 运营数据看板崩溃根治：三层叠加问题修复——①`chartConfigs`初始空数组导致首次渲染`undefined.xCol`崩溃（初始填充+`chartAt()`安全访问+`ensureChartConfigs`提前到同步段）；②渲染异常沿组件树冒泡破坏全站（keep-alive缓存下任何路由切换都白屏，`main.js`新增全局`errorHandler`兜底拦截）；③keep-alive下`onBeforeUnmount`永不触发的资源泄漏（新增`onDeactivated`/`onActivated`适配：切走清理`resize`监听与echarts实例、切回恢复监听并重渲染）；`setChartRef`卸载时清引用、`layoutCount`缩小时dispose多余图表实例、多处函数增加配置缺失防御 |
 | 2026-08-28 | v2.3.11 | 运营数据看板脚本统一到scripts表：废弃旧`dashboard_scripts`表，看板脚本CRUD全面切换到`scripts`表（`type='dashboard'`）；后端`dashboard_routes.py`改用`Script`模型查询/创建/更新/删除看板脚本，新增`_script_to_dashboard_dict`辅助函数保持前端字段兼容；`dashboard_service.py`种子函数改用`Script`模型；`__init__.py`启用迁移函数（自动检测并同步旧`dashboard_scripts`表数据）；前端`DataDashboard.vue`增加API调用错误处理（try/catch降级为空数组避免页面崩溃）；删除改为软删除（`is_active=False`） |
 | 2026-08-28 | v2.3.10 | 修复工单AI处理多系统任务只执行最后一个的bug：AI工具调用循环中多个SQL系统任务待确认时，`pending_system_task`单变量被覆盖只保留最后一个；改为`pending_system_tasks`列表收集所有任务，`pending_action`存储为`{'tasks': [...]}`格式；重写`_execute_pending_action_async`支持多任务顺序执行（遇失败中止），兼容旧格式单任务字典；前端待确认banner显示任务列表，确认对话框列出所有待执行任务；修复`cancel_ticket_action`对新格式的兼容性 |
 | 2026-08-28 | v2.3.9 | 运营数据看板脚本集成到脚本管理：看板脚本类型（`dashboard`）统一纳入现有脚本管理系统，与查询/导出/系统/字典脚本同页管理；Script模型新增`chart_type`/`conn_name`/`merge_conn_names`字段，支持图表类型、主数据源、多源合并查询配置；前端ScriptManager新增"看板脚本"类型选项，选择后显示图表类型选择、数据源选择、合并数据源多选等专属表单字段；新增从旧`dashboard_scripts`表的迁移逻辑，自动同步历史看板脚本数据 |

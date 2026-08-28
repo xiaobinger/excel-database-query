@@ -94,19 +94,19 @@
       <div v-for="i in state.layoutCount" :key="i" class="chart-card">
         <div class="chart-card-toolbar">
           <span class="chart-title">图表 {{ i }}</span>
-          <el-select v-model="chartConfigs[i - 1].xCol" placeholder="X轴" size="small" style="width: 110px" @change="renderChart(i - 1)">
+          <el-select v-model="chartAt(i - 1).xCol" placeholder="X轴" size="small" style="width: 110px" @change="renderChart(i - 1)">
             <el-option v-for="c in availableColumns" :key="c" :label="c" :value="c" />
           </el-select>
-          <el-select v-model="chartConfigs[i - 1].yCols" multiple collapse-tags placeholder="Y轴" size="small" style="width: 150px" @change="renderChart(i - 1)">
+          <el-select v-model="chartAt(i - 1).yCols" multiple collapse-tags placeholder="Y轴" size="small" style="width: 150px" @change="renderChart(i - 1)">
             <el-option v-for="c in availableColumns" :key="c" :label="c" :value="c" />
           </el-select>
           <div class="type-btns">
-            <button v-for="t in displayChartTypes" :key="t" class="type-btn" :class="{ active: chartConfigs[i - 1].chartType === t }"
-              :title="t" @click="chartConfigs[i - 1].chartType = t; renderChart(i - 1)">{{ t }}</button>
+            <button v-for="t in displayChartTypes" :key="t" class="type-btn" :class="{ active: chartAt(i - 1).chartType === t }"
+              :title="t" @click="chartAt(i - 1).chartType = t; renderChart(i - 1)">{{ t }}</button>
           </div>
           <div class="toolbar-spacer"></div>
           <el-button size="small" text :icon="FullScreen" @click="openFullscreen(i - 1)" title="全屏" />
-          <el-button v-if="chartConfigs[i - 1].chartType !== 'table'" size="small" text :icon="Camera" @click="saveChartImage(i - 1)" title="保存图片" />
+          <el-button v-if="chartAt(i - 1).chartType !== 'table'" size="small" text :icon="Camera" @click="saveChartImage(i - 1)" title="保存图片" />
           <el-button v-else size="small" text :icon="Download" @click="exportExcel(i - 1)" title="导出Excel" />
         </div>
         <div class="chart-body" :ref="el => setChartRef(i - 1, el)"></div>
@@ -186,7 +186,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { FullScreen, Camera, Download } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
@@ -207,7 +207,8 @@ const customParamNames = ref([])
 const executing = ref(false)
 const lastResult = ref(null)
 const drillStack = ref([])
-const chartConfigs = ref([])
+// 初始即填充1个默认配置，避免首次渲染时模板访问 chartConfigs[0] 为 undefined 导致组件崩溃
+const chartConfigs = ref([{ xCol: '', yCols: [], chartType: 'line' }])
 const chartInstances = {}
 const scriptDialogVisible = ref(false)
 const quickQueryDialogVisible = ref(false)
@@ -255,8 +256,17 @@ const availableColumns = computed(() => {
   return lastResult.value.columns.filter(c => !META_COLS.has(c))
 })
 
+// 模板安全访问图表配置：索引越界时自动补全默认配置，杜绝 undefined.xxx 崩溃
+function chartAt(idx) {
+  if (!chartConfigs.value[idx]) {
+    chartConfigs.value[idx] = { xCol: '', yCols: [], chartType: 'line' }
+  }
+  return chartConfigs.value[idx]
+}
+
 function setChartRef(idx, el) {
   if (el) chartBodyRefs[idx] = el
+  else delete chartBodyRefs[idx] // 元素卸载时清除引用，避免持有已销毁 DOM
 }
 
 // ── 数据加载 ──
@@ -397,7 +407,13 @@ function ensureChartConfigs() {
   chartConfigs.value.length = state.layoutCount
 }
 
-watch(() => state.layoutCount, () => { ensureChartConfigs() })
+watch(() => state.layoutCount, () => {
+  ensureChartConfigs()
+  // 布局数量缩小时，dispose 超出范围的图表实例，防止泄漏
+  Object.keys(chartInstances).forEach(k => {
+    if (+k >= state.layoutCount) { chartInstances[k].dispose(); delete chartInstances[k] }
+  })
+})
 
 // ── 图表渲染 ──
 
@@ -551,8 +567,8 @@ function buildChartOption(result, cfg) {
 
 function renderChart(idx) {
   const el = chartBodyRefs[idx]
-  if (!el || !lastResult.value) return
   const cfg = chartConfigs.value[idx]
+  if (!el || !cfg || !lastResult.value) return
   if (chartInstances[idx]) { chartInstances[idx].dispose(); delete chartInstances[idx] }
 
   if (cfg.chartType === 'table') {
@@ -630,7 +646,7 @@ function detectXColDimension(xData) {
 
 function handleDrill(idx, params) {
   const cfg = chartConfigs.value[idx]
-  if (!lastResult.value || cfg.chartType === 'table') return
+  if (!cfg || !lastResult.value || cfg.chartType === 'table') return
   const xData = lastResult.value.rows.map(r => String(r[lastResult.value.columns.indexOf(cfg.xCol)]))
   const dim = detectXColDimension(xData)
   const clicked = String(params.name ?? '')
@@ -686,6 +702,7 @@ function saveChartImage(idx) {
 function exportExcel(idx) {
   if (!lastResult.value) return ElMessage.warning('无数据可导出')
   const cfg = chartConfigs.value[idx]
+  if (!cfg) return
   const { columns, rows } = lastResult.value
   const displayCols = [cfg.xCol, ...cfg.yCols.filter(c => columns.includes(c))]
   const filterCols = displayCols.length ? displayCols : columns
@@ -705,6 +722,7 @@ function openFullscreen(idx) {
     if (!fullscreenChartRef.value || !lastResult.value) return
     if (fullscreenInst.value) { fullscreenInst.value.dispose(); fullscreenInst.value = null }
     const cfg = chartConfigs.value[idx]
+    if (!cfg) return
     if (cfg.chartType === 'table') {
       fullscreenChartRef.value.innerHTML = buildTableHtml(lastResult.value, cfg)
       return
@@ -829,16 +847,35 @@ function handleResize() {
   if (fullscreenInst.value) fullscreenInst.value.resize()
 }
 
+// 统一清理所有 echarts 实例（失活/卸载共用）
+function disposeAllCharts() {
+  Object.keys(chartInstances).forEach(k => { chartInstances[k].dispose(); delete chartInstances[k] })
+  if (fullscreenInst.value) { fullscreenInst.value.dispose(); fullscreenInst.value = null }
+}
+
 onMounted(async () => {
-  await Promise.all([loadMeta(), loadConnections(), loadQuickQueries(), loadScripts()])
   ensureChartConfigs()
   window.addEventListener('resize', handleResize)
+  await Promise.all([loadMeta(), loadConnections(), loadQuickQueries(), loadScripts()])
+})
+
+// 本应用所有路由页面被 Layout.vue 的 keep-alive 缓存：
+// 切走时 onBeforeUnmount 不会触发，必须用 onDeactivated 清理资源，
+// 否则 resize 监听器与 echarts 实例永久泄漏
+onDeactivated(() => {
+  window.removeEventListener('resize', handleResize)
+  disposeAllCharts()
+})
+
+// 从缓存切回：DOM 已恢复但 echarts 实例已 dispose，需重新渲染并恢复监听
+onActivated(() => {
+  window.addEventListener('resize', handleResize)
+  if (lastResult.value) renderAllCharts()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleResize)
-  Object.values(chartInstances).forEach(c => c.dispose())
-  if (fullscreenInst.value) fullscreenInst.value.dispose()
+  disposeAllCharts()
 })
 </script>
 
