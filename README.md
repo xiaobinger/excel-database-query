@@ -337,6 +337,32 @@ WHERE merchant_id = :value
 
 ## 近期新增功能
 
+### 工单草稿暂存 (v2.3.8)
+
+工单编辑时支持暂存为草稿，未提交的草稿工单下次可从列表进入重新编辑并提交：
+
+**功能说明**：
+- **暂存草稿**：创建工单时点击"暂存草稿"按钮，仅标题必填，内容与指派人可为空
+- **草稿列表**：草稿工单在工单列表中显示"草稿"标签（仅创建人可见），点击标签可直接进入编辑
+- **编辑草稿**：从列表或详情对话框点击"编辑草稿"，预填草稿数据后修改，可再次暂存或提交
+- **提交草稿**：草稿编辑完成后点击"提交工单"，校验必填字段（内容/指派人）后转为正式工单
+- **AI草稿**：草稿指派给AI时，提交后自动触发AI处理
+
+**技术实现**：
+- `backend/app/models/ticket.py`：Ticket模型新增`is_draft`布尔字段（区分草稿与正式工单），状态流转新增`draft`状态
+- `backend/app/routes/ticket_routes.py`：
+  - `create_ticket()` 支持`is_draft`参数：草稿模式跳过内容与指派人校验
+  - 新增`PUT /<id>/draft`：更新草稿（仅创建人可操作）
+  - 新增`POST /<id>/submit`：提交草稿（校验必填字段后转为submitted状态）
+  - `list_tickets()` 列表查询扩展：普通用户可见自己创建的草稿
+- `frontend/src/api/index.js`：新增`updateDraft`/`submitDraft` API方法
+- `frontend/src/views/TicketManager.vue`：
+  - 创建对话框新增"暂存草稿"按钮
+  - 列表状态列新增"草稿"标签（可点击直接编辑）
+  - 详情对话框新增"编辑草稿"和"提交工单"按钮（仅创建人可见）
+  - `statusLabels`/`statusTagType` 新增`draft`状态
+  - `openCreateDialog` 支持预填草稿数据（`editingDraftId`标记）
+
 ### 工单AI处理Token消耗统计 (v2.3.6+)
 
 工单指派给AI处理时，统计并展示该工单在整个AI处理过程中消耗的token相关指标，包括Headroom压缩指标和参与的AI模型：
@@ -512,6 +538,7 @@ API类型和本地脚本类型的系统任务支持**从SQL脚本动态获取参
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-08-28 | v2.3.8 | 工单草稿暂存：创建工单支持暂存为草稿（仅标题必填，内容/指派人可选）；草稿在列表中显示"草稿"标签，点击可直接进入编辑；详情对话框新增"编辑草稿"/"提交工单"按钮；新增`PUT /<id>/draft`更新草稿接口、`POST /<id>/submit`提交草稿接口；`create_ticket`支持`is_draft`参数；列表查询扩展普通用户可见自己的草稿 |
 | 2026-08-28 | v2.3.7 | 工单AI处理Token消耗统计：工单指派给AI时，统计并展示AI处理过程消耗的token指标（总Token/Prompt/Completion/缓存创建/缓存读取），Headroom压缩指标（原始/节省/压缩率），参与的AI模型列表；工单详情对话框新增"AI Token 消耗指标"区块；工单统计页AI Agent表格新增Token消耗和Headroom节省列，汇总行新增Token总消耗标签 |
 | 2026-08-27 | v2.3.5 | 修复流式对话路径Headroom压缩缺失：流式对话（`send_message_stream`）完全未调用`compress_if_enabled`，导致headroom在流式对话中不生效；修复后在`_attempt`循环中添加压缩调用，并在done事件和消息保存中传递`headroom_stats`（original_tokens/saved_tokens/compression_ratio）；修复token统计不工作：流式请求缺少`stream_options: {include_usage: True}`导致OpenAI流式API不返回usage数据，在两处流式请求中添加`stream_options`；删除工具循环中重复的usage提取代码（避免token统计翻倍）；增强纯文本压缩策略：新增单段落长文本按句子截断策略 |
 | 2026-08-27 | v2.3.4 | Headroom压缩指标始终展示：对话消息下方和缓存统计页面即使未压缩也显示压缩指标（0 tokens/0%）；输入栏区分"将压缩"/"太短不压缩"/"未启用压缩"三种状态 |

@@ -54,6 +54,10 @@
             <el-tag v-else-if="row.assignee_type === 'ai' && row.status === 'pending_confirmation'" type="warning" effect="dark" size="small">
               <i class="fas fa-exclamation-triangle"></i> 待确认
             </el-tag>
+            <!-- 草稿：可点击进入编辑（仅创建人可见） -->
+            <el-tag v-else-if="row.status === 'draft'" type="info" effect="plain" size="small" style="cursor: pointer" @click.stop="editDraftFromList(row)">
+              <i class="fas fa-edit"></i> 草稿
+            </el-tag>
             <el-tag v-else :type="statusTagType(row.status)" size="small">{{ statusLabels[row.status] || row.status }}</el-tag>
           </template>
         </el-table-column>
@@ -89,7 +93,7 @@
     </el-card>
 
     <!-- 创建工单对话框 -->
-    <el-dialog v-model="createVisible" title="提交工单" width="780px" destroy-on-close top="5vh">
+    <el-dialog v-model="createVisible" :title="editingDraftId ? '编辑草稿' : '提交工单'" width="780px" destroy-on-close top="5vh">
       <el-form ref="createFormRef" :model="createForm" :rules="createRules" label-width="90px">
         <el-form-item label="标题" prop="title">
           <el-input v-model="createForm.title" placeholder="请输入工单标题" maxlength="100" show-word-limit />
@@ -141,10 +145,13 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="createVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="submitCreate">提交工单</el-button>
-      </template>
-    </el-dialog>
+    <el-button @click="createVisible = false">取消</el-button>
+    <el-button :loading="submitting" @click="submitCreateDraft">
+      <i class="fas fa-save"></i> 暂存草稿
+    </el-button>
+    <el-button type="primary" :loading="submitting" @click="submitCreate">提交工单</el-button>
+  </template>
+</el-dialog>
 
     <!-- 工单详情对话框 -->
     <el-dialog v-model="detailVisible" :title="`工单详情 - ${detailData.ticket_no || ''}`" width="900px" destroy-on-close top="3vh" @close="stopAiPolling">
@@ -305,6 +312,13 @@
           </template>
           <!-- 提交人操作 -->
           <template v-if="isCreator">
+            <!-- 草稿状态：支持编辑和提交 -->
+            <el-button v-if="detailData.is_draft || detailData.status === 'draft'" type="warning" @click="editDraft">
+              <i class="fas fa-edit"></i> 编辑草稿
+            </el-button>
+            <el-button v-if="detailData.is_draft || detailData.status === 'draft'" type="primary" :loading="submitting" @click="submitDraftItem">
+              <i class="fas fa-paper-plane"></i> 提交工单
+            </el-button>
             <el-button v-if="detailData.status === 'processed'" type="success" @click="handleAction('confirm')">
               <i class="fas fa-check-circle"></i> 核实通过
             </el-button>
@@ -449,6 +463,7 @@ const isAdmin = computed(() => store.isAdmin)
 
 // 状态配置
 const statusLabels = {
+  draft: '草稿',
   submitted: '已提交',
   received: '已接收',
   processing: '处理中',
@@ -461,6 +476,7 @@ const statusLabels = {
 
 const statusTagType = (status) => {
   const map = {
+    draft: 'info',
     submitted: 'info',
     received: 'warning',
     processing: 'warning',
@@ -557,7 +573,8 @@ const attachmentFileList = ref([])
 const attachmentIds = ref([])
 const createRules = {
   title: [{ required: true, message: '请输入标题', trigger: 'blur' }],
-  content: [{ required: true, message: '请输入工单内容', trigger: 'blur' }],
+  // content 不强制必填：暂存草稿时允许为空，提交时再单独校验
+  content: [],
 }
 const assignees = ref([])
 const businessSystems = ref([])
@@ -568,6 +585,7 @@ async function openCreateDialog() {
   createForm.value = { title: '', content: '', assignee_type: 'user', assignee_id: null, assignee_agent_id: null, business_system_id: null }
   attachmentFileList.value = []
   attachmentIds.value = []
+  editingDraftId.value = null
   createVisible.value = true
   // 并行加载选项数据
   Promise.all([fetchAssignees(), fetchBusinessSystems(), fetchAiAgents()])
@@ -670,12 +688,16 @@ async function submitCreate() {
     ElMessage.warning('请选择指派人')
     return
   }
+  if (!(createForm.value.content || '').trim()) {
+    ElMessage.warning('请输入工单内容')
+    return
+  }
   await createFormRef.value.validate(async (valid) => {
     if (!valid) return
     submitting.value = true
     try {
       // 构造提交数据（按指派类型清理字段）
-      const payload = { ...createForm.value }
+      const payload = { ...createForm.value, is_draft: false }
       if (payload.assignee_type === 'ai') {
         delete payload.assignee_id
       } else {
@@ -684,9 +706,17 @@ async function submitCreate() {
       if (attachmentIds.value.length) {
         payload.attachment_ids = [...attachmentIds.value]
       }
-      await api.tickets.create(payload)
-      ElMessage.success('工单已提交')
+      // 如果正在编辑草稿，调用 updateDraft + submitDraft；否则调用 create
+      if (editingDraftId.value) {
+        await api.tickets.updateDraft(editingDraftId.value, payload)
+        await api.tickets.submitDraft(editingDraftId.value)
+        ElMessage.success('草稿已更新并提交')
+      } else {
+        await api.tickets.create(payload)
+        ElMessage.success('工单已提交')
+      }
       createVisible.value = false
+      editingDraftId.value = null
       attachmentFileList.value = []
       attachmentIds.value = []
       fetchTickets()
@@ -698,10 +728,107 @@ async function submitCreate() {
   })
 }
 
+// 暂存草稿：仅标题必填，内容与指派人可为空
+async function submitCreateDraft() {
+  if (!createFormRef.value) return
+  await createFormRef.value.validate(async (valid) => {
+    if (!valid) return
+    submitting.value = true
+    try {
+      const payload = { ...createForm.value, is_draft: true }
+      if (payload.assignee_type === 'ai') {
+        delete payload.assignee_id
+      } else {
+        delete payload.assignee_agent_id
+      }
+      if (attachmentIds.value.length) {
+        payload.attachment_ids = [...attachmentIds.value]
+      }
+      // 如果正在编辑草稿，调用 updateDraft；否则调用 create
+      if (editingDraftId.value) {
+        await api.tickets.updateDraft(editingDraftId.value, payload)
+        ElMessage.success('草稿已更新')
+      } else {
+        await api.tickets.create(payload)
+        ElMessage.success('草稿已暂存')
+      }
+      createVisible.value = false
+      editingDraftId.value = null
+      attachmentFileList.value = []
+      attachmentIds.value = []
+      fetchTickets()
+    } catch (e) {
+      ElMessage.error(e?.response?.data?.message || '暂存失败')
+    } finally {
+      submitting.value = false
+    }
+  })
+}
+
+// 从列表点击草稿标签，直接打开编辑草稿
+async function editDraftFromList(row) {
+  // 先加载完整工单详情（包含 attachments）
+  try {
+    const res = await api.tickets.get(row.id)
+    detailData.value = res.data || res || {}
+  } catch {}
+  editDraft()
+}
+
+// 编辑草稿：从详情对话框打开创建对话框，预填草稿数据
+async function editDraft() {
+  const t = detailData.value
+  if (!t || !t.id) return
+  // 预填表单
+  createForm.value = {
+    title: t.title || '',
+    content: t.content || '',
+    assignee_type: t.assignee_type || 'user',
+    assignee_id: t.assignee_id || null,
+    assignee_agent_id: t.assignee_agent_id || null,
+    business_system_id: t.business_system_id || null,
+  }
+  // 加载已有附件
+  attachmentFileList.value = []
+  attachmentIds.value = []
+  if (Array.isArray(t.attachments) && t.attachments.length) {
+    for (const a of t.attachments) {
+      attachmentIds.value.push(a.id)
+      attachmentFileList.value.push({ name: a.file_name, uid: a.id, attId: a.id })
+    }
+  }
+  // 标记当前正在编辑的草稿ID（提交时调用 updateDraft 而非 create）
+  editingDraftId.value = t.id
+  // 关闭详情对话框
+  detailVisible.value = false
+  // 打开创建对话框
+  createVisible.value = true
+  // 并行加载选项数据
+  Promise.all([fetchAssignees(), fetchBusinessSystems(), fetchAiAgents()])
+}
+
+// 提交草稿：调用 submitDraft API
+async function submitDraftItem() {
+  const t = detailData.value
+  if (!t || !t.id) return
+  submitting.value = true
+  try {
+    await api.tickets.submitDraft(t.id)
+    ElMessage.success('工单已提交')
+    detailVisible.value = false
+    fetchTickets()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '提交失败')
+  } finally {
+    submitting.value = false
+  }
+}
+
 // 详情
 const detailVisible = ref(false)
 const detailLoading = ref(false)
 const detailData = ref({})
+const editingDraftId = ref(null)
 // AI处理中轮询定时器
 let aiPollingTimer = null
 // AI处理时长计时器（每秒更新，用于显示已处理时长）

@@ -1,6 +1,7 @@
 """工单模型
 
 状态流转：
+  draft                 草稿       用户暂存未提交的工单，仅创建人可见
   submitted             已提交     提交人创建 / 申诉重启 / 核实不通过重新发起 / 重新指派
   received              已接收     指派人接收
   processing            处理中     指派人开始处理 / AI处理中
@@ -51,6 +52,8 @@ class Ticket(db.Model):
     ai_headroom_saved_tokens = db.Column(db.Integer, default=0, comment='Headroom压缩节省token')
     ai_headroom_compression_ratio = db.Column(db.Float, default=0.0, comment='Headroom压缩比例')
     ai_models_used = db.Column(db.Text, comment='AI处理使用过的模型列表(JSON数组)')
+
+    is_draft = db.Column(db.Boolean, default=False, comment='是否草稿（暂存未提交）')
 
     submitted_at = db.Column(db.DateTime, comment='提交时间')
     received_at = db.Column(db.DateTime, comment='接收时间')
@@ -165,6 +168,7 @@ class Ticket(db.Model):
             'ai_headroom_saved_tokens': self.ai_headroom_saved_tokens or 0,
             'ai_headroom_compression_ratio': self.ai_headroom_compression_ratio or 0.0,
             'ai_models_used': json.loads(self.ai_models_used) if self.ai_models_used else [],
+            'is_draft': bool(self.is_draft),
         }
         if include_comments:
             data['comments'] = [c.to_dict() for c in (self.comments or [])]

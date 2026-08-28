@@ -39,19 +39,21 @@ STATUS_PROCESSED = 'processed'
 STATUS_PENDING_ASSIGNMENT = 'pending_assignment'
 STATUS_PENDING_CONFIRMATION = 'pending_confirmation'
 STATUS_CLOSED = 'closed'
+STATUS_DRAFT = 'draft'
 
 ACTIVE_STATUSES = (STATUS_SUBMITTED, STATUS_RECEIVED, STATUS_PROCESSING, STATUS_PROCESSED, STATUS_REJECTED, STATUS_PENDING_ASSIGNMENT, STATUS_PENDING_CONFIRMATION)
 
 # 状态标签映射
 STATUS_LABELS = {
-    STATUS_SUBMITTED: '已提交',
-    STATUS_RECEIVED: '已接收',
-    STATUS_PROCESSING: '处理中',
-    STATUS_REJECTED: '拒绝',
-    STATUS_PROCESSED: '已处理',
-    STATUS_PENDING_ASSIGNMENT: '待指派',
-    STATUS_PENDING_CONFIRMATION: '待确认',
-    STATUS_CLOSED: '结束',
+ STATUS_DRAFT: '草稿',
+ STATUS_SUBMITTED: '已提交',
+ STATUS_RECEIVED: '已接收',
+ STATUS_PROCESSING: '处理中',
+ STATUS_REJECTED: '拒绝',
+ STATUS_PROCESSED: '已处理',
+ STATUS_PENDING_ASSIGNMENT: '待指派',
+ STATUS_PENDING_CONFIRMATION: '待确认',
+ STATUS_CLOSED: '结束',
 }
 
 # 进度条阶段顺序：已提交 → 已接收 → 已处理 → 结束
@@ -1087,8 +1089,13 @@ def list_tickets():
 
     query = Ticket.query
     if not is_admin and current_user:
+        # 普通用户可见：自己创建的 + 指派给自己的 + 自己创建的草稿
         query = query.filter(
-            db.or_(Ticket.created_by == current_user.id, Ticket.assignee_id == current_user.id)
+            db.or_(
+                Ticket.created_by == current_user.id,
+                Ticket.assignee_id == current_user.id,
+                db.and_(Ticket.is_draft == True, Ticket.created_by == current_user.id),
+            )
         )
 
     status = request.args.get('status')
@@ -1155,20 +1162,22 @@ def create_ticket():
     """创建工单
 
     任何登录用户均可提交工单。
-    必填：title, content
-    指派（二选一）：
+    必填：title
+    可选：content（草稿模式下可为空）
+    指派（二选一，提交时必填，草稿时可选）：
       - assignee_type='user' + assignee_id（指派给具体用户）
       - assignee_type='ai' + assignee_agent_id（指派给AI，可选，默认使用默认Agent）
-    可选：business_system_id
+    可选：business_system_id, is_draft（true 时暂存为草稿）
     """
     data = request.get_json() or {}
     title = (data.get('title') or '').strip()
     content = (data.get('content') or '').strip()
     assignee_type = (data.get('assignee_type') or 'user').strip()
+    is_draft = bool(data.get('is_draft', False))
 
     if not title:
         return jsonify({'success': False, 'message': '标题不能为空'}), 400
-    if not content:
+    if not is_draft and not content:
         return jsonify({'success': False, 'message': '工单内容不能为空'}), 400
 
     business_system_id = data.get('business_system_id')
@@ -1210,21 +1219,21 @@ def create_ticket():
                 agent = AiAgent.query.filter_by(is_active=True).first()
             if agent:
                 assignee_agent_id = agent.id
-            else:
+            elif not is_draft:
                 return jsonify({'success': False, 'message': '未找到可用的AI Agent'}), 400
     else:
         # 指派给具体用户
         assignee_id = data.get('assignee_id')
-        if not assignee_id:
+        if not assignee_id and not is_draft:
             return jsonify({'success': False, 'message': '请选择指派人'}), 400
-        try:
-            assignee_id = int(assignee_id)
-        except (TypeError, ValueError):
-            return jsonify({'success': False, 'message': '指派人ID格式错误'}), 400
-
-        assignee = User.query.get(assignee_id)
-        if not assignee or not assignee.is_active:
-            return jsonify({'success': False, 'message': '指派人不存在或已禁用'}), 400
+        if assignee_id:
+            try:
+                assignee_id = int(assignee_id)
+            except (TypeError, ValueError):
+                return jsonify({'success': False, 'message': '指派人ID格式错误'}), 400
+            assignee = User.query.get(assignee_id)
+            if not assignee or not assignee.is_active:
+                return jsonify({'success': False, 'message': '指派人不存在或已禁用'}), 400
 
     ticket = Ticket(
         ticket_no=_generate_ticket_no(),
@@ -1235,8 +1244,9 @@ def create_ticket():
         assignee_id=assignee_id,
         assignee_agent_id=assignee_agent_id,
         created_by=current_user.id,
-        status=STATUS_SUBMITTED,
-        submitted_at=now,
+        status=STATUS_DRAFT if is_draft else STATUS_SUBMITTED,
+        is_draft=is_draft,
+        submitted_at=None if is_draft else now,
     )
     db.session.add(ticket)
     db.session.commit()
@@ -1254,8 +1264,147 @@ def create_ticket():
                 att.ticket_id = ticket.id
         db.session.commit()
 
+    # 草稿模式：不触发AI处理
+    if is_draft:
+        return jsonify({'success': True, 'data': ticket.to_dict(), 'message': '草稿已暂存'})
+
     # 如果指派给AI，自动触发AI处理
     if assignee_type == 'ai':
+        _trigger_ai_processing(ticket)
+        return jsonify({'success': True, 'data': ticket.to_dict(), 'message': '工单已提交，AI正在处理中'})
+
+    return jsonify({'success': True, 'data': ticket.to_dict(), 'message': '工单已提交'})
+
+
+@ticket_bp.route('/<int:ticket_id>/draft', methods=['PUT'])
+@login_required
+def update_draft(ticket_id):
+    """更新草稿工单（仅创建人可操作，且工单必须处于草稿状态）
+
+    可更新：title, content, business_system_id, assignee_type, assignee_id, assignee_agent_id, attachment_ids
+    """
+    ticket = Ticket.query.get(ticket_id)
+    if not ticket:
+        return jsonify({'success': False, 'message': '工单不存在'}), 404
+    if not ticket.is_draft:
+        return jsonify({'success': False, 'message': '该工单不是草稿，无法编辑'}), 400
+    if ticket.created_by != get_current_user().id:
+        return jsonify({'success': False, 'message': '只能编辑自己创建的草稿'}), 403
+
+    data = request.get_json() or {}
+    title = (data.get('title') or '').strip()
+    content = (data.get('content') or '').strip()
+    assignee_type = (data.get('assignee_type') or 'user').strip()
+
+    if not title:
+        return jsonify({'success': False, 'message': '标题不能为空'}), 400
+
+    business_system_id = data.get('business_system_id')
+    if business_system_id:
+        try:
+            business_system_id = int(business_system_id)
+        except (TypeError, ValueError):
+            business_system_id = None
+
+    # 处理指派
+    assignee_id = None
+    assignee_agent_id = None
+    current_user = get_current_user()
+
+    if assignee_type == 'ai':
+        assignee_agent_id = data.get('assignee_agent_id')
+        if assignee_agent_id:
+            try:
+                assignee_agent_id = int(assignee_agent_id)
+            except (TypeError, ValueError):
+                assignee_agent_id = None
+        if assignee_agent_id and not current_user.is_admin():
+            if not current_user.can_switch_agent():
+                assignee_agent_id = None
+            elif not current_user.can_use_agent(assignee_agent_id):
+                return jsonify({'success': False, 'message': '无权使用该AI Agent，请选择授权范围内的Agent'}), 403
+        if not assignee_agent_id:
+            agent = AiAgent.query.filter_by(is_active=True, is_default=True).first()
+            if not agent:
+                agent = AiAgent.query.filter_by(is_active=True).first()
+            if agent:
+                assignee_agent_id = agent.id
+    else:
+        assignee_id = data.get('assignee_id')
+        if assignee_id:
+            try:
+                assignee_id = int(assignee_id)
+            except (TypeError, ValueError):
+                return jsonify({'success': False, 'message': '指派人ID格式错误'}), 400
+            assignee = User.query.get(assignee_id)
+            if not assignee or not assignee.is_active:
+                return jsonify({'success': False, 'message': '指派人不存在或已禁用'}), 400
+
+    ticket.title = title
+    ticket.content = content
+    ticket.business_system_id = business_system_id
+    ticket.assignee_type = assignee_type
+    ticket.assignee_id = assignee_id
+    ticket.assignee_agent_id = assignee_agent_id
+
+    # 关联附件
+    attachment_ids = data.get('attachment_ids') or []
+    if attachment_ids and isinstance(attachment_ids, list):
+        for att_id in attachment_ids:
+            try:
+                att_id = int(att_id)
+            except (TypeError, ValueError):
+                continue
+            att = TicketAttachment.query.get(att_id)
+            if att and att.ticket_id is None and att.uploaded_by == current_user.id:
+                att.ticket_id = ticket.id
+        db.session.commit()
+
+    db.session.commit()
+    return jsonify({'success': True, 'data': ticket.to_dict(), 'message': '草稿已更新'})
+
+
+@ticket_bp.route('/<int:ticket_id>/submit', methods=['POST'])
+@login_required
+def submit_draft(ticket_id):
+    """提交草稿工单（仅创建人可操作，且工单必须处于草稿状态）
+
+    提交后：
+      - 状态从 draft → submitted
+      - 设置 submitted_at
+      - 如果指派给AI，自动触发AI处理
+    """
+    ticket = Ticket.query.get(ticket_id)
+    if not ticket:
+        return jsonify({'success': False, 'message': '工单不存在'}), 404
+    if not ticket.is_draft:
+        return jsonify({'success': False, 'message': '该工单不是草稿，无法提交'}), 400
+    if ticket.created_by != get_current_user().id:
+        return jsonify({'success': False, 'message': '只能提交自己创建的草稿'}), 403
+
+    # 校验必填字段
+    if not (ticket.content or '').strip():
+        return jsonify({'success': False, 'message': '工单内容不能为空，请补充内容后再提交'}), 400
+    if ticket.assignee_type == 'user' and not ticket.assignee_id:
+        return jsonify({'success': False, 'message': '请选择指派人后再提交'}), 400
+    if ticket.assignee_type == 'ai' and not ticket.assignee_agent_id:
+        # 尝试用默认Agent
+        agent = AiAgent.query.filter_by(is_active=True, is_default=True).first()
+        if not agent:
+            agent = AiAgent.query.filter_by(is_active=True).first()
+        if agent:
+            ticket.assignee_agent_id = agent.id
+        else:
+            return jsonify({'success': False, 'message': '未找到可用的AI Agent'}), 400
+
+    # 提交
+    ticket.is_draft = False
+    ticket.status = STATUS_SUBMITTED
+    ticket.submitted_at = datetime.utcnow()
+    db.session.commit()
+
+    # 如果指派给AI，自动触发AI处理
+    if ticket.assignee_type == 'ai':
         _trigger_ai_processing(ticket)
         return jsonify({'success': True, 'data': ticket.to_dict(), 'message': '工单已提交，AI正在处理中'})
 

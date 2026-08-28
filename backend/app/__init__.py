@@ -54,12 +54,14 @@ def create_app(config_name='default'):
         from app.models.api_call_log import ApiCallLog
         from app.models.ticket import Ticket, TicketComment
         from app.models.pay_config import PayConfig
+        from app.models.dashboard import DashboardScript, DashboardQuickQuery
         db.create_all()
         _auto_migrate(app)
         _migrate_ticket_comments_nullable(app)
         _migrate_api_call_log_columns(app)
         _migrate_api_call_log_session(app)
         _init_default_admin(app)
+        _seed_dashboard_scripts(app)
         _init_connection_pool(app)
         _recover_stale_ai_tickets(app)
 
