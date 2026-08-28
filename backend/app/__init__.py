@@ -136,7 +136,11 @@ def _setup_logging(app):
 
             # Clean up old log files only if rotation succeeded
             if rotated and self.backupCount > 0:
-                for s in self.getFilesToDelete(self.baseFilename):
+                try:
+                    stale_files = self.getFilesToDelete(_time.time())
+                except TypeError:
+                    stale_files = self.getFilesToDelete()
+                for s in stale_files:
                     try:
                         os.remove(s)
                     except (PermissionError, OSError):
