@@ -18,17 +18,21 @@
           <el-radio-button value="day">按日</el-radio-button>
           <el-radio-button value="month">按月</el-radio-button>
           <el-radio-button value="year">按年</el-radio-button>
+          <el-radio-button value="custom">自定义范围</el-radio-button>
         </el-radio-group>
 
         <el-date-picker v-if="state.dimension === 'day'" v-model="state.dateValue" type="month"
           placeholder="选择月份" value-format="YYYY-MM" style="width: 140px" />
         <el-date-picker v-else-if="state.dimension === 'month'" v-model="state.dateValue" type="year"
           placeholder="选择年份" value-format="YYYY" style="width: 120px" />
-        <template v-else>
+        <template v-else-if="state.dimension === 'year'">
           <el-date-picker v-model="state.startYear" type="year" placeholder="起始年" value-format="YYYY" style="width: 110px" />
           <span style="color: var(--el-text-color-secondary)">~</span>
           <el-date-picker v-model="state.endYear" type="year" placeholder="结束年" value-format="YYYY" style="width: 110px" />
         </template>
+        <el-date-picker v-else-if="state.dimension === 'custom'" v-model="state.dateRange" type="daterange"
+          range-separator="~" start-placeholder="开始日期" end-placeholder="结束日期"
+          value-format="YYYY-MM-DD" style="width: 260px" />
 
         <el-input v-for="p in customParamNames" :key="p" v-model="state.customParams[p]" :placeholder="p"
           style="width: 120px" clearable />
@@ -46,7 +50,6 @@
           <el-option v-for="q in quickQueries" :key="q.id" :label="q.name" :value="q.id" />
         </el-select>
         <el-button @click="openSaveQuickQuery"><i class="fas fa-bookmark"></i> 保存</el-button>
-        <el-button @click="scriptDialogVisible = true"><i class="fas fa-cogs"></i> 脚本管理</el-button>
       </div>
 
       <!-- 多数据源合并控制 -->
@@ -113,58 +116,6 @@
       </div>
     </div>
 
-    <!-- 脚本管理对话框 -->
-    <el-dialog v-model="scriptDialogVisible" title="看板脚本管理" width="860px" top="5vh">
-      <div class="script-manager">
-        <div class="script-list">
-          <div class="script-list-header">
-            <span>脚本列表（{{ scripts.length }}）</span>
-            <el-button size="small" type="primary" @click="newScript"><i class="fas fa-plus"></i> 新建</el-button>
-          </div>
-          <div class="script-items">
-            <div v-for="s in scripts" :key="s.id" class="script-item" :class="{ active: editingScript?.id === s.id }" @click="editScript(s)">
-              <i class="fas fa-file-code"></i> {{ s.name }}
-            </div>
-            <el-empty v-if="!scripts.length" description="暂无脚本" :image-size="60" />
-          </div>
-        </div>
-        <div class="script-editor">
-          <el-form label-width="80px" size="small">
-            <el-form-item label="名称">
-              <el-input v-model="scriptForm.name" placeholder="脚本名称" />
-            </el-form-item>
-            <el-form-item label="数据源">
-              <el-select v-model="scriptForm.conn_name" placeholder="主数据源" clearable style="width: 100%">
-                <el-option v-for="c in connections" :key="c.name" :label="c.name" :value="c.name" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="合并源">
-              <el-select v-model="scriptForm.merge_conn_names" multiple placeholder="可多选（多源合并查询）" style="width: 100%">
-                <el-option v-for="c in connections" :key="c.name" :label="c.name" :value="c.name" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="图表类型">
-              <el-select v-model="scriptForm.chart_type" style="width: 100%">
-                <el-option v-for="t in metaConfig.chart_types" :key="t" :label="t" :value="t" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="SQL">
-              <el-input v-model="scriptForm.sql" type="textarea" :rows="9" placeholder="支持 {{start_date}} {{end_date}} {{date_format}} {{year}} {{month}} 等内置参数和自定义 {{参数}}" />
-            </el-form-item>
-            <el-form-item label="描述">
-              <el-input v-model="scriptForm.description" type="textarea" :rows="2" />
-            </el-form-item>
-          </el-form>
-          <div class="script-editor-actions">
-            <el-button v-if="editingScript?.id" type="danger" plain @click="deleteScript"><i class="fas fa-trash"></i> 删除</el-button>
-            <div class="toolbar-spacer"></div>
-            <el-button @click="scriptDialogVisible = false">取消</el-button>
-            <el-button type="primary" :loading="savingScript" @click="saveScript"><i class="fas fa-save"></i> 保存</el-button>
-          </div>
-        </div>
-      </div>
-    </el-dialog>
-
     <!-- 保存快捷查询对话框 -->
     <el-dialog v-model="quickQueryDialogVisible" title="保存快捷查询" width="420px">
       <el-form label-width="80px">
@@ -187,7 +138,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { FullScreen, Camera, Download } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import * as XLSX from 'xlsx'
@@ -210,18 +161,14 @@ const drillStack = ref([])
 // 初始即填充1个默认配置，避免首次渲染时模板访问 chartConfigs[0] 为 undefined 导致组件崩溃
 const chartConfigs = ref([{ xCol: '', yCols: [], chartType: 'line' }])
 const chartInstances = {}
-const scriptDialogVisible = ref(false)
 const quickQueryDialogVisible = ref(false)
 const fullscreenVisible = ref(false)
 const fullscreenIdx = ref(-1)
 const fullscreenChartRef = ref(null)
 const fullscreenInst = ref(null)
-const savingScript = ref(false)
 const savingQuickQuery = ref(false)
 const quickQueryName = ref('')
 const selectedQuickQueryId = ref(null)
-const editingScript = ref(null)
-const scriptForm = reactive({ name: '', sql: '', conn_name: '', merge_conn_names: [], chart_type: 'line', description: '' })
 const chartBodyRefs = {}
 
 const state = reactive({
@@ -232,6 +179,7 @@ const state = reactive({
   dateValue: '',
   startYear: '',
   endYear: '',
+  dateRange: null,
   customParams: {},
   mergeMode: 'separate',
   mergeKey: '',
@@ -324,6 +272,7 @@ function onDimensionChange() {
   state.dateValue = ''
   state.startYear = ''
   state.endYear = ''
+  state.dateRange = null
 }
 
 // ── 执行查询 ──
@@ -348,6 +297,9 @@ function buildExecuteBody(forceRefresh) {
   else if (state.dimension === 'year') {
     if (state.startYear) body.start_year = parseInt(state.startYear)
     if (state.endYear) body.end_year = parseInt(state.endYear)
+  } else if (state.dimension === 'custom' && state.dateRange?.length === 2) {
+    body.start_date = state.dateRange[0]
+    body.end_date = state.dateRange[1]
   }
   return body
 }
@@ -735,55 +687,6 @@ function openFullscreen(idx) {
 }
 watch(fullscreenVisible, (v) => { if (!v && fullscreenInst.value) { fullscreenInst.value.dispose(); fullscreenInst.value = null } })
 
-// ── 脚本管理 ──
-
-function newScript() {
-  editingScript.value = null
-  Object.assign(scriptForm, { name: '', sql: '', conn_name: '', merge_conn_names: [], chart_type: 'line', description: '' })
-}
-
-function editScript(s) {
-  editingScript.value = s
-  Object.assign(scriptForm, {
-    name: s.name, sql: s.sql, conn_name: s.conn_name,
-    merge_conn_names: [...(s.merge_conn_names || [])],
-    chart_type: s.chart_type || 'line', description: s.description || '',
-  })
-}
-
-async function saveScript() {
-  if (!scriptForm.name || !scriptForm.sql) return ElMessage.warning('请填写名称和SQL')
-  savingScript.value = true
-  try {
-    if (editingScript.value?.id) {
-      const res = await api.dataDashboard.updateScript(editingScript.value.id, scriptForm)
-      if (!res.success) return ElMessage.error(res.message)
-      ElMessage.success('已更新')
-    } else {
-      const res = await api.dataDashboard.createScript(scriptForm)
-      if (!res.success) return ElMessage.error(res.message)
-      ElMessage.success('已创建')
-    }
-    await loadScripts()
-    scriptDialogVisible.value = false
-  } catch (e) { /* interceptor */ } finally { savingScript.value = false }
-}
-
-async function deleteScript() {
-  if (!editingScript.value?.id) return
-  try {
-    await ElMessageBox.confirm(`确定删除脚本 '${editingScript.value.name}'？`, '提示', { type: 'warning' })
-  } catch (e) { return }
-  try {
-    const res = await api.dataDashboard.deleteScript(editingScript.value.id)
-    if (res.success) {
-      ElMessage.success('已删除')
-      newScript()
-      await loadScripts()
-    }
-  } catch (e) { /* interceptor */ }
-}
-
 // ── 快捷查询 ──
 
 function openSaveQuickQuery() {
@@ -807,6 +710,8 @@ async function saveQuickQuery() {
       dimension: state.dimension,
       dp_year: state.startYear ? parseInt(state.startYear) : null,
       dp_year_end: state.endYear ? parseInt(state.endYear) : null,
+      dp_start_date: state.dimension === 'custom' && state.dateRange?.length === 2 ? state.dateRange[0] : null,
+      dp_end_date: state.dimension === 'custom' && state.dateRange?.length === 2 ? state.dateRange[1] : null,
       custom_params: state.customParams,
       layout_count: state.layoutCount,
       chart_configs: chartConfigs.value.map(c => ({ xCol: c.xCol, yCols: c.yCols, chartType: c.chartType })),
@@ -833,6 +738,11 @@ function onQuickQueryChange(id) {
   state.dimension = q.dimension || 'day'
   state.customParams = { ...(q.custom_params || {}) }
   state.layoutCount = q.layout_count || 1
+  // 恢复时间范围
+  if (q.dp_year) state.startYear = String(q.dp_year)
+  if (q.dp_year_end) state.endYear = String(q.dp_year_end)
+  if (q.dp_start_date && q.dp_end_date) state.dateRange = [q.dp_start_date, q.dp_end_date]
+  else state.dateRange = null
   if (q.chart_configs?.length) {
     chartConfigs.value = q.chart_configs.map(c => ({ xCol: c.xCol, yCols: [...(c.yCols || [])], chartType: c.chartType }))
     ensureChartConfigs()
@@ -912,16 +822,6 @@ onBeforeUnmount(() => {
 .data-table th { background: var(--el-fill-color-light); position: sticky; top: 0; }
 .data-table td.num, .data-table td.pct { text-align: right; font-variant-numeric: tabular-nums; }
 .data-table td.pct { color: var(--el-color-success); }
-
-.script-manager { display: flex; gap: 16px; }
-.script-list { width: 220px; border-right: 1px solid var(--el-border-color-lighter); padding-right: 12px; }
-.script-list-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-weight: 600; }
-.script-items { max-height: 460px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
-.script-item { padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; }
-.script-item:hover { background: var(--el-fill-color-light); }
-.script-item.active { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
-.script-editor { flex: 1; }
-.script-editor-actions { display: flex; gap: 8px; margin-top: 8px; }
 
 .fullscreen-chart { width: 100%; height: 72vh; min-height: 480px; }
 </style>

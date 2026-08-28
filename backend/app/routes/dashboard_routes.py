@@ -1,9 +1,12 @@
 """运营数据看板路由
 
-- 脚本管理 / 快捷查询 CRUD
-- 查询执行（维度参数、钻取、多数据源合并、缓存）
+- 快捷查询 CRUD
+- 查询执行（维度参数、自定义时间范围、钻取、多数据源合并、缓存）
 - SQL 参数与列名解析
 - 看板配置（存 SystemConfig，由系统配置页维护）
+
+看板脚本的增删改统一在脚本管理页（/api/scripts）维护，本模块只提供
+只读的脚本列表供看板页下拉选择，不再单独维护一套脚本 CRUD。
 """
 import logging
 import traceback
@@ -22,7 +25,7 @@ logger = logging.getLogger(__name__)
 dashboard_bp = Blueprint('data_dashboard', __name__, url_prefix='/api/dashboard')
 
 
-# ── 脚本管理（基于 scripts 表 type='dashboard'）──────────────────
+# ── 看板脚本（只读列表，CRUD 在脚本管理页）──────────────────
 
 def _script_to_dashboard_dict(s):
     d = s.to_dict()
@@ -36,66 +39,6 @@ def _script_to_dashboard_dict(s):
 def list_scripts():
     scripts = Script.query.filter_by(type='dashboard', is_active=True).order_by(Script.created_at).all()
     return jsonify({'success': True, 'data': [_script_to_dashboard_dict(s) for s in scripts]})
-
-
-@dashboard_bp.route('/scripts', methods=['POST'])
-@permission_required('data_dashboard')
-def add_script():
-    data = request.json or {}
-    name = (data.get('name') or '').strip()
-    sql_text = (data.get('sql') or data.get('sql_text') or '').strip()
-    if not name or not sql_text:
-        return jsonify({'success': False, 'message': '请填写脚本名称和SQL'}), 400
-    if Script.query.filter_by(name=name, type='dashboard').first():
-        return jsonify({'success': False, 'message': f"脚本名称 '{name}' 已存在"}), 400
-    script = Script(
-        name=name,
-        sql_text=sql_text,
-        type='dashboard',
-        chart_type=data.get('chart_type', 'line'),
-        conn_name=data.get('conn_name', ''),
-        description=data.get('description', ''),
-        is_active=True,
-    )
-    script.set_merge_conn_names(data.get('merge_conn_names') or [])
-    db.session.add(script)
-    db.session.commit()
-    return jsonify({'success': True, 'data': _script_to_dashboard_dict(script)})
-
-
-@dashboard_bp.route('/scripts/<int:script_id>', methods=['PUT'])
-@permission_required('data_dashboard')
-def update_script(script_id):
-    script = Script.query.filter_by(id=script_id, type='dashboard').first()
-    if not script:
-        return jsonify({'success': False, 'message': '脚本不存在'}), 404
-    data = request.json or {}
-    name = (data.get('name') or '').strip()
-    sql_text = (data.get('sql') or data.get('sql_text') or '').strip()
-    if not name or not sql_text:
-        return jsonify({'success': False, 'message': '请填写脚本名称和SQL'}), 400
-    dup = Script.query.filter(Script.name == name, Script.type == 'dashboard', Script.id != script_id).first()
-    if dup:
-        return jsonify({'success': False, 'message': f"脚本名称 '{name}' 已存在"}), 400
-    script.name = name
-    script.sql_text = sql_text
-    script.chart_type = data.get('chart_type', script.chart_type)
-    script.conn_name = data.get('conn_name', script.conn_name)
-    script.description = data.get('description', script.description)
-    script.set_merge_conn_names(data.get('merge_conn_names') or [])
-    db.session.commit()
-    return jsonify({'success': True, 'data': _script_to_dashboard_dict(script)})
-
-
-@dashboard_bp.route('/scripts/<int:script_id>', methods=['DELETE'])
-@permission_required('data_dashboard')
-def delete_script(script_id):
-    script = Script.query.filter_by(id=script_id, type='dashboard').first()
-    if not script:
-        return jsonify({'success': False, 'message': '脚本不存在'}), 404
-    script.is_active = False
-    db.session.commit()
-    return jsonify({'success': True, 'message': '删除成功'})
 
 
 # ── 快捷查询 ──────────────────────────────────────────
@@ -119,6 +62,8 @@ def _fill_quick_query(q: DashboardQuickQuery, data: dict):
     q.dp_month = data.get('dp_month')
     q.dp_year_start = data.get('dp_year_start')
     q.dp_year_end = data.get('dp_year_end')
+    q.dp_start_date = data.get('dp_start_date') or None
+    q.dp_end_date = data.get('dp_end_date') or None
     q.layout_count = int(data.get('layout_count') or 1)
     import json as _json
     q.merge_names = _json.dumps(data.get('merge_names') or [], ensure_ascii=False)

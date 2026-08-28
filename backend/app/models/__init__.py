@@ -17,10 +17,10 @@ from app.models.tool_memory import ToolMemory
 from app.models.ticket import Ticket, TicketComment
 from app.models.pay_config import PayConfig
 from app.models.pay_flow import PayFlowTemplate, PayFlowExecution, PayFlowNodeExecution
-from app.models.dashboard import DashboardScript, DashboardQuickQuery
+from app.models.dashboard import DashboardQuickQuery
 
 __all__ = ['SshConfig', 'DatabaseConnection', 'Script', 'QueryTask', 'Role', 'User',
            'SystemConfig', 'AutoExportTask', 'AiConfig', 'AiStrategy', 'UserBehavior', 'AiSkill',
            'AiChat', 'AiChatMessage', 'BusinessSystem', 'SystemTask', 'SystemTaskExecution', 'ToolMemory',
            'Ticket', 'TicketComment', 'PayConfig', 'PayFlowTemplate', 'PayFlowExecution', 'PayFlowNodeExecution',
-           'DashboardScript', 'DashboardQuickQuery']
+           'DashboardQuickQuery']

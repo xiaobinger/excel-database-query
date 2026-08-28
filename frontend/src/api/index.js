@@ -386,9 +386,6 @@ const openApi = {
 
 const dataDashboard = {
   listScripts: () => http.get('/dashboard/scripts'),
-  createScript: (data) => http.post('/dashboard/scripts', data),
-  updateScript: (id, data) => http.put(`/dashboard/scripts/${id}`, data),
-  deleteScript: (id) => http.delete(`/dashboard/scripts/${id}`),
   listQuickQueries: () => http.get('/dashboard/quick-queries'),
   createQuickQuery: (data) => http.post('/dashboard/quick-queries', data),
   updateQuickQuery: (id, data) => http.put(`/dashboard/quick-queries/${id}`, data),

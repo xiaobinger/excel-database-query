@@ -21,8 +21,6 @@ import pandas as pd
 from sqlalchemy import text
 
 from app import db
-from app.models.dashboard import DashboardQuickQuery
-from app.models.script import Script
 from app.models.database import DatabaseConnection
 from app.models.system_config import SystemConfig
 
@@ -35,7 +33,7 @@ BUILTIN_PARAMS = {
     'year', 'month', 'day', 'start_year', 'end_year',
 }
 
-DIMENSIONS = ['day', 'month', 'year']
+DIMENSIONS = ['day', 'month', 'year', 'custom']
 DIMENSION_DATE_FORMATS = {'day': '%Y-%m-%d', 'month': '%Y-%m', 'year': '%Y'}
 CHART_TYPES = ['line', 'bar', 'area', 'pie', 'scatter', 'table', 'radar', 'gauge', 'funnel', 'mix']
 
@@ -264,7 +262,9 @@ def parse_columns(sql: str) -> List[str]:
 
 def build_dimension_params(dimension: str, date: Optional[str] = None,
                            start_year: Optional[int] = None,
-                           end_year: Optional[int] = None) -> Dict[str, Any]:
+                           end_year: Optional[int] = None,
+                           range_start: Optional[str] = None,
+                           range_end: Optional[str] = None) -> Dict[str, Any]:
     now = datetime.now()
     if date:
         try:
@@ -272,8 +272,36 @@ def build_dimension_params(dimension: str, date: Optional[str] = None,
         except ValueError:
             pass
 
-    fmt = DIMENSION_DATE_FORMATS.get(dimension, '%Y-%m-%d')
     y, m = now.year, now.month
+
+    # 自定义时间范围：按跨度自动选择分组粒度，避免大范围按天分组产生海量行
+    if dimension == 'custom' and range_start and range_end:
+        try:
+            sd = datetime.strptime(range_start, '%Y-%m-%d')
+            ed = datetime.strptime(range_end, '%Y-%m-%d')
+        except ValueError:
+            sd, ed = now, now
+        if ed < sd:
+            sd, ed = ed, sd
+        days = (ed - sd).days
+        if days > 365 * 2:
+            fmt = '%Y'       # 跨度2年以上 → 按年
+        elif days > 60:
+            fmt = '%Y-%m'    # 跨度2个月以上 → 按月
+        else:
+            fmt = '%Y-%m-%d' # 小范围 → 按天
+        return {
+            'dimension': dimension,
+            'date_format': fmt,
+            'date': sd.strftime(fmt),
+            'start_date': sd.strftime('%Y-%m-%d'),
+            'end_date': ed.strftime('%Y-%m-%d'),
+            'year': sd.year,
+            'month': sd.month,
+            'day': sd.day,
+        }
+
+    fmt = DIMENSION_DATE_FORMATS.get(dimension, '%Y-%m-%d')
 
     if dimension == 'day':
         start_date = datetime(y, m, 1)
@@ -421,6 +449,8 @@ def execute_dashboard_query(data: dict) -> dict:
     merge_names = data.get('merge_conn_names', []) or []
     dimension = data.get('dimension', 'day')
     date = data.get('date', '')
+    range_start = data.get('start_date', '') or ''
+    range_end = data.get('end_date', '') or ''
     custom_params = data.get('custom_params', {}) or {}
     chart_type = data.get('chart_type', 'line')
     merge_mode = data.get('merge_mode', 'separate')
@@ -432,6 +462,8 @@ def execute_dashboard_query(data: dict) -> dict:
         raise ValueError('请输入SQL')
     if not conn_name and not merge_names:
         raise ValueError('请选择数据源')
+    if dimension == 'custom' and (not range_start or not range_end):
+        raise ValueError('请选择自定义时间范围（开始/结束日期）')
 
     cfg = get_dashboard_config()
 
@@ -439,6 +471,8 @@ def execute_dashboard_query(data: dict) -> dict:
         'sql': sql, 'conn_name': conn_name,
         'merge_conn_names': sorted(merge_names) if merge_names else [],
         'dimension': dimension, 'date': date,
+        'range_start': range_start if dimension == 'custom' else '',
+        'range_end': range_end if dimension == 'custom' else '',
         'custom_params': custom_params,
         'drill_start_date': data.get('drill_start_date', ''),
         'drill_end_date': data.get('drill_end_date', ''),
@@ -460,6 +494,8 @@ def execute_dashboard_query(data: dict) -> dict:
         dimension, date,
         start_year=int(start_year) if start_year else None,
         end_year=int(end_year) if end_year else None,
+        range_start=range_start or None,
+        range_end=range_end or None,
     )
     drill_start_date = data.get('drill_start_date')
     drill_end_date = data.get('drill_end_date')
@@ -494,73 +530,3 @@ def clear_dashboard_cache() -> int:
     count = len(_cache._store)
     _cache.clear()
     return count
-
-
-# ── 种子脚本（从 data_dashboard 适配） ─────────────────
-
-
-def seed_default_scripts():
-    """首次启动时导入示例看板脚本（写入 scripts 表，type='dashboard'）"""
-    if Script.query.filter_by(type='dashboard').count() > 0:
-        return
-    seeds = [
-        {
-            'name': '商户进件情况',
-            'sql_text': (
-                "SELECT CASE WHEN m.channel_type='HKRT' THEN '海科融通' WHEN m.channel_type='LEPASS' THEN '乐刷' "
-                "WHEN m.channel_type='DYIN' THEN '电银' WHEN m.channel_type='HELIPAY' THEN '合利宝' "
-                "WHEN m.channel_type='ZF' THEN '中付' END 通道,"
-                "DATE_FORMAT(m.create_time,{{date_format}}) 日期,"
-                "count(1) 总进件商户,"
-                "SUM(CASE WHEN m.apply_status=2 THEN 1 ELSE 0 END) 进件成功商户数,"
-                "SUM(IF(m.activate_time IS NOT NULL,1,0)) 激活商户数 "
-                "FROM posp_business.merchant m "
-                "WHERE m.create_time BETWEEN CONCAT({{start_date}},' 00:00:00') AND CONCAT({{end_date}},' 23:59:59') "
-                "GROUP BY DATE_FORMAT(m.create_time,{{date_format}})"
-            ),
-            'chart_type': 'line',
-            'conn_name': '',
-            'merge_conn_names': [],
-            'description': '示例脚本：按维度统计商户进件与激活情况，需关联业务库后使用',
-        },
-        {
-            'name': '商户交易统计',
-            'sql_text': (
-                "SELECT CASE WHEN t.channel_code='hkrt' THEN '融聚商户通' WHEN t.channel_code='zft_plus' THEN '支付通PLUS' "
-                "WHEN t.channel_code='dyin' THEN '电银' WHEN t.channel_code='helipay' THEN '合利宝' "
-                "WHEN t.channel_code='zf' THEN '中付' WHEN t.channel_code='lepass' THEN '乐刷' END 通道,"
-                "DATE_FORMAT(t.trade_time,{{date_format}}) 日期,"
-                "count(1) 总交易流水笔数,"
-                "sum(t.trade_amount)/100 总交易流水金额,"
-                "sum(IF(t.flow_activity_amount IS NULL,0,t.flow_activity_amount))/100 总流量卡金额,"
-                "sum(ifnull(t.trade_t0_fee,0)+ifnull(t.trade_fee_amount,0))/100 总手续费金额 "
-                "FROM posp_business.trade_order t "
-                "WHERE t.trade_time BETWEEN CONCAT({{start_date}},' 00:00:00') AND CONCAT({{end_date}},' 23:59:59') "
-                "AND t.trade_status=1 "
-                "GROUP BY DATE_FORMAT(t.trade_time,{{date_format}}),t.channel_code "
-                "ORDER BY t.channel_code,DATE_FORMAT(t.trade_time,{{date_format}})"
-            ),
-            'chart_type': 'line',
-            'conn_name': '',
-            'merge_conn_names': [],
-            'description': '示例脚本：按维度统计交易流水与手续费，需关联业务库后使用',
-        },
-    ]
-    for seed in seeds:
-        script = Script(
-            name=seed['name'],
-            sql_text=seed['sql_text'],
-            type='dashboard',
-            chart_type=seed['chart_type'],
-            conn_name=seed['conn_name'],
-            description=seed['description'],
-            is_active=True,
-        )
-        script.set_merge_conn_names(seed['merge_conn_names'])
-        db.session.add(script)
-    try:
-        db.session.commit()
-        logger.info('已导入 %d 个看板示例脚本（scripts 表）', len(seeds))
-    except Exception as e:
-        db.session.rollback()
-        logger.warning(f'看板示例脚本导入失败: {e}')

@@ -337,6 +337,24 @@ WHERE merchant_id = :value
 
 ## 近期新增功能
 
+### 运营数据看板脚本统一 + 自定义时间范围 (v2.3.13)
+
+看板脚本增删改统一到脚本管理页维护，看板页只保留脚本下拉选择；新增"自定义范围"时间维度。
+
+**看板脚本统一**：
+- `DataDashboard.vue`：移除脚本管理对话框及全部 CRUD 函数（newScript/editScript/saveScript/deleteScript），看板页仅保留脚本下拉选择 + 执行查询
+- `dashboard_routes.py`：移除看板脚本 POST/PUT/DELETE 路由，仅保留 GET 只读列表
+- `dashboard_service.py`：移除 `seed_default_scripts()` 函数
+- `api/index.js`：移除 `createScript/updateScript/deleteScript` 三个 API 调用
+- `DashboardScript` 模型类正式删除，`__init__.py` 迁移函数改用 raw SQL 读取旧表
+- 脚本增删改全部通过脚本管理页（ScriptManager，`type='dashboard'`）维护
+
+**自定义时间范围**：
+- 前端新增 `custom` 维度 radio-button + `el-date-picker` daterange 选择器
+- 后端 `build_dimension_params()` 新增 `custom` 维度：按跨度自动选择分组粒度（2年以上→按年，2月以上→按月，否则→按天）
+- 后端 `execute_dashboard_query()` 接收 `start_date`/`end_date` 参数并纳入缓存 key
+- 快捷查询保存/恢复自定义时间范围（`dp_start_date`/`dp_end_date` 字段，`DashboardQuickQuery` 模型新增）
+
 ### 运营数据看板崩溃根治：渲染异常 + 全站污染 + keep-alive 资源泄漏 (v2.3.12)
 
 彻底修复运营数据看板打开报错、且崩溃后拖垮其他页面（需刷新整站）的三层叠加问题：

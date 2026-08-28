@@ -4,45 +4,13 @@ from app import db
 from app.utils.helpers import beijing_isoformat
 
 
-class DashboardScript(db.Model):
-    """运营数据看板-查询脚本（SQL模板，支持{{参数}}占位符）"""
-    __tablename__ = 'dashboard_scripts'
-
-    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    name = db.Column(db.String(100), nullable=False, unique=True)
-    sql_text = db.Column(db.Text, nullable=False)
-    chart_type = db.Column(db.String(20), default='line')
-    conn_name = db.Column(db.String(200), default='')
-    merge_conn_names = db.Column(db.Text)
-    description = db.Column(db.String(500), default='')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    def get_merge_conn_names(self) -> list:
-        try:
-            return json.loads(self.merge_conn_names) if self.merge_conn_names else []
-        except (json.JSONDecodeError, TypeError):
-            return []
-
-    def set_merge_conn_names(self, names):
-        self.merge_conn_names = json.dumps(names or [], ensure_ascii=False)
-
-    def to_dict(self) -> dict:
-        return {
-            'id': self.id,
-            'name': self.name,
-            'sql': self.sql_text,
-            'chart_type': self.chart_type or 'line',
-            'conn_name': self.conn_name or '',
-            'merge_conn_names': self.get_merge_conn_names(),
-            'description': self.description or '',
-            'created_at': beijing_isoformat(self.created_at),
-            'updated_at': beijing_isoformat(self.updated_at),
-        }
-
-
 class DashboardQuickQuery(db.Model):
-    """运营数据看板-快捷查询（保存查询条件与图表配置）"""
+    """运营数据看板-快捷查询（保存查询条件与图表配置）
+
+    看板脚本已统一到 scripts 表（type='dashboard'），由脚本管理页维护，
+    本模块只保留快捷查询。旧的 dashboard_scripts 表由启动迁移函数
+    （raw SQL）一次性搬入 scripts 表后不再维护。
+    """
     __tablename__ = 'dashboard_quick_queries'
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
@@ -58,6 +26,9 @@ class DashboardQuickQuery(db.Model):
     dp_month = db.Column(db.Integer)
     dp_year_start = db.Column(db.Integer)
     dp_year_end = db.Column(db.Integer)
+    # 自定义时间范围（dimension='custom' 时使用）
+    dp_start_date = db.Column(db.String(10))
+    dp_end_date = db.Column(db.String(10))
     custom_params = db.Column(db.Text)
     layout_count = db.Column(db.Integer, default=1)
     chart_configs = db.Column(db.Text)
@@ -85,6 +56,8 @@ class DashboardQuickQuery(db.Model):
             'dp_month': self.dp_month,
             'dp_year_start': self.dp_year_start,
             'dp_year_end': self.dp_year_end,
+            'dp_start_date': self.dp_start_date or '',
+            'dp_end_date': self.dp_end_date or '',
             'custom_params': self._load_json(self.custom_params, {}),
             'layout_count': self.layout_count or 1,
             'chart_configs': self._load_json(self.chart_configs, []),

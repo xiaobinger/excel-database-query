@@ -62,7 +62,6 @@ def create_app(config_name='default'):
         _migrate_api_call_log_session(app)
         _init_default_admin(app)
         _migrate_dashboard_scripts_to_scripts(app)
-        _seed_dashboard_scripts(app)
         _init_connection_pool(app)
         _recover_stale_ai_tickets(app)
 
@@ -621,53 +620,38 @@ def _init_default_admin(app):
         app.logger.warning(f'Admin account created - username: admin, password: {admin_password}')
 
 
-def _seed_dashboard_scripts(app):
-    """首次启动时导入运营数据看板示例脚本（写入 scripts 表）"""
-    try:
-        from app.models.script import Script
-        # 如果 scripts 表中没有看板类型脚本，则导入示例
-        new_count = Script.query.filter_by(type='dashboard').count()
-        if new_count == 0:
-            from app.services.dashboard_service import seed_default_scripts
-            seed_default_scripts()
-            app.logger.info('看板示例脚本已导入（scripts 表）')
-    except Exception as e:
-        app.logger.warning(f'看板示例脚本导入失败: {e}')
-
-
 def _migrate_dashboard_scripts_to_scripts(app):
-    """将 dashboard_scripts 表中未迁移的看板脚本同步到 scripts 表（type='dashboard'）"""
+    """将旧 dashboard_scripts 表中未迁移的看板脚本同步到 scripts 表（type='dashboard'）
+
+    使用 raw SQL 读取旧表（DashboardScript 模型已删除，旧表不再由 ORM 维护），
+    一次性数据搬迁后旧表即废弃，看板脚本统一由脚本管理页维护。
+    """
     try:
-        from app.models.script import Script
-        # 检查 dashboard_scripts 表是否存在（旧表可能已废弃）
-        from sqlalchemy import inspect as sqla_inspect
+        from sqlalchemy import inspect as sqla_inspect, text as sqla_text
         inspector = sqla_inspect(db.engine)
         if 'dashboard_scripts' not in inspector.get_table_names():
             return
-        from app.models.dashboard import DashboardScript
-        dashboard_scripts = DashboardScript.query.all()
-        if not dashboard_scripts:
+        rows = db.session.execute(sqla_text(
+            'SELECT name, sql_text, chart_type, conn_name, merge_conn_names, description '
+            'FROM dashboard_scripts'
+        )).fetchall()
+        if not rows:
             return
+        from app.models.script import Script
         migrated = 0
-        for ds in dashboard_scripts:
-            existing = Script.query.filter_by(name=ds.name, type='dashboard').first()
-            if existing:
+        for name, sql_text, chart_type, conn_name, merge_conn_names, description in rows:
+            if Script.query.filter_by(name=name, type='dashboard').first():
                 continue
-            sql_text = ds.sql_text
-            desc = ds.description or ''
-            chart_type = ds.chart_type or 'line'
-            conn_name = ds.conn_name or ''
-            merge_names = ds.get_merge_conn_names() or []
             script = Script(
-                name=ds.name,
-                sql_text=sql_text,
-                description=desc,
+                name=name,
+                sql_text=sql_text or '',
+                description=description or '',
                 type='dashboard',
-                chart_type=chart_type,
-                conn_name=conn_name,
+                chart_type=chart_type or 'line',
+                conn_name=conn_name or '',
                 is_active=True,
             )
-            script.set_merge_conn_names(merge_names)
+            script.merge_conn_names = merge_conn_names  # 旧表同为 JSON 文本，直接搬
             db.session.add(script)
             migrated += 1
         if migrated:
