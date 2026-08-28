@@ -384,4 +384,23 @@ const openApi = {
   getStats: (params) => http.get('/open-api/stats', { params }),
 }
 
-export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, mcp, openApi, business, systemTask, lookup, profitShare, tickets, pay, payFlow }
+const dataDashboard = {
+  listScripts: () => http.get('/dashboard/scripts'),
+  createScript: (data) => http.post('/dashboard/scripts', data),
+  updateScript: (id, data) => http.put(`/dashboard/scripts/${id}`, data),
+  deleteScript: (id) => http.delete(`/dashboard/scripts/${id}`),
+  listQuickQueries: () => http.get('/dashboard/quick-queries'),
+  createQuickQuery: (data) => http.post('/dashboard/quick-queries', data),
+  updateQuickQuery: (id, data) => http.put(`/dashboard/quick-queries/${id}`, data),
+  deleteQuickQuery: (id) => http.delete(`/dashboard/quick-queries/${id}`),
+  listConnections: () => http.get('/dashboard/connections'),
+  execute: (data) => http.post('/dashboard/execute', data),
+  parseParams: (data) => http.post('/dashboard/parse-params', data),
+  parseColumns: (data) => http.post('/dashboard/parse-columns', data),
+  getMetaConfig: () => http.get('/dashboard/config'),
+  getSettings: () => http.get('/dashboard/settings'),
+  saveSettings: (data) => http.post('/dashboard/settings', data),
+  clearCache: () => http.post('/dashboard/cache/clear'),
+}
+
+export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, mcp, openApi, business, systemTask, lookup, profitShare, tickets, pay, payFlow, dataDashboard }

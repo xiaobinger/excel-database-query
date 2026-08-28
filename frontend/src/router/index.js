@@ -15,6 +15,7 @@ const routes = [
       { path: '', name: 'Dashboard', component: () => import('../views/Dashboard.vue'), meta: { menu: 'dashboard', title: '仪表盘' } },
       { path: 'databases', name: 'Databases', component: () => import('../views/DatabaseManager.vue'), meta: { menu: 'databases', title: '数据库管理' } },
       { path: 'scripts', name: 'Scripts', component: () => import('../views/ScriptManager.vue'), meta: { menu: 'scripts', title: '脚本管理' } },
+      { path: 'data-dashboard', name: 'DataDashboard', component: () => import('../views/DataDashboard.vue'), meta: { menu: 'data_dashboard', title: '运营数据看板' } },
       { path: 'query', name: 'Query', component: () => import('../views/QueryExecutor.vue'), meta: { menu: 'query', title: '查询执行' } },
       { path: 'exports', name: 'ExportManager', component: () => import('../views/ExportManager.vue'), meta: { menu: 'exports', title: '导出管理' } },
       { path: 'export-exec', name: 'ExportExec', component: () => import('../views/ExportExecutor.vue'), meta: { menu: 'export_exec', title: '导出任务' } },

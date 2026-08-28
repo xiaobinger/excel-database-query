@@ -476,6 +476,44 @@
             </el-table>
           </div>
         </el-tab-pane>
+
+        <!-- 运营数据看板配置 -->
+        <el-tab-pane label="运营数据看板" name="dashboard">
+          <el-form label-width="140px" style="max-width: 640px; margin-top: 16px">
+            <el-form-item label="启用查询缓存">
+              <el-switch v-model="dashboardForm.cache_enabled" active-text="是" inactive-text="否" />
+              <span style="margin-left: 12px; color: #909399; font-size: 12px">开启后相同查询在有效期内直接返回缓存结果</span>
+            </el-form-item>
+            <el-form-item label="缓存有效期(秒)">
+              <el-input-number v-model="dashboardForm.cache_ttl" :min="0" :max="86400" :step="60" style="width: 200px" />
+            </el-form-item>
+            <el-form-item label="单次最大返回行数">
+              <el-input-number v-model="dashboardForm.max_rows" :min="100" :max="100000" :step="1000" style="width: 200px" />
+            </el-form-item>
+            <el-form-item label="默认统计维度">
+              <el-radio-group v-model="dashboardForm.default_dimension">
+                <el-radio-button value="day">按天</el-radio-button>
+                <el-radio-button value="month">按月</el-radio-button>
+                <el-radio-button value="year">按年</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item label="最大图表数量">
+              <el-input-number v-model="dashboardForm.max_chart_count" :min="1" :max="6" style="width: 200px" />
+              <span style="margin-left: 12px; color: #909399; font-size: 12px">看板页可同时展示的图表卡片数</span>
+            </el-form-item>
+            <el-form-item label="图表动画">
+              <el-switch v-model="dashboardForm.animation_enabled" active-text="是" inactive-text="否" />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="savingDashboard" @click="handleSaveDashboard">
+                <i class="fas fa-save"></i> 保存配置
+              </el-button>
+              <el-button :loading="clearingCache" @click="handleClearDashboardCache">
+                <i class="fas fa-broom"></i> 清空查询缓存
+              </el-button>
+            </el-form-item>
+          </el-form>
+        </el-tab-pane>
       </el-tabs>
     </el-card>
 
@@ -813,6 +851,45 @@ async function deletePayConfig(row) {
   } catch (e) { /* cancelled */ }
 }
 
+// ============ 运营数据看板配置 ============
+const dashboardForm = reactive({
+  cache_enabled: true,
+  cache_ttl: 600,
+  max_rows: 10000,
+  default_dimension: 'day',
+  max_chart_count: 4,
+  animation_enabled: true,
+})
+const savingDashboard = ref(false)
+const clearingCache = ref(false)
+
+async function fetchDashboardConfig() {
+  try {
+    const res = await api.dataDashboard.getSettings()
+    if (res.data) Object.assign(dashboardForm, res.data)
+  } catch {}
+}
+
+async function handleSaveDashboard() {
+  savingDashboard.value = true
+  try {
+    await api.dataDashboard.saveSettings({ ...dashboardForm })
+    ElMessage.success('看板配置已保存')
+  } catch {} finally {
+    savingDashboard.value = false
+  }
+}
+
+async function handleClearDashboardCache() {
+  clearingCache.value = true
+  try {
+    const res = await api.dataDashboard.clearCache()
+    ElMessage.success(res.message || '缓存已清空')
+  } catch {} finally {
+    clearingCache.value = false
+  }
+}
+
 function handleSelectionChange(rows) {
   selectedRows.value = rows
 }
@@ -998,6 +1075,7 @@ onMounted(() => {
   fetchStrategy()
   loadPayConfigs()
   loadPayChannels()
+  fetchDashboardConfig()
 })
 
 // AI Strategy

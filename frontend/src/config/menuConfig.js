@@ -11,6 +11,7 @@ export const ALL_MENU_ITEMS = [
   { path: '/', title: '仪表盘', icon: 'fa-tachometer-alt', permission: 'dashboard', affix: true },
   { path: '/databases', title: '数据库管理', icon: 'fa-database', permission: 'databases' },
   { path: '/scripts', title: '脚本管理', icon: 'fa-clipboard-list', permission: 'scripts' },
+  { path: '/data-dashboard', title: '运营数据看板', icon: 'fa-chart-line', permission: 'data_dashboard' },
   { path: '/query', title: '查询执行', icon: 'fa-play-circle', permission: 'query' },
   { path: '/history', title: '执行历史', icon: 'fa-history', permission: 'history' },
   { path: '/export-exec', title: '导出任务', icon: 'fa-download', permission: 'export_exec' },
@@ -42,6 +43,7 @@ export const DEFAULT_MENU_CONFIG = [
   { type: 'group', title: '数据管理', icon: 'fa-database', visible: true, children: [
     { path: '/databases', title: '数据库管理', icon: 'fa-database', permission: 'databases', visible: true },
     { path: '/scripts', title: '脚本管理', icon: 'fa-clipboard-list', permission: 'scripts', visible: true },
+    { path: '/data-dashboard', title: '运营数据看板', icon: 'fa-chart-line', permission: 'data_dashboard', visible: true },
   ]},
   { type: 'group', title: '导出中心', icon: 'fa-download', visible: true, children: [
     { path: '/query', title: '查询执行', icon: 'fa-play-circle', permission: 'query', visible: true },

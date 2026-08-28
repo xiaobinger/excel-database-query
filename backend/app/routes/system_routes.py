@@ -38,6 +38,7 @@ ALL_MENU_ITEMS = [
     {"path": "/system-tasks", "title": "系统任务", "icon": "fa-cogs", "permission": "system_tasks"},
     {"path": "/tickets", "title": "工单管理", "icon": "fa-ticket", "permission": "tickets"},
     {"path": "/system-map", "title": "系统地图", "icon": "fa-sitemap", "permission": "system_map"},
+    {"path": "/data-dashboard", "title": "运营数据看板", "icon": "fa-chart-line", "permission": "data_dashboard"},
 ]
 
 # 默认菜单配置
@@ -46,6 +47,7 @@ DEFAULT_MENU_CONFIG = [
     {"type": "group", "title": "数据管理", "icon": "fa-database", "visible": True, "children": [
         {"path": "/databases", "title": "数据库管理", "icon": "fa-database", "permission": "databases", "visible": True},
         {"path": "/scripts", "title": "脚本管理", "icon": "fa-clipboard-list", "permission": "scripts", "visible": True},
+        {"path": "/data-dashboard", "title": "运营数据看板", "icon": "fa-chart-line", "permission": "data_dashboard", "visible": True},
     ]},
     {"type": "group", "title": "导出中心", "icon": "fa-download", "visible": True, "children": [
         {"path": "/query", "title": "查询执行", "icon": "fa-play-circle", "permission": "query", "visible": True},

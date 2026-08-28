@@ -194,6 +194,7 @@ def _register_blueprints(app):
     from app.routes.ticket_routes import ticket_bp
     from app.routes.pay_routes import pay_bp
     from app.routes.pay_flow_routes import pay_flow_bp
+    from app.routes.dashboard_routes import dashboard_bp
 
     app.register_blueprint(ssh_bp)
     app.register_blueprint(database_bp)
@@ -221,6 +222,7 @@ def _register_blueprints(app):
     app.register_blueprint(ticket_bp)
     app.register_blueprint(pay_bp)
     app.register_blueprint(pay_flow_bp)
+    app.register_blueprint(dashboard_bp)
 
 
 def _register_error_handlers(app):
@@ -543,7 +545,7 @@ def _init_default_admin(app):
             name='超级管理员',
             description='系统超级管理员，拥有所有权限',
             is_admin=True,
-            menu_permissions='["dashboard","databases","scripts","query","exports","export_exec","auto_export","history","users","roles","system","ai_chat","skills","business_systems","system_tasks"]',
+            menu_permissions='["dashboard","databases","scripts","query","exports","export_exec","auto_export","history","users","roles","system","ai_chat","skills","business_systems","system_tasks","data_dashboard"]',
             button_permissions='["all"]',
         )
         db.session.add(admin_role)
@@ -552,7 +554,7 @@ def _init_default_admin(app):
         # 确保管理员角色包含新菜单权限
         try:
             menus = json.loads(admin_role.menu_permissions) if admin_role.menu_permissions else []
-            new_menus = ['ai_chat', 'ai_sessions', 'skills', 'agent_manager', 'mcp_servers', 'open_api', 'cache_stats', 'business_systems', 'system_tasks', 'profit_share', 'tickets', 'system_map', 'pay_withdraw', 'pay_flow', 'pay_flow_executions']
+            new_menus = ['ai_chat', 'ai_sessions', 'skills', 'agent_manager', 'mcp_servers', 'open_api', 'cache_stats', 'business_systems', 'system_tasks', 'profit_share', 'tickets', 'system_map', 'pay_withdraw', 'pay_flow', 'pay_flow_executions', 'data_dashboard']
             updated = False
             for m in new_menus:
                 if m not in menus:
@@ -612,6 +614,15 @@ def _init_default_admin(app):
         print(f'  请登录后立即修改密码！')
         print(f'{"="*60}\n')
         app.logger.warning(f'Admin account created - username: admin, password: {admin_password}')
+
+
+def _seed_dashboard_scripts(app):
+    """首次启动时导入运营数据看板示例脚本"""
+    try:
+        from app.services.dashboard_service import seed_default_scripts
+        seed_default_scripts()
+    except Exception as e:
+        app.logger.warning(f'看板示例脚本导入失败: {e}')
 
 
 def _init_connection_pool(app):
