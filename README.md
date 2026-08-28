@@ -337,6 +337,13 @@ WHERE merchant_id = :value
 
 ## 近期新增功能
 
+### 工单列表显示修复 (v2.3.17)
+
+**Bug修复**：
+- 修复 TicketManager.vue 中 `assigneeFilter`、`businessSystemFilter`、`dateFilter` 三个筛选变量未用 `ref()` 声明的问题
+- 这些变量在模板中用 `v-model` 绑定，但 `<script setup>` 中缺少声明，导致 `fetchTickets` 访问 `.value` 时抛出 `TypeError`，被空 `catch` 捕获后设置空列表
+- 同时补充了缺失的 `resetTicketFilters` 函数
+
 ### 菜单图标优化 + 列表筛选增强 (v2.3.16)
 
 **菜单图标优化**：

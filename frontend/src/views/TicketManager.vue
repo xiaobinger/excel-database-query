@@ -526,7 +526,20 @@ const total = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(20)
 const statusFilter = ref('')
+const assigneeFilter = ref('')
+const businessSystemFilter = ref('')
+const dateFilter = ref(null)
 const keyword = ref('')
+
+function resetTicketFilters() {
+  statusFilter.value = ''
+  assigneeFilter.value = ''
+  businessSystemFilter.value = ''
+  dateFilter.value = null
+  keyword.value = ''
+  currentPage.value = 1
+  fetchTickets()
+}
 
 // 列表中是否有AI处理中的工单（用于自动轮询刷新）
 const hasAiProcessing = computed(() =>
