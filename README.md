@@ -337,6 +337,14 @@ WHERE merchant_id = :value
 
 ## 近期新增功能
 
+### 看板表格紧凑化 + 视觉微调 (v2.3.15)
+
+**表格紧凑化**：
+- 单元格 padding 从 `7px 10px` 缩减为 `6px 5px`（th）/ `4px 5px`（td），列间距大幅收窄
+- 标签列 max-width 从 160px 缩减为 120px
+- 百分比列 min-width 从 100px 缩减为 70px，pct-val margin-left 从 58px 缩减为 40px
+- 表头去除 `white-space: nowrap` 允许换行（避免过宽表头撑开）
+
 ### 看板表格美化 + 多数据源图表切换 (v2.3.14)
 
 **表格渲染美化**：

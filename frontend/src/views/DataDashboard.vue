@@ -878,16 +878,16 @@ onBeforeUnmount(() => {
 .table-wrap { overflow: auto; max-height: 560px; border-radius: 6px; border: 1px solid var(--el-border-color-lighter); }
 .data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .data-table thead { position: sticky; top: 0; z-index: 1; }
-.data-table th { background: #409eff; color: #fff; font-weight: 600; padding: 7px 10px; border: none; font-size: 12px; white-space: nowrap; }
-.data-table td { padding: 5px 10px; border-bottom: 1px solid var(--el-border-color-extra-light); white-space: nowrap; }
+.data-table th { background: #409eff; color: #fff; font-weight: 600; padding: 6px 5px; border: none; font-size: 12px; }
+.data-table td { padding: 4px 5px; border-bottom: 1px solid var(--el-border-color-extra-light); white-space: nowrap; }
 .data-table tr.even { background: var(--el-bg-color); }
 .data-table tr.odd { background: var(--el-fill-color-blank); }
 .data-table tbody tr:hover { background: var(--el-color-primary-light-9) !important; }
-.data-table .cell-label { font-weight: 500; color: var(--el-text-color-primary); max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.data-table .cell-label { font-weight: 500; color: var(--el-text-color-primary); max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
 .data-table .cell-num { text-align: right; font-variant-numeric: tabular-nums; font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace; color: var(--el-text-color-regular); font-size: 12px; }
-.data-table .cell-pct { text-align: right; position: relative; min-width: 100px; }
+.data-table .cell-pct { text-align: right; position: relative; min-width: 70px; }
 .pct-bar { position: absolute; left: 4px; top: 50%; transform: translateY(-50%); height: 5px; width: 52px; border-radius: 3px; background: var(--el-fill-color); overflow: hidden; }
 .pct-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--el-color-success-light-5), var(--el-color-success)); transition: width 0.3s; }
-.pct-val { position: relative; z-index: 1; font-variant-numeric: tabular-nums; font-size: 12px; color: var(--el-color-success); font-weight: 500; margin-left: 58px; }
+.pct-val { position: relative; z-index: 1; font-variant-numeric: tabular-nums; font-size: 12px; color: var(--el-color-success); font-weight: 500; margin-left: 40px; }
 .data-dashboard .empty-hint { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--el-text-color-placeholder); }
 </style>
