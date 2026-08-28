@@ -492,6 +492,7 @@ API类型和本地脚本类型的系统任务支持**从SQL脚本动态获取参
 |------|------|------|
 | 2026-08-27 | v2.3.5 | 修复流式对话路径Headroom压缩缺失：流式对话（`send_message_stream`）完全未调用`compress_if_enabled`，导致headroom在流式对话中不生效；修复后在`_attempt`循环中添加压缩调用，并在done事件和消息保存中传递`headroom_stats`（original_tokens/saved_tokens/compression_ratio）；修复token统计不工作：流式请求缺少`stream_options: {include_usage: True}`导致OpenAI流式API不返回usage数据，在两处流式请求中添加`stream_options`；删除工具循环中重复的usage提取代码（避免token统计翻倍）；增强纯文本压缩策略：新增单段落长文本按句子截断策略 |
 | 2026-08-27 | v2.3.4 | Headroom压缩指标始终展示：对话消息下方和缓存统计页面即使未压缩也显示压缩指标（0 tokens/0%）；输入栏区分"将压缩"/"太短不压缩"/"未启用压缩"三种状态 |
+| 2026-08-27 | v2.3.6 | AI会话管理对话详情展示完整指标：在会话管理页面"查看对话详情"对话框中，每条 assistant 消息下方展示耗时、token（输入/输出）、缓存（写入/命中）、Headroom 压缩指标（原文/压缩后/节省/压缩率），与实时对话页保持一致 |
 | 2026-08-27 | v2.3.3 | AI对话输入框实时统计：输入区域下方展示已输入字符数、预计消耗token数、是否触发headroom压缩（绿色"将压缩"/灰色"不压缩"） |
 | 2026-08-27 | v2.3.2 | 对外API支持Headroom压缩：外部API调用（OpenAI兼容端点、自定义端点）同样应用Headroom上下文压缩逻辑，响应中返回`headroom`统计字段（original_tokens/saved_tokens/compression_ratio），调用日志记录压缩指标和节省token |
 | 2026-08-27 | v2.3.1 | Headroom上下文压缩优化：降低压缩阈值（内容50字符/JSON 3项/日志5行/代码10行/文本500字符）使更多消息被压缩；新增模型标签栏绿色压缩图标指示器（`headroom-badge`）；新增消息发送区域Headroom启用状态实时展示 |
