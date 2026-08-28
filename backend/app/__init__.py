@@ -621,12 +621,59 @@ def _init_default_admin(app):
 
 
 def _seed_dashboard_scripts(app):
-    """首次启动时导入运营数据看板示例脚本"""
+    """首次启动时导入运营数据看板示例脚本（迁移到scripts表）"""
     try:
-        from app.services.dashboard_service import seed_default_scripts
-        seed_default_scripts()
+        from app.models.script import Script
+        from app.models.dashboard import DashboardScript
+        # 如果旧表没有数据且新表没有看板类型脚本，则导入示例
+        old_count = DashboardScript.query.count()
+        new_count = Script.query.filter_by(type='dashboard').count()
+        if old_count == 0 and new_count == 0:
+            from app.services.dashboard_service import seed_default_scripts
+            seed_default_scripts()
+            app.logger.info('看板示例脚本已导入（DashboardScript表）')
+        elif old_count > 0 and new_count == 0:
+            app.logger.warning(f'DashboardScript表有{old_count}条记录，但scripts表无看板脚本，建议手动迁移')
     except Exception as e:
         app.logger.warning(f'看板示例脚本导入失败: {e}')
+
+
+def _migrate_dashboard_scripts_to_scripts(app):
+    """将 dashboard_scripts 表中未迁移的看板脚本同步到 scripts 表（type='dashboard'）"""
+    try:
+        from app.models.script import Script
+        from app.models.dashboard import DashboardScript
+        import json
+        dashboard_scripts = DashboardScript.query.all()
+        for ds in dashboard_scripts:
+            existing = Script.query.filter_by(name=ds.name, type='dashboard').first()
+            if existing:
+                continue
+            sql_text = ds.sql_text
+            desc = ds.description or ''
+            chart_type = ds.chart_type or 'line'
+            conn_name = ds.conn_name or ''
+            merge_names = ds.get_merge_conn_names() or []
+            script = Script(
+                name=ds.name,
+                sql_text=sql_text,
+                description=desc,
+                type='dashboard',
+                chart_type=chart_type,
+                conn_name=conn_name,
+                is_active=True,
+            )
+            script.set_merge_conn_names(merge_names)
+            db.session.add(script)
+        db.session.commit()
+        if dashboard_scripts:
+            app.logger.info(f'看板脚本迁移完成：{len(dashboard_scripts)} 条记录同步到 scripts 表')
+    except Exception as e:
+        app.logger.warning(f'看板脚本迁移失败（忽略）: {e}')
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
 
 
 def _init_connection_pool(app):

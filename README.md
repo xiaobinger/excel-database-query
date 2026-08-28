@@ -538,6 +538,7 @@ API类型和本地脚本类型的系统任务支持**从SQL脚本动态获取参
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-08-28 | v2.3.9 | 运营数据看板脚本集成到脚本管理：看板脚本类型（`dashboard`）统一纳入现有脚本管理系统，与查询/导出/系统/字典脚本同页管理；Script模型新增`chart_type`/`conn_name`/`merge_conn_names`字段，支持图表类型、主数据源、多源合并查询配置；前端ScriptManager新增"看板脚本"类型选项，选择后显示图表类型选择、数据源选择、合并数据源多选等专属表单字段；新增从旧`dashboard_scripts`表的迁移逻辑，自动同步历史看板脚本数据 |
 | 2026-08-28 | v2.3.8 | 工单草稿暂存：创建工单支持暂存为草稿（仅标题必填，内容/指派人可选）；草稿在列表中显示"草稿"标签，点击可直接进入编辑；详情对话框新增"编辑草稿"/"提交工单"按钮；新增`PUT /<id>/draft`更新草稿接口、`POST /<id>/submit`提交草稿接口；`create_ticket`支持`is_draft`参数；列表查询扩展普通用户可见自己的草稿 |
 | 2026-08-28 | v2.3.7 | 工单AI处理Token消耗统计：工单指派给AI时，统计并展示AI处理过程消耗的token指标（总Token/Prompt/Completion/缓存创建/缓存读取），Headroom压缩指标（原始/节省/压缩率），参与的AI模型列表；工单详情对话框新增"AI Token 消耗指标"区块；工单统计页AI Agent表格新增Token消耗和Headroom节省列，汇总行新增Token总消耗标签 |
 | 2026-08-27 | v2.3.5 | 修复流式对话路径Headroom压缩缺失：流式对话（`send_message_stream`）完全未调用`compress_if_enabled`，导致headroom在流式对话中不生效；修复后在`_attempt`循环中添加压缩调用，并在done事件和消息保存中传递`headroom_stats`（original_tokens/saved_tokens/compression_ratio）；修复token统计不工作：流式请求缺少`stream_options: {include_usage: True}`导致OpenAI流式API不返回usage数据，在两处流式请求中添加`stream_options`；删除工具循环中重复的usage提取代码（避免token统计翻倍）；增强纯文本压缩策略：新增单段落长文本按句子截断策略 |

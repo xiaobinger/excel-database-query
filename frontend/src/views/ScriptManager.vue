@@ -16,6 +16,7 @@
               <el-option value="export" label="导出选项" />
               <el-option value="system" label="系统脚本" />
               <el-option value="lookup" label="信息查询" />
+              <el-option value="dashboard" label="看板脚本" />
             </el-select>
             <el-select
               v-model="tagFilter"
@@ -197,6 +198,7 @@
                     <el-option value="export" label="导出选项" />
                     <el-option value="system" label="系统脚本" />
                     <el-option value="lookup" label="信息查询" />
+                    <el-option value="dashboard" label="看板脚本" />
                   </el-select>
                 </el-form-item>
                 <el-form-item label="标签" class="form-row-item">
@@ -506,6 +508,53 @@
               </el-form-item>
             </el-form>
           </div>
+
+          <!-- 看板脚本专属配置 -->
+          <div v-if="form.type === 'dashboard'" class="sidebar-section">
+            <div class="section-label">
+              <i class="fas fa-chart-bar"></i> 看板配置
+            </div>
+            <el-form
+              :model="form"
+              label-position="top"
+              class="sidebar-form"
+            >
+              <el-form-item label="图表类型">
+                <el-select v-model="form.chart_type" style="width: 100%">
+                  <el-option value="line" label="折线图 (line)" />
+                  <el-option value="bar" label="柱状图 (bar)" />
+                  <el-option value="area" label="面积图 (area)" />
+                  <el-option value="pie" label="饼图 (pie)" />
+                  <el-option value="scatter" label="散点图 (scatter)" />
+                  <el-option value="table" label="表格 (table)" />
+                  <el-option value="radar" label="雷达图 (radar)" />
+                  <el-option value="gauge" label="仪表盘 (gauge)" />
+                  <el-option value="funnel" label="漏斗图 (funnel)" />
+                  <el-option value="mix" label="混合图 (mix)" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="主数据源">
+                <el-select v-model="form.conn_name" placeholder="选择主数据源" clearable style="width: 100%">
+                  <el-option
+                    v-for="db in store.databases"
+                    :key="db.id"
+                    :label="db.name"
+                    :value="db.name"
+                  />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="合并数据源">
+                <el-select v-model="form.merge_conn_names" multiple placeholder="可多选（多源合并查询）" style="width: 100%">
+                  <el-option
+                    v-for="db in store.databases"
+                    :key="db.id"
+                    :label="db.name"
+                    :value="db.name"
+                  />
+                </el-select>
+              </el-form-item>
+            </el-form>
+          </div>
         </div>
       </div>
 
@@ -563,7 +612,10 @@ const defaultForm = {
   new_sheet: true,
   primary_key: '',
   database_ids: [],
-  params_config: []
+  params_config: [],
+  chart_type: 'line',
+  conn_name: '',
+  merge_conn_names: [],
 }
 
 const form = reactive({ ...defaultForm })
@@ -649,7 +701,7 @@ function getParamCount(row) {
 }
 
 function typeLabel(type) {
-  const map = { query: '查询选项', export: '导出选项', system: '系统脚本', lookup: '信息查询' }
+  const map = { query: '查询选项', export: '导出选项', system: '系统脚本', lookup: '信息查询', dashboard: '看板脚本' }
   return map[type] || '脚本'
 }
 
@@ -933,7 +985,7 @@ async function handleValidate(row) {
 
 onMounted(() => {
   const queryType = route.query.type
-  if (queryType && ['query', 'export', 'system', 'lookup'].includes(queryType)) {
+  if (queryType && ['query', 'export', 'system', 'lookup', 'dashboard'].includes(queryType)) {
     typeFilter.value = queryType
   }
   fetchList()
