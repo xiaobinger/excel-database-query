@@ -859,7 +859,7 @@ onBeforeUnmount(() => {
 .type-btns { display: flex; gap: 2px; }
 .type-btn { border: 1px solid var(--el-border-color); background: transparent; color: var(--el-text-color-secondary); padding: 2px 7px; font-size: 11px; cursor: pointer; border-radius: 4px; }
 .type-btn.active { background: var(--el-color-primary); color: #fff; border-color: var(--el-color-primary); }
-.chart-body { flex: 1; min-height: 320px; width: 100%; }
+.chart-body { flex: 1; min-height: 480px; width: 100%; }
 .empty-hint { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--el-text-color-placeholder); }
 
 /* ── 数据源切换 tabs ── */
@@ -875,19 +875,19 @@ onBeforeUnmount(() => {
 
 <!-- 非 scoped 样式：innerHTML 生成的 DOM 没有 data-v-xxx 属性，scoped 选择器无法匹配 -->
 <style>
-.table-wrap { overflow: auto; max-height: 420px; border-radius: 6px; border: 1px solid var(--el-border-color-lighter); }
-.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.table-wrap { overflow: auto; max-height: 560px; border-radius: 6px; border: 1px solid var(--el-border-color-lighter); }
+.data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .data-table thead { position: sticky; top: 0; z-index: 1; }
-.data-table th { background: linear-gradient(135deg, var(--el-color-primary-light-7), var(--el-color-primary-light-8)); color: #fff; font-weight: 600; padding: 10px 14px; border: none; font-size: 12px; letter-spacing: 0.3px; white-space: nowrap; }
-.data-table td { padding: 9px 14px; border-bottom: 1px solid var(--el-border-color-extra-light); white-space: nowrap; }
+.data-table th { background: #409eff; color: #fff; font-weight: 600; padding: 7px 10px; border: none; font-size: 12px; white-space: nowrap; }
+.data-table td { padding: 5px 10px; border-bottom: 1px solid var(--el-border-color-extra-light); white-space: nowrap; }
 .data-table tr.even { background: var(--el-bg-color); }
 .data-table tr.odd { background: var(--el-fill-color-blank); }
 .data-table tbody tr:hover { background: var(--el-color-primary-light-9) !important; }
-.data-table .cell-label { font-weight: 500; color: var(--el-text-color-primary); max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.data-table .cell-label { font-weight: 500; color: var(--el-text-color-primary); max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 .data-table .cell-num { text-align: right; font-variant-numeric: tabular-nums; font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace; color: var(--el-text-color-regular); font-size: 12px; }
-.data-table .cell-pct { text-align: right; position: relative; min-width: 110px; }
-.pct-bar { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); height: 6px; width: 60px; border-radius: 3px; background: var(--el-fill-color); overflow: hidden; }
+.data-table .cell-pct { text-align: right; position: relative; min-width: 100px; }
+.pct-bar { position: absolute; left: 4px; top: 50%; transform: translateY(-50%); height: 5px; width: 52px; border-radius: 3px; background: var(--el-fill-color); overflow: hidden; }
 .pct-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--el-color-success-light-5), var(--el-color-success)); transition: width 0.3s; }
-.pct-val { position: relative; z-index: 1; font-variant-numeric: tabular-nums; font-size: 12px; color: var(--el-color-success); font-weight: 500; margin-left: 66px; }
+.pct-val { position: relative; z-index: 1; font-variant-numeric: tabular-nums; font-size: 12px; color: var(--el-color-success); font-weight: 500; margin-left: 58px; }
 .data-dashboard .empty-hint { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--el-text-color-placeholder); }
 </style>
