@@ -269,18 +269,30 @@ async function loadMeta() {
 }
 
 async function loadScripts() {
-  const res = await api.dataDashboard.listScripts()
-  scripts.value = res.data || []
+  try {
+    const res = await api.dataDashboard.listScripts()
+    scripts.value = res.data || []
+  } catch (e) {
+    scripts.value = []
+  }
 }
 
 async function loadConnections() {
-  const res = await api.dataDashboard.listConnections()
-  connections.value = res.data || []
+  try {
+    const res = await api.dataDashboard.listConnections()
+    connections.value = res.data || []
+  } catch (e) {
+    connections.value = []
+  }
 }
 
 async function loadQuickQueries() {
-  const res = await api.dataDashboard.listQuickQueries()
-  quickQueries.value = res.data || []
+  try {
+    const res = await api.dataDashboard.listQuickQueries()
+    quickQueries.value = res.data || []
+  } catch (e) {
+    quickQueries.value = []
+  }
 }
 
 // ── 脚本变更 ──
@@ -741,13 +753,17 @@ async function saveScript() {
 
 async function deleteScript() {
   if (!editingScript.value?.id) return
-  await ElMessageBox.confirm(`确定删除脚本 '${editingScript.value.name}'？`, '提示', { type: 'warning' })
-  const res = await api.dataDashboard.deleteScript(editingScript.value.id)
-  if (res.success) {
-    ElMessage.success('已删除')
-    newScript()
-    await loadScripts()
-  }
+  try {
+    await ElMessageBox.confirm(`确定删除脚本 '${editingScript.value.name}'？`, '提示', { type: 'warning' })
+  } catch (e) { return }
+  try {
+    const res = await api.dataDashboard.deleteScript(editingScript.value.id)
+    if (res.success) {
+      ElMessage.success('已删除')
+      newScript()
+      await loadScripts()
+    }
+  } catch (e) { /* interceptor */ }
 }
 
 // ── 快捷查询 ──

@@ -21,7 +21,8 @@ import pandas as pd
 from sqlalchemy import text
 
 from app import db
-from app.models.dashboard import DashboardScript, DashboardQuickQuery
+from app.models.dashboard import DashboardQuickQuery
+from app.models.script import Script
 from app.models.database import DatabaseConnection
 from app.models.system_config import SystemConfig
 
@@ -499,8 +500,8 @@ def clear_dashboard_cache() -> int:
 
 
 def seed_default_scripts():
-    """首次启动时导入示例看板脚本（连接名留空，需自行关联数据源）"""
-    if DashboardScript.query.count() > 0:
+    """首次启动时导入示例看板脚本（写入 scripts 表，type='dashboard'）"""
+    if Script.query.filter_by(type='dashboard').count() > 0:
         return
     seeds = [
         {
@@ -546,18 +547,20 @@ def seed_default_scripts():
         },
     ]
     for seed in seeds:
-        script = DashboardScript(
+        script = Script(
             name=seed['name'],
             sql_text=seed['sql_text'],
+            type='dashboard',
             chart_type=seed['chart_type'],
             conn_name=seed['conn_name'],
             description=seed['description'],
+            is_active=True,
         )
         script.set_merge_conn_names(seed['merge_conn_names'])
         db.session.add(script)
     try:
         db.session.commit()
-        logger.info('已导入 %d 个看板示例脚本', len(seeds))
+        logger.info('已导入 %d 个看板示例脚本（scripts 表）', len(seeds))
     except Exception as e:
         db.session.rollback()
         logger.warning(f'看板示例脚本导入失败: {e}')

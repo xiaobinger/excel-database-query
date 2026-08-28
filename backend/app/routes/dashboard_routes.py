@@ -11,7 +11,8 @@ import traceback
 from flask import Blueprint, request, jsonify
 
 from app import db
-from app.models.dashboard import DashboardScript, DashboardQuickQuery
+from app.models.dashboard import DashboardQuickQuery
+from app.models.script import Script
 from app.models.database import DatabaseConnection
 from app.utils.auth import permission_required
 from app.services import dashboard_service as svc
@@ -21,14 +22,20 @@ logger = logging.getLogger(__name__)
 dashboard_bp = Blueprint('data_dashboard', __name__, url_prefix='/api/dashboard')
 
 
-# ── 脚本管理 ──────────────────────────────────────────
+# ── 脚本管理（基于 scripts 表 type='dashboard'）──────────────────
+
+def _script_to_dashboard_dict(s):
+    d = s.to_dict()
+    # 保持前端期望的 sql 字段（兼容旧字段名）
+    d['sql'] = d.pop('sql_text', '')
+    return d
 
 
 @dashboard_bp.route('/scripts', methods=['GET'])
 @permission_required('data_dashboard')
 def list_scripts():
-    scripts = DashboardScript.query.order_by(DashboardScript.id).all()
-    return jsonify({'success': True, 'data': [s.to_dict() for s in scripts]})
+    scripts = Script.query.filter_by(type='dashboard', is_active=True).order_by(Script.created_at).all()
+    return jsonify({'success': True, 'data': [_script_to_dashboard_dict(s) for s in scripts]})
 
 
 @dashboard_bp.route('/scripts', methods=['POST'])
@@ -36,54 +43,57 @@ def list_scripts():
 def add_script():
     data = request.json or {}
     name = (data.get('name') or '').strip()
-    sql_text = (data.get('sql') or '').strip()
+    sql_text = (data.get('sql') or data.get('sql_text') or '').strip()
     if not name or not sql_text:
         return jsonify({'success': False, 'message': '请填写脚本名称和SQL'}), 400
-    if DashboardScript.query.filter_by(name=name).first():
+    if Script.query.filter_by(name=name, type='dashboard').first():
         return jsonify({'success': False, 'message': f"脚本名称 '{name}' 已存在"}), 400
-    script = DashboardScript(
+    script = Script(
         name=name,
         sql_text=sql_text,
+        type='dashboard',
         chart_type=data.get('chart_type', 'line'),
         conn_name=data.get('conn_name', ''),
         description=data.get('description', ''),
+        is_active=True,
     )
     script.set_merge_conn_names(data.get('merge_conn_names') or [])
     db.session.add(script)
     db.session.commit()
-    return jsonify({'success': True, 'data': script.to_dict()})
+    return jsonify({'success': True, 'data': _script_to_dashboard_dict(script)})
 
 
 @dashboard_bp.route('/scripts/<int:script_id>', methods=['PUT'])
 @permission_required('data_dashboard')
 def update_script(script_id):
-    script = DashboardScript.query.get(script_id)
+    script = Script.query.filter_by(id=script_id, type='dashboard').first()
     if not script:
         return jsonify({'success': False, 'message': '脚本不存在'}), 404
     data = request.json or {}
     name = (data.get('name') or '').strip()
-    if not name or not (data.get('sql') or '').strip():
+    sql_text = (data.get('sql') or data.get('sql_text') or '').strip()
+    if not name or not sql_text:
         return jsonify({'success': False, 'message': '请填写脚本名称和SQL'}), 400
-    dup = DashboardScript.query.filter(DashboardScript.name == name, DashboardScript.id != script_id).first()
+    dup = Script.query.filter(Script.name == name, Script.type == 'dashboard', Script.id != script_id).first()
     if dup:
         return jsonify({'success': False, 'message': f"脚本名称 '{name}' 已存在"}), 400
     script.name = name
-    script.sql_text = (data.get('sql') or '').strip()
+    script.sql_text = sql_text
     script.chart_type = data.get('chart_type', script.chart_type)
-    script.conn_name = data.get('conn_name', '')
-    script.description = data.get('description', '')
+    script.conn_name = data.get('conn_name', script.conn_name)
+    script.description = data.get('description', script.description)
     script.set_merge_conn_names(data.get('merge_conn_names') or [])
     db.session.commit()
-    return jsonify({'success': True, 'data': script.to_dict()})
+    return jsonify({'success': True, 'data': _script_to_dashboard_dict(script)})
 
 
 @dashboard_bp.route('/scripts/<int:script_id>', methods=['DELETE'])
 @permission_required('data_dashboard')
 def delete_script(script_id):
-    script = DashboardScript.query.get(script_id)
+    script = Script.query.filter_by(id=script_id, type='dashboard').first()
     if not script:
         return jsonify({'success': False, 'message': '脚本不存在'}), 404
-    db.session.delete(script)
+    script.is_active = False
     db.session.commit()
     return jsonify({'success': True, 'message': '删除成功'})
 

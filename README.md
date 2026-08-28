@@ -337,6 +337,22 @@ WHERE merchant_id = :value
 
 ## 近期新增功能
 
+### 运营数据看板脚本统一到 scripts 表 (v2.3.11)
+
+废弃旧的 `dashboard_scripts` 表，看板脚本 CRUD 全面切换到统一的 `scripts` 表（`type='dashboard'`），与脚本管理页同源：
+
+**后端改造**：
+- `backend/app/routes/dashboard_routes.py`：看板脚本 CRUD（`/api/dashboard/scripts`）从 `DashboardScript` 模型切换到 `Script` 模型（`type='dashboard'`），新增 `_script_to_dashboard_dict` 辅助函数保持前端 `sql` 字段名兼容；删除改为软删除（`is_active=False`）
+- `backend/app/services/dashboard_service.py`：`seed_default_scripts()` 改用 `Script` 模型写入示例脚本
+- `backend/app/__init__.py`：启用 `_migrate_dashboard_scripts_to_scripts()` 迁移函数（启动时自动检查旧 `dashboard_scripts` 表并同步到 `scripts` 表），`_seed_dashboard_scripts()` 简化为只检查 `scripts` 表
+
+**前端修复**：
+- `frontend/src/views/DataDashboard.vue`：`loadScripts`/`loadConnections`/`loadQuickQueries` 增加 try/catch 错误处理，API 失败时降级为空数组而非页面崩溃；`deleteScript` 增加确认对话框取消异常处理
+
+**数据迁移**：
+- 启动时自动检测旧 `dashboard_scripts` 表是否存在，存在则同步未迁移的脚本到 `scripts` 表（按名称去重）
+- 旧 `DashboardScript` 模型类保留用于迁移，迁移完成后可安全废弃
+
 ### 工单草稿暂存 (v2.3.8)
 
 工单编辑时支持暂存为草稿，未提交的草稿工单下次可从列表进入重新编辑并提交：
@@ -538,6 +554,7 @@ API类型和本地脚本类型的系统任务支持**从SQL脚本动态获取参
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-08-28 | v2.3.11 | 运营数据看板脚本统一到scripts表：废弃旧`dashboard_scripts`表，看板脚本CRUD全面切换到`scripts`表（`type='dashboard'`）；后端`dashboard_routes.py`改用`Script`模型查询/创建/更新/删除看板脚本，新增`_script_to_dashboard_dict`辅助函数保持前端字段兼容；`dashboard_service.py`种子函数改用`Script`模型；`__init__.py`启用迁移函数（自动检测并同步旧`dashboard_scripts`表数据）；前端`DataDashboard.vue`增加API调用错误处理（try/catch降级为空数组避免页面崩溃）；删除改为软删除（`is_active=False`） |
 | 2026-08-28 | v2.3.10 | 修复工单AI处理多系统任务只执行最后一个的bug：AI工具调用循环中多个SQL系统任务待确认时，`pending_system_task`单变量被覆盖只保留最后一个；改为`pending_system_tasks`列表收集所有任务，`pending_action`存储为`{'tasks': [...]}`格式；重写`_execute_pending_action_async`支持多任务顺序执行（遇失败中止），兼容旧格式单任务字典；前端待确认banner显示任务列表，确认对话框列出所有待执行任务；修复`cancel_ticket_action`对新格式的兼容性 |
 | 2026-08-28 | v2.3.9 | 运营数据看板脚本集成到脚本管理：看板脚本类型（`dashboard`）统一纳入现有脚本管理系统，与查询/导出/系统/字典脚本同页管理；Script模型新增`chart_type`/`conn_name`/`merge_conn_names`字段，支持图表类型、主数据源、多源合并查询配置；前端ScriptManager新增"看板脚本"类型选项，选择后显示图表类型选择、数据源选择、合并数据源多选等专属表单字段；新增从旧`dashboard_scripts`表的迁移逻辑，自动同步历史看板脚本数据 |
 | 2026-08-28 | v2.3.8 | 工单草稿暂存：创建工单支持暂存为草稿（仅标题必填，内容/指派人可选）；草稿在列表中显示"草稿"标签，点击可直接进入编辑；详情对话框新增"编辑草稿"/"提交工单"按钮；新增`PUT /<id>/draft`更新草稿接口、`POST /<id>/submit`提交草稿接口；`create_ticket`支持`is_draft`参数；列表查询扩展普通用户可见自己的草稿 |

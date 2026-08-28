@@ -54,13 +54,14 @@ def create_app(config_name='default'):
         from app.models.api_call_log import ApiCallLog
         from app.models.ticket import Ticket, TicketComment
         from app.models.pay_config import PayConfig
-        from app.models.dashboard import DashboardScript, DashboardQuickQuery
+        from app.models.dashboard import DashboardQuickQuery
         db.create_all()
         _auto_migrate(app)
         _migrate_ticket_comments_nullable(app)
         _migrate_api_call_log_columns(app)
         _migrate_api_call_log_session(app)
         _init_default_admin(app)
+        _migrate_dashboard_scripts_to_scripts(app)
         _seed_dashboard_scripts(app)
         _init_connection_pool(app)
         _recover_stale_ai_tickets(app)
@@ -621,19 +622,15 @@ def _init_default_admin(app):
 
 
 def _seed_dashboard_scripts(app):
-    """首次启动时导入运营数据看板示例脚本（迁移到scripts表）"""
+    """首次启动时导入运营数据看板示例脚本（写入 scripts 表）"""
     try:
         from app.models.script import Script
-        from app.models.dashboard import DashboardScript
-        # 如果旧表没有数据且新表没有看板类型脚本，则导入示例
-        old_count = DashboardScript.query.count()
+        # 如果 scripts 表中没有看板类型脚本，则导入示例
         new_count = Script.query.filter_by(type='dashboard').count()
-        if old_count == 0 and new_count == 0:
+        if new_count == 0:
             from app.services.dashboard_service import seed_default_scripts
             seed_default_scripts()
-            app.logger.info('看板示例脚本已导入（DashboardScript表）')
-        elif old_count > 0 and new_count == 0:
-            app.logger.warning(f'DashboardScript表有{old_count}条记录，但scripts表无看板脚本，建议手动迁移')
+            app.logger.info('看板示例脚本已导入（scripts 表）')
     except Exception as e:
         app.logger.warning(f'看板示例脚本导入失败: {e}')
 
@@ -642,9 +639,16 @@ def _migrate_dashboard_scripts_to_scripts(app):
     """将 dashboard_scripts 表中未迁移的看板脚本同步到 scripts 表（type='dashboard'）"""
     try:
         from app.models.script import Script
+        # 检查 dashboard_scripts 表是否存在（旧表可能已废弃）
+        from sqlalchemy import inspect as sqla_inspect
+        inspector = sqla_inspect(db.engine)
+        if 'dashboard_scripts' not in inspector.get_table_names():
+            return
         from app.models.dashboard import DashboardScript
-        import json
         dashboard_scripts = DashboardScript.query.all()
+        if not dashboard_scripts:
+            return
+        migrated = 0
         for ds in dashboard_scripts:
             existing = Script.query.filter_by(name=ds.name, type='dashboard').first()
             if existing:
@@ -665,9 +669,10 @@ def _migrate_dashboard_scripts_to_scripts(app):
             )
             script.set_merge_conn_names(merge_names)
             db.session.add(script)
-        db.session.commit()
-        if dashboard_scripts:
-            app.logger.info(f'看板脚本迁移完成：{len(dashboard_scripts)} 条记录同步到 scripts 表')
+            migrated += 1
+        if migrated:
+            db.session.commit()
+            app.logger.info(f'看板脚本迁移完成：{migrated} 条记录同步到 scripts 表')
     except Exception as e:
         app.logger.warning(f'看板脚本迁移失败（忽略）: {e}')
         try:
