@@ -337,6 +337,14 @@ WHERE merchant_id = :value
 
 ## 近期新增功能
 
+### 运营数据看板统计指标面板 (v2.3.22)
+
+**单Y轴字段时动态展示统计指标**：
+- 当图表 Y 轴仅选择 1 个数值字段时，图表区域右上角自动显示四项关键统计指标：最大值、最小值、平均值、中位数
+- 指标面板支持大数智能格式化（万/亿），等宽数字字体（tabular-nums）对齐
+- 面板带入场滑动动画，视觉上与图表区域融为一体
+- 切换 Y 轴字段数量或更换字段时自动重算，无需手动操作
+
 ### 工单对话框关闭自动暂存草稿 (v2.3.21)
 
 **防误关闭内容丢失**：
@@ -681,6 +689,7 @@ API类型和本地脚本类型的系统任务支持**从SQL脚本动态获取参
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-08-29 | v2.3.22 | 运营数据看板统计指标面板：图表Y轴仅选择1个数值字段时，图表区域右上角自动显示四项关键统计指标（最大值、最小值、平均值、中位数）；大数智能格式化（万/亿），等宽数字字体对齐；面板带入场滑动动画；切换Y轴字段时自动重算 |
 | 2026-08-28 | v2.3.12 | 运营数据看板崩溃根治：三层叠加问题修复——①`chartConfigs`初始空数组导致首次渲染`undefined.xCol`崩溃（初始填充+`chartAt()`安全访问+`ensureChartConfigs`提前到同步段）；②渲染异常沿组件树冒泡破坏全站（keep-alive缓存下任何路由切换都白屏，`main.js`新增全局`errorHandler`兜底拦截）；③keep-alive下`onBeforeUnmount`永不触发的资源泄漏（新增`onDeactivated`/`onActivated`适配：切走清理`resize`监听与echarts实例、切回恢复监听并重渲染）；`setChartRef`卸载时清引用、`layoutCount`缩小时dispose多余图表实例、多处函数增加配置缺失防御 |
 | 2026-08-28 | v2.3.11 | 运营数据看板脚本统一到scripts表：废弃旧`dashboard_scripts`表，看板脚本CRUD全面切换到`scripts`表（`type='dashboard'`）；后端`dashboard_routes.py`改用`Script`模型查询/创建/更新/删除看板脚本，新增`_script_to_dashboard_dict`辅助函数保持前端字段兼容；`dashboard_service.py`种子函数改用`Script`模型；`__init__.py`启用迁移函数（自动检测并同步旧`dashboard_scripts`表数据）；前端`DataDashboard.vue`增加API调用错误处理（try/catch降级为空数组避免页面崩溃）；删除改为软删除（`is_active=False`） |
 | 2026-08-28 | v2.3.10 | 修复工单AI处理多系统任务只执行最后一个的bug：AI工具调用循环中多个SQL系统任务待确认时，`pending_system_task`单变量被覆盖只保留最后一个；改为`pending_system_tasks`列表收集所有任务，`pending_action`存储为`{'tasks': [...]}`格式；重写`_execute_pending_action_async`支持多任务顺序执行（遇失败中止），兼容旧格式单任务字典；前端待确认banner显示任务列表，确认对话框列出所有待执行任务；修复`cancel_ticket_action`对新格式的兼容性 |

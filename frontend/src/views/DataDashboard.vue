@@ -112,6 +112,14 @@
           <el-button v-if="chartAt(i - 1).chartType !== 'table'" size="small" text :icon="Camera" @click="saveChartImage(i - 1)" title="保存图片" />
           <el-button v-else size="small" text :icon="Download" @click="exportExcel(i - 1)" title="导出Excel" />
         </div>
+        <!-- 统计指标面板：当 Y 轴仅选择 1 个数值字段时显示 -->
+        <div v-if="showStatsPanel(i - 1)" class="chart-stats-panel">
+          <span class="stats-label">统计：</span>
+          <span class="stat-item"><span class="stat-label">最大值</span><span class="stat-value">{{ formatStatValue(statsAt(i - 1).max) }}</span></span>
+          <span class="stat-item"><span class="stat-label">最小值</span><span class="stat-value">{{ formatStatValue(statsAt(i - 1).min) }}</span></span>
+          <span class="stat-item"><span class="stat-label">平均值</span><span class="stat-value">{{ formatStatValue(statsAt(i - 1).avg) }}</span></span>
+          <span class="stat-item"><span class="stat-label">中位数</span><span class="stat-value">{{ formatStatValue(statsAt(i - 1).median) }}</span></span>
+        </div>
         <!-- 多数据源切换 tabs -->
         <div v-if="sourceNames.length > 1" class="source-tabs">
           <span class="source-tab" :class="{ active: chartAt(i - 1).activeSource === '' }"
@@ -243,6 +251,59 @@ function getFilteredResult(cfg) {
   if (srcIdx < 0) return lastResult.value
   const rows = lastResult.value.rows.filter(r => r[srcIdx] === cfg.activeSource)
   return { ...lastResult.value, rows, row_count: rows.length }
+}
+
+// ── 统计指标（单 Y 轴字段时展示）──
+const chartStats = ref({})
+
+function computeStats(idx) {
+  const cfg = chartConfigs.value[idx]
+  const result = lastResult.value
+  if (!cfg || !result || cfg.chartType === 'table') {
+    chartStats.value[idx] = null
+    return
+  }
+  // 仅当 Y 轴恰好选择 1 个字段时计算
+  if (!cfg.yCols || cfg.yCols.length !== 1) {
+    chartStats.value[idx] = null
+    return
+  }
+  const col = cfg.yCols[0]
+  const colIdx = result.columns.indexOf(col)
+  if (colIdx < 0) {
+    chartStats.value[idx] = null
+    return
+  }
+  const rows = getFilteredResult(cfg)?.rows || []
+  const vals = rows.map(r => parseNum(r[colIdx])).filter(v => !isNaN(v))
+  if (!vals.length) {
+    chartStats.value[idx] = null
+    return
+  }
+  const sorted = [...vals].sort((a, b) => a - b)
+  const max = sorted[sorted.length - 1]
+  const min = sorted[0]
+  const sum = sorted.reduce((a, b) => a + b, 0)
+  const avg = sum / sorted.length
+  const mid = Math.floor(sorted.length / 2)
+  const median = sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
+  chartStats.value[idx] = { max, min, avg, median }
+}
+
+function showStatsPanel(idx) {
+  return !!chartStats.value[idx]
+}
+
+function statsAt(idx) {
+  return chartStats.value[idx] || { max: 0, min: 0, avg: 0, median: 0 }
+}
+
+function formatStatValue(v) {
+  if (v == null || isNaN(v)) return '-'
+  const abs = Math.abs(v)
+  if (abs >= 1e8) return (v / 1e8).toFixed(2) + '亿'
+  if (abs >= 1e4) return (v / 1e4).toFixed(2) + '万'
+  return Number.isInteger(v) ? v.toString() : v.toFixed(2)
 }
 
 function setChartRef(idx, el) {
@@ -556,6 +617,7 @@ function renderChart(idx) {
   if (!el || !cfg || !lastResult.value) return
   if (chartInstances[idx]) { chartInstances[idx].dispose(); delete chartInstances[idx] }
 
+  computeStats(idx)
   const result = getFilteredResult(cfg)
   if (cfg.chartType === 'table') {
     el.innerHTML = buildTableHtml(result, cfg)
@@ -880,6 +942,49 @@ onBeforeUnmount(() => {
   box-shadow: 0 2px 8px -2px var(--el-color-primary-light-5);
 }
 .chart-body { flex: 1; min-height: 480px; width: 100%; }
+
+/* ── 统计指标面板 ── */
+.chart-stats-panel {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 6px 12px;
+  margin-bottom: 4px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, var(--el-fill-color-light) 0%, var(--el-fill-color-lighter) 100%);
+  border: 1px solid var(--el-border-color-extra-light);
+  font-size: 12px;
+  animation: statsSlideIn 0.35s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+.stats-label {
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+.stat-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.stat-item .stat-label {
+  color: var(--el-text-color-placeholder);
+  font-size: 11px;
+}
+.stat-item .stat-value {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Consolas', monospace;
+  color: var(--el-color-primary);
+  font-size: 13px;
+  letter-spacing: -0.02em;
+}
+
+@keyframes statsSlideIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 .empty-hint { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--el-text-color-placeholder); }
 
 /* ── 数据源切换 tabs ── */
