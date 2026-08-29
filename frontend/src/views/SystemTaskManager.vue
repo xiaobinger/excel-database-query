@@ -384,7 +384,7 @@
         <template v-if="form.task_type === 'api' || form.task_type === 'script'">
           <el-form-item label="参数配置">
             <div class="param-hint" style="margin-bottom: 8px; color: #909399; font-size: 12px;">
-              枚举类型参数常用于环境切换：在API地址中使用 <code v-pre>{{param_name}}</code> 占位符引用参数值，枚举的 value 即可作为不同环境的 BaseUrl。可在「枚举参数」中预设可复用的枚举列表。
+              枚举类型参数常用于环境切换：在API地址中使用 <code v-pre>{{param_name}}</code> 占位符引用参数值，枚举的 value 即可作为不同环境的 BaseUrl。可在「枚举参数」中预设可复用的枚举列表。列表类型用于 <code>IN (:param)</code> 子句，执行时传入多个值。
             </div>
             <div v-for="(param, idx) in form.params_config" :key="idx" class="param-row">
               <el-input v-model="param.name" placeholder="参数名" style="width: 140px" />
@@ -394,10 +394,14 @@
                 <el-option value="number" label="数字" />
                 <el-option value="textarea" label="多行文本" />
                 <el-option value="enum" label="枚举" />
+                <el-option value="list" label="列表" />
               </el-select>
               <el-button type="danger" text @click="removeParam(idx)">
                 <i class="fas fa-trash"></i>
               </el-button>
+              <span v-if="param.type === 'list'" style="color: #e6a23c; font-size: 11px; margin-left: 4px;">
+                <i class="fas fa-info-circle"></i> 用于 IN (:{{ param.name || 'param' }}) 子句，执行时传入多个值
+              </span>
               <!-- 枚举选项配置 -->
               <div v-if="param.type === 'enum'" class="param-enum-options" style="width: 100%; margin-top: 6px; padding-left: 8px; border-left: 2px solid #e4e7ed;">
                 <div class="param-row" style="margin-bottom: 6px;">
@@ -698,6 +702,27 @@
               :rows="3"
               :placeholder="`请输入 ${param.label || param.name}`"
             />
+            <div v-else-if="param.type === 'list'" style="width: 100%">
+              <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; min-height: 28px;">
+                <el-tag
+                  v-for="(item, idx) in executeParams[param.name]"
+                  :key="idx"
+                  closable
+                  size="small"
+                  @close="executeParams[param.name].splice(idx, 1)"
+                >{{ item }}</el-tag>
+              </div>
+              <div style="display: flex; gap: 6px;">
+                <el-input
+                  v-model="newListItem"
+                  size="small"
+                  :placeholder="`输入值后回车添加，支持逗号分隔批量添加`"
+                  style="flex: 1"
+                  @keyup.enter="addListItems(param.name)"
+                />
+                <el-button size="small" type="primary" @click="addListItems(param.name)">添加</el-button>
+              </div>
+            </div>
             <el-input-number
               v-else-if="param.type === 'number'"
               v-model="executeParams[param.name]"
@@ -878,6 +903,7 @@ const currentTask = ref(null)
 const currentExecution = ref(null)
 const executeParams = reactive({})
 const executeDatabaseId = ref(null)
+const newListItem = ref('')
 
 const currentTaskParamsConfig = computed(() => {
   if (!currentTask.value) return []
@@ -902,15 +928,27 @@ const allParamsFilled = computed(() => {
   if (currentTask.value.task_type === 'sql' || currentTask.value.task_type === 'script') {
     return params.every(p => {
       const v = executeParams[p.name]
+      if (p.type === 'list') return Array.isArray(v) && v.length > 0
       return v !== undefined && v !== null && v !== ''
     })
   }
   // API类型：required字段 或 enum类型 视为必填
   return params.filter(p => p.required || p.type === 'enum').every(p => {
     const v = executeParams[p.name]
+    if (p.type === 'list') return Array.isArray(v) && v.length > 0
     return v !== undefined && v !== null && v !== ''
   })
 })
+
+// 列表参数：添加项（支持逗号/中文逗号分隔批量添加）
+function addListItems(paramName) {
+  const raw = newListItem.value.trim()
+  if (!raw) return
+  const items = raw.split(/[,，]/).map(s => s.trim()).filter(Boolean)
+  if (!executeParams[paramName]) executeParams[paramName] = []
+  executeParams[paramName].push(...items)
+  newListItem.value = ''
+}
 
 // 当前任务关联的数据库连接列表
 const currentTaskDatabases = computed(() => {
@@ -1444,7 +1482,7 @@ function openExecuteDialog(row) {
   const paramsConfig = getTaskParamsConfig(row)
   if (paramsConfig && paramsConfig.length > 0) {
     paramsConfig.forEach(p => {
-      executeParams[p.name] = ''
+      executeParams[p.name] = p.type === 'list' ? [] : ''
     })
   }
   executeDialogVisible.value = true
