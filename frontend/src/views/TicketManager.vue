@@ -112,7 +112,7 @@
     </el-card>
 
     <!-- 创建工单对话框 -->
-    <el-dialog v-model="createVisible" :title="editingDraftId ? '编辑草稿' : '提交工单'" width="780px" destroy-on-close top="5vh">
+    <el-dialog v-model="createVisible" :title="editingDraftId ? '编辑草稿' : '提交工单'" width="780px" destroy-on-close top="5vh" :before-close="handleCreateDialogClose">
       <el-form ref="createFormRef" :model="createForm" :rules="createRules" label-width="90px">
         <el-form-item label="标题" prop="title">
           <el-input v-model="createForm.title" placeholder="请输入工单标题" maxlength="100" show-word-limit />
@@ -164,7 +164,7 @@
         </el-form-item>
       </el-form>
       <template #footer>
-    <el-button @click="createVisible = false">取消</el-button>
+    <el-button @click="handleCreateCancel">取消</el-button>
     <el-button :loading="submitting" @click="submitCreateDraft">
       <i class="fas fa-save"></i> 暂存草稿
     </el-button>
@@ -616,6 +616,7 @@ async function fetchTickets(silent = false) {
 const createVisible = ref(false)
 const submitting = ref(false)
 const createFormRef = ref(null)
+const justSubmitted = ref(false)
 const createForm = ref({ title: '', content: '', assignee_type: 'user', assignee_id: null, assignee_agent_id: null, business_system_id: null })
 // 工单附件：fileList供el-upload展示，ids为已上传的附件ID（提交时关联）
 const attachmentFileList = ref([])
@@ -635,9 +636,61 @@ async function openCreateDialog() {
   attachmentFileList.value = []
   attachmentIds.value = []
   editingDraftId.value = null
+  justSubmitted.value = false
   createVisible.value = true
   // 并行加载选项数据
   Promise.all([fetchAssignees(), fetchBusinessSystems(), fetchAiAgents()])
+}
+
+// 关闭创建对话框前的自动暂存逻辑
+function handleCreateDialogClose(done) {
+  autoSaveDraftIfNeeded().finally(() => {
+    justSubmitted.value = false
+    editingDraftId.value = null
+    attachmentFileList.value = []
+    attachmentIds.value = []
+    done()
+  })
+}
+
+function handleCreateCancel() {
+  autoSaveDraftIfNeeded().finally(() => {
+    justSubmitted.value = false
+    editingDraftId.value = null
+    attachmentFileList.value = []
+    attachmentIds.value = []
+    createVisible.value = false
+  })
+}
+
+// 静默自动暂存草稿（关闭对话框时触发，有内容才保存）
+async function autoSaveDraftIfNeeded() {
+  // 刚刚成功提交/暂存过，不重复保存
+  if (justSubmitted.value) return
+  const title = (createForm.value.title || '').trim()
+  const content = (createForm.value.content || '').trim()
+  // 没有标题且没有内容，不保存
+  if (!title && !content) return
+  try {
+    const payload = { ...createForm.value, is_draft: true }
+    if (payload.assignee_type === 'ai') {
+      delete payload.assignee_id
+    } else {
+      delete payload.assignee_agent_id
+    }
+    if (attachmentIds.value.length) {
+      payload.attachment_ids = [...attachmentIds.value]
+    }
+    if (editingDraftId.value) {
+      await api.tickets.updateDraft(editingDraftId.value, payload)
+    } else {
+      await api.tickets.create(payload)
+    }
+    ElMessage.success('草稿已自动暂存')
+    fetchTickets()
+  } catch {
+    // 静默失败，不打扰用户
+  }
 }
 
 // 工单附件上传（选择文件即上传，暂存待提交时关联）
@@ -764,6 +817,7 @@ async function submitCreate() {
         await api.tickets.create(payload)
         ElMessage.success('工单已提交')
       }
+      justSubmitted.value = true
       createVisible.value = false
       editingDraftId.value = null
       attachmentFileList.value = []
@@ -801,6 +855,7 @@ async function submitCreateDraft() {
         await api.tickets.create(payload)
         ElMessage.success('草稿已暂存')
       }
+      justSubmitted.value = true
       createVisible.value = false
       editingDraftId.value = null
       attachmentFileList.value = []
@@ -848,6 +903,7 @@ async function editDraft() {
   }
   // 标记当前正在编辑的草稿ID（提交时调用 updateDraft 而非 create）
   editingDraftId.value = t.id
+  justSubmitted.value = false
   // 关闭详情对话框
   detailVisible.value = false
   // 打开创建对话框
