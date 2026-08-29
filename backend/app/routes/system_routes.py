@@ -76,10 +76,6 @@ DEFAULT_MENU_CONFIG = [
         {"path": "/business", "title": "业务系统", "icon": "fa-building", "permission": "business_systems", "visible": True},
         {"path": "/system-tasks", "title": "系统任务", "icon": "fa-cogs", "permission": "system_tasks", "visible": True},
         {"path": "/tickets", "title": "工单管理", "icon": "fa-tasks", "permission": "tickets", "visible": True},
-        {"path": "/pay-withdraw", "title": "代付提现", "icon": "fa-wallet", "permission": "pay_withdraw", "visible": True},
-        {"path": "/pay-flow", "title": "代付流程编排", "icon": "fa-route", "permission": "pay_flow", "visible": True},
-        {"path": "/pay-flow-executions", "title": "代付流程执行记录", "icon": "fa-list-check", "permission": "pay_flow_executions", "visible": True},
-        {"path": "/ticket-analytics", "title": "工单统计", "icon": "fa-chart-pie", "permission": "ticket_analytics", "visible": True},
         {"path": "/system-map", "title": "系统地图", "icon": "fa-sitemap", "permission": "system_map", "visible": True},
     ]},
 ]

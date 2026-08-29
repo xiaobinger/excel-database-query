@@ -17,7 +17,7 @@
 
       <el-alert type="info" :closable="false" show-icon style="margin-bottom: 16px">
         <template #title>
-          拖拽菜单项可在分组间移动或调整顺序；拖拽分组可调整一级顺序；切换"可见"控制是否在侧边栏展示。
+          拖拽菜单项可在分组间移动或调整顺序；拖拽分组可调整一级顺序；切换"可见"控制是否在侧边栏展示；新建/编辑分组时可选择图标。
         </template>
       </el-alert>
 
@@ -69,8 +69,8 @@
               <div class="row-actions">
                 <span class="vis-label">可见</span>
                 <el-switch v-model="node.visible" size="small" />
-                <el-button text size="small" @click="editGroupName(idx)">
-                  <i class="fas fa-pen"></i> 改名
+                <el-button text size="small" @click="editGroup(idx)">
+                  <i class="fas fa-pen"></i> 编辑
                 </el-button>
                 <el-button text size="small" type="danger" @click="deleteGroup(idx)">
                   <i class="fas fa-trash"></i> 删除分组
@@ -172,11 +172,50 @@
         </div>
       </div>
     </el-card>
+
+    <!-- 新建/编辑分组对话框 -->
+    <el-dialog
+      v-model="groupDialog.visible"
+      :title="groupDialog.mode === 'create' ? '新建分组' : '编辑分组'"
+      width="500px"
+      append-to-body
+    >
+      <el-form label-width="80px" @submit.prevent>
+        <el-form-item label="分组名称">
+          <el-input v-model="groupDialog.title" placeholder="请输入分组名称" maxlength="20" />
+        </el-form-item>
+        <el-form-item label="分组图标">
+          <div class="icon-grid">
+            <button
+              v-for="ic in GROUP_ICONS"
+              :key="ic"
+              type="button"
+              class="icon-cell"
+              :class="{ active: groupDialog.icon === ic }"
+              :title="ic"
+              @click="groupDialog.icon = ic"
+            >
+              <i class="fas" :class="ic"></i>
+            </button>
+          </div>
+        </el-form-item>
+        <el-form-item label="预览">
+          <span class="group-preview">
+            <i class="fas" :class="groupDialog.icon"></i>
+            {{ groupDialog.title || '分组名称' }}
+          </span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="groupDialog.visible = false">取消</el-button>
+        <el-button type="primary" @click="confirmGroupDialog">确定</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import { useAppStore } from '../stores'
@@ -409,38 +448,68 @@ function onDropUnplaced(e) {
 
 // ── 操作按钮 ─────────────────────────────────────────────
 
-async function addGroup() {
-  try {
-    const { value } = await ElMessageBox.prompt('请输入分组名称', '新建分组', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      inputPattern: /.+/,
-      inputErrorMessage: '名称不能为空'
-    })
+// 常用分组图标（Font Awesome 6 Free Solid）
+const GROUP_ICONS = [
+  'fa-folder', 'fa-folder-open', 'fa-folder-tree', 'fa-layer-group', 'fa-sitemap', 'fa-cubes', 'fa-box', 'fa-boxes-stacked',
+  'fa-tags', 'fa-star', 'fa-bookmark', 'fa-book', 'fa-graduation-cap', 'fa-briefcase', 'fa-building', 'fa-industry',
+  'fa-house', 'fa-city', 'fa-shop', 'fa-cart-shopping', 'fa-truck', 'fa-wallet', 'fa-money-bill-wave', 'fa-credit-card',
+  'fa-coins', 'fa-chart-line', 'fa-chart-bar', 'fa-chart-pie', 'fa-gauge', 'fa-list-check', 'fa-clipboard-list', 'fa-file-lines',
+  'fa-database', 'fa-server', 'fa-cloud', 'fa-terminal', 'fa-code', 'fa-bug', 'fa-wrench', 'fa-screwdriver-wrench',
+  'fa-gears', 'fa-plug', 'fa-key', 'fa-shield-halved', 'fa-users', 'fa-user-gear', 'fa-robot', 'fa-brain',
+  'fa-comments', 'fa-envelope', 'fa-bell', 'fa-calendar', 'fa-clock', 'fa-history', 'fa-search', 'fa-route',
+  'fa-compass', 'fa-globe', 'fa-tower-broadcast', 'fa-inbox', 'fa-lightbulb', 'fa-bolt', 'fa-headset', 'fa-handshake',
+]
+
+// 新建/编辑分组对话框
+const groupDialog = reactive({
+  visible: false,
+  mode: 'create', // create | edit
+  editIndex: -1,
+  title: '',
+  icon: 'fa-folder',
+})
+
+function addGroup() {
+  groupDialog.mode = 'create'
+  groupDialog.editIndex = -1
+  groupDialog.title = ''
+  groupDialog.icon = 'fa-folder'
+  groupDialog.visible = true
+}
+
+function editGroup(idx) {
+  const grp = editingConfig.value[idx]
+  if (!grp) return
+  groupDialog.mode = 'edit'
+  groupDialog.editIndex = idx
+  groupDialog.title = grp.title
+  groupDialog.icon = grp.icon || 'fa-folder'
+  groupDialog.visible = true
+}
+
+function confirmGroupDialog() {
+  const title = groupDialog.title.trim()
+  if (!title) {
+    ElMessage.warning('分组名称不能为空')
+    return
+  }
+  if (groupDialog.mode === 'create') {
     editingConfig.value.push({
       type: 'group',
-      title: value.trim(),
-      icon: 'fa-folder',
+      title,
+      icon: groupDialog.icon,
       visible: true,
       children: []
     })
     ElMessage.success('分组已添加，记得拖拽菜单项进入并保存')
-  } catch (_) { /* cancelled */ }
-}
-
-async function editGroupName(idx) {
-  const grp = editingConfig.value[idx]
-  if (!grp) return
-  try {
-    const { value } = await ElMessageBox.prompt('请输入新的分组名称', '修改分组名称', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      inputValue: grp.title,
-      inputPattern: /.+/,
-      inputErrorMessage: '名称不能为空'
-    })
-    grp.title = value.trim()
-  } catch (_) { /* cancelled */ }
+  } else {
+    const grp = editingConfig.value[groupDialog.editIndex]
+    if (grp) {
+      grp.title = title
+      grp.icon = groupDialog.icon
+    }
+  }
+  groupDialog.visible = false
 }
 
 function deleteGroup(idx) {
@@ -735,5 +804,50 @@ onMounted(() => {
 .empty-unplaced {
   color: var(--text-muted, #999);
   font-size: 12px;
+}
+
+/* 分组图标选择器 */
+.icon-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 6px;
+  width: 100%;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 2px;
+}
+
+.icon-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 34px;
+  padding: 0;
+  font-size: 15px;
+  color: var(--text-color, #606266);
+  background: var(--bg-color, #fff);
+  border: 1px solid var(--border-color, #dcdfe6);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.icon-cell:hover {
+  border-color: var(--el-color-primary);
+  color: var(--el-color-primary);
+}
+
+.icon-cell.active {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary);
+  color: #fff;
+}
+
+.group-preview {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text-color, #606266);
 }
 </style>
