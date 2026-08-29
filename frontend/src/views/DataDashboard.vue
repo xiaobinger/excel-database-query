@@ -105,7 +105,7 @@
           </el-select>
           <div class="type-btns">
             <button v-for="t in displayChartTypes" :key="t" class="type-btn" :class="{ active: chartAt(i - 1).chartType === t }"
-              :title="t" @click="chartAt(i - 1).chartType = t; renderChart(i - 1)">{{ t }}</button>
+              :title="t" @click="chartAt(i - 1).chartType = t; renderChart(i - 1)"><i class="fas" :class="typeIcon(t)"></i>{{ typeLabel(t) }}</button>
           </div>
           <div class="toolbar-spacer"></div>
           <el-button size="small" text :icon="FullScreen" @click="openFullscreen(i - 1)" title="全屏" />
@@ -157,6 +157,12 @@ const store = useAppStore()
 
 const META_COLS = new Set(['_source', '_source_db'])
 const DATE_KEYWORDS = ['日期', 'date', 'time', 'datetime', 'day', 'month', 'year', '时间']
+
+// 图表类型 → 图标 / 中文标签
+const TYPE_ICONS = { line: 'fa-chart-line', bar: 'fa-chart-column', area: 'fa-chart-area', pie: 'fa-chart-pie', scatter: 'fa-braille', table: 'fa-table', mix: 'fa-layer-group' }
+const TYPE_LABELS = { line: '折线', bar: '柱状', area: '面积', pie: '饼图', scatter: '散点', table: '表格', mix: '混合' }
+const typeIcon = (t) => TYPE_ICONS[t] || 'fa-chart-simple'
+const typeLabel = (t) => TYPE_LABELS[t] || t
 
 const scripts = ref([])
 const connections = ref([])
@@ -608,7 +614,7 @@ function buildTableHtml(result, cfg) {
   })
   html += '</tr></thead><tbody>'
   rows.forEach((row, ri) => {
-    html += `<tr class="${ri % 2 === 0 ? 'even' : 'odd'}">`
+    html += `<tr class="${ri % 2 === 0 ? 'even' : 'odd'}" style="--row-delay:${Math.min(ri * 18, 220)}ms">`
     displayCols.forEach((col, ci) => {
       const idx = columns.indexOf(col)
       const raw = idx >= 0 ? row[idx] : ''
@@ -856,9 +862,23 @@ onBeforeUnmount(() => {
 .chart-card { background: var(--el-bg-color); border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; }
 .chart-card-toolbar { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
 .chart-title { font-weight: 600; font-size: 13px; color: var(--el-text-color-primary); margin-right: 4px; }
-.type-btns { display: flex; gap: 2px; }
-.type-btn { border: 1px solid var(--el-border-color); background: transparent; color: var(--el-text-color-secondary); padding: 2px 7px; font-size: 11px; cursor: pointer; border-radius: 4px; }
-.type-btn.active { background: var(--el-color-primary); color: #fff; border-color: var(--el-color-primary); }
+.type-btns { display: flex; gap: 4px; flex-wrap: nowrap; }
+.type-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  border: 1px solid var(--el-border-color-lighter);
+  background: var(--el-fill-color-blank);
+  color: var(--el-text-color-secondary);
+  padding: 0 9px; height: 22px; line-height: 1;
+  font-size: 11px; cursor: pointer; border-radius: 99px;
+  transition: all 0.18s ease;
+}
+.type-btn i { font-size: 10px; }
+.type-btn:hover { color: var(--el-color-primary); border-color: var(--el-color-primary-light-5); background: var(--el-color-primary-light-9); }
+.type-btn.active {
+  background: linear-gradient(135deg, var(--el-color-primary), var(--el-color-primary-dark-2));
+  color: #fff; border-color: transparent;
+  box-shadow: 0 2px 8px -2px var(--el-color-primary-light-5);
+}
 .chart-body { flex: 1; min-height: 480px; width: 100%; }
 .empty-hint { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--el-text-color-placeholder); }
 
@@ -875,19 +895,99 @@ onBeforeUnmount(() => {
 
 <!-- 非 scoped 样式：innerHTML 生成的 DOM 没有 data-v-xxx 属性，scoped 选择器无法匹配 -->
 <style>
-.table-wrap { overflow: auto; max-height: 560px; border-radius: 6px; border: 1px solid var(--el-border-color-lighter); }
-.data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.data-table thead { position: sticky; top: 0; z-index: 1; }
-.data-table th { background: #409eff; color: #fff; font-weight: 600; padding: 6px 5px; border: none; font-size: 12px; }
-.data-table td { padding: 4px 5px; border-bottom: 1px solid var(--el-border-color-extra-light); white-space: nowrap; }
-.data-table tr.even { background: var(--el-bg-color); }
-.data-table tr.odd { background: var(--el-fill-color-blank); }
+/* ── 数据看板·表格图表：暗色渐变表头 + 交错入场 + 悬浮高亮 + 发光进度条 ── */
+.table-wrap {
+  overflow: auto;
+  max-height: 560px;
+  border-radius: 10px;
+  border: 1px solid var(--el-border-color-lighter);
+  background: var(--el-bg-color);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 16px 40px -20px rgba(15, 23, 42, 0.18);
+}
+.table-wrap::-webkit-scrollbar { width: 6px; height: 6px; }
+.table-wrap::-webkit-scrollbar-track { background: transparent; }
+.table-wrap::-webkit-scrollbar-thumb { background: rgba(100, 116, 139, 0.35); border-radius: 99px; }
+.table-wrap::-webkit-scrollbar-thumb:hover { background: rgba(100, 116, 139, 0.6); }
+
+.data-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; }
+.data-table thead { position: sticky; top: 0; z-index: 2; }
+.data-table th {
+  background: linear-gradient(180deg, #334155 0%, #1e293b 100%);
+  color: #e2e8f0;
+  font-weight: 600;
+  padding: 8px 9px;
+  border: none;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
+  box-shadow: inset 0 -1px 0 rgba(148, 163, 184, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.data-table td {
+  padding: 5px 9px;
+  border-bottom: 1px solid var(--el-border-color-extra-light);
+  white-space: nowrap;
+  color: var(--el-text-color-regular);
+}
+.data-table tbody tr:last-child td { border-bottom: none; }
+.data-table tr.odd { background: rgba(148, 163, 184, 0.05); }
+.data-table tbody tr {
+  transition: background-color 0.15s ease;
+  animation: rowIn 0.3s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  animation-delay: var(--row-delay, 0ms);
+}
 .data-table tbody tr:hover { background: var(--el-color-primary-light-9) !important; }
-.data-table .cell-label { font-weight: 500; color: var(--el-text-color-primary); max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
-.data-table .cell-num { text-align: right; font-variant-numeric: tabular-nums; font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace; color: var(--el-text-color-regular); font-size: 12px; }
-.data-table .cell-pct { text-align: right; position: relative; min-width: 70px; }
-.pct-bar { position: absolute; left: 4px; top: 50%; transform: translateY(-50%); height: 5px; width: 52px; border-radius: 3px; background: var(--el-fill-color); overflow: hidden; }
-.pct-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--el-color-success-light-5), var(--el-color-success)); transition: width 0.3s; }
-.pct-val { position: relative; z-index: 1; font-variant-numeric: tabular-nums; font-size: 12px; color: var(--el-color-success); font-weight: 500; margin-left: 40px; }
+.data-table tbody tr:hover td:first-child { box-shadow: inset 2.5px 0 0 0 var(--el-color-primary); }
+
+.data-table .cell-label {
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.data-table .cell-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Consolas', monospace;
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+}
+.data-table .cell-pct { text-align: right; position: relative; min-width: 104px; }
+
+.pct-bar {
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 6px;
+  width: 56px;
+  border-radius: 99px;
+  background: rgba(148, 163, 184, 0.18);
+  overflow: hidden;
+}
+.pct-fill {
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #6ee7b7 0%, #10b981 100%);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
+  transform-origin: left center;
+  animation: barIn 0.55s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  animation-delay: var(--row-delay, 0ms);
+}
+.pct-val {
+  position: relative;
+  z-index: 1;
+  font-variant-numeric: tabular-nums;
+  font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  font-size: 12px;
+  color: #059669;
+  font-weight: 600;
+  margin-left: 40px;
+}
+
+@keyframes rowIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes barIn { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
 .data-dashboard .empty-hint { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--el-text-color-placeholder); }
 </style>
