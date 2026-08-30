@@ -82,18 +82,6 @@ def _generate_ticket_no():
     return f'TK{today}{(count + 1):04d}'
 
 
-def _parse_max_collaboration_rounds(data):
-    """解析并校验工单级最大协作轮数（合法范围1-20，非法/未提供返回 None 表示用默认3）"""
-    raw = data.get('max_collaboration_rounds')
-    if raw is None or raw == '':
-        return None
-    try:
-        v = int(raw)
-    except (TypeError, ValueError):
-        return None
-    return v if 1 <= v <= 20 else None
-
-
 def _can_access(ticket, user):
     """用户是否有权访问该工单"""
     if not user:
@@ -1327,6 +1315,7 @@ def create_ticket():
 
         # 监督者Agent（多agent协作，可选）：监督执行者Agent是否执行了任务且结果满足要求
         supervisor_agent_id = data.get('supervisor_agent_id')
+        sup = None
         if supervisor_agent_id:
             try:
                 supervisor_agent_id = int(supervisor_agent_id)
@@ -1341,8 +1330,8 @@ def create_ticket():
                 if not sup or not sup.is_active:
                     supervisor_agent_id = None
 
-        # 最大协作轮数（多agent协作，可选，默认3）
-        max_collaboration_rounds = _parse_max_collaboration_rounds(data)
+        # 最大协作轮数：自动从监督者Agent配置读取，无需用户输入
+        max_collaboration_rounds = sup.max_supervisor_rounds if sup else 3
     else:
         # 指派给具体用户
         assignee_id = data.get('assignee_id')
@@ -1366,7 +1355,7 @@ def create_ticket():
         assignee_id=assignee_id,
         assignee_agent_id=assignee_agent_id,
         supervisor_agent_id=supervisor_agent_id,
-        max_collaboration_rounds=max_collaboration_rounds or 3,
+        max_collaboration_rounds=max_collaboration_rounds,
         created_by=current_user.id,
         status=STATUS_DRAFT if is_draft else STATUS_SUBMITTED,
         is_draft=is_draft,
@@ -1458,6 +1447,7 @@ def update_draft(ticket_id):
 
         # 监督者Agent（多agent协作，可选）
         supervisor_agent_id = data.get('supervisor_agent_id')
+        sup = None
         if supervisor_agent_id:
             try:
                 supervisor_agent_id = int(supervisor_agent_id)
@@ -1471,8 +1461,8 @@ def update_draft(ticket_id):
                 if not sup or not sup.is_active:
                     supervisor_agent_id = None
 
-        # 最大协作轮数（多agent协作，可选，默认3）
-        max_collaboration_rounds = _parse_max_collaboration_rounds(data)
+        # 最大协作轮数：自动从监督者Agent配置读取
+        max_collaboration_rounds = sup.max_supervisor_rounds if sup else 3
     else:
         assignee_id = data.get('assignee_id')
         if assignee_id:
@@ -1491,7 +1481,7 @@ def update_draft(ticket_id):
     ticket.assignee_id = assignee_id
     ticket.assignee_agent_id = assignee_agent_id
     ticket.supervisor_agent_id = supervisor_agent_id
-    ticket.max_collaboration_rounds = max_collaboration_rounds or 3
+    ticket.max_collaboration_rounds = max_collaboration_rounds
 
     # 关联附件
     attachment_ids = data.get('attachment_ids') or []
@@ -1691,14 +1681,14 @@ def update_status(ticket_id):
                     if not sup or not sup.is_active:
                         new_supervisor_agent_id = None
 
-            # 最大协作轮数（多agent协作，可选，默认3）
-            new_max_collaboration_rounds = _parse_max_collaboration_rounds(data)
+            # 最大协作轮数：自动从监督者Agent配置读取
+            new_max_collaboration_rounds = sup.max_supervisor_rounds if sup else 3
 
             ticket.assignee_type = 'ai'
             ticket.assignee_id = None
             ticket.assignee_agent_id = new_assignee_agent_id
             ticket.supervisor_agent_id = new_supervisor_agent_id
-            ticket.max_collaboration_rounds = new_max_collaboration_rounds or 3
+            ticket.max_collaboration_rounds = new_max_collaboration_rounds
         else:
             if not new_assignee_id:
                 return jsonify({'success': False, 'message': '请选择新的指派人'}), 400
@@ -2006,6 +1996,7 @@ def list_ai_agents():
             'description': a.description or '',
             'agent_role': a.agent_role or 'general',
             'can_confirm_execution': bool(a.can_confirm_execution),
+            'max_supervisor_rounds': a.max_supervisor_rounds if a.max_supervisor_rounds else 3,
             'is_default': a.is_default,
         }
         for a in agents

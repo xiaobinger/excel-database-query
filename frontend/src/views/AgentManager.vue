@@ -111,6 +111,14 @@
             </div>
           </div>
         </el-form-item>
+        <el-form-item v-if="form.agent_role === 'supervisor'" label="最大监督轮次">
+          <div style="width: 100%">
+            <el-input-number v-model="form.max_supervisor_rounds" :min="1" :max="20" :step="1" step-strictly style="width: 180px" />
+            <div style="font-size: 12px; color: #999; line-height: 1.4; margin-top: 4px;">
+              执行者与监督者循环协作的最大轮数，超过后强制完结并注明未完全验收（默认3轮，建议3-5轮）
+            </div>
+          </div>
+        </el-form-item>
         <el-form-item label="系统提示词" prop="system_prompt">
           <el-input v-model="form.system_prompt" type="textarea" :rows="12" placeholder="Agent的系统提示词，定义Agent的行为规则和能力范围" />
         </el-form-item>
@@ -261,6 +269,7 @@ const defaultForm = {
   description: '',
   agent_role: 'general',
   can_confirm_execution: false,
+  max_supervisor_rounds: 3,
   system_prompt: '',
   enabled_tools: null,
   mcp_server_ids: [],
@@ -299,6 +308,7 @@ function openDialog(row) {
       description: row.description || '',
       agent_role: row.agent_role || 'general',
       can_confirm_execution: !!row.can_confirm_execution,
+      max_supervisor_rounds: row.max_supervisor_rounds || 3,
       system_prompt: row.system_prompt || '',
       enabled_tools: row.enabled_tools ? [...row.enabled_tools] : null,
       mcp_server_ids: row.mcp_server_ids ? [...row.mcp_server_ids] : [],

@@ -148,10 +148,6 @@
           </el-select>
           <div class="form-tip"><i class="fas fa-info-circle"></i> 配置监督者后进入多Agent协作：执行者Agent执行任务，监督者Agent审查结果是否满足要求，不满足则反馈返工，直到验收通过。</div>
         </el-form-item>
-        <el-form-item v-if="createForm.assignee_type === 'ai' && createForm.supervisor_agent_id" label="最大协作轮数">
-          <el-input-number v-model="createForm.max_collaboration_rounds" :min="1" :max="20" :step="1" step-strictly style="width: 180px" />
-          <div class="form-tip"><i class="fas fa-info-circle"></i> 执行者与监督者循环协作的最大轮数，超过后强制完结（默认3轮，建议3-5轮）</div>
-        </el-form-item>
         <el-form-item label="工单内容" prop="content">
           <MarkdownEditor v-model="createForm.content" :upload-fn="uploadAttachment" placeholder="详细描述工单内容，支持图片、视频和 Markdown 格式" :height="280" />
         </el-form-item>
@@ -519,10 +515,6 @@
           </el-select>
           <div class="form-tip"><i class="fas fa-info-circle"></i> 配置监督者后进入多Agent协作，监督者审查执行结果直到验收通过。</div>
         </el-form-item>
-        <el-form-item v-if="reassignForm.assignee_type === 'ai' && reassignForm.supervisor_agent_id" label="最大协作轮数">
-          <el-input-number v-model="reassignForm.max_collaboration_rounds" :min="1" :max="20" :step="1" step-strictly style="width: 180px" />
-          <div class="form-tip"><i class="fas fa-info-circle"></i> 执行者与监督者循环协作的最大轮数（默认3轮）</div>
-        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="reassignVisible = false">取消</el-button>
@@ -669,7 +661,7 @@ const createVisible = ref(false)
 const submitting = ref(false)
 const createFormRef = ref(null)
 const justSubmitted = ref(false)
-const createForm = ref({ title: '', content: '', assignee_type: 'user', assignee_id: null, assignee_agent_id: null, supervisor_agent_id: null, max_collaboration_rounds: 3, business_system_id: null })
+const createForm = ref({ title: '', content: '', assignee_type: 'user', assignee_id: null, assignee_agent_id: null, supervisor_agent_id: null, business_system_id: null })
 // 工单附件：fileList供el-upload展示，ids为已上传的附件ID（提交时关联）
 const attachmentFileList = ref([])
 const attachmentIds = ref([])
@@ -696,7 +688,7 @@ const reassignSupervisorAgentOptions = computed(() => {
 })
 
 async function openCreateDialog() {
-  createForm.value = { title: '', content: '', assignee_type: 'user', assignee_id: null, assignee_agent_id: null, supervisor_agent_id: null, max_collaboration_rounds: 3, business_system_id: null }
+  createForm.value = { title: '', content: '', assignee_type: 'user', assignee_id: null, assignee_agent_id: null, supervisor_agent_id: null, business_system_id: null }
   attachmentFileList.value = []
   attachmentIds.value = []
   editingDraftId.value = null
@@ -742,7 +734,6 @@ async function autoSaveDraftIfNeeded() {
     } else {
       delete payload.assignee_agent_id
       delete payload.supervisor_agent_id
-      delete payload.max_collaboration_rounds
     }
     if (attachmentIds.value.length) {
       payload.attachment_ids = [...attachmentIds.value]
@@ -871,7 +862,6 @@ async function submitCreate() {
       } else {
         delete payload.assignee_agent_id
         delete payload.supervisor_agent_id
-        delete payload.max_collaboration_rounds
       }
       if (attachmentIds.value.length) {
         payload.attachment_ids = [...attachmentIds.value]
@@ -912,7 +902,6 @@ async function submitCreateDraft() {
       } else {
         delete payload.assignee_agent_id
         delete payload.supervisor_agent_id
-        delete payload.max_collaboration_rounds
       }
       if (attachmentIds.value.length) {
         payload.attachment_ids = [...attachmentIds.value]
@@ -1242,7 +1231,7 @@ async function submitReason() {
 
 // 重新指派/重新发起 对话框
 const reassignVisible = ref(false)
-const reassignForm = ref({ assignee_type: 'user', assignee_id: null, assignee_agent_id: null, supervisor_agent_id: null, max_collaboration_rounds: 3 })
+const reassignForm = ref({ assignee_type: 'user', assignee_id: null, assignee_agent_id: null, supervisor_agent_id: null })
 const reassignAction = ref('reassign')
 
 const reassignDialogTitle = computed(() => {
@@ -1260,7 +1249,6 @@ async function openReassignDialog(action = 'reassign') {
     assignee_id: cur.assignee_type !== 'ai' ? cur.assignee_id : null,
     assignee_agent_id: cur.assignee_type === 'ai' ? cur.assignee_agent_id : null,
     supervisor_agent_id: cur.assignee_type === 'ai' ? cur.supervisor_agent_id : null,
-    max_collaboration_rounds: cur.max_collaboration_rounds || 3,
   }
   // 移交工单时，清空原指派人，强制选择新的指派对象
   if (action === 'transfer') {
@@ -1286,7 +1274,6 @@ async function submitReassign() {
     } else {
       delete payload.assignee_agent_id
       delete payload.supervisor_agent_id
-      delete payload.max_collaboration_rounds
     }
     const res = await api.tickets.updateStatus(detailData.value.id, payload)
     ElMessage.success(res.message || '操作成功')

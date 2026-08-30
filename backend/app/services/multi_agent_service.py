@@ -87,7 +87,7 @@ class MultiAgentService:
                     return
 
                 feedback = None
-                max_rounds = MultiAgentService._get_max_rounds(ticket)
+                max_rounds = MultiAgentService._get_max_rounds(ticket, supervisor)
                 for round_no in range(1, max_rounds + 1):
                     ticket.collaboration_rounds = round_no
 
@@ -507,8 +507,17 @@ class MultiAgentService:
             return None
 
     @staticmethod
-    def _get_max_rounds(ticket):
-        """获取工单级配置的最大协作轮数（非法或未配置则用全局默认）"""
+    def _get_max_rounds(ticket, supervisor=None):
+        """获取最大协作轮数：优先从监督者Agent配置读取，回退到工单级字段，最终回退全局默认"""
+        # 优先从监督者Agent配置读取
+        if supervisor:
+            try:
+                v = int(supervisor.max_supervisor_rounds)
+                if 1 <= v <= 20:
+                    return v
+            except (TypeError, ValueError):
+                pass
+        # 回退到工单级字段（历史兼容）
         try:
             v = int(ticket.max_collaboration_rounds)
             if 1 <= v <= 20:
@@ -724,7 +733,7 @@ class MultiAgentService:
 
             # 监督者审查属于执行者刚完成的那一轮，不递增轮数
             round_no = ticket.collaboration_rounds or 1
-            max_rounds = MultiAgentService._get_max_rounds(ticket)
+            max_rounds = MultiAgentService._get_max_rounds(ticket, supervisor)
 
             result = {
                 'mode': 'done',
@@ -817,8 +826,8 @@ class MultiAgentService:
 
                     if approved:
                         MultiAgentService._finalize_processed(ticket, review_summary, result)
-                    elif (ticket.collaboration_rounds or 0) >= MultiAgentService._get_max_rounds(ticket):
-                        max_rounds = MultiAgentService._get_max_rounds(ticket)
+                    elif (ticket.collaboration_rounds or 0) >= MultiAgentService._get_max_rounds(ticket, supervisor):
+                        max_rounds = MultiAgentService._get_max_rounds(ticket, supervisor)
                         MultiAgentService._finalize_processed(
                             ticket,
                             f'（已达最大协作轮数{max_rounds}轮，监督者最后一次评分{score}，反馈如下）\n\n{review_summary}',
