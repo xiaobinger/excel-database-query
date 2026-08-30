@@ -81,6 +81,17 @@
           </div>
         </el-col>
         <el-col :xs="12" :sm="8" :md="4">
+          <div class="summary-card summary-score">
+            <div class="summary-icon"><i class="fas fa-star"></i></div>
+            <div class="summary-info">
+              <div class="summary-value" :style="{ color: getScoreColor(summary.ai_overall_avg_score || 0) }">
+                {{ summary.ai_overall_avg_score || 0 }}
+              </div>
+              <div class="summary-label">综合平均分</div>
+            </div>
+          </div>
+        </el-col>
+        <el-col :xs="12" :sm="8" :md="4">
           <div class="summary-card summary-users">
             <div class="summary-icon"><i class="fas fa-users"></i></div>
             <div class="summary-info">
@@ -128,6 +139,9 @@
               <el-tag size="small" type="success" effect="plain" style="margin-left: 4px">
                 {{ formatCompressionRatio(summary.ai_total_headroom_saved_tokens, summary.ai_total_headroom_original_tokens) }}
               </el-tag>
+            </span>
+            <span v-if="(summary.ai_overall_avg_score || 0) > 0" class="ai-summary-item ai-token-item">
+              <i class="fas fa-star"></i> 综合平均分 <b :style="{ color: getScoreColor(summary.ai_overall_avg_score) }">{{ summary.ai_overall_avg_score }}</b>
             </span>
           </div>
           </div>
@@ -192,6 +206,14 @@
             <template #default="{ row }">
               <span v-if="(row.headroom_saved_tokens || 0) > 0" style="color: #67c23a; font-weight: 600">
                 {{ formatTokens(row.headroom_saved_tokens) }}
+              </span>
+              <span v-else style="color: #c0c4cc">-</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="avg_score" label="平均评分" width="110" align="center" sortable>
+            <template #default="{ row }">
+              <span v-if="row.scored_count > 0" :style="{ color: getScoreColor(row.avg_score), fontWeight: '600' }">
+                <i class="fas fa-star"></i> {{ row.avg_score }}
               </span>
               <span v-else style="color: #c0c4cc">-</span>
             </template>
@@ -373,6 +395,12 @@ function getRateColor(rate) {
   return '#f56c6c'
 }
 
+function getScoreColor(score) {
+  if (score >= 80) return '#67c23a'   // 优秀 绿色
+  if (score >= 60) return '#e6a23c'   // 及格 黄色
+  return '#f56c6c'                     // 不及格 红色
+}
+
 function getDurationColor(seconds) {
   if (seconds <= 300) return '#67c23a'       // 5分钟内 绿色
   if (seconds <= 3600) return '#e6a23c'       // 1小时内 黄色
@@ -490,6 +518,7 @@ onMounted(() => {
 .summary-completed { background: linear-gradient(135deg, #67c23a, #85ce61); }
 .summary-rate { background: linear-gradient(135deg, #e6a23c, #ebb563); }
 .summary-duration { background: linear-gradient(135deg, #f56c6c, #f78989); }
+.summary-score { background: linear-gradient(135deg, #ff9800, #ffb74d); }
 .summary-users { background: linear-gradient(135deg, #722ed1, #9254de); }
 
 .trend-card {

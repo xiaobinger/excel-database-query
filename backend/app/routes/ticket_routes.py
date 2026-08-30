@@ -2459,6 +2459,19 @@ def get_analytics():
     ).group_by(Ticket.assignee_agent_id)
     ai_token_rows = ai_token_query.all()
 
+    # AI 评分统计（按 agent 聚合，只统计有评分的工单）
+    ai_score_query = processed_base.filter(
+        ai_assignee_filter,
+        Ticket.assignee_agent_id.isnot(None),
+        Ticket.final_score.isnot(None),
+        Ticket.final_score > 0,
+    ).with_entities(
+        Ticket.assignee_agent_id.label('agent_id'),
+        func.avg(Ticket.final_score).label('avg_score'),
+        func.count(Ticket.id).label('scored_count'),
+    ).group_by(Ticket.assignee_agent_id)
+    ai_score_rows = ai_score_query.all()
+
     # 汇总到用户维度
     user_map = {}  # user_id -> {submitted, assigned, completed, avg_duration, durations}
 
@@ -2506,6 +2519,12 @@ def get_analytics():
         agent_map.setdefault(aid, {})['cache_read_tokens'] = row.cache_read_tokens or 0
         agent_map.setdefault(aid, {})['headroom_original_tokens'] = row.headroom_original_tokens or 0
         agent_map.setdefault(aid, {})['headroom_saved_tokens'] = row.headroom_saved_tokens or 0
+
+    # AI 评分汇总到 agent_map
+    for row in ai_score_rows:
+        aid = row.agent_id
+        agent_map.setdefault(aid, {})['avg_score'] = round(float(row.avg_score or 0), 1)
+        agent_map.setdefault(aid, {})['scored_count'] = row.scored_count or 0
 
     # 获取用户信息
     user_ids = list(user_map.keys())
@@ -2590,6 +2609,8 @@ def get_analytics():
             'cache_read_tokens': stats.get('cache_read_tokens', 0),
             'headroom_original_tokens': stats.get('headroom_original_tokens', 0),
             'headroom_saved_tokens': stats.get('headroom_saved_tokens', 0),
+            'avg_score': stats.get('avg_score', 0),
+            'scored_count': stats.get('scored_count', 0),
         })
 
     # AI 按指派数降序
@@ -2620,6 +2641,14 @@ def get_analytics():
     ai_total_cache_read_tokens = sum(a['cache_read_tokens'] for a in ai_stats)
     ai_total_headroom_original_tokens = sum(a['headroom_original_tokens'] for a in ai_stats)
     ai_total_headroom_saved_tokens = sum(a['headroom_saved_tokens'] for a in ai_stats)
+
+    # AI 综合平均分（所有有评分的工单的平均分）
+    all_scored = [(a['avg_score'], a['scored_count']) for a in ai_stats if a['scored_count'] > 0]
+    if all_scored:
+        total_scored = sum(sc for _, sc in all_scored)
+        ai_overall_avg_score = round(sum(s * sc for s, sc in all_scored) / total_scored, 1) if total_scored > 0 else 0
+    else:
+        ai_overall_avg_score = 0
 
     return jsonify({
         'success': True,
@@ -2653,6 +2682,7 @@ def get_analytics():
                 'ai_total_cache_read_tokens': ai_total_cache_read_tokens,
                 'ai_total_headroom_original_tokens': ai_total_headroom_original_tokens,
                 'ai_total_headroom_saved_tokens': ai_total_headroom_saved_tokens,
+                'ai_overall_avg_score': ai_overall_avg_score,
             },
             'status_labels': STATUS_LABELS,
         }
