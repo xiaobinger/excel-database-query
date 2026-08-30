@@ -459,6 +459,7 @@ def _process_ticket_with_ai_async(ticket_id, app):
             # 状态改为处理中
             ticket.status = STATUS_PROCESSING
             ticket.received_at = datetime.utcnow()
+            ticket.last_activity_at = datetime.utcnow()
             db.session.commit()
 
             # 获取Agent配置
@@ -899,6 +900,7 @@ def _confirm_ticket_action(ticket, current_user):
 
     # 转为处理中
     ticket.status = STATUS_PROCESSING
+    ticket.last_activity_at = datetime.utcnow()
     _add_comment(ticket, current_user.id, '提交人已确认执行数据变更操作，AI开始执行', 'status_change')
     db.session.commit()
 
@@ -2023,6 +2025,8 @@ def list_ai_agents():
             'description': a.description or '',
             'agent_role': a.agent_role or 'general',
             'can_confirm_execution': bool(a.can_confirm_execution),
+            'can_retry_processing': bool(a.can_retry_processing),
+            'can_close_ticket': bool(a.can_close_ticket),
             'max_supervisor_rounds': a.max_supervisor_rounds if a.max_supervisor_rounds else 3,
             'is_default': a.is_default,
         }

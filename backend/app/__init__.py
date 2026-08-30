@@ -67,6 +67,7 @@ def create_app(config_name='default'):
 
     _start_auto_export_scheduler(app)
     _start_pay_flow_scheduler(app)
+    _start_supervisor_monitor(app)
 
     @app.route('/api/health', methods=['GET'])
     def health_check():
@@ -324,6 +325,11 @@ def _start_auto_export_scheduler(app):
 def _start_pay_flow_scheduler(app):
     from app.services.pay_flow_scheduler import start_pay_flow_scheduler
     start_pay_flow_scheduler(app)
+
+
+def _start_supervisor_monitor(app):
+    from app.services.supervisor_monitor import start_supervisor_monitor
+    start_supervisor_monitor(app)
 
 
 def _auto_migrate(app):

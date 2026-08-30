@@ -132,7 +132,7 @@ class MultiAgentService:
                     db.session.commit()
 
                     if approved:
-                        MultiAgentService._finalize_processed(ticket, review_summary, result)
+                        MultiAgentService._finalize_processed(ticket, review_summary, result, app=app)
                         logger.info(f'工单 {ticket.ticket_no} 监督者验收通过（第{round_no}轮，评分{score}），协作完成')
                         return
 
@@ -145,6 +145,7 @@ class MultiAgentService:
                             f'（已达最大协作轮数{max_rounds}轮，监督者最后一次评分{score}，反馈如下）\n\n{review_summary}',
                             result,
                             force=True,
+                            app=app,
                         )
                         return
 
@@ -753,7 +754,7 @@ class MultiAgentService:
             ticket.final_score = score
 
             if approved:
-                MultiAgentService._finalize_processed(ticket, review_summary, result)
+                MultiAgentService._finalize_processed(ticket, review_summary, result, app=app)
                 logger.info(f'工单 {ticket.ticket_no} 异步任务完成后监督者验收通过（评分{score}）')
                 return True
 
@@ -764,6 +765,7 @@ class MultiAgentService:
                     f'（已达最大协作轮数{max_rounds}轮，监督者最后一次评分{score}，反馈如下）\n\n{review_summary}',
                     result,
                     force=True,
+                    app=app,
                 )
                 return True
 
@@ -815,7 +817,7 @@ class MultiAgentService:
                         return
 
                     if not supervisor:
-                        MultiAgentService._finalize_processed(ticket, result.get('final_content', ''), result)
+                        MultiAgentService._finalize_processed(ticket, result.get('final_content', ''), result, app=app)
                         return
 
                     approved, feedback2, review_summary, score = MultiAgentService._supervisor_review(ticket, supervisor, result)
@@ -825,7 +827,7 @@ class MultiAgentService:
                     ticket.final_score = score
 
                     if approved:
-                        MultiAgentService._finalize_processed(ticket, review_summary, result)
+                        MultiAgentService._finalize_processed(ticket, review_summary, result, app=app)
                     elif (ticket.collaboration_rounds or 0) >= MultiAgentService._get_max_rounds(ticket, supervisor):
                         max_rounds = MultiAgentService._get_max_rounds(ticket, supervisor)
                         MultiAgentService._finalize_processed(
@@ -833,6 +835,7 @@ class MultiAgentService:
                             f'（已达最大协作轮数{max_rounds}轮，监督者最后一次评分{score}，反馈如下）\n\n{review_summary}',
                             result,
                             force=True,
+                            app=app,
                         )
                     else:
                         # 继续下一轮协作（递归调用，下一轮会再递增轮数）
@@ -858,8 +861,8 @@ class MultiAgentService:
     # ── 完结处理 ─────────────────────────────────────────────
 
     @staticmethod
-    def _finalize_processed(ticket, review_summary, executor_result, force=False):
-        """标记工单已处理（含监督者验收结论）"""
+    def _finalize_processed(ticket, review_summary, executor_result, force=False, app=None):
+        """标记工单已处理（含监督者验收结论），并触发监督者自动验收（如授权）"""
         base_result = executor_result.get('final_content', '') if executor_result else ''
         if review_summary:
             if force:
@@ -871,9 +874,18 @@ class MultiAgentService:
 
         ticket.status = STATUS_PROCESSED
         ticket.processed_at = datetime.utcnow()
+        ticket.last_activity_at = datetime.utcnow()
         _add_comment(ticket, None, ticket.ai_result, 'ai_process', is_ai=True)
         _add_comment(ticket, None, 'AI已完成处理并通过监督者验收，等待提交人核实', 'status_change', is_ai=True)
         db.session.commit()
+
+        # 触发监督者自动验收（如授权）
+        if app:
+            try:
+                from app.services.supervisor_monitor import trigger_auto_close
+                trigger_auto_close(ticket.id, app)
+            except Exception as e:
+                logger.warning(f'触发监督者自动验收失败: {e}')
 
     @staticmethod
     def _finalize_pending_assignment(ticket, executor_result):

@@ -111,6 +111,22 @@
             </div>
           </div>
         </el-form-item>
+        <el-form-item v-if="form.agent_role === 'supervisor'" label="智能重试处理">
+          <div style="width: 100%">
+            <el-switch v-model="form.can_retry_processing" />
+            <div style="font-size: 12px; color: #999; line-height: 1.4; margin-top: 4px;">
+              授权后，当工单在AI处理过程中疑似中断（处理超过10分钟无进展），监督者将自动评估并决定是否重新触发AI处理，或放弃重试转为人工介入
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item v-if="form.agent_role === 'supervisor'" label="自动验收结束">
+          <div style="width: 100%">
+            <el-switch v-model="form.can_close_ticket" />
+            <div style="font-size: 12px; color: #999; line-height: 1.4; margin-top: 4px;">
+              授权后，当执行者完成任务（工单变为「已处理」），监督者将自动最终验收并决定是否结束工单，无需提交者手动确认结束
+            </div>
+          </div>
+        </el-form-item>
         <el-form-item v-if="form.agent_role === 'supervisor'" label="最大监督轮次">
           <div style="width: 100%">
             <el-input-number v-model="form.max_supervisor_rounds" :min="1" :max="20" :step="1" step-strictly style="width: 180px" />
@@ -269,6 +285,8 @@ const defaultForm = {
   description: '',
   agent_role: 'general',
   can_confirm_execution: false,
+  can_retry_processing: false,
+  can_close_ticket: false,
   max_supervisor_rounds: 3,
   system_prompt: '',
   enabled_tools: null,
@@ -308,6 +326,8 @@ function openDialog(row) {
       description: row.description || '',
       agent_role: row.agent_role || 'general',
       can_confirm_execution: !!row.can_confirm_execution,
+      can_retry_processing: !!row.can_retry_processing,
+      can_close_ticket: !!row.can_close_ticket,
       max_supervisor_rounds: row.max_supervisor_rounds || 3,
       system_prompt: row.system_prompt || '',
       enabled_tools: row.enabled_tools ? [...row.enabled_tools] : null,

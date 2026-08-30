@@ -66,6 +66,7 @@ class Ticket(db.Model):
     received_at = db.Column(db.DateTime, comment='接收时间')
     processed_at = db.Column(db.DateTime, comment='处理完成时间')
     closed_at = db.Column(db.DateTime, comment='结束时间')
+    last_activity_at = db.Column(db.DateTime, comment='最后活动时间(用于监督者超时检测)')
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
