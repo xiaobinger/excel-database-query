@@ -502,61 +502,94 @@
     </el-dialog>
 
     <!-- 拒绝/申诉原因对话框 -->
-    <el-dialog v-model="reasonVisible" :title="reasonTitle" width="600px" append-to-body destroy-on-close>
-      <el-form :model="reasonForm">
-        <el-form-item label="原因说明" required>
-          <MarkdownEditor v-model="reasonForm.reason" :upload-fn="uploadAttachment" :placeholder="reasonPlaceholder" :height="180" />
-        </el-form-item>
-      </el-form>
+    <el-dialog v-model="reasonVisible" :title="reasonTitle" width="600px" append-to-body destroy-on-close class="ticket-create-dialog">
+      <div class="form-section">
+        <div class="form-section-title"><i class="fas fa-comment-dots"></i> 原因说明</div>
+        <el-form :model="reasonForm">
+          <el-form-item>
+            <MarkdownEditor v-model="reasonForm.reason" :upload-fn="uploadAttachment" :placeholder="reasonPlaceholder" :height="200" />
+          </el-form-item>
+        </el-form>
+      </div>
       <template #footer>
-        <el-button @click="reasonVisible = false">取消</el-button>
-        <el-button type="primary" :loading="actionLoading" @click="submitReason">确认</el-button>
+        <div class="dialog-footer">
+          <div class="footer-left">
+            <el-button @click="reasonVisible = false">取消</el-button>
+          </div>
+          <div class="footer-right">
+            <el-button type="primary" :loading="actionLoading" @click="submitReason">
+              <i class="fas fa-check"></i> 确认提交
+            </el-button>
+          </div>
+        </div>
       </template>
     </el-dialog>
 
     <!-- 重新指派/重新发起/移交工单 对话框 -->
-    <el-dialog v-model="reassignVisible" :title="reassignDialogTitle" width="520px" append-to-body destroy-on-close>
-      <el-form :model="reassignForm" label-width="90px">
-        <div v-if="reassignAction === 'transfer'" class="form-tip" style="margin-bottom: 12px">
-          <i class="fas fa-info-circle"></i> 移交后工单将重新进入"已提交"状态，由新指派人接收处理。
-          <span v-if="reassignForm.assignee_type === 'ai'">移交给AI后将自动处理，处理失败会转为"待指派"状态。</span>
+    <el-dialog v-model="reassignVisible" :title="reassignDialogTitle" width="580px" append-to-body destroy-on-close class="ticket-create-dialog">
+      <el-form :model="reassignForm" label-width="96px">
+        <!-- 提示信息 -->
+        <div v-if="reassignAction === 'transfer'" class="reassign-hint transfer">
+          <i class="fas fa-exchange-alt"></i>
+          <span>移交后工单将重新进入「已提交」状态，由新指派人接收处理。</span>
         </div>
-        <el-form-item label="指派类型">
-          <el-radio-group v-model="reassignForm.assignee_type">
-            <el-radio-button label="user">指派给具体人</el-radio-button>
-            <el-radio-button label="ai">指派给AI</el-radio-button>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item v-if="reassignForm.assignee_type === 'user'" label="指派给" required>
-          <el-select v-model="reassignForm.assignee_id" placeholder="选择处理人" filterable style="width: 100%">
-            <el-option v-for="u in assignees" :key="u.id" :label="u.display_name" :value="u.id" :disabled="reassignAction === 'transfer' && u.id === detailData.assignee_id" />
-          </el-select>
-        </el-form-item>
-        <template v-else>
-          <template v-if="canSwitchAgent">
-            <el-form-item label="执行者Agent">
-              <el-select v-model="reassignForm.assignee_agent_id" placeholder="选择执行者Agent（留空使用默认）" clearable filterable style="width: 100%">
-                <el-option v-for="a in reassignExecutorOptions" :key="a.id" :label="a.name + (a.is_default ? '（默认）' : '')" :value="a.id" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="监督者Agent">
-              <el-select v-model="reassignForm.supervisor_agent_id" placeholder="选择监督者Agent（可选，监督执行结果）" clearable filterable style="width: 100%">
-                <el-option v-for="a in reassignSupervisorAgentOptions" :key="a.id" :label="a.name + (a.can_confirm_execution ? '（可自动确认）' : '')" :value="a.id" />
-              </el-select>
-            </el-form-item>
-          </template>
-          <div v-else class="ai-assign-card">
-            <div class="ai-assign-card-icon"><i class="fas fa-robot"></i></div>
-            <div class="ai-assign-card-body">
-              <div class="ai-assign-card-title">AI 自动处理</div>
-              <div class="ai-assign-card-desc">系统将使用默认的执行者Agent处理工单。</div>
+        <div v-else-if="reassignAction === 'reopen'" class="reassign-hint reopen">
+          <i class="fas fa-redo"></i>
+          <span>重新发起后工单将重新进入「已提交」状态，可更换指派人。</span>
+        </div>
+        <div v-else class="reassign-hint reassign">
+          <i class="fas fa-user-edit"></i>
+          <span>重新指派后工单将重新进入「已提交」状态。</span>
+        </div>
+
+        <!-- 指派设置 -->
+        <div class="form-section">
+          <div class="form-section-title"><i class="fas fa-user-tag"></i> 指派设置</div>
+          <el-form-item label="指派方式">
+            <el-radio-group v-model="reassignForm.assignee_type">
+              <el-radio-button label="user"><i class="fas fa-user"></i> 指派给具体人</el-radio-button>
+              <el-radio-button label="ai"><i class="fas fa-robot"></i> 指派给AI</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item v-if="reassignForm.assignee_type === 'user'" label="处理人" required>
+            <el-select v-model="reassignForm.assignee_id" placeholder="选择处理人" filterable style="width: 100%">
+              <el-option v-for="u in assignees" :key="u.id" :label="u.display_name" :value="u.id" :disabled="reassignAction === 'transfer' && u.id === detailData.assignee_id" />
+            </el-select>
+          </el-form-item>
+          <template v-else>
+            <template v-if="canSwitchAgent">
+              <el-form-item label="执行者Agent">
+                <el-select v-model="reassignForm.assignee_agent_id" placeholder="选择执行者Agent（留空使用默认）" clearable filterable style="width: 100%">
+                  <el-option v-for="a in reassignExecutorOptions" :key="a.id" :label="a.name + (a.is_default ? '（默认）' : '')" :value="a.id" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="监督者Agent">
+                <el-select v-model="reassignForm.supervisor_agent_id" placeholder="选择监督者Agent（可选，监督执行结果）" clearable filterable style="width: 100%">
+                  <el-option v-for="a in reassignSupervisorAgentOptions" :key="a.id" :label="a.name + (a.can_confirm_execution ? '（可自动确认）' : '')" :value="a.id" />
+                </el-select>
+              </el-form-item>
+            </template>
+            <div v-else class="ai-assign-card">
+              <div class="ai-assign-card-icon"><i class="fas fa-robot"></i></div>
+              <div class="ai-assign-card-body">
+                <div class="ai-assign-card-title">AI 自动处理</div>
+                <div class="ai-assign-card-desc">系统将使用默认的执行者Agent处理工单，处理失败时自动转为「待指派」状态。</div>
+              </div>
             </div>
-          </div>
-        </template>
+          </template>
+        </div>
       </el-form>
       <template #footer>
-        <el-button @click="reassignVisible = false">取消</el-button>
-        <el-button type="primary" :loading="actionLoading" @click="submitReassign">确认</el-button>
+        <div class="dialog-footer">
+          <div class="footer-left">
+            <el-button @click="reassignVisible = false">取消</el-button>
+          </div>
+          <div class="footer-right">
+            <el-button type="primary" :loading="actionLoading" @click="submitReassign">
+              <i class="fas fa-check"></i> 确认{{ reassignAction === 'transfer' ? '移交' : reassignAction === 'reopen' ? '发起' : '指派' }}
+            </el-button>
+          </div>
+        </div>
       </template>
     </el-dialog>
   </div>
@@ -1632,6 +1665,41 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* 重指派提示信息 */
+.reassign-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.reassign-hint i {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.reassign-hint.reassign {
+  background: #f0f9ff;
+  border: 1px solid #c6e2ff;
+  color: #409eff;
+}
+
+.reassign-hint.transfer {
+  background: #fdf6ec;
+  border: 1px solid #faecd8;
+  color: #e6a23c;
+}
+
+.reassign-hint.reopen {
+  background: #f0f9eb;
+  border: 1px solid #e1f3d8;
+  color: #67c23a;
 }
 
 .card-header {
