@@ -4498,9 +4498,9 @@ async function fetchAgentMemoryCount(agentId) {
 async function fetchAgents() {
   try {
     const res = await api.agent.list()
-    const agents = res.data || []
+    const agents = (res.data || []).filter(a => a.agent_role !== 'supervisor')  // 过滤掉监督者，只显示可对话的Agent
     canSwitchAgent.value = res.can_switch_agent || false
-    availableAgents.value = agents  // 包含所有Agent（含默认）
+    availableAgents.value = agents
     // 设置默认Agent
     const defaultAgent = agents.find(a => a.is_default)
     if (defaultAgent) {
