@@ -246,8 +246,9 @@ def _do_auto_close(ticket_id, app):
     logger.info(f'工单 {ticket.ticket_no} 监督者验收决策: has_pass={has_pass}, has_close={has_close}, has_reject={has_reject}')
     logger.info(f'工单 {ticket.ticket_no} 监督者输出前100字: {decision[:100]}')
 
-    if has_pass and has_close:
-        # 监督者验收通过，自动结束工单
+    if has_pass and not has_reject:
+        # 监督者验收通过（且没有明确说不通过），自动结束工单
+        # "验收通过"本身就隐含应该结束
         logger.info(f'工单 {ticket.ticket_no} 监督者验收通过，自动结束工单')
         ticket.status = 'closed'
         ticket.closed_at = datetime.utcnow()
@@ -257,11 +258,6 @@ def _do_auto_close(ticket_id, app):
         # 监督者验收不通过，保持 processed 状态，提交者仍可手动结束
         logger.info(f'工单 {ticket.ticket_no} 监督者验收不通过，保持已处理状态')
         _add_comment(ticket, None, f'监督者最终验收未通过，工单保持「已处理」状态：{decision}', 'status_change', is_ai=True)
-        db.session.commit()
-    elif has_pass:
-        # 只有通过关键词但没有明确说结束，保守处理：记录意见但不自动结束
-        logger.info(f'工单 {ticket.ticket_no} 监督者验收通过但未明确要求结束，保持已处理状态')
-        _add_comment(ticket, None, f'监督者验收意见（未自动结束）：{decision}', 'ai_process', is_ai=True)
         db.session.commit()
     else:
         # 未按格式输出，保守处理：不结束，记录监督者意见
