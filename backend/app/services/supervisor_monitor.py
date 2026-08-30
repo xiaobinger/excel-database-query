@@ -303,6 +303,7 @@ def _trigger_executor_retry_with_feedback(ticket_id, feedback, app):
         with app.app_context():
             try:
                 from app.models.ticket import Ticket
+                from app.models.ai_agent import AiAgent
                 from app.services.multi_agent_service import MultiAgentService
                 from app.routes.ticket_routes import _add_comment, _build_ticket_ai_prompt, STATUS_PROCESSING, STATUS_PROCESSED
                 from app.models.ai_config import AiConfig
