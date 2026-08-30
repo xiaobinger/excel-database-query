@@ -565,9 +565,10 @@ def _do_auto_close(ticket_id, app):
         # 监督者验收不通过，检查是否需要重新执行
         score_text = f'，综合评分：{final_score}分' if final_score is not None else ''
         
-        # 检查是否超过最大补充处理轮数（默认3轮）
+        # 检查是否超过最大补充处理轮数（使用监督者配置的最大监督轮次）
         # 使用 ticket.collaboration_rounds 作为补充处理轮数计数
-        max_retry_rounds = 3
+        from app.services.multi_agent_service import MultiAgentService
+        max_retry_rounds = MultiAgentService._get_max_rounds(ticket, supervisor)
         current_rounds = ticket.collaboration_rounds or 0
         
         if current_rounds < max_retry_rounds:
