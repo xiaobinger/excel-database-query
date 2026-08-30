@@ -173,6 +173,76 @@ def trigger_auto_close(ticket_id, app):
     t.start()
 
 
+def _trigger_executor_retry_with_feedback(ticket_id, feedback, app):
+    """监督者验收不通过后，触发执行者补充处理
+
+    流程：执行者处理（带反馈） → 完成后再次触发监督者验收
+    """
+    def _run():
+        with app.app_context():
+            try:
+                from app.models.ticket import Ticket
+                from app.routes.ticket_routes import _process_ticket_with_ai_async, _add_comment
+                
+                ticket = Ticket.query.get(ticket_id)
+                if not ticket:
+                    return
+                
+                # 记录监督者反馈到评论区（不修改工单内容）
+                _add_comment(ticket, None, f'📋 监督者反馈（需补充处理）：\n\n{feedback}', 'ai_process', is_ai=True)
+                db.session.commit()
+                
+                logger.info(f'工单 {ticket.ticket_no} 触发执行者补充处理（第{ticket.collaboration_rounds}轮）')
+                
+                # 触发执行者处理（复用现有的AI处理流程）
+                # 注意：_process_ticket_with_ai_async 内部会检测 supervisor_agent_id
+                # 如果有监督者，会委托给 MultiAgentService.process_ticket
+                # 但这里我们希望执行者直接处理，不走多agent协作（避免循环）
+                # 所以临时清空 supervisor_agent_id，处理完成后再恢复
+                supervisor_id = ticket.supervisor_agent_id
+                ticket.supervisor_agent_id = None
+                db.session.commit()
+                
+                # 触发执行者处理
+                _process_ticket_with_ai_async(ticket.id, app)
+                
+                # 恢复 supervisor_agent_id
+                with app.app_context():
+                    ticket = Ticket.query.get(ticket_id)
+                    if ticket:
+                        ticket.supervisor_agent_id = supervisor_id
+                        db.session.commit()
+                
+                # 执行者处理完成后，再次触发监督者验收
+                with app.app_context():
+                    ticket = Ticket.query.get(ticket_id)
+                    if ticket and ticket.status == 'processed':
+                        logger.info(f'工单 {ticket.ticket_no} 执行者补充处理完成，触发监督者再次验收')
+                        trigger_auto_close(ticket.id, app)
+                    elif ticket and ticket.status == 'processing':
+                        # 执行者可能还在处理中（异步任务），等待完成
+                        logger.info(f'工单 {ticket.ticket_no} 执行者仍在处理中，等待完成后再验收')
+                        # 异步任务完成后会自动触发验收（在异步回调中）
+                    
+            except Exception as e:
+                logger.error(f'工单{ticket_id}执行者补充处理失败: {e}', exc_info=True)
+                try:
+                    with app.app_context():
+                        db.session.rollback()
+                        ticket = Ticket.query.get(ticket_id)
+                        if ticket:
+                            # 恢复 supervisor_agent_id
+                            ticket.supervisor_agent_id = supervisor_id if 'supervisor_id' in dir() else ticket.supervisor_agent_id
+                            ticket.status = 'pending_assignment'
+                            ticket.ai_result = f'执行者补充处理异常: {str(e)}'
+                            db.session.commit()
+                except Exception:
+                    pass
+    
+    t = threading.Thread(target=_run, daemon=True, name=f'executor-retry-{ticket_id}')
+    t.start()
+
+
 def _do_auto_close(ticket_id, app):
     """监督者自动验收已处理工单，决定是否结束"""
     from app.models.ticket import Ticket
@@ -265,10 +335,19 @@ def _do_auto_close(ticket_id, app):
         ticket.final_score = final_score
         logger.info(f'工单 {ticket.ticket_no} 监督者综合评分: {final_score}')
     
-    # 放宽格式判断：检查关键词而非严格格式
-    has_pass = '验收通过' in decision or '通过验收' in decision or '【通过】' in decision
-    has_close = '结束工单' in decision or '自动结束' in decision or '可以结束' in decision or '应结束' in decision
-    has_reject = '验收不通过' in decision or '不通过' in decision or '【不通过】' in decision or '不应结束' in decision
+    # 放宽格式判断：检查关键词而非严格格式（覆盖多种表达方式）
+    has_pass = (
+        '验收通过' in decision or '通过验收' in decision or '【通过】' in decision or
+        '验收结论：通过' in decision or '验收结论:通过' in decision or
+        '同意关闭' in decision or '可以关闭' in decision or '应关闭' in decision or
+        '同意结束' in decision or '可以结束' in decision or '应结束' in decision
+    )
+    has_reject = (
+        '验收不通过' in decision or '不通过' in decision or '【不通过】' in decision or
+        '不应结束' in decision or '不应关闭' in decision or '不同意关闭' in decision or
+        '需要返工' in decision or '补充处理' in decision or '任务遗漏' in decision or
+        '执行不完整' in decision or '结果不完整' in decision
+    )
     
     # 调试日志
     logger.info(f'工单 {ticket.ticket_no} 监督者验收决策: has_pass={has_pass}, has_close={has_close}, has_reject={has_reject}, score={final_score}')
@@ -284,11 +363,37 @@ def _do_auto_close(ticket_id, app):
         _add_comment(ticket, None, f'✅ 监督者最终验收通过{score_text}，工单自动结束\n\n{decision}', 'status_change', is_ai=True)
         db.session.commit()
     elif has_reject:
-        # 监督者验收不通过，保持 processed 状态，提交者仍可手动结束
+        # 监督者验收不通过，检查是否需要重新执行
         score_text = f'，综合评分：{final_score}分' if final_score is not None else ''
-        logger.info(f'工单 {ticket.ticket_no} 监督者验收不通过{score_text}，保持已处理状态')
-        _add_comment(ticket, None, f'❌ 监督者最终验收未通过{score_text}，工单保持「已处理」状态\n\n{decision}', 'status_change', is_ai=True)
-        db.session.commit()
+        
+        # 检查是否超过最大补充处理轮数（默认3轮）
+        # 使用 ticket.collaboration_rounds 作为补充处理轮数计数
+        max_retry_rounds = 3
+        current_rounds = ticket.collaboration_rounds or 0
+        
+        if current_rounds < max_retry_rounds:
+            # 未超过最大轮数，触发执行者补充处理
+            logger.info(f'工单 {ticket.ticket_no} 监督者验收不通过{score_text}，触发执行者补充处理（第{current_rounds + 1}轮）')
+            ticket.status = 'processing'
+            ticket.collaboration_rounds = current_rounds + 1
+            ticket.last_activity_at = datetime.utcnow()
+            _add_comment(ticket, None, f'❌ 监督者验收不通过{score_text}，将由执行者补充处理（第{current_rounds + 1}轮）\n\n{decision}', 'status_change', is_ai=True)
+            db.session.commit()
+            
+            # 提取反馈内容（去掉【验收不通过】前缀）
+            feedback = decision
+            if decision.startswith('【验收不通过】'):
+                feedback = decision[len('【验收不通过】'):].strip() or decision
+            
+            # 触发执行者重新处理（带监督者反馈）
+            _trigger_executor_retry_with_feedback(ticket.id, feedback, app)
+        else:
+            # 超过最大轮数，强制结束并记录
+            logger.info(f'工单 {ticket.ticket_no} 已达最大补充处理轮数({max_retry_rounds}轮)，强制结束')
+            ticket.status = 'closed'
+            ticket.closed_at = datetime.utcnow()
+            _add_comment(ticket, None, f'⚠️ 已达最大补充处理轮数({max_retry_rounds}轮)，工单强制结束\n\n监督者最终意见：{decision}', 'status_change', is_ai=True)
+            db.session.commit()
     else:
         # 未按格式输出，保守处理：不结束，记录监督者意见
         logger.warning(f'工单 {ticket.ticket_no} 监督者验收输出格式异常: {decision[:100]}')
