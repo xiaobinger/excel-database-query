@@ -452,8 +452,26 @@ def _process_ticket_with_ai_async(ticket_id, app):
 
             # 多agent协作：配置了监督者Agent时走执行者+监督者协作流程
             if ticket.supervisor_agent_id:
+                # 智能检测：重试/重新发起/重新指派时，先让监督者评估当前执行状态
+                # 如果已执行完成，直接触发验收；如果有遗漏，返回反馈给执行者
+                need_execute = True
+                supervisor_feedback = None
+                
+                # 检查是否有历史执行记录（ai_result 或多条评论）
+                has_history = (ticket.ai_result and len(ticket.ai_result.strip()) > 10) or len(ticket.comments or []) > 1
+                
+                if has_history:
+                    from app.services.supervisor_monitor import trigger_supervisor_evaluate_before_retry
+                    need_execute, supervisor_feedback = trigger_supervisor_evaluate_before_retry(ticket_id, app)
+                
+                if not need_execute:
+                    # 监督者判定已执行完成，已触发验收，无需执行者处理
+                    logger.info(f'工单 {ticket.ticket_no} 监督者判定已执行完成，跳过执行者处理')
+                    return
+                
+                # 需要执行者处理（可能是补充执行）
                 from app.services.multi_agent_service import MultiAgentService
-                MultiAgentService.process_ticket(ticket_id, app)
+                MultiAgentService.process_ticket(ticket_id, app, feedback=supervisor_feedback)
                 return
 
             # 状态改为处理中

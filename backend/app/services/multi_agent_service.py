@@ -63,10 +63,11 @@ class MultiAgentService:
     # ── 主入口 ──────────────────────────────────────────────
 
     @staticmethod
-    def process_ticket(ticket_id, app):
+    def process_ticket(ticket_id, app, feedback=None):
         """多agent协作处理工单（后台线程入口）
 
         执行者 + 监督者协作循环，直到验收通过或达到最大轮数。
+        feedback: 监督者评估反馈（重试/重新发起/重新指派时，监督者对当前执行状态的评估）
         """
         with app.app_context():
             try:
@@ -86,13 +87,16 @@ class MultiAgentService:
                     MultiAgentService._fallback_to_single_agent(ticket, app)
                     return
 
-                feedback = None
+                # feedback 参数来自监督者评估（重试/重新发起/重新指派时）
+                # 第一次循环使用外部 feedback，后续循环使用监督者审查的 feedback
+                external_feedback = feedback  # 保存外部 feedback
                 max_rounds = MultiAgentService._get_max_rounds(ticket, supervisor)
                 for round_no in range(1, max_rounds + 1):
                     ticket.collaboration_rounds = round_no
 
-                    # 1. 执行者执行一轮
-                    result = MultiAgentService._executor_tool_loop(ticket, executor, app, feedback)
+                    # 1. 执行者执行一轮（第一次使用外部 feedback，后续使用监督者审查的 feedback）
+                    current_feedback = external_feedback if round_no == 1 else feedback
+                    result = MultiAgentService._executor_tool_loop(ticket, executor, app, current_feedback)
                     MultiAgentService._log_collaboration(ticket, 'executor', executor.name if executor else 'AI助手', result)
 
                     if result.get('mode') == 'async':

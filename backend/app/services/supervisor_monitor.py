@@ -173,6 +173,127 @@ def trigger_auto_close(ticket_id, app):
     t.start()
 
 
+def trigger_supervisor_evaluate_before_retry(ticket_id, app):
+    """在重试/重新发起/重新指派前，让监督者评估当前工单执行状态
+
+    评估结果：
+    - 已执行完成，需要验收 → 触发监督者验收
+    - 有遗漏/未完成，需要补充执行 → 返回反馈供执行者使用
+    - 无法评估 → 返回 None，让执行者正常处理
+
+    返回：(need_execute, feedback)
+    - need_execute=True, feedback=反馈内容：需要执行者补充处理
+    - need_execute=False, feedback=None：已执行完成，已触发验收
+    - need_execute=True, feedback=None：无法评估，执行者正常处理
+    """
+    try:
+        from app.models.ticket import Ticket
+        from app.models.ai_agent import AiAgent
+        from app.services.ai_service import AiService
+        from app.routes.ticket_routes import _add_comment
+
+        ticket = Ticket.query.get(ticket_id)
+        if not ticket:
+            return True, None
+        if not ticket.supervisor_agent_id:
+            return True, None
+
+        supervisor = AiAgent.query.get(ticket.supervisor_agent_id)
+        if not supervisor or not supervisor.is_active:
+            return True, None
+
+        # 检查是否有历史执行记录
+        has_history = False
+        history_text = ''
+
+        # 检查 ai_result
+        if ticket.ai_result and len(ticket.ai_result.strip()) > 10:
+            has_history = True
+            history_text += f'## 上次处理结果\n{ticket.ai_result}\n\n'
+
+        # 检查评论记录
+        comments = ticket.comments or []
+        if len(comments) > 1:
+            has_history = True
+            history_text += '## 历史评论记录\n'
+            for c in comments[-5:]:  # 只看最近5条
+                role = 'AI' if c.is_ai else '用户'
+                content = (c.content or '').strip()
+                if content:
+                    history_text += f'[{c.action}] {role}: {content[:200]}\n\n'
+
+        if not has_history:
+            # 没有历史记录，执行者正常处理
+            return True, None
+
+        logger.info(f'工单 {ticket.ticket_no} 检测到历史执行记录，监督者评估执行状态')
+
+        prompt = (
+            '你是一个工单质量监督者（Supervisor），现在工单需要重新处理（可能是重试、重新发起或重新指派）。'
+            '你需要评估工单当前的执行状态，判断是否需要补充执行遗漏的任务。\n\n'
+            '## 评估输出格式（严格遵守）\n'
+            '- 如果工单已经执行完成，只需要验收：回复以【已执行完成，需要验收】开头\n'
+            '- 如果工单有遗漏任务需要补充执行：回复以【需要补充执行】开头，随后详细说明哪些任务已经执行完成，哪些任务还需要补充执行\n\n'
+            '## 评估原则\n'
+            '- 仔细对比工单需求和执行记录，判断执行是否完整覆盖\n'
+            '- 如果执行记录显示任务成功且参数覆盖了工单需求的所有数据项，应判定为已执行完成\n'
+            '- 如果有部分任务未执行或执行失败，应判定为需要补充执行，并明确指出需要补充的内容\n'
+        )
+        if supervisor.system_prompt:
+            prompt += '\n## 监督者专属要求\n' + supervisor.system_prompt
+
+        messages = [
+            {'role': 'system', 'content': prompt},
+            {'role': 'user', 'content': (
+                f'## 工单信息\n'
+                f'- 编号: {ticket.ticket_no}\n'
+                f'- 标题: {ticket.title}\n\n'
+                f'## 工单内容（原始需求）\n{ticket.content or ""}\n\n'
+                f'{history_text}'
+                f'请评估当前执行状态，判断是否需要补充执行。'
+            )},
+        ]
+
+        content, tokens, p_tokens, c_tokens, cache_create, cache_read, headroom = AiService.chat_with_failover(
+            messages, use_tools=False, scope='ticket'
+        )
+        ticket.accumulate_ai_token_usage({
+            'tokens': tokens, 'prompt_tokens': p_tokens, 'completion_tokens': c_tokens,
+            'cache_creation_tokens': cache_create, 'cache_read_tokens': cache_read, 'headroom_stats': headroom,
+        })
+
+        decision = (content or '').strip()
+        logger.info(f'工单 {ticket.ticket_no} 监督者评估结果: {decision[:100]}')
+
+        if '已执行完成' in decision or '需要验收' in decision:
+            # 已执行完成，直接触发验收
+            logger.info(f'工单 {ticket.ticket_no} 监督者判定已执行完成，触发验收')
+            ticket.status = 'processed'
+            ticket.processed_at = datetime.utcnow()
+            ticket.last_activity_at = datetime.utcnow()
+            _add_comment(ticket, None, f'📋 监督者评估：工单已执行完成，直接进入验收\n\n{decision}', 'status_change', is_ai=True)
+            db.session.commit()
+            trigger_auto_close(ticket.id, app)
+            return False, None
+        elif '需要补充执行' in decision:
+            # 有遗漏，返回反馈供执行者使用
+            feedback = decision
+            if decision.startswith('【需要补充执行】'):
+                feedback = decision[len('【需要补充执行】'):].strip() or decision
+            logger.info(f'工单 {ticket.ticket_no} 监督者判定需要补充执行')
+            _add_comment(ticket, None, f'📋 监督者评估：工单有遗漏任务需要补充执行\n\n{decision}', 'status_change', is_ai=True)
+            db.session.commit()
+            return True, feedback
+        else:
+            # 无法判断，执行者正常处理
+            logger.info(f'工单 {ticket.ticket_no} 监督者无法判断执行状态，执行者正常处理')
+            return True, None
+
+    except Exception as e:
+        logger.warning(f'工单{ticket_id}监督者评估失败: {e}')
+        return True, None
+
+
 def _trigger_executor_retry_with_feedback(ticket_id, feedback, app):
     """监督者验收不通过后，触发执行者补充处理
 
