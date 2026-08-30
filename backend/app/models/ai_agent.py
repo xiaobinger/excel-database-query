@@ -11,6 +11,7 @@ class AiAgent(db.Model):
     name = db.Column(db.String(100), nullable=False, comment='Agent名称')
     description = db.Column(db.String(500), comment='Agent描述')
     agent_role = db.Column(db.String(20), default='general', nullable=False, comment='Agent角色: general(通用)/executor(执行者)/supervisor(监督者)')
+    can_confirm_execution = db.Column(db.Boolean, default=False, comment='是否授权该Agent(作为监督者)直接确认执行待确认操作，跳过提交者人工确认')
     system_prompt = db.Column(db.Text, nullable=False, comment='系统提示词')
     enabled_tools = db.Column(db.Text, comment='启用的AI工具列表JSON，null表示全部启用')
     mcp_server_ids = db.Column(db.Text, comment='授予的MCP Server ID列表JSON')
@@ -59,6 +60,7 @@ class AiAgent(db.Model):
             'name': self.name,
             'description': self.description,
             'agent_role': self.agent_role or 'general',
+            'can_confirm_execution': bool(self.can_confirm_execution),
             'system_prompt': self.system_prompt,
             'enabled_tools': self.get_enabled_tools(),
             'mcp_server_ids': self.get_mcp_server_ids(),

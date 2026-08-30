@@ -144,7 +144,7 @@
         </el-form-item>
         <el-form-item v-if="createForm.assignee_type === 'ai'" label="监督者Agent">
           <el-select v-if="canSwitchAgent" v-model="createForm.supervisor_agent_id" placeholder="选择监督者Agent（可选，监督执行结果）" clearable filterable style="width: 100%">
-            <el-option v-for="a in supervisorAgentOptions" :key="a.id" :label="a.name + (a.agent_role === 'supervisor' ? '（监督者）' : '')" :value="a.id" />
+            <el-option v-for="a in supervisorAgentOptions" :key="a.id" :label="a.name + (a.agent_role === 'supervisor' ? '（监督者）' : '') + (a.can_confirm_execution ? '（可自动确认）' : '')" :value="a.id" />
           </el-select>
           <div class="form-tip"><i class="fas fa-info-circle"></i> 配置监督者后进入多Agent协作：执行者Agent执行任务，监督者Agent审查结果是否满足要求，不满足则反馈返工，直到验收通过。</div>
         </el-form-item>
@@ -301,6 +301,8 @@
                 <span class="collab-round">第{{ entry.round }}轮</span>
                 <el-tag v-if="entry.role === 'supervisor' && entry.approved === true" type="success" size="small">验收通过</el-tag>
                 <el-tag v-else-if="entry.role === 'supervisor' && entry.approved === false" type="danger" size="small">需返工</el-tag>
+                <el-tag v-if="entry.role === 'supervisor' && entry.decision === 'confirm'" type="success" size="small">确认执行</el-tag>
+                <el-tag v-else-if="entry.role === 'supervisor' && entry.decision === 'reject'" type="danger" size="small">拒绝执行</el-tag>
                 <span v-if="entry.role === 'supervisor' && entry.score != null" class="collab-score" :style="{ color: scoreColor(entry.score) }">
                   <i class="fas fa-star"></i> {{ entry.score }}分
                 </span>
@@ -513,7 +515,7 @@
         </el-form-item>
         <el-form-item v-if="reassignForm.assignee_type === 'ai'" label="监督者Agent">
           <el-select v-if="canSwitchAgent" v-model="reassignForm.supervisor_agent_id" placeholder="选择监督者Agent（可选，监督执行结果）" clearable filterable style="width: 100%">
-            <el-option v-for="a in reassignSupervisorAgentOptions" :key="a.id" :label="a.name + (a.agent_role === 'supervisor' ? '（监督者）' : '')" :value="a.id" />
+            <el-option v-for="a in reassignSupervisorAgentOptions" :key="a.id" :label="a.name + (a.agent_role === 'supervisor' ? '（监督者）' : '') + (a.can_confirm_execution ? '（可自动确认）' : '')" :value="a.id" />
           </el-select>
           <div class="form-tip"><i class="fas fa-info-circle"></i> 配置监督者后进入多Agent协作，监督者审查执行结果直到验收通过。</div>
         </el-form-item>

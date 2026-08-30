@@ -2005,6 +2005,7 @@ def list_ai_agents():
             'name': a.name,
             'description': a.description or '',
             'agent_role': a.agent_role or 'general',
+            'can_confirm_execution': bool(a.can_confirm_execution),
             'is_default': a.is_default,
         }
         for a in agents

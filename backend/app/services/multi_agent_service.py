@@ -102,7 +102,13 @@ class MultiAgentService:
                         return
 
                     if result.get('mode') == 'pending':
-                        # 需人工确认（SQL系统任务/生产代付），等待用户确认，无需监督者审查
+                        # 需确认执行（SQL系统任务/生产代付）
+                        if supervisor and supervisor.can_confirm_execution:
+                            # 监督者被授权确认执行：由监督者审查并直接确认/拒绝，无需提交者人工介入
+                            MultiAgentService._supervisor_confirm_pending(ticket, supervisor, app)
+                            logger.info(f'工单 {ticket.ticket_no} 监督者被授权确认执行，已由监督者处理待确认操作')
+                            return
+                        # 未授权：等待提交者人工确认
                         db.session.commit()
                         logger.info(f'工单 {ticket.ticket_no} 执行者需用户确认，暂停协作')
                         return
@@ -565,6 +571,135 @@ class MultiAgentService:
             # 未按约定格式输出，保守处理为需要返工
             return False, review_summary, review_summary, score
 
+    # ── 监督者确认执行待确认操作 ──────────────────────────────
+
+    @staticmethod
+    def _build_pending_description(ticket):
+        """把待确认操作(pending_action)转成可读文本，供监督者审查决策"""
+        pending_action = ticket.get_pending_action()
+        if not pending_action:
+            return '（无待确认操作信息）'
+
+        if 'tasks' in pending_action:
+            tasks = pending_action.get('tasks') or []
+            lines = [f'待执行的数据变更类SQL系统任务（共{len(tasks)}个）：']
+            for i, t in enumerate(tasks, 1):
+                lines.append(f'  {i}. {t.get("task_name", "未命名任务")}')
+                params = t.get('params_values', {})
+                if params:
+                    lines.append(f'     参数：{json.dumps(params, ensure_ascii=False)}')
+                if t.get('description'):
+                    lines.append(f'     说明：{t["description"]}')
+                if t.get('confirm_message'):
+                    lines.append(f'     确认提示：{t["confirm_message"]}')
+            return '\n'.join(lines)
+
+        # 生产环境代付提现
+        channel_name = pending_action.get('channel_name', pending_action.get('channel', ''))
+        lines = [
+            '待执行的生产环境代付提现操作：',
+            f'  - 渠道：{channel_name}',
+            f'  - 接口类型：{pending_action.get("interface_type", "")}',
+            f'  - 环境：{pending_action.get("environment", "")}',
+            f'  - 实时代付：{pending_action.get("real_time", "")}',
+            f'  - 执行类型：{pending_action.get("execute_type", "")}',
+        ]
+        if pending_action.get('description'):
+            lines.append(f'  - 说明：{pending_action["description"]}')
+        if pending_action.get('confirm_message'):
+            lines.append(f'  - 确认提示：{pending_action["confirm_message"]}')
+        return '\n'.join(lines)
+
+    @staticmethod
+    def _supervisor_confirm_pending(ticket, supervisor, app):
+        """监督者被授权确认执行时，审查待确认操作并决定确认/拒绝
+
+        确认 → 转 processing 并异步执行 pending_action；拒绝 → 转 pending_assignment。
+        """
+        from app.services.ai_service import AiService
+
+        system_name = ticket.business_system.name if ticket.business_system else '未指定'
+        pending_desc = MultiAgentService._build_pending_description(ticket)
+
+        base_prompt = (
+            '你是一个工单质量监督者（Supervisor），现在执行者处理工单时识别到一项需要确认后才能执行的操作，'
+            '你已被授权直接确认执行（无需提交者人工介入）。请评估该操作并决定是否执行。\n\n'
+            '## 决策输出格式（严格遵守）\n'
+            '- 如果该操作符合工单需求且安全合理，应执行：回复以【确认执行】开头，随后简述理由\n'
+            '- 如果该操作存在风险、不符合工单要求或不应执行：回复以【拒绝执行】开头，随后说明原因\n\n'
+            '## 决策原则\n'
+            '- 以提交人的原始需求为唯一依据，操作必须确实服务于工单目标\n'
+            '- 对涉及生产数据/真实资金的变更操作保持审慎，但不因过度保守而拒绝合理的操作\n'
+        )
+        if supervisor and supervisor.system_prompt:
+            base_prompt = base_prompt + '\n## 监督者专属要求\n' + supervisor.system_prompt
+
+        messages = [
+            {'role': 'system', 'content': base_prompt},
+            {'role': 'user', 'content': (
+                f'## 工单信息\n'
+                f'- 编号: {ticket.ticket_no}\n'
+                f'- 标题: {ticket.title}\n'
+                f'- 涉及系统: {system_name}\n\n'
+                f'## 工单内容\n{ticket.content or ""}\n\n'
+                f'## 待确认的操作\n{pending_desc}\n\n'
+                f'请评估并决定是否确认执行。'
+            )},
+        ]
+
+        try:
+            content, tokens, prompt_tokens, completion_tokens, cache_creation, cache_read, headroom_stats = AiService.chat_with_failover(
+                messages, use_tools=False, scope='ticket'
+            )
+            ticket.accumulate_ai_token_usage({
+                'tokens': tokens, 'prompt_tokens': prompt_tokens,
+                'completion_tokens': completion_tokens,
+                'cache_creation_tokens': cache_creation,
+                'cache_read_tokens': cache_read,
+                'headroom_stats': headroom_stats,
+            })
+        except Exception as e:
+            logger.warning(f'工单 {ticket.ticket_no} 监督者确认决策失败: {e}')
+            # 审查失败保守处理：拒绝执行，转待指派，由人工介入
+            MultiAgentService._reject_pending_by_supervisor(ticket, f'（监督者决策异常：{e}）')
+            return
+
+        decision = (content or '').strip()
+        if not decision:
+            decision = '（监督者未给出有效决策）'
+
+        if decision.startswith('【确认执行】'):
+            reason = decision[len('【确认执行】'):].strip() or decision
+            MultiAgentService._log_collaboration(ticket, 'supervisor', supervisor.name, {
+                'decision': 'confirm', 'summary': reason,
+            })
+            # 监督者确认执行：转 processing 并异步执行待确认操作
+            ticket.status = STATUS_PROCESSING
+            _add_comment(ticket, None, f'监督者已确认执行该操作：{reason}', 'status_change', is_ai=True)
+            db.session.commit()
+            from app.routes.ticket_routes import _execute_pending_action_async, _ticket_ai_threads
+            t = threading.Thread(target=_execute_pending_action_async, args=(ticket.id, app), daemon=True)
+            _ticket_ai_threads[ticket.id] = t
+            t.start()
+            logger.info(f'工单 {ticket.ticket_no} 监督者确认执行待确认操作，已异步执行')
+        else:
+            # 拒绝执行（含【拒绝执行】或未按格式输出，保守拒绝）
+            MultiAgentService._log_collaboration(ticket, 'supervisor', supervisor.name, {
+                'decision': 'reject', 'summary': decision,
+            })
+            MultiAgentService._reject_pending_by_supervisor(ticket, decision)
+
+    @staticmethod
+    def _reject_pending_by_supervisor(ticket, decision):
+        """监督者拒绝执行待确认操作：转待指派并记录原因"""
+        ticket.ai_result = f'监督者拒绝执行该操作：{decision}'
+        ticket.status = STATUS_PENDING_ASSIGNMENT
+        ticket.clear_pending_action()
+        _add_comment(ticket, None, ticket.ai_result, 'ai_process', is_ai=True)
+        _add_comment(ticket, None, '监督者拒绝执行该操作，工单已转为「待指派」，请提交人重新指派或人工介入', 'status_change', is_ai=True)
+        db.session.commit()
+        logger.info(f'工单 {ticket.ticket_no} 监督者拒绝执行待确认操作')
+
     # ── 异步任务完成后的监督者审查 ────────────────────────────
 
     @staticmethod
@@ -645,6 +780,7 @@ class MultiAgentService:
                     if not ticket:
                         return
                     executor = AiAgent.query.get(ticket.assignee_agent_id) if ticket.assignee_agent_id else None
+                    supervisor = AiAgent.query.get(ticket.supervisor_agent_id) if ticket.supervisor_agent_id else None
                     # 进入新一轮协作：递增轮数
                     ticket.collaboration_rounds = (ticket.collaboration_rounds or 0) + 1
                     ticket.status = STATUS_PROCESSING
@@ -658,13 +794,17 @@ class MultiAgentService:
                         db.session.commit()
                         return
                     if result.get('mode') == 'pending':
+                        # 需确认执行（SQL系统任务/生产代付）
+                        if supervisor and supervisor.can_confirm_execution:
+                            # 监督者被授权确认执行：由监督者审查并直接确认/拒绝
+                            MultiAgentService._supervisor_confirm_pending(ticket, supervisor, app)
+                            return
                         db.session.commit()
                         return
                     if not result.get('is_handled'):
                         MultiAgentService._finalize_pending_assignment(ticket, result)
                         return
 
-                    supervisor = AiAgent.query.get(ticket.supervisor_agent_id) if ticket.supervisor_agent_id else None
                     if not supervisor:
                         MultiAgentService._finalize_processed(ticket, result.get('final_content', ''), result)
                         return
@@ -751,7 +891,12 @@ class MultiAgentService:
                 entry['tool_executed'] = bool(result.get('tool_executed'))
         else:
             if isinstance(result, dict):
-                entry['approved'] = bool(result.get('approved'))
+                if result.get('decision') is not None:
+                    # 确认决策（confirm/reject），非验收审查
+                    entry['decision'] = result.get('decision')
+                    entry['approved'] = None
+                else:
+                    entry['approved'] = bool(result.get('approved'))
                 entry['summary'] = (result.get('summary') or '')[:500]
                 if result.get('score') is not None:
                     entry['score'] = result.get('score')

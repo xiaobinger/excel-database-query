@@ -28,6 +28,12 @@
             <el-tag v-else type="info" size="small">通用</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="授权确认" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.agent_role === 'supervisor' && row.can_confirm_execution" type="success" size="small">已授权</el-tag>
+            <span v-else style="color: #c0c4cc; font-size: 12px">-</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
         <el-table-column label="启用工具" width="120" align="center">
           <template #default="{ row }">
@@ -94,6 +100,14 @@
             </el-radio-group>
             <div style="font-size: 12px; color: #999; line-height: 1.4; margin-top: 4px;">
               通用：独立处理工单/对话；执行者：多Agent协作中负责执行工单任务；监督者：多Agent协作中负责审查执行者的处理结果是否满足要求
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item v-if="form.agent_role === 'supervisor'" label="授权确认执行">
+          <div style="width: 100%">
+            <el-switch v-model="form.can_confirm_execution" />
+            <div style="font-size: 12px; color: #999; line-height: 1.4; margin-top: 4px;">
+              授权后，该Agent作为监督者时，工单进入「待确认」状态（如SQL数据变更、生产环境代付提现）可直接由监督者审查并确认/拒绝执行，无需提交者人工介入
             </div>
           </div>
         </el-form-item>
@@ -246,6 +260,7 @@ const defaultForm = {
   name: '',
   description: '',
   agent_role: 'general',
+  can_confirm_execution: false,
   system_prompt: '',
   enabled_tools: null,
   mcp_server_ids: [],
@@ -283,6 +298,7 @@ function openDialog(row) {
       name: row.name,
       description: row.description || '',
       agent_role: row.agent_role || 'general',
+      can_confirm_execution: !!row.can_confirm_execution,
       system_prompt: row.system_prompt || '',
       enabled_tools: row.enabled_tools ? [...row.enabled_tools] : null,
       mcp_server_ids: row.mcp_server_ids ? [...row.mcp_server_ids] : [],

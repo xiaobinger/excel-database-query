@@ -115,6 +115,7 @@ def create_agent():
             name=data['name'],
             description=data.get('description', ''),
             agent_role=data.get('agent_role', 'general'),
+            can_confirm_execution=bool(data.get('can_confirm_execution', False)),
             system_prompt=data['system_prompt'],
             is_default=data.get('is_default', False),
             is_active=data.get('is_active', True),
@@ -163,6 +164,8 @@ def update_agent(agent_id):
             agent.description = data['description']
         if 'agent_role' in data:
             agent.agent_role = data.get('agent_role', 'general')
+        if 'can_confirm_execution' in data:
+            agent.can_confirm_execution = bool(data.get('can_confirm_execution', False))
         if 'system_prompt' in data:
             agent.system_prompt = data['system_prompt']
         if 'is_active' in data:
