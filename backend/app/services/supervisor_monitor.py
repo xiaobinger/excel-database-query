@@ -194,6 +194,15 @@ def _do_auto_close(ticket_id, app):
 
     logger.info(f'工单 {ticket.ticket_no} 监督者自动验收开始')
 
+    # 收集完整的执行记录（评论区）
+    comments_text = ''
+    for c in (ticket.comments or []):
+        role = 'AI' if c.is_ai else '用户'
+        action = c.action or 'comment'
+        content = (c.content or '').strip()
+        if content:
+            comments_text += f'[{action}] {role}: {content}\n\n'
+
     prompt = (
         '你是一个工单质量监督者（Supervisor），执行者已完成工单处理（工单状态为「已处理」），'
         '你需要最终验收并决定是否结束此工单。\n\n'
@@ -202,7 +211,9 @@ def _do_auto_close(ticket_id, app):
         '- 如果工单处理结果仍有问题，不应结束：回复以【验收不通过】开头，说明原因\n\n'
         '## 验收原则\n'
         '- 以提交人的原始需求为唯一验收标准\n'
-        '- 如果执行者确实调用了工具并成功完成任务，结果正确，应结束工单\n'
+        '- **仔细阅读执行记录**：不要简单比较任务数量，要查看每个任务的实际执行内容和参数。一个任务可能批量处理多个数据项（如一个任务包含多个SN、多个商户号等）\n'
+        '- 判断执行是否完整：对比工单需求中的数据项与执行记录中的参数，确认所有数据项是否都已被处理\n'
+        '- 如果执行记录显示任务成功且参数覆盖了工单需求的所有数据项，应验收通过\n'
         '- 如果执行者只是给出了方案但未真正执行，不应结束\n'
         '- 如果工单有待确认操作未执行，不应结束\n'
     )
@@ -216,10 +227,11 @@ def _do_auto_close(ticket_id, app):
             f'- 编号: {ticket.ticket_no}\n'
             f'- 标题: {ticket.title}\n'
             f'- 状态: 已处理（待最终验收）\n\n'
-            f'## 工单内容\n{ticket.content or ""}\n\n'
-            f'## AI处理结果\n{ticket.ai_result or "（无）"}\n\n'
+            f'## 工单内容（提交人的原始需求）\n{ticket.content or ""}\n\n'
+            f'## 完整执行记录（评论区）\n{comments_text or "（无记录）"}\n\n'
+            f'## AI处理结果摘要\n{ticket.ai_result or "（无）"}\n\n'
             f'## 监督评分\n{ticket.final_score or "（无评分）"}\n\n'
-            f'请做最终验收决定。'
+            f'请仔细对比工单需求和执行记录，判断执行是否完整覆盖了所有需求，然后做最终验收决定。'
         )},
     ]
 
