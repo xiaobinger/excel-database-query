@@ -182,48 +182,125 @@ def _trigger_executor_retry_with_feedback(ticket_id, feedback, app):
         with app.app_context():
             try:
                 from app.models.ticket import Ticket
-                from app.routes.ticket_routes import _process_ticket_with_ai_async, _add_comment
+                from app.services.multi_agent_service import MultiAgentService
+                from app.routes.ticket_routes import _add_comment, _build_ticket_ai_prompt, STATUS_PROCESSING, STATUS_PROCESSED
+                from app.models.ai_config import AiConfig
+                from app.services.ai_service import AiService, get_effective_tools
                 
                 ticket = Ticket.query.get(ticket_id)
                 if not ticket:
                     return
                 
-                # 记录监督者反馈到评论区（不修改工单内容）
+                # 记录监督者反馈到评论区
                 _add_comment(ticket, None, f'📋 监督者反馈（需补充处理）：\n\n{feedback}', 'ai_process', is_ai=True)
+                ticket.status = STATUS_PROCESSING
+                ticket.last_activity_at = datetime.utcnow()
                 db.session.commit()
                 
                 logger.info(f'工单 {ticket.ticket_no} 触发执行者补充处理（第{ticket.collaboration_rounds}轮）')
                 
-                # 触发执行者处理（复用现有的AI处理流程）
-                # 注意：_process_ticket_with_ai_async 内部会检测 supervisor_agent_id
-                # 如果有监督者，会委托给 MultiAgentService.process_ticket
-                # 但这里我们希望执行者直接处理，不走多agent协作（避免循环）
-                # 所以临时清空 supervisor_agent_id，处理完成后再恢复
-                supervisor_id = ticket.supervisor_agent_id
-                ticket.supervisor_agent_id = None
+                # 直接调用执行者工具循环（不走 _process_ticket_with_ai_async，避免多agent协作）
+                executor = AiAgent.query.get(ticket.assignee_agent_id) if ticket.assignee_agent_id else None
+                ai_config = AiConfig.query.filter_by(is_active=True).first()
+                
+                if not ai_config:
+                    logger.error(f'工单 {ticket.ticket_no} 未找到可用的AI模型配置')
+                    ticket.status = 'pending_assignment'
+                    ticket.ai_result = '未找到可用的AI模型配置'
+                    db.session.commit()
+                    return
+                
+                # 构建执行者消息（带监督者反馈）
+                system_name = ticket.business_system.name if ticket.business_system else '未指定'
+                ticket_system_prompt = _build_ticket_ai_prompt(executor, system_name)
+                
+                # 附件清单
+                att_lines = ''
+                if ticket.attachments:
+                    att_items = [f'- {a.file_name}（{a.file_size // 1024}KB）' for a in ticket.attachments]
+                    att_lines = ('\n\n## 工单附件\n提交人随工单上传了以下数据文件（处理人可在工单详情页下载）：\n'
+                                 + '\n'.join(att_items)
+                                 + '\n如工单需求依赖附件中的数据（如按Excel主键批量查询），请在结果中说明需使用对应附件执行查询任务。')
+                
+                messages = [
+                    {'role': 'system', 'content': ticket_system_prompt},
+                    {'role': 'user', 'content': f'## 工单编号: {ticket.ticket_no}\n## 标题: {ticket.title}\n## 涉及系统: {system_name}\n\n## 工单内容:\n{ticket.content}{att_lines}'},
+                    {'role': 'user', 'content': f'## 监督者反馈（请务必根据以下反馈补充处理）\n{feedback}\n\n请根据以上反馈，补充处理遗漏的任务，确保完整覆盖工单需求。'},
+                ]
+                
+                # 执行者工具循环（简化版，只执行一轮）
+                filtered_tools = get_effective_tools(executor)
+                tool_executed = False
+                action_triggered = False
+                final_content = ''
+                tool_log = []
+                
+                ai_response = AiService.chat_with_failover(messages, use_tools=True, tools=filtered_tools, scope='ticket')
+                content = ai_response.get('content', '') or ''
+                tool_calls = ai_response.get('tool_calls', []) or []
+                ticket.accumulate_ai_token_usage(ai_response)
+                
+                if tool_calls:
+                    tool_results = []
+                    for tc in tool_calls:
+                        func_name = tc.get('function', {}).get('name', '')
+                        func_args = tc.get('function', {}).get('arguments', '')
+                        logger.info(f'工单{ticket.ticket_no} 执行者补充处理调用工具: {func_name}')
+                        
+                        result = AiService.execute_tool_call(func_name, func_args, ticket.created_by, agent_id=executor.id if executor else None)
+                        tool_results.append({'tool_call_id': tc['id'], 'name': func_name, 'result': result})
+                        
+                        # 生成结果摘要
+                        if isinstance(result, dict):
+                            if result.get('error'):
+                                tool_log.append(f'**调用工具**: `{func_name}` → 错误: {result["error"]}')
+                            elif result.get('action_type') in ('export', 'query', 'profit_share', 'pay_withdraw'):
+                                action_triggered = True
+                                tool_executed = True
+                                tool_log.append(f'**调用工具**: `{func_name}` → 已触发任务')
+                            else:
+                                tool_executed = True
+                                tool_log.append(f'**调用工具**: `{func_name}` → 已执行')
+                    
+                    # 追加工具结果到消息
+                    messages.append({'role': 'assistant', 'content': content, 'tool_calls': tool_calls})
+                    for tr in tool_results:
+                        messages.append({'role': 'tool', 'tool_call_id': tr['tool_call_id'], 'content': json.dumps(tr['result'], ensure_ascii=False)})
+                    
+                    # 获取AI总结
+                    try:
+                        summary_content, tokens, p_tokens, c_tokens, cache_create, cache_read, headroom = AiService.chat_with_failover(messages, use_tools=False, scope='ticket')
+                        final_content = summary_content or ''
+                        ticket.accumulate_ai_token_usage({
+                            'tokens': tokens, 'prompt_tokens': p_tokens, 'completion_tokens': c_tokens,
+                            'cache_creation_tokens': cache_create, 'cache_read_tokens': cache_read, 'headroom_stats': headroom,
+                        })
+                    except Exception as se:
+                        logger.warning(f'工单{ticket.ticket_no} 执行者补充处理归总失败: {se}')
+                        final_content = content or '补充处理完成'
+                else:
+                    final_content = content
+                
+                # 设置工单状态
+                final_content = (final_content or '').strip() or '执行者已补充处理'
+                if tool_log:
+                    tool_log_text = '\n\n'.join(tool_log)
+                    ticket.ai_result = f'{final_content}\n\n---\n**补充处理过程：**\n{tool_log_text}'
+                else:
+                    ticket.ai_result = final_content
+                
+                ticket.status = STATUS_PROCESSED
+                ticket.processed_at = datetime.utcnow()
+                ticket.last_activity_at = datetime.utcnow()
+                _add_comment(ticket, None, ticket.ai_result, 'ai_process', is_ai=True)
+                _add_comment(ticket, None, '执行者补充处理完成，等待监督者验收', 'status_change', is_ai=True)
                 db.session.commit()
                 
-                # 触发执行者处理
-                _process_ticket_with_ai_async(ticket.id, app)
+                logger.info(f'工单 {ticket.ticket_no} 执行者补充处理完成，触发监督者验收')
                 
-                # 恢复 supervisor_agent_id
-                with app.app_context():
-                    ticket = Ticket.query.get(ticket_id)
-                    if ticket:
-                        ticket.supervisor_agent_id = supervisor_id
-                        db.session.commit()
+                # 触发监督者验收
+                trigger_auto_close(ticket.id, app)
                 
-                # 执行者处理完成后，再次触发监督者验收
-                with app.app_context():
-                    ticket = Ticket.query.get(ticket_id)
-                    if ticket and ticket.status == 'processed':
-                        logger.info(f'工单 {ticket.ticket_no} 执行者补充处理完成，触发监督者再次验收')
-                        trigger_auto_close(ticket.id, app)
-                    elif ticket and ticket.status == 'processing':
-                        # 执行者可能还在处理中（异步任务），等待完成
-                        logger.info(f'工单 {ticket.ticket_no} 执行者仍在处理中，等待完成后再验收')
-                        # 异步任务完成后会自动触发验收（在异步回调中）
-                    
             except Exception as e:
                 logger.error(f'工单{ticket_id}执行者补充处理失败: {e}', exc_info=True)
                 try:
@@ -231,8 +308,6 @@ def _trigger_executor_retry_with_feedback(ticket_id, feedback, app):
                         db.session.rollback()
                         ticket = Ticket.query.get(ticket_id)
                         if ticket:
-                            # 恢复 supervisor_agent_id
-                            ticket.supervisor_agent_id = supervisor_id if 'supervisor_id' in dir() else ticket.supervisor_agent_id
                             ticket.status = 'pending_assignment'
                             ticket.ai_result = f'执行者补充处理异常: {str(e)}'
                             db.session.commit()
@@ -342,6 +417,7 @@ def _do_auto_close(ticket_id, app):
         '同意关闭' in decision or '可以关闭' in decision or '应关闭' in decision or
         '同意结束' in decision or '可以结束' in decision or '应结束' in decision
     )
+    has_close = '结束工单' in decision or '自动结束' in decision or '可以结束' in decision or '应结束' in decision
     has_reject = (
         '验收不通过' in decision or '不通过' in decision or '【不通过】' in decision or
         '不应结束' in decision or '不应关闭' in decision or '不同意关闭' in decision or
