@@ -87,7 +87,8 @@ class MultiAgentService:
                     return
 
                 feedback = None
-                for round_no in range(1, MAX_COLLABORATION_ROUNDS + 1):
+                max_rounds = MultiAgentService._get_max_rounds(ticket)
+                for round_no in range(1, max_rounds + 1):
                     ticket.collaboration_rounds = round_no
 
                     # 1. 执行者执行一轮
@@ -112,33 +113,33 @@ class MultiAgentService:
                         return
 
                     # 2. 监督者审查执行结果
-                    approved, feedback, review_summary = MultiAgentService._supervisor_review(
+                    approved, feedback, review_summary, score = MultiAgentService._supervisor_review(
                         ticket, supervisor, result
                     )
                     MultiAgentService._log_collaboration(ticket, 'supervisor', supervisor.name, {
                         'approved': approved,
                         'feedback': feedback,
                         'summary': review_summary,
+                        'score': score,
                     })
+                    ticket.final_score = score
                     db.session.commit()
 
                     if approved:
                         MultiAgentService._finalize_processed(ticket, review_summary, result)
-                        db.session.commit()
-                        logger.info(f'工单 {ticket.ticket_no} 监督者验收通过（第{round_no}轮），协作完成')
+                        logger.info(f'工单 {ticket.ticket_no} 监督者验收通过（第{round_no}轮，评分{score}），协作完成')
                         return
 
                     # 不通过，反馈继续下一轮
-                    logger.info(f'工单 {ticket.ticket_no} 监督者第{round_no}轮未通过，反馈给执行者继续处理')
-                    if round_no >= MAX_COLLABORATION_ROUNDS:
+                    logger.info(f'工单 {ticket.ticket_no} 监督者第{round_no}轮未通过（评分{score}），反馈给执行者继续处理')
+                    if round_no >= max_rounds:
                         # 达到最大轮数，强制完结并注明未完全验收
                         MultiAgentService._finalize_processed(
                             ticket,
-                            f'（已达最大协作轮数{MAX_COLLABORATION_ROUNDS}轮，监督者最后一次反馈如下）\n\n{review_summary}',
+                            f'（已达最大协作轮数{max_rounds}轮，监督者最后一次评分{score}，反馈如下）\n\n{review_summary}',
                             result,
                             force=True,
                         )
-                        db.session.commit()
                         return
 
                 logger.info(f'工单 {ticket.ticket_no} 多agent协作结束')
@@ -470,9 +471,10 @@ class MultiAgentService:
             '1. 判断执行者是否真正执行了工单要求的任务（是否调用了正确的工具、是否得到了正确的结果）\n'
             '2. 判断执行者的处理结果是否满足提交人的需求，是否存在遗漏、错误或不完整的地方\n'
             '3. 只有在执行结果确实满足工单要求时才验收通过\n\n'
-            '## 审查输出格式（严格遵守）\n'
-            '- 如果执行结果满足要求：回复以【验收通过】开头，随后简述验收结论（用中文）\n'
-            '- 如果执行结果不满足要求：回复以【需要返工】开头，随后详细、具体地说明执行者需要改进或补充的地方，'
+            '## 审查输出格式（严格遵守，按行输出）\n'
+            '第一行：如果执行结果满足要求，回复以【验收通过】开头；如果不满足，回复以【需要返工】开头\n'
+            '第二行：评分：X（X为0-100的整数，代表对执行结果质量的评分；验收通过通常不低于60分，返工通常低于60分）\n'
+            '第三行起：如果验收通过，简述验收结论（用中文）；如果需要返工，详细、具体地说明执行者需要改进或补充的地方，'
             '这些反馈会原样交给执行者重新处理，因此必须可执行、可验证，避免空泛\n\n'
             '## 审查原则\n'
             '- 严格但公正：只对真实存在的缺陷要求返工，不吹毛求疵\n'
@@ -485,8 +487,33 @@ class MultiAgentService:
         return base
 
     @staticmethod
+    def _parse_score(text):
+        """从监督者输出中提取评分（0-100），未提取到返回 None"""
+        import re
+        if not text:
+            return None
+        m = re.search(r'评分\s*[:：]\s*(-?\d{1,3})', text)
+        if not m:
+            return None
+        try:
+            return max(0, min(100, int(m.group(1))))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _get_max_rounds(ticket):
+        """获取工单级配置的最大协作轮数（非法或未配置则用全局默认）"""
+        try:
+            v = int(ticket.max_collaboration_rounds)
+            if 1 <= v <= 20:
+                return v
+        except (TypeError, ValueError):
+            pass
+        return MAX_COLLABORATION_ROUNDS
+
+    @staticmethod
     def _supervisor_review(ticket, supervisor, executor_result):
-        """监督者审查执行者的处理结果，返回 (approved, feedback, review_summary)"""
+        """监督者审查执行者的处理结果，返回 (approved, feedback, review_summary, score)"""
         from app.services.ai_service import AiService
 
         system_name = ticket.business_system.name if ticket.business_system else '未指定'
@@ -520,20 +547,23 @@ class MultiAgentService:
         except Exception as e:
             logger.warning(f'工单 {ticket.ticket_no} 监督者审查失败: {e}')
             # 审查失败时，保守处理：不通过，要求人工介入
-            return False, '监督者审查调用失败，请人工核实处理结果。', f'（监督者审查异常：{e}）'
+            return False, '监督者审查调用失败，请人工核实处理结果。', f'（监督者审查异常：{e}）', None
 
         review_summary = (content or '').strip()
         if not review_summary:
-            return False, '监督者未给出明确结论，请人工核实。', '（监督者无有效输出）'
+            return False, '监督者未给出明确结论，请人工核实。', '（监督者无有效输出）', None
+
+        score = MultiAgentService._parse_score(review_summary)
 
         if review_summary.startswith('【验收通过】'):
-            return True, '', review_summary[len('【验收通过】'):].strip() or review_summary
+            summary = review_summary[len('【验收通过】'):].strip() or review_summary
+            return True, '', summary, score
         elif review_summary.startswith('【需要返工】'):
             feedback = review_summary[len('【需要返工】'):].strip() or review_summary
-            return False, feedback, review_summary
+            return False, feedback, review_summary, score
         else:
             # 未按约定格式输出，保守处理为需要返工
-            return False, review_summary, review_summary
+            return False, review_summary, review_summary, score
 
     # ── 异步任务完成后的监督者审查 ────────────────────────────
 
@@ -559,6 +589,7 @@ class MultiAgentService:
 
             # 监督者审查属于执行者刚完成的那一轮，不递增轮数
             round_no = ticket.collaboration_rounds or 1
+            max_rounds = MultiAgentService._get_max_rounds(ticket)
 
             result = {
                 'mode': 'done',
@@ -568,23 +599,25 @@ class MultiAgentService:
                 'action_triggered': True,
                 'is_handled': True,
             }
-            approved, feedback, review_summary = MultiAgentService._supervisor_review(ticket, supervisor, result)
+            approved, feedback, review_summary, score = MultiAgentService._supervisor_review(ticket, supervisor, result)
             MultiAgentService._log_collaboration(ticket, 'supervisor', supervisor.name, {
                 'approved': approved,
                 'feedback': feedback,
                 'summary': review_summary,
+                'score': score,
             })
+            ticket.final_score = score
 
             if approved:
                 MultiAgentService._finalize_processed(ticket, review_summary, result)
-                logger.info(f'工单 {ticket.ticket_no} 异步任务完成后监督者验收通过')
+                logger.info(f'工单 {ticket.ticket_no} 异步任务完成后监督者验收通过（评分{score}）')
                 return True
 
             # 不通过
-            if round_no >= MAX_COLLABORATION_ROUNDS:
+            if round_no >= max_rounds:
                 MultiAgentService._finalize_processed(
                     ticket,
-                    f'（已达最大协作轮数{MAX_COLLABORATION_ROUNDS}轮，监督者最后一次反馈如下）\n\n{review_summary}',
+                    f'（已达最大协作轮数{max_rounds}轮，监督者最后一次评分{score}，反馈如下）\n\n{review_summary}',
                     result,
                     force=True,
                 )
@@ -636,17 +669,19 @@ class MultiAgentService:
                         MultiAgentService._finalize_processed(ticket, result.get('final_content', ''), result)
                         return
 
-                    approved, feedback2, review_summary = MultiAgentService._supervisor_review(ticket, supervisor, result)
+                    approved, feedback2, review_summary, score = MultiAgentService._supervisor_review(ticket, supervisor, result)
                     MultiAgentService._log_collaboration(ticket, 'supervisor', supervisor.name, {
-                        'approved': approved, 'feedback': feedback2, 'summary': review_summary,
+                        'approved': approved, 'feedback': feedback2, 'summary': review_summary, 'score': score,
                     })
+                    ticket.final_score = score
 
                     if approved:
                         MultiAgentService._finalize_processed(ticket, review_summary, result)
-                    elif (ticket.collaboration_rounds or 0) >= MAX_COLLABORATION_ROUNDS:
+                    elif (ticket.collaboration_rounds or 0) >= MultiAgentService._get_max_rounds(ticket):
+                        max_rounds = MultiAgentService._get_max_rounds(ticket)
                         MultiAgentService._finalize_processed(
                             ticket,
-                            f'（已达最大协作轮数{MAX_COLLABORATION_ROUNDS}轮，监督者最后一次反馈如下）\n\n{review_summary}',
+                            f'（已达最大协作轮数{max_rounds}轮，监督者最后一次评分{score}，反馈如下）\n\n{review_summary}',
                             result,
                             force=True,
                         )
@@ -718,6 +753,8 @@ class MultiAgentService:
             if isinstance(result, dict):
                 entry['approved'] = bool(result.get('approved'))
                 entry['summary'] = (result.get('summary') or '')[:500]
+                if result.get('score') is not None:
+                    entry['score'] = result.get('score')
         ticket.append_collaboration_log(entry)
 
     @staticmethod

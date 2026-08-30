@@ -82,6 +82,18 @@ def _generate_ticket_no():
     return f'TK{today}{(count + 1):04d}'
 
 
+def _parse_max_collaboration_rounds(data):
+    """解析并校验工单级最大协作轮数（合法范围1-20，非法/未提供返回 None 表示用默认3）"""
+    raw = data.get('max_collaboration_rounds')
+    if raw is None or raw == '':
+        return None
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return v if 1 <= v <= 20 else None
+
+
 def _can_access(ticket, user):
     """用户是否有权访问该工单"""
     if not user:
@@ -1283,6 +1295,7 @@ def create_ticket():
     assignee_id = None
     assignee_agent_id = None
     supervisor_agent_id = None
+    max_collaboration_rounds = None
 
     if assignee_type == 'ai':
         # 指派给AI
@@ -1327,6 +1340,9 @@ def create_ticket():
                 sup = AiAgent.query.get(supervisor_agent_id)
                 if not sup or not sup.is_active:
                     supervisor_agent_id = None
+
+        # 最大协作轮数（多agent协作，可选，默认3）
+        max_collaboration_rounds = _parse_max_collaboration_rounds(data)
     else:
         # 指派给具体用户
         assignee_id = data.get('assignee_id')
@@ -1350,6 +1366,7 @@ def create_ticket():
         assignee_id=assignee_id,
         assignee_agent_id=assignee_agent_id,
         supervisor_agent_id=supervisor_agent_id,
+        max_collaboration_rounds=max_collaboration_rounds or 3,
         created_by=current_user.id,
         status=STATUS_DRAFT if is_draft else STATUS_SUBMITTED,
         is_draft=is_draft,
@@ -1417,6 +1434,7 @@ def update_draft(ticket_id):
     assignee_id = None
     assignee_agent_id = None
     supervisor_agent_id = None
+    max_collaboration_rounds = None
     current_user = get_current_user()
 
     if assignee_type == 'ai':
@@ -1452,6 +1470,9 @@ def update_draft(ticket_id):
                 sup = AiAgent.query.get(supervisor_agent_id)
                 if not sup or not sup.is_active:
                     supervisor_agent_id = None
+
+        # 最大协作轮数（多agent协作，可选，默认3）
+        max_collaboration_rounds = _parse_max_collaboration_rounds(data)
     else:
         assignee_id = data.get('assignee_id')
         if assignee_id:
@@ -1470,6 +1491,7 @@ def update_draft(ticket_id):
     ticket.assignee_id = assignee_id
     ticket.assignee_agent_id = assignee_agent_id
     ticket.supervisor_agent_id = supervisor_agent_id
+    ticket.max_collaboration_rounds = max_collaboration_rounds or 3
 
     # 关联附件
     attachment_ids = data.get('attachment_ids') or []
@@ -1669,10 +1691,14 @@ def update_status(ticket_id):
                     if not sup or not sup.is_active:
                         new_supervisor_agent_id = None
 
+            # 最大协作轮数（多agent协作，可选，默认3）
+            new_max_collaboration_rounds = _parse_max_collaboration_rounds(data)
+
             ticket.assignee_type = 'ai'
             ticket.assignee_id = None
             ticket.assignee_agent_id = new_assignee_agent_id
             ticket.supervisor_agent_id = new_supervisor_agent_id
+            ticket.max_collaboration_rounds = new_max_collaboration_rounds or 3
         else:
             if not new_assignee_id:
                 return jsonify({'success': False, 'message': '请选择新的指派人'}), 400
@@ -1687,6 +1713,7 @@ def update_status(ticket_id):
             ticket.assignee_id = new_assignee_id
             ticket.assignee_agent_id = None
             ticket.supervisor_agent_id = None
+            ticket.max_collaboration_rounds = 3
 
         ticket.status = STATUS_SUBMITTED
         ticket.submitted_at = now
@@ -1701,6 +1728,7 @@ def update_status(ticket_id):
         # 重置多agent协作状态
         ticket.collaboration_rounds = 0
         ticket.collaboration_log = None
+        ticket.final_score = None
 
         if action == 'reassign':
             action_msg = '提交人重新指派了工单'

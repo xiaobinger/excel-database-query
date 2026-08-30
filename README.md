@@ -28,7 +28,7 @@
 - 用户行为追踪与自主学习
 - AI技能管理（系统/用户/自动学习）
 - AI对话（Markdown渲染）
-- **多Agent协作**：工单指派给AI时可配置监督者Agent，执行者Agent负责执行工单任务，监督者Agent审查执行结果是否满足要求，不满足则反馈返工，循环协作直到验收通过（默认最多3轮）
+- **多Agent协作**：工单指派给AI时可配置监督者Agent，执行者Agent负责执行工单任务，监督者Agent审查执行结果是否满足要求并打分（0-100），不满足则反馈返工，循环协作直到验收通过（协作轮数工单级可配置，默认3轮）
 - **Headroom上下文压缩**：智能识别内容类型（JSON/日志/代码/文本），应用针对性压缩策略，节省60-95%输入token；支持按模型独立启用，实时展示压缩率和节省token统计
 
 ### 代付流程编排
@@ -345,9 +345,11 @@ WHERE merchant_id = :value
 **协作机制**：
 - **执行者Agent**：工单的 assignee_agent，负责调用系统工具（导出/查询/系统任务/信息查询/分润/代付等）实际处理工单
 - **监督者Agent**：工单的 supervisor_agent_id，不调用工具，纯审查执行者的处理结果是否真正执行了任务、结果是否满足提交人要求
-- **循环协作**：执行者执行一轮 → 监督者审查 → 验收通过则完结 / 不通过则反馈给执行者重新处理（默认最多3轮，超过则强制完结并注明未完全验收）
+- **循环协作**：执行者执行一轮 → 监督者审查 → 验收通过则完结 / 不通过则反馈给执行者重新处理，直到验收通过或达到最大协作轮数
+- **监督者评分**：监督者审查时对执行结果质量打分（0-100分），验收通过通常不低于60分；最终评分记录在工单 `final_score`，每轮评分记录在协作日志中，工单详情页按分数着色展示（≥80绿/≥60橙黄/<60红）
+- **轮数可配置**：最大协作轮数工单级可配置（1-20轮，默认3），创建/重指派工单时可选，超过则强制完结并注明未完全验收
 - **异步任务审查**：导出/查询/分润/代付等异步任务执行完成后，同样由监督者审查执行结果
-- **协作日志**：每轮执行者与监督者的交互（角色/轮次/结论）实时记录，工单详情页以时间线形式展示
+- **协作日志**：每轮执行者与监督者的交互（角色/轮次/结论/评分）实时记录，工单详情页以时间线形式展示
 
 **Agent角色配置**：
 - Agent管理页新增「角色」字段：通用（general）/ 执行者（executor）/ 监督者（supervisor）
@@ -355,8 +357,8 @@ WHERE merchant_id = :value
 
 **技术实现**：
 - `backend/app/models/ai_agent.py`：AiAgent 新增 `agent_role` 字段
-- `backend/app/models/ticket.py`：Ticket 新增 `supervisor_agent_id` / `collaboration_rounds` / `collaboration_log` 字段及 `supervisor_agent` 关系
-- `backend/app/services/multi_agent_service.py`：新增多Agent协作编排服务（执行者工具循环 + 监督者审查 + 异步任务审查 + 轮数控制）
+- `backend/app/models/ticket.py`：Ticket 新增 `supervisor_agent_id` / `collaboration_rounds` / `collaboration_log` / `max_collaboration_rounds` / `final_score` 字段及 `supervisor_agent` 关系
+- `backend/app/services/multi_agent_service.py`：新增多Agent协作编排服务（执行者工具循环 + 监督者审查评分 + 异步任务审查 + 工单级轮数控制）
 - `backend/app/routes/ticket_routes.py`：`_process_ticket_with_ai_async` 检测到监督者时委托多Agent服务；异步回调接入监督者审查；create/update_draft/reassign 支持 `supervisor_agent_id`；`list_ai_agents` 返回 `agent_role`
 - `backend/app/routes/agent_routes.py`：create/update 支持 `agent_role`
 - 前端：`AgentManager.vue` 角色配置与展示；`TicketManager.vue` 监督者选择、协作日志时间线展示
@@ -713,7 +715,7 @@ API类型和本地脚本类型的系统任务支持**从SQL脚本动态获取参
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
-| 2026-08-30 | v2.4.0 | 工单多Agent协作（执行者+监督者）：工单指派给AI时可额外配置监督者Agent，执行者Agent执行工单任务、监督者Agent审查执行结果是否满足要求，不满足则反馈返工循环协作直到验收通过（默认最多3轮）；异步任务（导出/查询/分润/代付）完成后同样由监督者审查；Agent管理新增角色字段（通用/执行者/监督者）；工单创建/重指派支持选择监督者；工单详情展示协作日志时间线；后端新增`multi_agent_service.py`、Ticket模型新增`supervisor_agent_id`/`collaboration_rounds`/`collaboration_log`、AiAgent新增`agent_role` |
+| 2026-08-30 | v2.4.0 | 工单多Agent协作（执行者+监督者）：工单指派给AI时可额外配置监督者Agent，执行者Agent执行工单任务、监督者Agent审查执行结果是否满足要求并打分（0-100），不满足则反馈返工循环协作直到验收通过；最大协作轮数工单级可配置（1-20轮，默认3）；异步任务（导出/查询/分润/代付）完成后同样由监督者审查；Agent管理新增角色字段（通用/执行者/监督者）；工单创建/重指派支持选择监督者与轮数配置；工单详情展示监督评分与协作日志时间线；后端新增`multi_agent_service.py`、Ticket模型新增`supervisor_agent_id`/`collaboration_rounds`/`collaboration_log`/`max_collaboration_rounds`/`final_score`、AiAgent新增`agent_role` |
 | 2026-08-29 | v2.3.22 | 运营数据看板统计指标面板：图表Y轴仅选择1个数值字段时，图表区域右上角自动显示四项关键统计指标（最大值、最小值、平均值、中位数）；大数智能格式化（万/亿），等宽数字字体对齐；面板带入场滑动动画；切换Y轴字段时自动重算 |
 | 2026-08-28 | v2.3.12 | 运营数据看板崩溃根治：三层叠加问题修复——①`chartConfigs`初始空数组导致首次渲染`undefined.xCol`崩溃（初始填充+`chartAt()`安全访问+`ensureChartConfigs`提前到同步段）；②渲染异常沿组件树冒泡破坏全站（keep-alive缓存下任何路由切换都白屏，`main.js`新增全局`errorHandler`兜底拦截）；③keep-alive下`onBeforeUnmount`永不触发的资源泄漏（新增`onDeactivated`/`onActivated`适配：切走清理`resize`监听与echarts实例、切回恢复监听并重渲染）；`setChartRef`卸载时清引用、`layoutCount`缩小时dispose多余图表实例、多处函数增加配置缺失防御 |
 | 2026-08-28 | v2.3.11 | 运营数据看板脚本统一到scripts表：废弃旧`dashboard_scripts`表，看板脚本CRUD全面切换到`scripts`表（`type='dashboard'`）；后端`dashboard_routes.py`改用`Script`模型查询/创建/更新/删除看板脚本，新增`_script_to_dashboard_dict`辅助函数保持前端字段兼容；`dashboard_service.py`种子函数改用`Script`模型；`__init__.py`启用迁移函数（自动检测并同步旧`dashboard_scripts`表数据）；前端`DataDashboard.vue`增加API调用错误处理（try/catch降级为空数组避免页面崩溃）；删除改为软删除（`is_active=False`） |

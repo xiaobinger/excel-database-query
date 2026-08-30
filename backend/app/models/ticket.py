@@ -59,6 +59,8 @@ class Ticket(db.Model):
     # 多agent协作字段
     collaboration_rounds = db.Column(db.Integer, default=0, comment='多agent协作已进行的轮数')
     collaboration_log = db.Column(db.Text, comment='多agent协作日志(JSON数组)')
+    max_collaboration_rounds = db.Column(db.Integer, default=3, comment='多agent协作最大轮数(工单级可配置)')
+    final_score = db.Column(db.Integer, comment='监督者最终评分(0-100)')
 
     submitted_at = db.Column(db.DateTime, comment='提交时间')
     received_at = db.Column(db.DateTime, comment='接收时间')
@@ -194,6 +196,8 @@ class Ticket(db.Model):
             'is_draft': bool(self.is_draft),
             'collaboration_rounds': self.collaboration_rounds or 0,
             'collaboration_log': self.get_collaboration_log(),
+            'max_collaboration_rounds': self.max_collaboration_rounds if self.max_collaboration_rounds else 3,
+            'final_score': self.final_score,
         }
         if include_comments:
             data['comments'] = [c.to_dict() for c in (self.comments or [])]
