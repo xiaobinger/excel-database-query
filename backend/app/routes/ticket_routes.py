@@ -1109,6 +1109,7 @@ def _execute_pending_action_async(ticket_id, app):
             if all_success:
                 ticket.status = STATUS_PROCESSED
                 ticket.processed_at = datetime.utcnow()
+                ticket.last_activity_at = datetime.utcnow()
                 ticket.ai_result = f'✅ 全部{len(tasks)}个数据变更任务执行成功\n\n{results_text}'
                 ticket.clear_pending_action()
                 _add_comment(ticket, None, ticket.ai_result, 'ai_process', is_ai=True)
@@ -1122,6 +1123,14 @@ def _execute_pending_action_async(ticket_id, app):
 
             db.session.commit()
             logger.info(f'工单 {ticket.ticket_no} 待确认任务执行完成，结果: {"全部成功" if all_success else "失败"}')
+
+            # 触发监督者自动验收（如授权）
+            if all_success and ticket.supervisor_agent_id:
+                try:
+                    from app.services.supervisor_monitor import trigger_auto_close
+                    trigger_auto_close(ticket.id, app)
+                except Exception as e:
+                    logger.warning(f'触发监督者自动验收失败: {e}')
 
         except Exception as e:
             logger.error(f'工单待确认任务执行失败 ticket_id={ticket_id}: {e}', exc_info=True)
