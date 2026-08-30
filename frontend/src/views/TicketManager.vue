@@ -542,6 +542,17 @@
           <span>重新指派后工单将重新进入「已提交」状态。</span>
         </div>
 
+        <!-- 工单内容 -->
+        <div class="form-section">
+          <div class="form-section-title"><i class="fas fa-file-alt"></i> 工单内容</div>
+          <el-form-item label="标题">
+            <el-input v-model="reassignForm.title" placeholder="工单标题" maxlength="100" show-word-limit />
+          </el-form-item>
+          <el-form-item label="内容详情">
+            <MarkdownEditor v-model="reassignForm.content" :upload-fn="uploadAttachment" placeholder="工单内容（支持Markdown）" :height="160" />
+          </el-form-item>
+        </div>
+
         <!-- 指派设置 -->
         <div class="form-section">
           <div class="form-section-title"><i class="fas fa-user-tag"></i> 指派设置</div>
@@ -1312,7 +1323,7 @@ async function submitReason() {
 
 // 重新指派/重新发起 对话框
 const reassignVisible = ref(false)
-const reassignForm = ref({ assignee_type: 'user', assignee_id: null, assignee_agent_id: null, supervisor_agent_id: null })
+const reassignForm = ref({ title: '', content: '', assignee_type: 'user', assignee_id: null, assignee_agent_id: null, supervisor_agent_id: null })
 const reassignAction = ref('reassign')
 
 const reassignDialogTitle = computed(() => {
@@ -1323,9 +1334,11 @@ const reassignDialogTitle = computed(() => {
 
 async function openReassignDialog(action = 'reassign') {
   reassignAction.value = action
-  // 默认填充当前指派信息，方便用户修改
+  // 默认填充当前工单信息，方便用户修改
   const cur = detailData.value
   reassignForm.value = {
+    title: cur.title || '',
+    content: cur.content || '',
     assignee_type: cur.assignee_type || 'user',
     assignee_id: cur.assignee_type !== 'ai' ? cur.assignee_id : null,
     assignee_agent_id: cur.assignee_type === 'ai' ? cur.assignee_agent_id : null,

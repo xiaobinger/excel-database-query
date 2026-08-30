@@ -1749,6 +1749,23 @@ def update_status(ticket_id):
         ticket.collaboration_log = None
         ticket.final_score = None
 
+        # 更新工单标题和内容（如果有提供），并记录修改历史
+        new_title = (data.get('title') or '').strip()
+        new_content = (data.get('content') or '').strip()
+        changes = []
+        if new_title and new_title != (ticket.title or ''):
+            changes.append(f'**标题**：\n- 旧：{ticket.title or "（空）"}\n- 新：{new_title}')
+            ticket.title = new_title
+        if new_content and new_content != (ticket.content or ''):
+            # 内容较长时截断显示
+            old_preview = (ticket.content or '')[:200] + ('...' if len(ticket.content or '') > 200 else '')
+            new_preview = new_content[:200] + ('...' if len(new_content) > 200 else '')
+            changes.append(f'**内容**已更新（{len(ticket.content or "")}字 → {len(new_content)}字）')
+            ticket.content = new_content
+        if changes:
+            change_log = '\n\n'.join(changes)
+            _add_comment(ticket, current_user.id, f'📝 工单内容已修改：\n\n{change_log}', 'status_change')
+
         if action == 'reassign':
             action_msg = '提交人重新指派了工单'
         elif action == 'transfer':
