@@ -206,9 +206,18 @@ def _do_auto_close(ticket_id, app):
     prompt = (
         '你是一个工单质量监督者（Supervisor），执行者已完成工单处理（工单状态为「已处理」），'
         '你需要最终验收并决定是否结束此工单。\n\n'
-        '## 验收输出格式（严格遵守）\n'
-        '- 如果工单处理结果满足提交人要求，应结束：回复以【验收通过，结束工单】开头，简述结论\n'
-        '- 如果工单处理结果仍有问题，不应结束：回复以【验收不通过】开头，说明原因\n\n'
+        '## 验收输出格式（严格遵守，按行输出）\n'
+        '第一行：\n'
+        '- 如果工单处理结果满足提交人要求，应结束：回复以【验收通过，结束工单】开头\n'
+        '- 如果工单处理结果仍有问题，不应结束：回复以【验收不通过】开头\n'
+        '第二行：综合评分：X（0-100整数，综合考虑执行质量、完整性、协作过程）\n'
+        '第三行起：简述验收结论或不通过原因\n\n'
+        '## 综合评分标准\n'
+        '基础分80分，根据以下因素调整：\n'
+        '- 执行完整性：所有需求数据项是否都被处理（缺失一项扣10-20分）\n'
+        '- 执行质量：任务是否成功完成、参数是否正确（错误扣20-30分）\n'
+        '- 协作效率：是否一次通过（每返工一轮扣5分，最低扣到40分）\n'
+        '- 结果可验证性：执行记录是否清晰可查（模糊扣5-10分）\n\n'
         '## 验收原则\n'
         '- 以提交人的原始需求为唯一验收标准\n'
         '- **仔细阅读执行记录**：不要简单比较任务数量，要查看每个任务的实际执行内容和参数。一个任务可能批量处理多个数据项（如一个任务包含多个SN、多个商户号等）\n'
@@ -249,27 +258,36 @@ def _do_auto_close(ticket_id, app):
 
     decision = (content or '').strip()
 
+    # 解析综合评分
+    from app.services.multi_agent_service import MultiAgentService
+    final_score = MultiAgentService._parse_score(decision)
+    if final_score is not None:
+        ticket.final_score = final_score
+        logger.info(f'工单 {ticket.ticket_no} 监督者综合评分: {final_score}')
+    
     # 放宽格式判断：检查关键词而非严格格式
     has_pass = '验收通过' in decision or '通过验收' in decision or '【通过】' in decision
     has_close = '结束工单' in decision or '自动结束' in decision or '可以结束' in decision or '应结束' in decision
     has_reject = '验收不通过' in decision or '不通过' in decision or '【不通过】' in decision or '不应结束' in decision
     
     # 调试日志
-    logger.info(f'工单 {ticket.ticket_no} 监督者验收决策: has_pass={has_pass}, has_close={has_close}, has_reject={has_reject}')
+    logger.info(f'工单 {ticket.ticket_no} 监督者验收决策: has_pass={has_pass}, has_close={has_close}, has_reject={has_reject}, score={final_score}')
     logger.info(f'工单 {ticket.ticket_no} 监督者输出前100字: {decision[:100]}')
 
     if has_pass and not has_reject:
         # 监督者验收通过（且没有明确说不通过），自动结束工单
         # "验收通过"本身就隐含应该结束
-        logger.info(f'工单 {ticket.ticket_no} 监督者验收通过，自动结束工单')
+        score_text = f'，综合评分：{final_score}分' if final_score is not None else ''
+        logger.info(f'工单 {ticket.ticket_no} 监督者验收通过{score_text}，自动结束工单')
         ticket.status = 'closed'
         ticket.closed_at = datetime.utcnow()
-        _add_comment(ticket, None, f'监督者最终验收通过，工单自动结束：{decision}', 'status_change', is_ai=True)
+        _add_comment(ticket, None, f'✅ 监督者最终验收通过{score_text}，工单自动结束\n\n{decision}', 'status_change', is_ai=True)
         db.session.commit()
     elif has_reject:
         # 监督者验收不通过，保持 processed 状态，提交者仍可手动结束
-        logger.info(f'工单 {ticket.ticket_no} 监督者验收不通过，保持已处理状态')
-        _add_comment(ticket, None, f'监督者最终验收未通过，工单保持「已处理」状态：{decision}', 'status_change', is_ai=True)
+        score_text = f'，综合评分：{final_score}分' if final_score is not None else ''
+        logger.info(f'工单 {ticket.ticket_no} 监督者验收不通过{score_text}，保持已处理状态')
+        _add_comment(ticket, None, f'❌ 监督者最终验收未通过{score_text}，工单保持「已处理」状态\n\n{decision}', 'status_change', is_ai=True)
         db.session.commit()
     else:
         # 未按格式输出，保守处理：不结束，记录监督者意见
