@@ -4,6 +4,7 @@
 1. 智能重试：检测 processing 状态超时的工单，由监督者评估是否重试
 2. 自动验收：工单变为 processed 后，由监督者自动验收并决定是否结束
 """
+import json
 import logging
 import threading
 import time
