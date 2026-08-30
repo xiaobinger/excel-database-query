@@ -112,70 +112,101 @@
     </el-card>
 
     <!-- 创建工单对话框 -->
-    <el-dialog v-model="createVisible" :title="editingDraftId ? '编辑草稿' : '提交工单'" width="780px" destroy-on-close top="5vh" :before-close="handleCreateDialogClose">
-      <el-form ref="createFormRef" :model="createForm" :rules="createRules" label-width="90px">
-        <el-form-item label="标题" prop="title">
-          <el-input v-model="createForm.title" placeholder="请输入工单标题" maxlength="100" show-word-limit />
-        </el-form-item>
-        <el-form-item label="涉及系统" prop="business_system_id">
-          <el-select v-model="createForm.business_system_id" placeholder="选择涉及的业务系统（可选）" clearable filterable style="width: 100%">
-            <el-option v-for="s in businessSystems" :key="s.id" :label="s.name" :value="s.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="指派类型" prop="assignee_type">
-          <el-radio-group v-model="createForm.assignee_type">
-            <el-radio-button label="user">指派给具体人</el-radio-button>
-            <el-radio-button label="ai">指派给AI</el-radio-button>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item v-if="createForm.assignee_type === 'user'" label="指派给" prop="assignee_id">
-          <el-select v-model="createForm.assignee_id" placeholder="选择处理人" filterable style="width: 100%">
-            <el-option v-for="u in assignees" :key="u.id" :label="u.display_name" :value="u.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-else label="AI Agent" prop="assignee_agent_id">
-          <el-select v-if="canSwitchAgent" v-model="createForm.assignee_agent_id" placeholder="选择AI Agent（留空使用默认）" clearable filterable style="width: 100%">
-            <el-option v-for="a in aiAgents" :key="a.id" :label="a.name + (a.is_default ? '（默认）' : '') + (a.agent_role === 'supervisor' ? '（监督者）' : '') + (a.agent_role === 'executor' ? '（执行者）' : '')" :value="a.id" />
-          </el-select>
-          <div v-else class="form-tip">
-            <i class="fas fa-info-circle"></i> 将指派给默认AI Agent自动处理（无切换Agent权限）
-          </div>
-          <div v-if="canSwitchAgent" class="form-tip"><i class="fas fa-info-circle"></i> 指派给AI后，AI将自动处理该工单。处理失败会转为"待指派"状态。</div>
-        </el-form-item>
-        <el-form-item v-if="createForm.assignee_type === 'ai'" label="监督者Agent">
-          <el-select v-if="canSwitchAgent" v-model="createForm.supervisor_agent_id" placeholder="选择监督者Agent（可选，监督执行结果）" clearable filterable style="width: 100%">
-            <el-option v-for="a in supervisorAgentOptions" :key="a.id" :label="a.name + (a.agent_role === 'supervisor' ? '（监督者）' : '') + (a.can_confirm_execution ? '（可自动确认）' : '')" :value="a.id" />
-          </el-select>
-          <div class="form-tip"><i class="fas fa-info-circle"></i> 配置监督者后进入多Agent协作：执行者Agent执行任务，监督者Agent审查结果是否满足要求，不满足则反馈返工，直到验收通过。</div>
-        </el-form-item>
-        <el-form-item label="工单内容" prop="content">
-          <MarkdownEditor v-model="createForm.content" :upload-fn="uploadAttachment" placeholder="详细描述工单内容，支持图片、视频和 Markdown 格式" :height="280" />
-        </el-form-item>
-        <el-form-item label="工单附件">
-          <el-upload
-            :file-list="attachmentFileList"
-            :auto-upload="true"
-            :http-request="customAttUpload"
-            :on-remove="handleAttRemove"
-            :show-file-list="true"
-            multiple
-          >
-            <el-button type="primary" plain>
-              <i class="fas fa-paperclip"></i> 上传附件
-            </el-button>
-            <template #tip>
-              <div class="el-upload__tip">支持 Excel/CSV/文本/压缩包/文档/图片，单个不超过50MB（如查询任务所需的Excel数据文件）</div>
+    <el-dialog v-model="createVisible" :title="editingDraftId ? '编辑草稿' : '提交工单'" width="800px" destroy-on-close top="5vh" :before-close="handleCreateDialogClose" class="ticket-create-dialog">
+      <el-form ref="createFormRef" :model="createForm" :rules="createRules" label-width="96px">
+        <!-- 基本信息 -->
+        <div class="form-section">
+          <div class="form-section-title"><i class="fas fa-edit"></i> 基本信息</div>
+          <el-form-item label="标题" prop="title">
+            <el-input v-model="createForm.title" placeholder="请输入工单标题" maxlength="100" show-word-limit />
+          </el-form-item>
+          <el-form-item label="涉及系统">
+            <el-select v-model="createForm.business_system_id" placeholder="选择涉及的业务系统（可选）" clearable filterable style="width: 100%">
+              <el-option v-for="s in businessSystems" :key="s.id" :label="s.name" :value="s.id" />
+            </el-select>
+          </el-form-item>
+        </div>
+
+        <!-- 指派设置 -->
+        <div class="form-section">
+          <div class="form-section-title"><i class="fas fa-user-tag"></i> 指派设置</div>
+          <el-form-item label="指派方式">
+            <el-radio-group v-model="createForm.assignee_type">
+              <el-radio-button label="user"><i class="fas fa-user"></i> 指派给具体人</el-radio-button>
+              <el-radio-button label="ai"><i class="fas fa-robot"></i> 指派给AI</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item v-if="createForm.assignee_type === 'user'" label="处理人" prop="assignee_id">
+            <el-select v-model="createForm.assignee_id" placeholder="选择处理人" filterable style="width: 100%">
+              <el-option v-for="u in assignees" :key="u.id" :label="u.display_name" :value="u.id" />
+            </el-select>
+          </el-form-item>
+          <template v-else>
+            <!-- 有切换权限：显示Agent选择 -->
+            <template v-if="canSwitchAgent">
+              <el-form-item label="执行者Agent">
+                <el-select v-model="createForm.assignee_agent_id" placeholder="选择执行者Agent（留空使用默认）" clearable filterable style="width: 100%">
+                  <el-option v-for="a in executorAgentOptions" :key="a.id" :label="a.name + (a.is_default ? '（默认）' : '')" :value="a.id" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="监督者Agent">
+                <el-select v-model="createForm.supervisor_agent_id" placeholder="选择监督者Agent（可选，监督执行结果）" clearable filterable style="width: 100%">
+                  <el-option v-for="a in supervisorAgentOptions" :key="a.id" :label="a.name + (a.can_confirm_execution ? '（可自动确认）' : '')" :value="a.id" />
+                </el-select>
+                <div class="form-tip" v-if="createForm.supervisor_agent_id"><i class="fas fa-users"></i> 已启用多Agent协作：执行者执行任务，监督者审查结果直到验收通过</div>
+              </el-form-item>
             </template>
-          </el-upload>
-        </el-form-item>
+            <!-- 无切换权限：优雅的默认指派卡片 -->
+            <div v-else class="ai-assign-card">
+              <div class="ai-assign-card-icon"><i class="fas fa-robot"></i></div>
+              <div class="ai-assign-card-body">
+                <div class="ai-assign-card-title">AI 自动处理</div>
+                <div class="ai-assign-card-desc">系统将使用默认的执行者Agent处理工单，处理失败时自动转为「待指派」状态。</div>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- 工单内容 -->
+        <div class="form-section">
+          <div class="form-section-title"><i class="fas fa-file-alt"></i> 工单内容</div>
+          <el-form-item label="内容详情" prop="content">
+            <MarkdownEditor v-model="createForm.content" :upload-fn="uploadAttachment" placeholder="详细描述工单需求，支持 Markdown 格式" :height="260" />
+          </el-form-item>
+          <el-form-item label="工单附件">
+            <div class="attachment-area">
+              <el-upload
+                :file-list="attachmentFileList"
+                :auto-upload="true"
+                :http-request="customAttUpload"
+                :on-remove="handleAttRemove"
+                :show-file-list="true"
+                multiple
+              >
+                <el-button type="primary" plain size="small">
+                  <i class="fas fa-paperclip"></i> 上传附件
+                </el-button>
+              </el-upload>
+              <div class="el-upload__tip">支持 Excel/CSV/文档/图片/压缩包，单个不超过50MB（查询任务需上传Excel数据文件）</div>
+            </div>
+          </el-form-item>
+        </div>
       </el-form>
       <template #footer>
-    <el-button @click="handleCreateCancel">取消</el-button>
-    <el-button :loading="submitting" @click="submitCreateDraft">
-      <i class="fas fa-save"></i> 暂存草稿
-    </el-button>
-    <el-button type="primary" :loading="submitting" @click="submitCreate">提交工单</el-button>
-  </template>
+        <div class="dialog-footer">
+          <div class="footer-left">
+            <el-button @click="handleCreateCancel">取消</el-button>
+          </div>
+          <div class="footer-right">
+            <el-button :loading="submitting" @click="submitCreateDraft">
+              <i class="fas fa-save"></i> 暂存草稿
+            </el-button>
+            <el-button type="primary" :loading="submitting" @click="submitCreate">
+              <i class="fas fa-paper-plane"></i> 提交工单
+            </el-button>
+          </div>
+        </div>
+      </template>
 </el-dialog>
 
     <!-- 工单详情对话框 -->
@@ -501,20 +532,27 @@
             <el-option v-for="u in assignees" :key="u.id" :label="u.display_name" :value="u.id" :disabled="reassignAction === 'transfer' && u.id === detailData.assignee_id" />
           </el-select>
         </el-form-item>
-        <el-form-item v-else label="AI Agent">
-          <el-select v-if="canSwitchAgent" v-model="reassignForm.assignee_agent_id" placeholder="选择AI Agent（留空使用默认）" clearable filterable style="width: 100%">
-            <el-option v-for="a in aiAgents" :key="a.id" :label="a.name + (a.is_default ? '（默认）' : '') + (a.agent_role === 'supervisor' ? '（监督者）' : '') + (a.agent_role === 'executor' ? '（执行者）' : '')" :value="a.id" />
-          </el-select>
-          <div v-else class="form-tip">
-            <i class="fas fa-info-circle"></i> 将指派给默认AI Agent自动处理（无切换Agent权限）
+        <template v-else>
+          <template v-if="canSwitchAgent">
+            <el-form-item label="执行者Agent">
+              <el-select v-model="reassignForm.assignee_agent_id" placeholder="选择执行者Agent（留空使用默认）" clearable filterable style="width: 100%">
+                <el-option v-for="a in reassignExecutorOptions" :key="a.id" :label="a.name + (a.is_default ? '（默认）' : '')" :value="a.id" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="监督者Agent">
+              <el-select v-model="reassignForm.supervisor_agent_id" placeholder="选择监督者Agent（可选，监督执行结果）" clearable filterable style="width: 100%">
+                <el-option v-for="a in reassignSupervisorAgentOptions" :key="a.id" :label="a.name + (a.can_confirm_execution ? '（可自动确认）' : '')" :value="a.id" />
+              </el-select>
+            </el-form-item>
+          </template>
+          <div v-else class="ai-assign-card">
+            <div class="ai-assign-card-icon"><i class="fas fa-robot"></i></div>
+            <div class="ai-assign-card-body">
+              <div class="ai-assign-card-title">AI 自动处理</div>
+              <div class="ai-assign-card-desc">系统将使用默认的执行者Agent处理工单。</div>
+            </div>
           </div>
-        </el-form-item>
-        <el-form-item v-if="reassignForm.assignee_type === 'ai'" label="监督者Agent">
-          <el-select v-if="canSwitchAgent" v-model="reassignForm.supervisor_agent_id" placeholder="选择监督者Agent（可选，监督执行结果）" clearable filterable style="width: 100%">
-            <el-option v-for="a in reassignSupervisorAgentOptions" :key="a.id" :label="a.name + (a.agent_role === 'supervisor' ? '（监督者）' : '') + (a.can_confirm_execution ? '（可自动确认）' : '')" :value="a.id" />
-          </el-select>
-          <div class="form-tip"><i class="fas fa-info-circle"></i> 配置监督者后进入多Agent协作，监督者审查执行结果直到验收通过。</div>
-        </el-form-item>
+        </template>
       </el-form>
       <template #footer>
         <el-button @click="reassignVisible = false">取消</el-button>
@@ -675,16 +713,26 @@ const businessSystems = ref([])
 const aiAgents = ref([])
 const canSwitchAgent = ref(false)
 
-// 创建工单时可选监督者：排除当前选中的执行者（监督者与执行者不能相同）
-const supervisorAgentOptions = computed(() => {
-  const executorId = createForm.value.assignee_agent_id
-  return aiAgents.value.filter(a => a.id !== executorId)
+// 创建工单时可选执行者：只显示通用和执行者角色的Agent
+const executorAgentOptions = computed(() => {
+  return aiAgents.value.filter(a => a.agent_role !== 'supervisor')
 })
 
-// 重指派时可选监督者：排除当前选中的执行者
+// 创建工单时可选监督者：只显示监督者角色，且排除当前选中的执行者
+const supervisorAgentOptions = computed(() => {
+  const executorId = createForm.value.assignee_agent_id
+  return aiAgents.value.filter(a => a.agent_role === 'supervisor' && a.id !== executorId)
+})
+
+// 重指派时可选执行者：只显示通用和执行者角色
+const reassignExecutorOptions = computed(() => {
+  return aiAgents.value.filter(a => a.agent_role !== 'supervisor')
+})
+
+// 重指派时可选监督者：只显示监督者角色，且排除当前选中的执行者
 const reassignSupervisorAgentOptions = computed(() => {
   const executorId = reassignForm.value.assignee_agent_id
-  return aiAgents.value.filter(a => a.id !== executorId)
+  return aiAgents.value.filter(a => a.agent_role === 'supervisor' && a.id !== executorId)
 })
 
 async function openCreateDialog() {
@@ -1491,6 +1539,99 @@ onUnmounted(() => {
 <style scoped>
 .ticket-manager {
   max-width: 1400px;
+}
+
+/* 创建工单对话框 - 分区样式 */
+.form-section {
+  background: #fafbfc;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  padding: 16px 20px 4px;
+  margin-bottom: 16px;
+}
+
+.form-section:last-child {
+  margin-bottom: 0;
+}
+
+.form-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.form-section-title i {
+  margin-right: 6px;
+  color: #409eff;
+}
+
+/* AI默认指派卡片（无切换权限用户） */
+.ai-assign-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  background: linear-gradient(135deg, #f0f5ff 0%, #f6f0ff 100%);
+  border: 1px solid #d9d2ec;
+  border-radius: 8px;
+  padding: 14px 18px;
+  margin-left: 96px;
+  margin-bottom: 12px;
+}
+
+.ai-assign-card-icon {
+  width: 40px;
+  height: 40px;
+  background: linear-gradient(135deg, #722ed1 0%, #9254de 100%);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.ai-assign-card-icon i {
+  color: #fff;
+  font-size: 18px;
+}
+
+.ai-assign-card-body {
+  flex: 1;
+}
+
+.ai-assign-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 4px;
+}
+
+.ai-assign-card-desc {
+  font-size: 12px;
+  color: #606266;
+  line-height: 1.5;
+}
+
+/* 附件区域 */
+.attachment-area {
+  width: 100%;
+}
+
+/* 底部按钮布局 */
+.dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.footer-left,
+.footer-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .card-header {

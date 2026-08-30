@@ -1330,6 +1330,15 @@ def create_ticket():
                 if not sup or not sup.is_active:
                     supervisor_agent_id = None
 
+        # 无切换权限用户或未指定监督者时，自动填充默认监督者Agent（如有）
+        if not supervisor_agent_id:
+            default_sup = AiAgent.query.filter_by(is_active=True, agent_role='supervisor', is_default=True).first()
+            if not default_sup:
+                default_sup = AiAgent.query.filter_by(is_active=True, agent_role='supervisor').first()
+            if default_sup and default_sup.id != assignee_agent_id:
+                supervisor_agent_id = default_sup.id
+                sup = default_sup
+
         # 最大协作轮数：自动从监督者Agent配置读取，无需用户输入
         max_collaboration_rounds = sup.max_supervisor_rounds if sup else 3
     else:
@@ -1460,6 +1469,15 @@ def update_draft(ticket_id):
                 sup = AiAgent.query.get(supervisor_agent_id)
                 if not sup or not sup.is_active:
                     supervisor_agent_id = None
+
+        # 无切换权限用户或未指定监督者时，自动填充默认监督者Agent（如有）
+        if not supervisor_agent_id:
+            default_sup = AiAgent.query.filter_by(is_active=True, agent_role='supervisor', is_default=True).first()
+            if not default_sup:
+                default_sup = AiAgent.query.filter_by(is_active=True, agent_role='supervisor').first()
+            if default_sup and default_sup.id != assignee_agent_id:
+                supervisor_agent_id = default_sup.id
+                sup = default_sup
 
         # 最大协作轮数：自动从监督者Agent配置读取
         max_collaboration_rounds = sup.max_supervisor_rounds if sup else 3
@@ -1680,6 +1698,15 @@ def update_status(ticket_id):
                     sup = AiAgent.query.get(new_supervisor_agent_id)
                     if not sup or not sup.is_active:
                         new_supervisor_agent_id = None
+
+            # 无切换权限用户或未指定监督者时，自动填充默认监督者Agent（如有）
+            if not new_supervisor_agent_id:
+                default_sup = AiAgent.query.filter_by(is_active=True, agent_role='supervisor', is_default=True).first()
+                if not default_sup:
+                    default_sup = AiAgent.query.filter_by(is_active=True, agent_role='supervisor').first()
+                if default_sup and default_sup.id != new_assignee_agent_id:
+                    new_supervisor_agent_id = default_sup.id
+                    sup = default_sup
 
             # 最大协作轮数：自动从监督者Agent配置读取
             new_max_collaboration_rounds = sup.max_supervisor_rounds if sup else 3
