@@ -160,6 +160,11 @@ def _execute_export_for_ticket(ticket, result, tool_log_text, app):
                     f'导出任务执行失败\n\n---\n**处理过程：**\n{tool_log_text}',
                     'ai_process', is_ai=True)
                 t.ai_result = '导出任务执行失败'
+            # 多agent协作：监督者审查异步任务执行结果
+            if t.supervisor_agent_id:
+                from app.services.multi_agent_service import MultiAgentService
+                if MultiAgentService.review_async_result(ticket_id, t.ai_result, app):
+                    return
             t.status = STATUS_PROCESSED
             t.processed_at = datetime.utcnow()
             _add_comment(t, None, '任务执行完成，等待提交人核实', 'status_change', is_ai=True)
@@ -226,6 +231,11 @@ def _execute_profit_share_for_ticket(ticket, result, tool_log_text, app):
                     f'分润导出任务执行失败\n\n---\n**处理过程：**\n{tool_log_text}',
                     'ai_process', is_ai=True)
                 t.ai_result = '分润导出任务执行失败'
+            # 多agent协作：监督者审查异步任务执行结果
+            if t.supervisor_agent_id:
+                from app.services.multi_agent_service import MultiAgentService
+                if MultiAgentService.review_async_result(ticket_id, t.ai_result, app):
+                    return
             t.status = STATUS_PROCESSED
             t.processed_at = datetime.utcnow()
             _add_comment(t, None, '任务执行完成，等待提交人核实', 'status_change', is_ai=True)
@@ -322,6 +332,11 @@ def _execute_query_for_ticket(ticket, result, tool_log_text, app):
                     f'查询任务执行失败：{err}\n\n---\n**处理过程：**\n{tool_log_text}',
                     'ai_process', is_ai=True)
                 t.ai_result = f'查询任务执行失败：{err}'
+            # 多agent协作：监督者审查异步任务执行结果
+            if t.supervisor_agent_id:
+                from app.services.multi_agent_service import MultiAgentService
+                if MultiAgentService.review_async_result(ticket_id, t.ai_result, app):
+                    return
             t.status = STATUS_PROCESSED
             t.processed_at = datetime.utcnow()
             _add_comment(t, None, '任务执行完成，等待提交人核实', 'status_change', is_ai=True)
@@ -386,6 +401,11 @@ def _execute_pay_withdraw_for_ticket(ticket, result, tool_log_text, app):
                     f'代付提现任务执行失败：{message}\n\n**执行日志：**\n```\n{log_text}\n```\n\n---\n**处理过程：**\n{tool_log_text}',
                     'ai_process', is_ai=True)
                 t.ai_result = f'代付提现任务执行失败：{message}'
+            # 多agent协作：监督者审查异步任务执行结果
+            if t.supervisor_agent_id:
+                from app.services.multi_agent_service import MultiAgentService
+                if MultiAgentService.review_async_result(ticket_id, t.ai_result, app):
+                    return
             t.status = STATUS_PROCESSED
             t.processed_at = datetime.utcnow()
             _add_comment(t, None, '任务执行完成，等待提交人核实', 'status_change', is_ai=True)
@@ -419,11 +439,21 @@ def _execute_pay_withdraw_for_ticket(ticket, result, tool_log_text, app):
 
 
 def _process_ticket_with_ai_async(ticket_id, app):
-    """后台线程：用AI处理工单（支持工具调用，可匹配系统的导出/查询/系统任务等）"""
+    """后台线程：用AI处理工单（支持工具调用，可匹配系统的导出/查询/系统任务等）
+
+    若工单配置了监督者Agent（supervisor_agent_id），则转交多Agent协作服务
+    （执行者Agent + 监督者Agent 循环协作，直到验收通过）。
+    """
     with app.app_context():
         try:
             ticket = Ticket.query.get(ticket_id)
             if not ticket:
+                return
+
+            # 多agent协作：配置了监督者Agent时走执行者+监督者协作流程
+            if ticket.supervisor_agent_id:
+                from app.services.multi_agent_service import MultiAgentService
+                MultiAgentService.process_ticket(ticket_id, app)
                 return
 
             # 状态改为处理中
@@ -1252,6 +1282,7 @@ def create_ticket():
     # 处理指派
     assignee_id = None
     assignee_agent_id = None
+    supervisor_agent_id = None
 
     if assignee_type == 'ai':
         # 指派给AI
@@ -1280,6 +1311,22 @@ def create_ticket():
                 assignee_agent_id = agent.id
             elif not is_draft:
                 return jsonify({'success': False, 'message': '未找到可用的AI Agent'}), 400
+
+        # 监督者Agent（多agent协作，可选）：监督执行者Agent是否执行了任务且结果满足要求
+        supervisor_agent_id = data.get('supervisor_agent_id')
+        if supervisor_agent_id:
+            try:
+                supervisor_agent_id = int(supervisor_agent_id)
+            except (TypeError, ValueError):
+                supervisor_agent_id = None
+        if supervisor_agent_id:
+            if supervisor_agent_id == assignee_agent_id:
+                # 监督者与执行者相同无意义，忽略
+                supervisor_agent_id = None
+            else:
+                sup = AiAgent.query.get(supervisor_agent_id)
+                if not sup or not sup.is_active:
+                    supervisor_agent_id = None
     else:
         # 指派给具体用户
         assignee_id = data.get('assignee_id')
@@ -1302,6 +1349,7 @@ def create_ticket():
         assignee_type=assignee_type,
         assignee_id=assignee_id,
         assignee_agent_id=assignee_agent_id,
+        supervisor_agent_id=supervisor_agent_id,
         created_by=current_user.id,
         status=STATUS_DRAFT if is_draft else STATUS_SUBMITTED,
         is_draft=is_draft,
@@ -1368,6 +1416,7 @@ def update_draft(ticket_id):
     # 处理指派
     assignee_id = None
     assignee_agent_id = None
+    supervisor_agent_id = None
     current_user = get_current_user()
 
     if assignee_type == 'ai':
@@ -1388,6 +1437,21 @@ def update_draft(ticket_id):
                 agent = AiAgent.query.filter_by(is_active=True).first()
             if agent:
                 assignee_agent_id = agent.id
+
+        # 监督者Agent（多agent协作，可选）
+        supervisor_agent_id = data.get('supervisor_agent_id')
+        if supervisor_agent_id:
+            try:
+                supervisor_agent_id = int(supervisor_agent_id)
+            except (TypeError, ValueError):
+                supervisor_agent_id = None
+        if supervisor_agent_id:
+            if supervisor_agent_id == assignee_agent_id:
+                supervisor_agent_id = None
+            else:
+                sup = AiAgent.query.get(supervisor_agent_id)
+                if not sup or not sup.is_active:
+                    supervisor_agent_id = None
     else:
         assignee_id = data.get('assignee_id')
         if assignee_id:
@@ -1405,6 +1469,7 @@ def update_draft(ticket_id):
     ticket.assignee_type = assignee_type
     ticket.assignee_id = assignee_id
     ticket.assignee_agent_id = assignee_agent_id
+    ticket.supervisor_agent_id = supervisor_agent_id
 
     # 关联附件
     attachment_ids = data.get('attachment_ids') or []
@@ -1588,9 +1653,26 @@ def update_status(ticket_id):
                     agent = AiAgent.query.filter_by(is_active=True).first()
                 if agent:
                     new_assignee_agent_id = agent.id
+
+            # 监督者Agent（多agent协作，可选）
+            new_supervisor_agent_id = data.get('supervisor_agent_id')
+            if new_supervisor_agent_id:
+                try:
+                    new_supervisor_agent_id = int(new_supervisor_agent_id)
+                except (TypeError, ValueError):
+                    new_supervisor_agent_id = None
+            if new_supervisor_agent_id:
+                if new_supervisor_agent_id == new_assignee_agent_id:
+                    new_supervisor_agent_id = None
+                else:
+                    sup = AiAgent.query.get(new_supervisor_agent_id)
+                    if not sup or not sup.is_active:
+                        new_supervisor_agent_id = None
+
             ticket.assignee_type = 'ai'
             ticket.assignee_id = None
             ticket.assignee_agent_id = new_assignee_agent_id
+            ticket.supervisor_agent_id = new_supervisor_agent_id
         else:
             if not new_assignee_id:
                 return jsonify({'success': False, 'message': '请选择新的指派人'}), 400
@@ -1604,6 +1686,7 @@ def update_status(ticket_id):
             ticket.assignee_type = 'user'
             ticket.assignee_id = new_assignee_id
             ticket.assignee_agent_id = None
+            ticket.supervisor_agent_id = None
 
         ticket.status = STATUS_SUBMITTED
         ticket.submitted_at = now
@@ -1615,6 +1698,9 @@ def update_status(ticket_id):
         # 清空上次AI处理结果和待确认任务信息
         ticket.ai_result = None
         ticket.clear_pending_action()
+        # 重置多agent协作状态
+        ticket.collaboration_rounds = 0
+        ticket.collaboration_log = None
 
         if action == 'reassign':
             action_msg = '提交人重新指派了工单'
@@ -1890,6 +1976,7 @@ def list_ai_agents():
             'id': a.id,
             'name': a.name,
             'description': a.description or '',
+            'agent_role': a.agent_role or 'general',
             'is_default': a.is_default,
         }
         for a in agents

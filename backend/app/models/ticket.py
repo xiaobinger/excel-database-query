@@ -34,6 +34,7 @@ class Ticket(db.Model):
     assignee_type = db.Column(db.String(10), default='user', nullable=False, comment='指派类型: user/ai')
     assignee_id = db.Column(db.Integer, db.ForeignKey('users.id'), comment='指派人ID(当assignee_type=user)')
     assignee_agent_id = db.Column(db.Integer, db.ForeignKey('ai_agents.id'), comment='指派AI Agent ID(当assignee_type=ai)')
+    supervisor_agent_id = db.Column(db.Integer, db.ForeignKey('ai_agents.id'), comment='监督者Agent ID(多agent协作时监督执行者Agent)')
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, comment='提交人ID')
 
     status = db.Column(db.String(20), default='submitted', nullable=False, comment='状态')
@@ -55,6 +56,10 @@ class Ticket(db.Model):
 
     is_draft = db.Column(db.Boolean, default=False, comment='是否草稿（暂存未提交）')
 
+    # 多agent协作字段
+    collaboration_rounds = db.Column(db.Integer, default=0, comment='多agent协作已进行的轮数')
+    collaboration_log = db.Column(db.Text, comment='多agent协作日志(JSON数组)')
+
     submitted_at = db.Column(db.DateTime, comment='提交时间')
     received_at = db.Column(db.DateTime, comment='接收时间')
     processed_at = db.Column(db.DateTime, comment='处理完成时间')
@@ -67,6 +72,7 @@ class Ticket(db.Model):
     creator = db.relationship('User', foreign_keys=[created_by], backref='created_tickets', lazy='joined')
     assignee = db.relationship('User', foreign_keys=[assignee_id], backref='assigned_tickets', lazy='joined')
     assignee_agent = db.relationship('AiAgent', foreign_keys=[assignee_agent_id], lazy='joined')
+    supervisor_agent = db.relationship('AiAgent', foreign_keys=[supervisor_agent_id], lazy='joined')
     business_system = db.relationship('BusinessSystem', foreign_keys=[business_system_id], lazy='joined')
     comments = db.relationship('TicketComment', backref='ticket', lazy='select', cascade='all, delete-orphan',
                                order_by='TicketComment.created_at.asc()')
@@ -89,6 +95,21 @@ class Ticket(db.Model):
     def clear_pending_action(self):
         """清空待确认执行的任务信息"""
         self.pending_action = None
+
+    def get_collaboration_log(self) -> list:
+        """获取多agent协作日志列表"""
+        if not self.collaboration_log:
+            return []
+        try:
+            return json.loads(self.collaboration_log)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    def append_collaboration_log(self, entry: dict):
+        """追加一条多agent协作日志"""
+        log = self.get_collaboration_log()
+        log.append(entry)
+        self.collaboration_log = json.dumps(log, ensure_ascii=False)
 
     def accumulate_ai_token_usage(self, usage: dict):
         """累加AI处理的token消耗指标（支持多次调用累加）
@@ -142,6 +163,8 @@ class Ticket(db.Model):
             'assignee_type': self.assignee_type or 'user',
             'assignee_id': self.assignee_id,
             'assignee_agent_id': self.assignee_agent_id,
+            'supervisor_agent_id': self.supervisor_agent_id,
+            'supervisor_agent_name': self.supervisor_agent.name if self.supervisor_agent else None,
             'assignee_name': assignee_name,
             'assignee_username': assignee_username,
             'created_by': self.created_by,
@@ -169,6 +192,8 @@ class Ticket(db.Model):
             'ai_headroom_compression_ratio': self.ai_headroom_compression_ratio or 0.0,
             'ai_models_used': json.loads(self.ai_models_used) if self.ai_models_used else [],
             'is_draft': bool(self.is_draft),
+            'collaboration_rounds': self.collaboration_rounds or 0,
+            'collaboration_log': self.get_collaboration_log(),
         }
         if include_comments:
             data['comments'] = [c.to_dict() for c in (self.comments or [])]

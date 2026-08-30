@@ -21,6 +21,13 @@
       <el-table ref="tableRef" :data="agents" stripe v-loading="loading" style="width: 100%" @selection-change="handleSelectionChange">
         <el-table-column type="selection" width="50" align="center" />
         <el-table-column prop="name" label="名称" min-width="140" show-overflow-tooltip />
+        <el-table-column label="角色" width="90" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.agent_role === 'supervisor'" type="warning" size="small">监督者</el-tag>
+            <el-tag v-else-if="row.agent_role === 'executor'" type="primary" size="small">执行者</el-tag>
+            <el-tag v-else type="info" size="small">通用</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
         <el-table-column label="启用工具" width="120" align="center">
           <template #default="{ row }">
@@ -77,6 +84,18 @@
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="form.description" type="textarea" :rows="2" placeholder="描述此Agent的功能和用途" />
+        </el-form-item>
+        <el-form-item label="角色">
+          <div style="width: 100%">
+            <el-radio-group v-model="form.agent_role">
+              <el-radio-button label="general">通用</el-radio-button>
+              <el-radio-button label="executor">执行者</el-radio-button>
+              <el-radio-button label="supervisor">监督者</el-radio-button>
+            </el-radio-group>
+            <div style="font-size: 12px; color: #999; line-height: 1.4; margin-top: 4px;">
+              通用：独立处理工单/对话；执行者：多Agent协作中负责执行工单任务；监督者：多Agent协作中负责审查执行者的处理结果是否满足要求
+            </div>
+          </div>
         </el-form-item>
         <el-form-item label="系统提示词" prop="system_prompt">
           <el-input v-model="form.system_prompt" type="textarea" :rows="12" placeholder="Agent的系统提示词，定义Agent的行为规则和能力范围" />
@@ -226,6 +245,7 @@ const toolOptions = [
 const defaultForm = {
   name: '',
   description: '',
+  agent_role: 'general',
   system_prompt: '',
   enabled_tools: null,
   mcp_server_ids: [],
@@ -262,6 +282,7 @@ function openDialog(row) {
     Object.assign(form, {
       name: row.name,
       description: row.description || '',
+      agent_role: row.agent_role || 'general',
       system_prompt: row.system_prompt || '',
       enabled_tools: row.enabled_tools ? [...row.enabled_tools] : null,
       mcp_server_ids: row.mcp_server_ids ? [...row.mcp_server_ids] : [],

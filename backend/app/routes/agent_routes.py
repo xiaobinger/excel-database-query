@@ -114,6 +114,7 @@ def create_agent():
         agent = AiAgent(
             name=data['name'],
             description=data.get('description', ''),
+            agent_role=data.get('agent_role', 'general'),
             system_prompt=data['system_prompt'],
             is_default=data.get('is_default', False),
             is_active=data.get('is_active', True),
@@ -160,6 +161,8 @@ def update_agent(agent_id):
             agent.name = data['name']
         if 'description' in data:
             agent.description = data['description']
+        if 'agent_role' in data:
+            agent.agent_role = data.get('agent_role', 'general')
         if 'system_prompt' in data:
             agent.system_prompt = data['system_prompt']
         if 'is_active' in data:
