@@ -182,6 +182,7 @@ const ai = {
   batchDeleteConfigs: (ids) => http.post('/ai/configs/batch-delete', { ids }),
   deleteAllConfigs: () => http.delete('/ai/configs/all'),
   testConfig: (id) => http.post(`/ai/configs/${id}/test`),
+  getBalance: (id) => http.get(`/ai/configs/${id}/balance`),
   getSkills: (params) => http.get('/ai/skills', { params }),
   createSkill: (data) => http.post('/ai/skills', data),
   updateSkill: (id, data) => http.put(`/ai/skills/${id}`, data),

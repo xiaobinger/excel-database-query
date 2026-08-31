@@ -530,6 +530,104 @@ class AiService:
         }
 
     @staticmethod
+    def get_balance(config) -> dict:
+        """查询AI配置余额/余量
+        
+        支持的余额查询:
+        - DeepSeek: GET {base}/user/balance
+        - OpenRouter: GET https://openrouter.ai/api/v1/credits
+        - 其他提供商: 返回 unsupported 标记
+        
+        参数:
+            config: AiConfig 实例
+            
+        返回:
+            dict: {
+                'supported': bool,
+                'data': dict | None,  # 余额数据
+                'message': str        # 错误/状态信息
+            }
+        """
+        api_key = config.get_api_key()
+        if not api_key:
+            return {'supported': True, 'data': None, 'message': 'API密钥未配置'}
+
+        api_base = (config.api_base or '').rstrip('/')
+        headers = {'Authorization': f'Bearer {api_key}', 'Accept': 'application/json'}
+
+        try:
+            # DeepSeek
+            if 'deepseek.com' in api_base:
+                balance_url = f"{api_base}/user/balance"
+                resp = requests.get(balance_url, headers=headers, timeout=15)
+                resp.raise_for_status()
+                result = resp.json()
+                # 格式化显示余额
+                balance_infos = result.get('balance_infos', [])
+                formatted = []
+                for info in balance_infos:
+                    currency = info.get('currency', 'USD')
+                    total = info.get('total_balance', '0')
+                    granted = info.get('granted_balance', '0')
+                    topped = info.get('topped_up_balance', '0')
+                    formatted.append(f"{currency}: 总额 {total} (充值 {topped} + 赠送 {granted})")
+                return {
+                    'supported': True,
+                    'data': result,
+                    'message': ' | '.join(formatted) if formatted else '余额数据为空',
+                    'is_available': result.get('is_available', False),
+                }
+
+            # OpenRouter
+            elif 'openrouter.ai' in api_base:
+                credits_url = 'https://openrouter.ai/api/v1/credits'
+                resp = requests.get(credits_url, headers=headers, timeout=15)
+                resp.raise_for_status()
+                result = resp.json()
+                credits = result.get('data', [])
+                if isinstance(credits, list) and len(credits) > 0:
+                    total = sum(c.get('total', 0) for c in credits)
+                    return {
+                        'supported': True,
+                        'data': result,
+                        'message': f'OpenRouter 余额: ${total:.4f}',
+                        'is_available': True,
+                    }
+                return {'supported': True, 'data': result, 'message': '暂无可用积分', 'is_available': False}
+
+            # 其他：尝试通用 OpenAI 兼容的余额端点
+            else:
+                # OpenAI 官方余额端点 (v1)
+                openai_url = f"{api_base}/dashboard/billing/credit_grants"
+                try:
+                    resp = requests.get(openai_url, headers=headers, timeout=10)
+                    if resp.status_code == 200:
+                        result = resp.json()
+                        # 计算总可用余额
+                        grants = result.get('data', [])
+                        total_available = sum(
+                            (g.get('amount', 0) - g.get('used', 0))
+                            for g in grants if isinstance(g, dict)
+                        )
+                        return {
+                            'supported': True,
+                            'data': result,
+                            'message': f'OpenAI 余额: 总额 ${total_available:.4f}' if total_available != 0 else '余额数据已加载',
+                            'is_available': total_available > 0,
+                        }
+                except Exception:
+                    pass
+                # fallback: 不支持
+                return {'supported': False, 'data': None, 'message': '该提供商暂不支持余额查询'}
+
+        except requests.exceptions.Timeout:
+            return {'supported': True, 'data': None, 'message': '请求超时，请重试', 'is_available': None}
+        except requests.exceptions.RequestException as e:
+            return {'supported': True, 'data': None, 'message': f'请求失败: {str(e)}', 'is_available': None}
+        except Exception as e:
+            return {'supported': True, 'data': None, 'message': f'查询异常: {str(e)}', 'is_available': None}
+
+    @staticmethod
     def _find_strategy_for_scope(scope: str = None):
         """根据 scope 匹配最优策略。
         优先匹配 scope 明确包含当前场景的策略；无匹配时回退到 scope 为空的通用策略。

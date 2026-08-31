@@ -279,6 +279,21 @@ def test_config(config_id):
         return jsonify({'success': False, 'message': f'连接测试失败: {str(e)}'}), 400
 
 
+@ai_bp.route('/configs/<int:config_id>/balance', methods=['GET'])
+@permission_required('system')
+def get_config_balance(config_id):
+    config = AiConfig.query.get(config_id)
+    if not config:
+        return jsonify({'success': False, 'message': '配置不存在'}), 404
+
+    try:
+        from app.services.ai_service import AiService
+        result = AiService.get_balance(config)
+        return jsonify({'success': True, 'data': result})
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'余额查询失败: {str(e)}'}), 400
+
+
 # ============ Skills ============
 @ai_bp.route('/skills', methods=['GET'])
 @login_required

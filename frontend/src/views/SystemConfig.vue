@@ -151,6 +151,21 @@
                   <el-tag :type="row.is_active ? 'success' : 'info'" size="small">{{ row.is_active ? '启用' : '禁用' }}</el-tag>
                 </template>
               </el-table-column>
+              <el-table-column label="余额" min-width="200" align="center">
+                <template #default="{ row }">
+                  <div v-if="row.is_free" style="color: #909399; font-size: 12px">免费模型</div>
+                  <div v-else-if="balanceLoading[row.id]" style="color: #909399; font-size: 12px">
+                    <i class="fas fa-spinner fa-spin"></i> 查询中...
+                  </div>
+                  <div v-else-if="balanceData[row.id]" style="text-align: left; font-size: 12px; line-height: 1.5">
+                    <div :style="{ color: balanceData[row.id].is_available === false ? '#f56c6c' : '#67c23a' }">{{ balanceData[row.id].message }}</div>
+                  </div>
+                  <div v-else style="color: #909399; font-size: 12px">-</div>
+                  <el-button v-if="!row.is_free" size="small" type="primary" text @click="refreshBalance(row.id)" :loading="balanceLoading[row.id]" style="margin-top: 2px; padding: 2px 4px">
+                    <i class="fas fa-sync-alt" :class="{ 'fa-spin': balanceLoading[row.id] }"></i> 刷新
+                  </el-button>
+                </template>
+              </el-table-column>
               <el-table-column label="操作" width="220" align="center">
                 <template #default="{ row }">
                   <el-button size="small" type="primary" text @click="openAiConfigDialog(row)">
@@ -771,6 +786,8 @@ const testingAi = ref(null)
 const aiConfigFormRef = ref(null)
 const tableRef = ref(null)
 const selectedRows = ref([])
+const balanceData = ref({})
+const balanceLoading = ref({})
 
 // ============ 代付配置 ============
 const payConfigs = ref([])
@@ -1058,6 +1075,23 @@ async function testAiConfig(id) {
     ElMessage.error('连接测试失败')
   } finally {
     testingAi.value = null
+  }
+}
+
+async function refreshBalance(id) {
+  balanceLoading.value = { ...balanceLoading.value, [id]: true }
+  try {
+    const res = await api.ai.getBalance(id)
+    if (res.success && res.data) {
+      balanceData.value = { ...balanceData.value, [id]: res.data }
+      if (!res.data.supported) {
+        ElMessage.info(res.data.message || '该提供商暂不支持余额查询')
+      }
+    }
+  } catch {
+    ElMessage.warning('余额查询失败，请稍后重试')
+  } finally {
+    balanceLoading.value = { ...balanceLoading.value, [id]: false }
   }
 }
 
