@@ -151,19 +151,27 @@
                   <el-tag :type="row.is_active ? 'success' : 'info'" size="small">{{ row.is_active ? '启用' : '禁用' }}</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="余额" min-width="200" align="center">
+              <el-table-column label="余额" min-width="200" align="center" header-align="center">
                 <template #default="{ row }">
-                  <div v-if="row.is_free" style="color: #909399; font-size: 12px">免费模型</div>
-                  <div v-else-if="balanceLoading[row.id]" style="color: #909399; font-size: 12px">
-                    <i class="fas fa-spinner fa-spin"></i> 查询中...
+                  <div v-if="row.is_free" style="color: #909399; font-size: 12px; display: flex; align-items: center; justify-content: center; gap: 6px">
+                    <span>免费模型</span>
                   </div>
-                  <div v-else-if="balanceData[row.id]" style="text-align: left; font-size: 12px; line-height: 1.5">
-                    <div :style="{ color: balanceData[row.id].is_available === false ? '#f56c6c' : '#67c23a' }">{{ balanceData[row.id].message }}</div>
+                  <div v-else-if="balanceLoading[row.id]" style="color: #909399; font-size: 12px; display: flex; align-items: center; justify-content: center; gap: 6px">
+                    <i class="fas fa-spinner fa-spin"></i>
+                    <span>查询中...</span>
                   </div>
-                  <div v-else style="color: #909399; font-size: 12px">-</div>
-                  <el-button v-if="!row.is_free" size="small" type="primary" text @click="refreshBalance(row.id)" :loading="balanceLoading[row.id]" style="margin-top: 2px; padding: 2px 4px">
-                    <i class="fas fa-sync-alt" :class="{ 'fa-spin': balanceLoading[row.id] }"></i> 刷新
-                  </el-button>
+                  <div v-else-if="balanceData[row.id]" style="display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: wrap">
+                    <span :style="{ color: balanceData[row.id].is_available === false ? '#f56c6c' : '#67c23a', fontSize: '12px', lineHeight: 1.5 }">{{ balanceData[row.id].message }}</span>
+                    <el-button size="small" type="primary" text @click="refreshBalance(row.id)" :loading="balanceLoading[row.id]" style="padding: 2px 4px; margin: 0">
+                      <i class="fas fa-sync-alt" :class="{ 'fa-spin': balanceLoading[row.id] }"></i>
+                    </el-button>
+                  </div>
+                  <div v-else style="display: flex; align-items: center; justify-content: center; gap: 6px">
+                    <span style="color: #909399; font-size: 12px">-</span>
+                    <el-button size="small" type="primary" text @click="refreshBalance(row.id)" :loading="balanceLoading[row.id]" style="padding: 2px 4px; margin: 0">
+                      <i class="fas fa-sync-alt" :class="{ 'fa-spin': balanceLoading[row.id] }"></i> 刷新
+                    </el-button>
+                  </div>
                 </template>
               </el-table-column>
               <el-table-column label="操作" width="220" align="center">
