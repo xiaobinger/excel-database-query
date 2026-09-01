@@ -348,6 +348,10 @@
 <i class="fas fa-compress-alt"></i> Headroom: 0 K (压缩率 0.0%), 节省 0 K
 </span>
                 </div>
+                <!-- 对话级监督者复核标记 -->
+                <div v-if="msg._supervision && msg.role === 'assistant'" class="message-supervision" :class="{ 'supervision-flagged': msg._supervision_flagged }">
+                  <i :class="msg._supervision_flagged ? 'fas fa-exclamation-triangle' : 'fas fa-shield-alt'"></i> {{ msg._supervision }}
+                </div>
                 <!-- 重试按钮：仅AI文本消息且非流式中、非卡片类型、非临时错误消息 -->
                 <div v-if="msg.role === 'assistant' && !msg._streaming && !msg._type && msg.content.trim() && !msg._no_retry" class="message-retry">
                   <el-button text size="small" class="retry-btn" @click="retryAiMessage(msg)" :loading="msg._retrying">
@@ -1523,6 +1527,14 @@ async function reloadCurrentMessages() {
           base.tool_data = meta.tool_data
           base.content = m.content || meta.tool_data?.confirm_message || ''
         }
+        // 监督者复核标记
+        const sup = meta.supervision
+        if (sup) {
+          base._supervision_flagged = sup.verdict === 'flagged' || sup.verdict === 'flag_human'
+          base._supervision = base._supervision_flagged
+            ? ('⚠️ 监督者标记本回复需人工复核' + (sup.feedback ? '：' + sup.feedback : ''))
+            : '✓ 监督者复核通过'
+        }
       }
       return base
     })
@@ -1919,6 +1931,24 @@ async function checkAndResumeStream(chatId) {
             streamMsg._show_thinking = true
           } else if (event.type === 'content') {
             streamMsg.content += event.content
+          } else if (event.type === 'supervision') {
+            // 对话级监督者复核状态
+            if (event.status === 'reviewing') {
+              streamMsg._supervision = '监督者复核中…'
+              streamMsg._supervision_flagged = false
+            } else if (event.status === 'retry') {
+              // 监督者要求重新生成：清空已流式输出的内容，等待新回复
+              streamMsg.content = ''
+              streamMsg._thinking = ''
+              streamMsg._supervision = '监督者要求重新生成：' + (event.content || '')
+              streamMsg._supervision_flagged = false
+            } else if (event.status === 'approved') {
+              streamMsg._supervision = '✓ 监督者复核通过'
+              streamMsg._supervision_flagged = false
+            } else if (event.status === 'flagged') {
+              streamMsg._supervision = event.content || '⚠️ 监督者标记本回复需人工复核'
+              streamMsg._supervision_flagged = true
+            }
           } else if (event.type === 'done') {
             streamMsg._streaming = false
             streamMsg._thinking_done = true
@@ -2793,6 +2823,24 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
               eventCount++
               if (eventCount <= 5) {
                 console.log('[SSE] 收到content事件 #' + eventCount + ', 当前内容长度:', streamMsg.content.length)
+              }
+            } else if (event.type === 'supervision') {
+              // 对话级监督者复核状态
+              if (event.status === 'reviewing') {
+                streamMsg._supervision = '监督者复核中…'
+                streamMsg._supervision_flagged = false
+              } else if (event.status === 'retry') {
+                // 监督者要求重新生成：清空已流式输出的内容，等待新回复
+                streamMsg.content = ''
+                streamMsg._thinking = ''
+                streamMsg._supervision = '监督者要求重新生成：' + (event.content || '')
+                streamMsg._supervision_flagged = false
+              } else if (event.status === 'approved') {
+                streamMsg._supervision = '✓ 监督者复核通过'
+                streamMsg._supervision_flagged = false
+              } else if (event.status === 'flagged') {
+                streamMsg._supervision = event.content || '⚠️ 监督者标记本回复需人工复核'
+                streamMsg._supervision_flagged = true
               }
             } else if (event.type === 'tool_results') {
               // 处理工具调用结果（渲染为卡片）
@@ -4964,6 +5012,27 @@ onActivated(() => {
 .message-meta i {
   margin-right: 3px;
   font-size: 10px;
+}
+
+.message-supervision {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  background: rgba(64, 158, 255, 0.1);
+  color: #409eff;
+}
+
+.message-supervision.supervision-flagged {
+  background: rgba(245, 108, 108, 0.1);
+  color: #f56c6c;
+}
+
+.message-supervision i {
+  font-size: 12px;
 }
 
 .cache-info {
