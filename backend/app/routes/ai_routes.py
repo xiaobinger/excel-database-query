@@ -4,6 +4,7 @@ import os
 import threading
 import time
 import uuid
+from datetime import datetime
 from flask import Blueprint, request, jsonify, Response, stream_with_context, current_app
 from app import db
 from app.models.ai_config import AiConfig
@@ -36,6 +37,58 @@ TICKET_FALLBACK_RULE = (
 _active_streams = {}
 # 已完成流式请求缓存（供断线重连读取最终状态）：{chat_id: (stream_info, finished_time)}
 _finished_streams = {}
+
+
+def _summarize_tools_for_review(tool_results: list) -> str:
+    """将工具执行记录压缩成简要文本，供复核记录保存"""
+    if not tool_results:
+        return '（本次回复未调用工具）'
+    lines = []
+    for tr in tool_results[:5]:  # 最多5条
+        name = tr.get('name', '')
+        result = tr.get('result', {})
+        if isinstance(result, dict):
+            # 只保留关键信息
+            action_type = result.get('action_type', '')
+            error = result.get('error', '')
+            if error:
+                lines.append(f'- {name}: 失败({error[:100]})')
+            elif action_type:
+                lines.append(f'- {name}: {action_type}')
+            else:
+                lines.append(f'- {name}: 成功')
+        else:
+            lines.append(f'- {name}: {str(result)[:100]}')
+    return '\n'.join(lines)
+
+
+def _save_review_record(msg_id: int, review_record: dict, supervisor_agent_id: int = None):
+    """保存复核记录到消息metadata的supervision_records列表中"""
+    from app import db
+    from app.models.ai_chat import AiChatMessage
+    import json as _json
+    msg = AiChatMessage.query.get(msg_id)
+    if not msg:
+        return
+    try:
+        meta = _json.loads(msg.msg_metadata) if msg.msg_metadata else {}
+        if not isinstance(meta, dict):
+            meta = {}
+    except (_json.JSONDecodeError, TypeError):
+        meta = {}
+    # 初始化复核记录列表
+    if 'supervision_records' not in meta:
+        meta['supervision_records'] = []
+    review_record['supervisor_agent_id'] = supervisor_agent_id
+    meta['supervision_records'].append(review_record)
+    # 更新最新的复核状态
+    meta['supervision'] = {
+        'verdict': review_record['verdict'],
+        'feedback': review_record.get('feedback', ''),
+        'supervisor_agent_id': supervisor_agent_id,
+    }
+    msg.msg_metadata = _json.dumps(meta, ensure_ascii=False)
+    db.session.commit()
 
 
 def _summarize_tool_card(meta):
@@ -2769,18 +2822,34 @@ def send_message_stream(chat_id):
                     _verdict = review_response(_sup_prompt, user_message_content, full_content, tool_results_list, stream_ordered_configs, custom_rules=_custom_rules)
                     _sup_round += 1
                     logger.info(f'监督者复核结果: chat_id={chat_id}, 第{_sup_round}轮, verdict={_verdict["verdict"]}')
+                    # 构建复核记录（保存到metadata供前端查看）
+                    _review_record = {
+                        'round': _sup_round,
+                        'verdict': _verdict['verdict'],
+                        'feedback': _verdict.get('feedback', ''),
+                        'user_content': user_message_content[:500],
+                        'assistant_content': full_content[:1000],
+                        'tool_summary': _summarize_tools_for_review(tool_results_list),
+                        'custom_rules': _custom_rules,
+                        'timestamp': datetime.utcnow().isoformat(),
+                    }
                     if _verdict['verdict'] == 'approved':
-                        yield f"data: {json.dumps({'type': 'supervision', 'status': 'approved', 'content': '✓ 监督者复核通过'}, ensure_ascii=False)}\n\n"
+                        # 保存复核通过记录
+                        _save_review_record(msg_id, _review_record, _sup_id)
+                        yield f"data: {json.dumps({'type': 'supervision', 'status': 'approved', 'content': '✓ 监督者复核通过', 'review_record': _review_record}, ensure_ascii=False)}\n\n"
                         break
                     elif _verdict['verdict'] == 'flag_human':
                         mark_message(msg_id, _verdict, _sup_id)
+                        _save_review_record(msg_id, _review_record, _sup_id)
                         _fb = _verdict.get('feedback', '')
-                        yield f"data: {json.dumps({'type': 'supervision', 'status': 'flagged', 'content': f'⚠️ 监督者标记本回复需人工复核：{_fb}'}, ensure_ascii=False)}\n\n"
+                        yield f"data: {json.dumps({'type': 'supervision', 'status': 'flagged', 'content': f'⚠️ 监督者标记本回复需人工复核：{_fb}', 'review_record': _review_record}, ensure_ascii=False)}\n\n"
                         break
                     else:
                         # retry：还有轮次则重新生成，否则降级为标记人工复核
                         _sup_feedback = _verdict.get('feedback') or '请重新检查并修正回复内容。'
                         _prev_msg_id = msg_id
+                        _save_review_record(msg_id, _review_record, _sup_id)
+                        yield f"data: {json.dumps({'type': 'supervision', 'status': 'retry', 'content': _sup_feedback, 'review_record': _review_record}, ensure_ascii=False)}\n\n"
                         if _sup_round >= _sup_max_rounds:
                             mark_message(msg_id, _verdict, _sup_id)
                             yield f"data: {json.dumps({'type': 'supervision', 'status': 'flagged', 'content': f'⚠️ 监督者复核{_sup_round}轮仍未通过，已标记需人工复核：{_sup_feedback}'}, ensure_ascii=False)}\n\n"

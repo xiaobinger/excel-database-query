@@ -348,9 +348,46 @@
 <i class="fas fa-compress-alt"></i> Headroom: 0 K (压缩率 0.0%), 节省 0 K
 </span>
                 </div>
-                <!-- 对话级监督者复核标记 -->
-                <div v-if="msg._supervision && msg.role === 'assistant'" class="message-supervision" :class="{ 'supervision-flagged': msg._supervision_flagged }">
+                <!-- 对话级监督者复核标记（可点击展开查看复核详情） -->
+                <div v-if="msg._supervision && msg.role === 'assistant'" class="message-supervision" :class="{ 'supervision-flagged': msg._supervision_flagged }" @click="msg._show_review_detail = !msg._show_review_detail">
                   <i :class="msg._supervision_flagged ? 'fas fa-exclamation-triangle' : 'fas fa-shield-alt'"></i> {{ msg._supervision }}
+                  <i v-if="msg._supervision_records && msg._supervision_records.length > 0" :class="msg._show_review_detail ? 'fas fa-chevron-up' : 'fas fa-chevron-down'" class="review-toggle"></i>
+                </div>
+                <!-- 复核详情展开区域 -->
+                <div v-if="msg._show_review_detail && msg._supervision_records && msg._supervision_records.length > 0" class="review-detail-panel">
+                  <div v-for="(record, idx) in msg._supervision_records" :key="idx" class="review-record">
+                    <div class="review-record-header">
+                      <span class="review-round">第{{ record.round }}轮复核</span>
+                      <el-tag :type="record.verdict === 'approved' ? 'success' : record.verdict === 'retry' ? 'warning' : 'danger'" size="small">
+                        {{ record.verdict === 'approved' ? '通过' : record.verdict === 'retry' ? '需改正' : '需人工复核' }}
+                      </el-tag>
+                      <span v-if="record.timestamp" class="review-time">{{ formatReviewTime(record.timestamp) }}</span>
+                    </div>
+                    <div class="review-record-body">
+                      <div class="review-section">
+                        <div class="review-section-title"><i class="fas fa-comment"></i> 用户问题</div>
+                        <div class="review-section-content">{{ record.user_content }}</div>
+                      </div>
+                      <div class="review-section">
+                        <div class="review-section-title"><i class="fas fa-robot"></i> 执行者回复</div>
+                        <div class="review-section-content">{{ record.assistant_content }}</div>
+                      </div>
+                      <div v-if="record.tool_summary" class="review-section">
+                        <div class="review-section-title"><i class="fas fa-tools"></i> 工具调用记录</div>
+                        <div class="review-section-content">{{ record.tool_summary }}</div>
+                      </div>
+                      <div v-if="record.custom_rules" class="review-section">
+                        <div class="review-section-title"><i class="fas fa-list-check"></i> 自定义复核规则</div>
+                        <div class="review-section-content">{{ record.custom_rules }}</div>
+                      </div>
+                      <div class="review-section review-feedback">
+                        <div class="review-section-title"><i class="fas fa-gavel"></i> 监督者判定</div>
+                        <div class="review-section-content" :class="{ 'feedback-approved': record.verdict === 'approved', 'feedback-retry': record.verdict === 'retry', 'feedback-flagged': record.verdict === 'flag_human' }">
+                          {{ record.feedback || (record.verdict === 'approved' ? '回复质量合格，态度端正' : '需重新生成') }}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 <!-- 重试按钮：仅AI文本消息且非流式中、非卡片类型、非临时错误消息 -->
                 <div v-if="msg.role === 'assistant' && !msg._streaming && !msg._type && msg.content.trim() && !msg._no_retry" class="message-retry">
@@ -1546,6 +1583,10 @@ async function reloadCurrentMessages() {
           base._supervision = base._supervision_flagged
             ? ('⚠️ 监督者标记本回复需人工复核' + (sup.feedback ? '：' + sup.feedback : ''))
             : '✓ 监督者复核通过'
+        }
+        // 恢复复核记录
+        if (meta.supervision_records && meta.supervision_records.length > 0) {
+          base._supervision_records = meta.supervision_records
         }
       }
       return base
@@ -2867,6 +2908,11 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
               }
             } else if (event.type === 'supervision') {
               // 对话级监督者复核状态
+              // 保存复核记录
+              if (event.review_record) {
+                if (!streamMsg._supervision_records) streamMsg._supervision_records = []
+                streamMsg._supervision_records.push(event.review_record)
+              }
               if (event.status === 'reviewing') {
                 streamMsg._supervision = '监督者复核中…'
                 streamMsg._supervision_flagged = false
@@ -3041,6 +3087,14 @@ function formatMsgTime(ts) {
     && d.getDate() === now.getDate()
   if (isSameDay) return hm
   return `${d.getMonth() + 1}/${d.getDate()} ${hm}`
+}
+
+function formatReviewTime(ts) {
+  if (!ts) return ''
+  const d = new Date(ts)
+  if (isNaN(d.getTime())) return ''
+  const pad = n => String(n).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
 function renderMarkdown(text) {
@@ -5071,6 +5125,12 @@ onActivated(() => {
   font-size: 12px;
   background: rgba(64, 158, 255, 0.1);
   color: #409eff;
+  cursor: pointer;
+  user-select: none;
+}
+
+.message-supervision:hover {
+  background: rgba(64, 158, 255, 0.15);
 }
 
 .message-supervision.supervision-flagged {
@@ -5078,8 +5138,120 @@ onActivated(() => {
   color: #f56c6c;
 }
 
+.message-supervision.supervision-flagged:hover {
+  background: rgba(245, 108, 108, 0.15);
+}
+
 .message-supervision i {
   font-size: 12px;
+}
+
+.review-toggle {
+  margin-left: 4px;
+  transition: transform 0.2s;
+}
+
+/* 复核详情面板 */
+.review-detail-panel {
+  margin-top: 8px;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fafafa;
+}
+
+.review-record {
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.review-record:last-child {
+  border-bottom: none;
+}
+
+.review-record-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #f0f2f5;
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.review-round {
+  font-weight: 600;
+  font-size: 13px;
+  color: #303133;
+}
+
+.review-time {
+  margin-left: auto;
+  font-size: 12px;
+  color: #909399;
+}
+
+.review-record-body {
+  padding: 12px 14px;
+}
+
+.review-section {
+  margin-bottom: 12px;
+}
+
+.review-section:last-child {
+  margin-bottom: 0;
+}
+
+.review-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #606266;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.review-section-title i {
+  color: #909399;
+  font-size: 11px;
+}
+
+.review-section-content {
+  font-size: 13px;
+  color: #303133;
+  line-height: 1.6;
+  padding: 8px 12px;
+  background: #fff;
+  border-radius: 6px;
+  border: 1px solid #ebeef5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.review-feedback {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #e4e7ed;
+}
+
+.review-section-content.feedback-approved {
+  background: #f0f9eb;
+  border-color: #e1f3d8;
+  color: #67c23a;
+}
+
+.review-section-content.feedback-retry {
+  background: #fdf6ec;
+  border-color: #faecd8;
+  color: #e6a23c;
+}
+
+.review-section-content.feedback-flagged {
+  background: #fef0f0;
+  border-color: #fde2e2;
+  color: #f56c6c;
 }
 
 .cache-info {
