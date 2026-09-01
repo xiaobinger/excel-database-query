@@ -333,7 +333,7 @@ def get_tasks():
             task_dict['database_names'] = db_names
             tasks.append(task_dict)
         except Exception as e:
-            app.logger.error(f'处理任务 {task.task_id} (ID={task.id}) 时出错: {e}', exc_info=True)
+            current_app.logger.error(f'处理任务 {task.task_id} (ID={task.id}) 时出错: {e}', exc_info=True)
             # 即使单个任务处理失败，也返回一个基础信息，避免整个列表报错
             tasks.append(task.to_dict())
 
