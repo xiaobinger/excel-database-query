@@ -338,6 +338,25 @@ WHERE merchant_id = :value
 
 ## 近期新增功能
 
+### AI对话体验优化：模型路由静默切换 + 导出确认去重 + 监督者可见性 (v2.4.1)
+
+**模型路由切换对用户透明**：
+- 故障转移切换备用模型时，不再在对话中显示 `⚠️ 主模型调用失败，已自动切换到备用模型` 提示
+- 模型路由切换信息仅记录在后端日志中（`logger.warning`），用户无感知
+
+**导出指令不再重复出现确认框**：
+- 修复当AI在同一轮同时调用 `list_export_options` 和 `request_export` 时，界面同时出现「选项选择卡片」和「任务确认卡片」的问题
+- 新增预检机制：同一轮工具结果中如果已存在 `select_options` 选择卡片，则跳过对应 `request_*` 工具的确认卡片创建
+- 同步修复非流式路径的相同问题
+
+**监督者复核信息保留**：
+- 修复当AI回复仅包含工具卡片（无文本内容）时，监督者复核状态随空消息被移除而丢失的问题
+- 空消息移除前检查是否包含 `_supervision` 监督者复核信息，有则保留
+
+**技术实现**：
+- `backend/app/routes/ai_routes.py`：流式/非流式路径均增加 `_select_action_types` 预检逻辑；移除故障转移前端通知
+- `frontend/src/views/AiChat.vue`：`handleToolResults` 增加 `selectActionTypes` 预检；空消息移除条件增加 `_supervision` 检查
+
 ### 工单多Agent协作：执行者 + 监督者 (v2.4.0)
 
 **多Agent协作模式**：工单指派给AI时，可额外配置一个监督者Agent，由执行者Agent负责执行任务、监督者Agent审查执行结果，循环协作直到验收通过：

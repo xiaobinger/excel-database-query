@@ -2535,6 +2535,18 @@ function quickAsk(text) {
 // 处理工具调用结果（普通和流式共用）
 async function handleToolResults(toolResults) {
   if (!toolResults || toolResults.length === 0) return
+  // 预检：同一轮中如果存在 select_options 卡片（list_*工具），则跳过对应的 request_* 确认卡片
+  // 避免重复出现「选项选择」和「任务确认」两个卡片
+  const selectActionTypes = new Set()
+  for (const tr of toolResults) {
+    const r = tr.result
+    if (r && r._select_mode) {
+      if (tr.name === 'list_export_options') selectActionTypes.add('export')
+      else if (tr.name === 'list_query_options') selectActionTypes.add('query')
+      else if (tr.name === 'list_system_tasks') selectActionTypes.add('system_task')
+      else if (tr.name === 'list_lookup_options') selectActionTypes.add('lookup')
+    }
+  }
   for (const tr of toolResults) {
     const result = tr.result
     // 工单创建：成功显示已创建卡片，失败/缺失参数由AI自然语言询问用户（不创建卡片）
@@ -2645,6 +2657,11 @@ async function handleToolResults(toolResults) {
         continue
       }
       // 导出/查询/system_task：成功才显示工具卡片，失败显示错误消息
+      // 同一轮已有选择卡片时，跳过重复的确认卡片
+      if (selectActionTypes.has(result.action_type)) {
+        console.log(`跳过重复确认卡片: ${tr.name}(${result.action_type})，同轮已有select_options卡片`)
+        continue
+      }
       if (result.error) {
         messages.value.push({
           id: Date.now() + Math.random(),
@@ -2941,8 +2958,8 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
     abortController.value = null
   }
 
-  // 如果流式消息内容为空且有工具结果，移除空消息
-  if (!streamMsg.content.trim() && !streamMsg._thinking) {
+  // 如果流式消息内容为空且有工具结果，移除空消息（但保留有监督者复核信息的消息）
+  if (!streamMsg.content.trim() && !streamMsg._thinking && !streamMsg._supervision) {
     const idx = messages.value.findIndex(m => m.id === streamMsg.id)
     if (idx > -1) messages.value.splice(idx, 1)
   }

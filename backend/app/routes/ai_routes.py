@@ -1430,6 +1430,20 @@ def send_message(chat_id):
 
         # If there are tool results, save each as a message and return IDs
         if tool_results:
+            # 预检：同一轮中如果存在 select_options 卡片（list_*工具），则跳过对应的 request_* 确认卡片
+            # 避免重复出现「选项选择」和「任务确认」两个卡片
+            _select_action_types = set()
+            for tr in tool_results:
+                r = tr['result']
+                if r and r.get('_select_mode'):
+                    if tr['name'] == 'list_export_options':
+                        _select_action_types.add('export')
+                    elif tr['name'] == 'list_query_options':
+                        _select_action_types.add('query')
+                    elif tr['name'] == 'list_system_tasks':
+                        _select_action_types.add('system_task')
+                    elif tr['name'] == 'list_lookup_options':
+                        _select_action_types.add('lookup')
             saved_tool_messages = []
             for tr in tool_results:
                 result = tr['result']
@@ -1458,10 +1472,14 @@ def send_message(chat_id):
                         'result': result,
                         'message_id': tool_msg.id,
                     })
-                # 导出/查询/系统任务确认卡片（API自动执行的系统任务不创建卡片，由AI二次回复反馈）
+                # 导出/查询/系统任务确认卡片（跳过：同一轮已有对应的 select_options 卡片，避免重复）
                 elif result and not result.get('error') and result.get('action_type') in ('export', 'query', 'system_task', 'profit_share'):
                     if result.get('auto_executed'):
                         # API自动执行的系统任务，不创建确认卡片，结果由AI二次回复直接反馈
+                        saved_tool_messages.append(tr)
+                    elif result.get('action_type') in _select_action_types:
+                        # 同一轮已有选择卡片，跳过重复的确认卡片
+                        logger.info(f'跳过重复确认卡片: {tr["name"]}({result.get("action_type")})，同轮已有select_options卡片')
                         saved_tool_messages.append(tr)
                     else:
                         tool_msg = AiChatMessage(
@@ -1883,7 +1901,6 @@ def send_message_stream(chat_id):
                     }
                     if _cfg_idx > 0:
                         logger.warning(f'故障转移: 切换到备用模型 {_cfg_idx + 1}/{len(stream_ordered_configs)}: {_stream_cfg["name"]} ({config_model_name})')
-                        yield f"data: {json.dumps({'type': 'content', 'content': f'\n\n⚠️ 主模型调用失败，已自动切换到备用模型：{_stream_cfg["name"]}（{config_model_name}）\n\n'}, ensure_ascii=False)}\n\n"
                         # 恢复原始消息列表（丢弃上一次失败尝试追加的工具结果和重试提示）
                         messages[:] = _orig_messages
                         # 清空上次失败尝试的部分流式内容
@@ -2169,6 +2186,20 @@ def send_message_stream(chat_id):
                             tool_results_list.extend(current_tool_results)
 
                             # ── 2. 保存卡片消息（信息查询结果卡/任务确认卡/选项选择卡）──
+                            # 预检：同一轮中如果存在 select_options 卡片（list_*工具），则跳过对应的 request_* 确认卡片
+                            # 避免重复出现「选项选择」和「任务确认」两个卡片
+                            _select_action_types = set()
+                            for tr in current_tool_results:
+                                r = tr['result']
+                                if r and r.get('_select_mode'):
+                                    if tr['name'] == 'list_export_options':
+                                        _select_action_types.add('export')
+                                    elif tr['name'] == 'list_query_options':
+                                        _select_action_types.add('query')
+                                    elif tr['name'] == 'list_system_tasks':
+                                        _select_action_types.add('system_task')
+                                    elif tr['name'] == 'list_lookup_options':
+                                        _select_action_types.add('lookup')
                             saved_tool_messages = []
                             try:
                                 for tr in current_tool_results:
@@ -2194,10 +2225,14 @@ def send_message_stream(chat_id):
                                             'message_id': tool_msg.id,
                                         })
                                         any_card_created = True
-                                    # 导出/查询/系统任务（API自动执行的不创建卡片，由AI后续轮次反馈）
+                                    # 导出/查询/系统任务确认卡片（跳过：同一轮已有对应的 select_options 卡片，避免重复）
                                     elif result and not result.get('error') and result.get('action_type') in ('export', 'query', 'system_task', 'profit_share'):
                                         if result.get('auto_executed'):
                                             # API自动执行的系统任务，不创建确认卡片
+                                            saved_tool_messages.append(tr)
+                                        elif result.get('action_type') in _select_action_types:
+                                            # 同一轮已有选择卡片，跳过重复的确认卡片
+                                            logger.info(f'跳过重复确认卡片: {tr["name"]}({result.get("action_type")})，同轮已有select_options卡片')
                                             saved_tool_messages.append(tr)
                                         else:
                                             tool_msg = AiChatMessage(
