@@ -23,14 +23,30 @@ TICKET_FALLBACK_RULE = (
     '- 当用户的请求不属于任何可用工具的能力范围（导出/查询/系统任务/信息查询/分润导出），'
     '或者调用了工具但未找到匹配项（返回total=0或error），或者任务执行失败时，'
     '必须主动询问用户是否要将此需求转化为工单交由人工处理。\n'
-    '- 例如回复："我目前无法直接处理这个请求，是否需要为您创建一个工单，由相关人员来处理？"\n'
+    '- 例如回复：“我目前无法直接处理这个请求，是否需要为您创建一个工单，由相关人员来处理？”\n'
     '- 用户同意后，调用create_ticket工具创建工单，工单内容根据用户原始指令生成。\n'
     '- 重要：创建工单时，以下两项必须由用户明确指定，不能默认填值：\n'
-    '  1. 指派对象：只有用户明确说出"指派给AI"、"让AI处理"等表述时才传assignee_type=ai；'
+    '  1. 指派对象：只有用户明确说出“指派给AI”、“让AI处理”等表述时才传assignee_type=ai；'
     '用户给出具体人名时传assignee_type=user并填assignee_name。如果用户没有明确说明指派给谁，不要填写assignee_type字段，系统会返回询问提示。\n'
-    '  2. 涉及的业务系统：用户必须明确指出涉及的系统名称（如"海科系统"填"海科"）。'
-    '如果用户没有说明涉及的系统，不要填写business_system_name字段，系统会返回询问提示。用户回复"不涉及"时填business_system_name="不涉及"。\n'
-    '- 不要直接回复"无法处理"、"我不支持这个功能"等就结束对话，必须给出转工单的选项。'
+    '  2. 涉及的业务系统：用户必须明确指出涉及的系统名称（如“海科系统”填“海科”）。'
+    '如果用户没有说明涉及的系统，不要填写business_system_name字段，系统会返回询问提示。用户回复“不涉及”时填business_system_name=“不涉及”。\n'
+    '- 不要直接回复“无法处理”、“我不支持这个功能”等就结束对话，必须给出转工单的选项。'
+)
+
+# SKILLS/规则自动保存规则
+SKILLS_SAVE_RULE = (
+    '## SKILLS/规则自动保存（必须遵守）\n'
+    '- 当用户明确要求“提炼SKILLS”、“记住这个规则”、“保存这个知识”、“记住这个偏好”、'
+    '“下次也要这样”、“以后按这个来”等表述时，必须立即调用save_skill工具保存。\n'
+    '- 当用户在对话中表达了一个有价值的规则、经验、注意事项、操作规范时，'
+    '即使用户没有明确说“记住”，也应该主动询问是否需要保存为SKILLS。\n'
+    '- 保存时要求：\n'
+    '  1. name：简明扼要的技能名称\n'
+    '  2. category：根据内容分类（规则/偏好/知识/查询/导出等）\n'
+    '  3. description：一句话概括\n'
+    '  4. content：完整的规则内容，保留所有关键细节\n'
+    '- 保存成功后，告知用户“已保存，下次对话自动生效”。\n'
+    '- 重要：不要遗漏用户的任何规则要求，宁可多保存也不要漏掉。'
 )
 
 # 活跃流式请求跟踪：{chat_id: {'aborted': bool, 'request_id': str, 'content': str, ...}}
@@ -1049,15 +1065,15 @@ def send_message(chat_id):
         
         if agent and agent.system_prompt:
             # 使用Agent的系统提示词，并附加上下文
-            sys_prompt = context + '\n\n' + agent.system_prompt + '\n\n' + TICKET_FALLBACK_RULE
+            sys_prompt = context + '\n\n' + agent.system_prompt + '\n\n' + TICKET_FALLBACK_RULE + '\n\n' + SKILLS_SAVE_RULE
             messages.append({'role': 'system', 'content': sys_prompt})
         elif ai_config.system_prompt:
-            messages.append({'role': 'system', 'content': ai_config.system_prompt + '\n\n' + TICKET_FALLBACK_RULE})
+            messages.append({'role': 'system', 'content': ai_config.system_prompt + '\n\n' + TICKET_FALLBACK_RULE + '\n\n' + SKILLS_SAVE_RULE})
         else:
             # 使用默认Agent的提示词
             default_agent = AiAgent.query.filter_by(is_default=True, is_active=True).first()
             if default_agent and default_agent.system_prompt:
-                sys_prompt = context + '\n\n' + default_agent.system_prompt + '\n\n' + TICKET_FALLBACK_RULE
+                sys_prompt = context + '\n\n' + default_agent.system_prompt + '\n\n' + TICKET_FALLBACK_RULE + '\n\n' + SKILLS_SAVE_RULE
                 messages.append({'role': 'system', 'content': sys_prompt})
             else:
                 # 最后的fallback：硬编码的默认提示词
@@ -1092,7 +1108,7 @@ def send_message(chat_id):
                     '- 如果用户提供了参数值，务必在调用工具时传入正确的参数\n' \
                     '- 如果缺少必填参数，在回复中向用户询问\n' \
                     '- 当用户上传文件时，消息中会包含文件信息（行数和列名），根据列名自动匹配最合适的查询或导出选项\n' \
-                    + TICKET_FALLBACK_RULE
+                    + TICKET_FALLBACK_RULE + '\n\n' + SKILLS_SAVE_RULE
                 messages.append({'role': 'system', 'content': sys_prompt})
 
         # 按上下文窗口自适应截断历史：从最新往前保留，直到token预算耗尽
@@ -1801,15 +1817,15 @@ def send_message_stream(chat_id):
         
         if agent and agent.system_prompt:
             # 使用Agent的系统提示词，并附加上下文
-            sys_prompt = context + '\n\n' + agent.system_prompt + '\n\n' + TICKET_FALLBACK_RULE
+            sys_prompt = context + '\n\n' + agent.system_prompt + '\n\n' + TICKET_FALLBACK_RULE + '\n\n' + SKILLS_SAVE_RULE
             messages.append({'role': 'system', 'content': sys_prompt})
         elif ai_config.system_prompt:
-            messages.append({'role': 'system', 'content': ai_config.system_prompt + '\n\n' + TICKET_FALLBACK_RULE})
+            messages.append({'role': 'system', 'content': ai_config.system_prompt + '\n\n' + TICKET_FALLBACK_RULE + '\n\n' + SKILLS_SAVE_RULE})
         else:
             # 使用默认Agent的提示词
             default_agent = AiAgent.query.filter_by(is_default=True, is_active=True).first()
             if default_agent and default_agent.system_prompt:
-                sys_prompt = context + '\n\n' + default_agent.system_prompt + '\n\n' + TICKET_FALLBACK_RULE
+                sys_prompt = context + '\n\n' + default_agent.system_prompt + '\n\n' + TICKET_FALLBACK_RULE + '\n\n' + SKILLS_SAVE_RULE
                 messages.append({'role': 'system', 'content': sys_prompt})
             else:
                 # 最后的fallback：硬编码的默认提示词
@@ -1825,7 +1841,7 @@ def send_message_stream(chat_id):
                     '- 重要：API类型的系统任务参数齐全时会自动执行并返回结果（包含mapping_summary映射摘要），请直接根据映射摘要用自然语言告诉用户执行结果\n' \
                     '- 重要：如果用户同时要求对多个对象执行同样的API系统任务（如"解绑SN001、SN002、SN003"），请在同一次回复中同时调用多个 request_system_task，每个调用对应一个对象，系统会自动并行执行，你只需汇总所有结果用列表形式反馈给用户\n' \
                     '- 重要：调用 list_lookup_options 时，如果用户提供了具体的参数值（如SN号、商户号等），务必同时传入 params 参数，这样当匹配到唯一查询时系统可以自动执行，大幅加快响应速度\n' \
-                    + TICKET_FALLBACK_RULE
+                    + TICKET_FALLBACK_RULE + '\n\n' + SKILLS_SAVE_RULE
                 messages.append({'role': 'system', 'content': sys_prompt})
 
         # 按上下文窗口自适应截断历史：从最新往前保留，直到token预算耗尽

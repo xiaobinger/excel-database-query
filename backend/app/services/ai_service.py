@@ -451,6 +451,35 @@ AI_TOOLS = [
                 "required": ["channel", "interface_type", "environment", "file_path", "description"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_skill",
+            "description": "当用户要求提炼SKILLS、记住某规则、保存某知识、记住某偏好时调用此工具。将用户的要求保存为可复用的技能/规则，下次对话时会自动注入上下文。重要：1、必须从用户描述中提取技能名称、分类、内容；2、如果用户说的是规则/偏好，category填'规则'；3、content应包含完整的规则/知识内容，不要遗漏关键信息；4、同名技能会自动更新而非重复创建",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "技能/规则名称，简明扼要，如'导出日期格式规范'、'商户查询注意事项'"
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "分类，如'规则'、'偏好'、'知识'、'查询'、'导出'"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "技能/规则的简要描述，一句话概括"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "完整的技能/规则内容，保留所有关键细节"
+                    }
+                },
+                "required": ["name", "description", "content"]
+            }
+        }
     }
 ]
 
@@ -1069,6 +1098,8 @@ class AiService:
             return AiService._tool_list_pay_channels(args, user_id)
         elif tool_name == 'request_pay_withdraw':
             return AiService._tool_request_pay_withdraw(args, user_id)
+        elif tool_name == 'save_skill':
+            return AiService._tool_save_skill(args, user_id)
         else:
             return {'error': f'未知工具: {tool_name}'}
 
@@ -2487,6 +2518,68 @@ AI回复：{ai_response[:500] if ai_response else ''}
             )
 
         return result
+
+    @staticmethod
+    def _tool_save_skill(args: dict, user_id: int = None) -> dict:
+        """保存用户要求的SKILLS/规则"""
+        from app.models.ai_skill import AiSkill
+        from app import db
+        
+        name = args.get('name', '')
+        category = args.get('category', '规则')
+        description = args.get('description', '')
+        content = args.get('content', '')
+        
+        if not name or not content:
+            return {'error': '技能名称和内容不能为空'}
+        
+        if not user_id:
+            return {'error': '未登录用户无法保存技能'}
+        
+        try:
+            # 检查是否已存在同名技能（同一用户）
+            existing = AiSkill.query.filter_by(
+                user_id=user_id,
+                name=name,
+                skill_type='user'
+            ).first()
+            
+            if existing:
+                # 更新现有技能
+                existing.category = category
+                existing.description = description
+                existing.content = content
+                skill_id = existing.id
+                action = 'updated'
+            else:
+                # 创建新技能
+                skill = AiSkill(
+                    name=name,
+                    skill_type='user',
+                    category=category,
+                    description=description,
+                    content=content,
+                    user_id=user_id,
+                    source='chat',
+                    is_active=True,
+                )
+                db.session.add(skill)
+                db.session.flush()
+                skill_id = skill.id
+                action = 'created'
+            
+            db.session.commit()
+            logger.info(f'技能{action}: id={skill_id}, name={name}, user_id={user_id}')
+            return {
+                'success': True,
+                'skill_id': skill_id,
+                'action': action,
+                'message': f'技能「{name}」已{action}，下次对话时会自动生效'
+            }
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f'保存技能失败: {e}')
+            return {'error': f'保存技能失败: {str(e)}'}
 
     @staticmethod
     def _tool_fetch_url(args: dict) -> dict:
