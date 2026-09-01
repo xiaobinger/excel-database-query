@@ -338,6 +338,33 @@ WHERE merchant_id = :value
 
 ## 近期新增功能
 
+### 支持自定义复核规则 (v2.4.7)
+
+**功能说明**：
+- 执行者Agent开启对话复核后，可配置自定义复核规则
+- 监督者复核时会严格按照自定义规则评估执行者回复
+- 不填写则使用系统默认规则（准确性+态度评估）
+
+**使用方式**：
+1. 编辑执行者Agent → 开启对话复核
+2. 填写复核规则，例如：
+   ```
+   1. 评估回复态度是否谦逊、专业，装逼飘了要鞭答改正
+   2. 检查是否完整回答了用户问题，有无遗漏
+   3. 验证数据是否与工具执行结果一致，严禁编造
+   ```
+3. 监督者复核时会严格按照自定义规则评估
+
+**数据库迁移**：
+- `ai_agents` 表新增 `review_rules` 字段（TEXT）
+
+**技术实现**：
+- `backend/app/models/ai_agent.py`：新增 `review_rules` 字段
+- `backend/app/routes/agent_routes.py`：创建/更新Agent时处理 `review_rules`
+- `backend/app/services/chat_supervisor.py`：`review_response` 函数新增 `custom_rules` 参数，复核时注入自定义规则
+- `backend/app/routes/ai_routes.py`：调用 `review_response` 时传入执行者Agent的 `review_rules`
+- `frontend/src/views/AgentManager.vue`：开启对话复核后显示复核规则文本框
+
 ### 监督者复核改为Agent级别配置 (v2.4.6)
 
 **配置方式**：
