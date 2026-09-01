@@ -2674,6 +2674,15 @@ async function handleToolResults(toolResults) {
         console.log(`跳过重复确认卡片: ${tr.name}(${result.action_type})，同轮已有select_options卡片`)
         continue
       }
+      // 监督者已自动执行，不创建确认卡片，显示简短结果
+      if (result._supervisor_auto_executed) {
+        messages.value.push({
+          id: tr.message_id || Date.now() + Math.random(),
+          role: 'assistant',
+          content: `✅ 监督者已评估通过并自动执行：${result.confirm_message || result.task_name || result.script_name || ''}${result._supervisor_feedback ? '\n评估意见：' + result._supervisor_feedback : ''}`,
+        })
+        continue
+      }
       if (result.error) {
         messages.value.push({
           id: Date.now() + Math.random(),
@@ -2693,20 +2702,6 @@ async function handleToolResults(toolResults) {
       }
       messages.value.push(toolCard)
       saveMessageState(toolCard)
-      // 监督者自动确认：如果有 _supervisor_approved 标记，自动执行
-      if (result._supervisor_approved) {
-        console.log(`监督者已评估通过，自动执行: ${result.action_type}`)
-        // 根据 action_type 自动执行对应操作
-        if (result.action_type === 'export') {
-          confirmExport(toolCard)
-        } else if (result.action_type === 'query') {
-          confirmQuery(toolCard)
-        } else if (result.action_type === 'system_task') {
-          confirmSystemTask(toolCard)
-        } else if (result.action_type === 'profit_share') {
-          confirmProfitShare(toolCard)
-        }
-      }
     } else if (result && result._select_mode) {
       messages.value.push({
         id: tr.message_id || Date.now() + Math.random(),

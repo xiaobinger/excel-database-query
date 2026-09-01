@@ -1483,7 +1483,7 @@ def send_message(chat_id):
                         saved_tool_messages.append(tr)
                     else:
                         # ── 监督者自动评估确认卡片 ──
-                        _auto_confirmed = False
+                        _supervisor_auto_exec = False
                         _sup_agent_nc = None
                         try:
                             from app.services.chat_supervisor import resolve_supervisor_agent, evaluate_tool_action
@@ -1507,34 +1507,40 @@ def send_message(chat_id):
                                 )
                                 logger.info(f'监督者工具评估(非流式): action_type={result.get("action_type")}, approved={_eval["approved"]}, feedback={_eval["feedback"]}')
                                 if _eval['approved']:
-                                    result['_supervisor_approved'] = True
+                                    # 监督者评估通过，直接执行（不创建确认卡片）
+                                    _supervisor_auto_exec = True
+                                    result['_supervisor_auto_executed'] = True
                                     result['_supervisor_feedback'] = _eval['feedback']
-                                    _auto_confirmed = True
                                 else:
+                                    # 监督者评估不通过，标记需要人工确认
                                     result['_supervisor_approved'] = False
                                     result['_supervisor_feedback'] = _eval['feedback']
                         except Exception as eval_err:
                             logger.warning(f'监督者工具评估失败(非流式): {eval_err}')
                         
-                        tool_msg = AiChatMessage(
-                            chat_id=chat_id,
-                            agent_id=agent_id,
-                            role='assistant',
-                            content='',
-                            msg_metadata=json.dumps({
-                                '_type': 'tool',
-                                'tool_data': result,
-                                '_supervisor_auto_confirmed': _auto_confirmed,
-                            }, ensure_ascii=False),
-                        )
-                        db.session.add(tool_msg)
-                        db.session.flush()
-                        saved_tool_messages.append({
-                            'tool_call_id': tr['tool_call_id'],
-                            'name': tr['name'],
-                            'result': result,
-                            'message_id': tool_msg.id,
-                        })
+                        if _supervisor_auto_exec:
+                            # 监督者已确认执行，不创建确认卡片，直接标记为已完成
+                            saved_tool_messages.append(tr)
+                        else:
+                            # 需要用户确认，创建确认卡片
+                            tool_msg = AiChatMessage(
+                                chat_id=chat_id,
+                                agent_id=agent_id,
+                                role='assistant',
+                                content='',
+                                msg_metadata=json.dumps({
+                                    '_type': 'tool',
+                                    'tool_data': result,
+                                }, ensure_ascii=False),
+                            )
+                            db.session.add(tool_msg)
+                            db.session.flush()
+                            saved_tool_messages.append({
+                                'tool_call_id': tr['tool_call_id'],
+                                'name': tr['name'],
+                                'result': result,
+                                'message_id': tool_msg.id,
+                            })
                 # 选项选择卡片（_select_mode）
                 elif result and result.get('_select_mode'):
                     # 确定 action_type
@@ -2271,7 +2277,7 @@ def send_message_stream(chat_id):
                                             saved_tool_messages.append(tr)
                                         else:
                                             # ── 监督者自动评估确认卡片 ──
-                                            _auto_confirmed = False
+                                            _supervisor_auto_exec = False
                                             if _sup_agent and _sup_agent.can_confirm_execution:
                                                 try:
                                                     from app.services.chat_supervisor import evaluate_tool_action
@@ -2284,12 +2290,12 @@ def send_message_stream(chat_id):
                                                     )
                                                     logger.info(f'监督者工具评估: action_type={result.get("action_type")}, approved={_eval["approved"]}, feedback={_eval["feedback"]}')
                                                     if _eval['approved']:
-                                                        # 监督者评估通过，自动执行
-                                                        result['_supervisor_approved'] = True
+                                                        # 监督者评估通过，直接执行（不创建确认卡片）
+                                                        _supervisor_auto_exec = True
+                                                        result['_supervisor_auto_executed'] = True
                                                         result['_supervisor_feedback'] = _eval['feedback']
-                                                        _auto_confirmed = True
                                                         # 发送监督者评估结果给前端
-                                                        yield f"data: {json.dumps({'type': 'supervision', 'status': 'tool_approved', 'content': f'监督者已评估通过：{_eval["feedback"]}', 'tool_call_id': tr['tool_call_id']}, ensure_ascii=False)}\n\n"
+                                                        yield f"data: {json.dumps({'type': 'supervision', 'status': 'tool_approved', 'content': f'监督者已评估通过，自动执行中：{_eval["feedback"]}', 'tool_call_id': tr['tool_call_id']}, ensure_ascii=False)}\n\n"
                                                     else:
                                                         # 监督者评估不通过，标记需要人工确认
                                                         result['_supervisor_approved'] = False
@@ -2298,22 +2304,26 @@ def send_message_stream(chat_id):
                                                 except Exception as eval_err:
                                                     logger.warning(f'监督者工具评估失败: {eval_err}')
                                             
-                                            tool_msg = AiChatMessage(
-                                                chat_id=chat_id, agent_id=stream_agent_id, role='assistant', content='',
-                                                msg_metadata=json.dumps({
-                                                    '_type': 'tool', 'tool_data': result,
-                                                    '_supervisor_auto_confirmed': _auto_confirmed,
-                                                }, ensure_ascii=False),
-                                            )
-                                            db.session.add(tool_msg)
-                                            db.session.flush()
-                                            saved_tool_messages.append({
-                                                'tool_call_id': tr['tool_call_id'],
-                                                'name': tr['name'],
-                                                'result': result,
-                                                'message_id': tool_msg.id,
-                                            })
-                                            any_card_created = True
+                                            if _supervisor_auto_exec:
+                                                # 监督者已确认执行，不创建确认卡片，直接标记为已完成
+                                                saved_tool_messages.append(tr)
+                                            else:
+                                                # 需要用户确认，创建确认卡片
+                                                tool_msg = AiChatMessage(
+                                                    chat_id=chat_id, agent_id=stream_agent_id, role='assistant', content='',
+                                                    msg_metadata=json.dumps({
+                                                        '_type': 'tool', 'tool_data': result,
+                                                    }, ensure_ascii=False),
+                                                )
+                                                db.session.add(tool_msg)
+                                                db.session.flush()
+                                                saved_tool_messages.append({
+                                                    'tool_call_id': tr['tool_call_id'],
+                                                    'name': tr['name'],
+                                                    'result': result,
+                                                    'message_id': tool_msg.id,
+                                                })
+                                                any_card_created = True
                                     # 选项选择卡片
                                     elif result and result.get('_select_mode'):
                                         if tr['name'] == 'list_export_options':
