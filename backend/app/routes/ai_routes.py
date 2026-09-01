@@ -2694,6 +2694,7 @@ def send_message_stream(chat_id):
 
                         # 本轮生成完成（消息保存结果由 msg_id 标识），标记成功后退出故障转移循环
                         _gen_success = True  # 本轮生成成功，退出故障转移循环
+                        break  # 成功后立即退出故障转移循环
 
                     except requests.exceptions.HTTPError as e:
                         # HTTP错误：透传API返回的具体错误信息（如400参数错误）
