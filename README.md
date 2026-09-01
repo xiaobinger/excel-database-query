@@ -338,6 +338,22 @@ WHERE merchant_id = :value
 
 ## 近期新增功能
 
+### 监督者复核改为Agent级别配置 (v2.4.6)
+
+**配置方式**：
+- 执行者角色Agent配置页新增「对话复核」开关
+- 只有执行者角色Agent开启了对话复核，且系统中存在活跃的监督者Agent时，才启动监督者复核
+- 用户需要有切换该Agent的权限，对话时才会触发监督者复核
+
+**数据库迁移**：
+- `ai_agents` 表新增 `enable_chat_review` 字段（BOOLEAN，默认FALSE）
+
+**技术实现**：
+- `backend/app/models/ai_agent.py`：新增 `enable_chat_review` 字段
+- `backend/app/routes/agent_routes.py`：创建/更新Agent时处理 `enable_chat_review`
+- `backend/app/routes/ai_routes.py`：监督者触发逻辑增加Agent角色和配置检查
+- `frontend/src/views/AgentManager.vue`：执行者角色配置页增加对话复核开关
+
 ### 监督者增加态度评估，鞭答执行者改正 (v2.4.5)
 
 **新增第5项评估维度 —— 态度评估**：
