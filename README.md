@@ -338,6 +338,25 @@ WHERE merchant_id = :value
 
 ## 近期新增功能
 
+### 监督者自动评估确认卡片 + 彻底去重确认框 (v2.4.2)
+
+**监督者自动评估确认卡片**：
+- 当导出/查询/系统任务确认卡片出现时，自动调用监督者Agent评估操作的安全性、合理性、完整性
+- 监督者被授权确认执行（`can_confirm_execution`）时，评估通过后自动执行操作，用户无需手动确认
+- 监督者评估不通过时，显示评估意见，由用户人工决定是否执行
+- 确认卡片头部显示监督者评估标记：绿色「监督者已确认」或橙色「监督者有异议」
+- 监督者评估结果以灰色提示条展示在确认卡片中
+
+**彻底去重确认框**：
+- 修复导出指令同时出现「选项选择卡片」和「任务确认卡片」的问题
+- 同一轮工具结果中，如果已存在 select_options 选择卡片，跳过对应的 request_* 确认卡片创建
+- 流式路径和非流式路径均已修复
+
+**技术实现**：
+- `backend/app/services/chat_supervisor.py`：新增 `evaluate_tool_action` 函数和 `TOOL_CONFIRM_TEMPLATE` 评估模板
+- `backend/app/routes/ai_routes.py`：流式/非流式路径确认卡片创建后，调用监督者评估并标记结果
+- `frontend/src/views/AiChat.vue`：前端处理 `_supervisor_approved` 状态自动执行；新增 `.supervisor-badge` 和 `.supervisor-feedback` 样式
+
 ### AI对话体验优化：模型路由静默切换 + 导出确认去重 + 监督者可见性 (v2.4.1)
 
 **模型路由切换对用户透明**：
