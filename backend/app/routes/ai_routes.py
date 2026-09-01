@@ -2831,6 +2831,7 @@ def send_message_stream(chat_id):
                         'assistant_content': full_content[:1000],
                         'tool_summary': _summarize_tools_for_review(tool_results_list),
                         'custom_rules': _custom_rules,
+                        'rules_created_by': _current_agent.created_by if _current_agent else None,
                         'timestamp': datetime.utcnow().isoformat(),
                     }
                     if _verdict['verdict'] == 'approved':

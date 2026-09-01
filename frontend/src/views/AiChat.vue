@@ -376,7 +376,7 @@
                         <div class="review-section-title"><i class="fas fa-tools"></i> 工具调用记录</div>
                         <div class="review-section-content">{{ record.tool_summary }}</div>
                       </div>
-                      <div v-if="record.custom_rules" class="review-section">
+                      <div v-if="record.custom_rules && (isAdmin || record.rules_created_by === store.user?.id)" class="review-section">
                         <div class="review-section-title"><i class="fas fa-list-check"></i> 自定义复核规则</div>
                         <div class="review-section-content">{{ record.custom_rules }}</div>
                       </div>
