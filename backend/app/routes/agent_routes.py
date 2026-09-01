@@ -129,6 +129,7 @@ def create_agent():
             can_confirm_execution=bool(data.get('can_confirm_execution', False)),
             can_retry_processing=bool(data.get('can_retry_processing', False)),
             can_close_ticket=bool(data.get('can_close_ticket', False)),
+            enable_chat_review=bool(data.get('enable_chat_review', False)),
             max_supervisor_rounds=_parse_max_rounds(data.get('max_supervisor_rounds')),
             system_prompt=data['system_prompt'],
             is_default=data.get('is_default', False),
@@ -184,6 +185,8 @@ def update_agent(agent_id):
             agent.can_retry_processing = bool(data.get('can_retry_processing', False))
         if 'can_close_ticket' in data:
             agent.can_close_ticket = bool(data.get('can_close_ticket', False))
+        if 'enable_chat_review' in data:
+            agent.enable_chat_review = bool(data.get('enable_chat_review', False))
         if 'max_supervisor_rounds' in data:
             agent.max_supervisor_rounds = _parse_max_rounds(data.get('max_supervisor_rounds'))
         if 'system_prompt' in data:

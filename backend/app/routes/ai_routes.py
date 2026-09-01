@@ -1871,19 +1871,31 @@ def send_message_stream(chat_id):
 
         try:
             # ── 对话级AI监督者复核（hybrid：AI自动复核 + 人工兜底标记）──
+            # 只有执行者角色的Agent开启了对话复核，才启动监督者复核
             _sup_agent = None
             _sup_max_rounds = 0
+            _current_agent = None
             try:
-                from app.services.chat_supervisor import resolve_supervisor_agent
-                _sup_agent = resolve_supervisor_agent(stream_agent_id)
-                _sup_max_rounds = (_sup_agent.max_supervisor_rounds or 3) if _sup_agent else 0
-                if _sup_agent:
-                    logger.info(f'对话级监督者已启用: {_sup_agent.name}, 最大复核轮次={_sup_max_rounds}')
-                    _sup_prompt = _sup_agent.system_prompt or ''  # 提前快照，避免生成器执行时ORM过期
-                    _sup_id = _sup_agent.id
+                from app.models.ai_agent import AiAgent
+                if stream_agent_id:
+                    _current_agent = AiAgent.query.get(stream_agent_id)
+                # 检查是否启用对话复核：执行者角色 + enable_chat_review=True
+                if _current_agent and _current_agent.agent_role == 'executor' and _current_agent.enable_chat_review:
+                    from app.services.chat_supervisor import resolve_supervisor_agent
+                    _sup_agent = resolve_supervisor_agent(stream_agent_id)
+                    _sup_max_rounds = (_sup_agent.max_supervisor_rounds or 3) if _sup_agent else 0
+                    if _sup_agent:
+                        logger.info(f'对话级监督者已启用: {_sup_agent.name}, 执行者Agent: {_current_agent.name}, 最大复核轮次={_sup_max_rounds}')
+                        _sup_prompt = _sup_agent.system_prompt or ''  # 提前快照，避免生成器执行时ORM过期
+                        _sup_id = _sup_agent.id
+                    else:
+                        _sup_prompt = None
+                        _sup_id = None
                 else:
                     _sup_prompt = None
                     _sup_id = None
+                    if _current_agent:
+                        logger.info(f'对话级监督者未启用: Agent={_current_agent.name}, role={_current_agent.agent_role}, enable_chat_review={_current_agent.enable_chat_review}')
             except Exception as sup_resolve_err:
                 logger.warning(f'解析对话级监督者失败，跳过复核: {sup_resolve_err}')
                 _sup_agent = None

@@ -135,6 +135,14 @@
             </div>
           </div>
         </el-form-item>
+        <el-form-item v-if="form.agent_role === 'executor'" label="对话复核">
+          <div style="width: 100%">
+            <el-switch v-model="form.enable_chat_review" />
+            <div style="font-size: 12px; color: #999; line-height: 1.4; margin-top: 4px;">
+              开启后，该执行者Agent在对话中的每次回复都会由监督者Agent复核（准确性、态度等），复核不通过将鞭答执行者重新生成。需要系统中存在活跃的监督者角色Agent
+            </div>
+          </div>
+        </el-form-item>
         <el-form-item label="系统提示词" prop="system_prompt">
           <el-input v-model="form.system_prompt" type="textarea" :rows="12" placeholder="Agent的系统提示词，定义Agent的行为规则和能力范围" />
         </el-form-item>
@@ -287,6 +295,7 @@ const defaultForm = {
   can_confirm_execution: false,
   can_retry_processing: false,
   can_close_ticket: false,
+  enable_chat_review: false,
   max_supervisor_rounds: 3,
   system_prompt: '',
   enabled_tools: null,
@@ -328,6 +337,7 @@ function openDialog(row) {
       can_confirm_execution: !!row.can_confirm_execution,
       can_retry_processing: !!row.can_retry_processing,
       can_close_ticket: !!row.can_close_ticket,
+      enable_chat_review: !!row.enable_chat_review,
       max_supervisor_rounds: row.max_supervisor_rounds || 3,
       system_prompt: row.system_prompt || '',
       enabled_tools: row.enabled_tools ? [...row.enabled_tools] : null,

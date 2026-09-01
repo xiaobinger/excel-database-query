@@ -14,6 +14,7 @@ class AiAgent(db.Model):
     can_confirm_execution = db.Column(db.Boolean, default=False, comment='是否授权该Agent(作为监督者)直接确认执行待确认操作，跳过提交者人工确认')
     can_retry_processing = db.Column(db.Boolean, default=False, comment='是否授权该Agent(作为监督者)智能重试卡住的处理中工单(超时未完成自动触发重试)')
     can_close_ticket = db.Column(db.Boolean, default=False, comment='是否授权该Agent(作为监督者)自动验收已处理工单并结束(无需提交者人工确认结束)')
+    enable_chat_review = db.Column(db.Boolean, default=False, comment='是否启用对话复核(仅执行者角色有意义，开启后监督者会复核回复质量)')
     max_supervisor_rounds = db.Column(db.Integer, default=3, comment='监督者最大监督轮次(仅监督者角色有意义，1-20默认3)')
     system_prompt = db.Column(db.Text, nullable=False, comment='系统提示词')
     enabled_tools = db.Column(db.Text, comment='启用的AI工具列表JSON，null表示全部启用')
@@ -66,6 +67,7 @@ class AiAgent(db.Model):
             'can_confirm_execution': bool(self.can_confirm_execution),
             'can_retry_processing': bool(self.can_retry_processing),
             'can_close_ticket': bool(self.can_close_ticket),
+            'enable_chat_review': bool(self.enable_chat_review),
             'max_supervisor_rounds': self.max_supervisor_rounds if self.max_supervisor_rounds else 3,
             'system_prompt': self.system_prompt,
             'enabled_tools': self.get_enabled_tools(),
