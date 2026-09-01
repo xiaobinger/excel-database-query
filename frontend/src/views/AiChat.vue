@@ -595,6 +595,19 @@
               </template>
             </div>
           </div>
+          <!-- 排队消息提示 -->
+          <div v-if="loading && queuedMessage" class="message assistant queued-message">
+            <div class="message-avatar"><i class="fas fa-clock"></i></div>
+            <div class="message-content">
+              <div class="queued-msg-content">
+                <i class="fas fa-hourglass-half"></i>
+                <span>排队中：{{ queuedMessage.content?.substring(0, 50) }}{{ (queuedMessage.content?.length || 0) > 50 ? '...' : '' }}</span>
+                <el-button text size="small" @click="cancelQueuedMessage" title="取消排队">
+                  <i class="fas fa-times"></i>
+                </el-button>
+              </div>
+            </div>
+          </div>
           <div v-if="loading" class="message assistant">
             <div class="message-avatar"><i class="fas fa-robot"></i></div>
             <div class="message-content">
@@ -769,9 +782,27 @@
                 >
                   <i :class="isRecording ? 'fas fa-stop' : 'fas fa-microphone'"></i>
                 </el-button>
-                <el-button v-if="loading" type="danger" @click="abortRequest" title="终止任务">
-                  <i class="fas fa-stop"></i>
-                </el-button>
+                <template v-if="loading">
+                  <el-button type="danger" @click="abortRequest" title="终止当前任务">
+                    <i class="fas fa-stop"></i>
+                  </el-button>
+                  <el-dropdown v-if="inputText.trim()" trigger="click" @command="handleInterruptCommand">
+                    <el-button type="warning" title="发送插话/引导指令">
+                      <i class="fas fa-paper-plane"></i>
+                      <i class="fas fa-bolt" style="font-size: 10px; margin-left: 2px;"></i>
+                    </el-button>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item command="interrupt">
+                          <i class="fas fa-bolt" style="color: #e6a23c;"></i> 插话发送（立即上送，AI立即采纳）
+                        </el-dropdown-item>
+                        <el-dropdown-item command="queue">
+                          <i class="fas fa-clock" style="color: #909399;"></i> 排队发送（等当前任务完成后再处理）
+                        </el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                </template>
                 <el-button v-else type="primary" :disabled="!canSend" @click="sendMessage">
                   <i class="fas fa-paper-plane"></i>
                 </el-button>
@@ -1382,6 +1413,7 @@ const messages = ref([])
 const inputText = ref('')
 const loading = ref(false)
 const abortController = ref(null)  // 用于终止流式请求
+const queuedMessage = ref(null)  // 排队中的消息
 const messagesRef = ref(null)
 const uploadedFile = ref(null)
 const store = useAppStore()
@@ -2478,11 +2510,81 @@ async function smartMatchDirectExecute(cardMsg, fileInfo, defaultParamColumn) {
   }
 }
 
+// 处理插话/排队命令
+function handleInterruptCommand(command) {
+  const text = inputText.value.trim()
+  if (!text) return
+  
+  if (command === 'interrupt') {
+    // 插话发送：立即上送给AI
+    sendInterruptMessage(text)
+  } else if (command === 'queue') {
+    // 排队发送：保存到排队队列
+    queuedMessage.value = { content: text, timestamp: Date.now() }
+    inputText.value = ''
+    ElMessage.info('消息已排队，当前任务完成后自动发送')
+  }
+}
 
+// 取消排队消息
+function cancelQueuedMessage() {
+  queuedMessage.value = null
+  ElMessage.info('已取消排队消息')
+}
+
+// 插话发送：立即上送给AI
+async function sendInterruptMessage(text) {
+  if (!currentChatId.value || !text) return
+  
+  // 清空输入框
+  inputText.value = ''
+  
+  // 添加用户消息到界面
+  const userMsg = {
+    id: Date.now(),
+    role: 'user',
+    content: text,
+    _is_interrupt: true,
+  }
+  messages.value.push(userMsg)
+  
+  // 发送插话指令到后端
+  try {
+    const token = localStorage.getItem('token')
+    const url = api.ai.sendInterruptMessage(currentChatId.value)
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': token ? `Bearer ${token}` : '',
+      },
+      body: JSON.stringify({ content: text }),
+    })
+    const result = await response.json()
+    if (result.success) {
+      ElMessage.success('插话指令已发送，AI将立即采纳')
+    } else {
+      ElMessage.error(result.message || '发送失败')
+    }
+  } catch (e) {
+    ElMessage.error('发送插话指令失败: ' + e.message)
+  }
+  
+  await nextTick()
+  scrollToBottom()
+}
 
 async function sendMessage() {
   const text = inputText.value.trim()
-  if ((!text && !uploadedFile.value) || loading.value) return
+  if (!text && !uploadedFile.value) return
+  
+  // 如果正在loading，将消息保存到排队队列
+  if (loading.value) {
+    queuedMessage.value = { content: text, timestamp: Date.now() }
+    inputText.value = ''
+    ElMessage.info('消息已排队，当前任务完成后自动发送')
+    return
+  }
 
   if (!currentChatId.value) {
     await createNewChat()
@@ -2577,6 +2679,14 @@ async function sendMessage() {
   } finally {
     loading.value = false
     uploadedFile.value = null
+    // 任务完成后，自动发送排队消息
+    if (queuedMessage.value) {
+      const queued = queuedMessage.value
+      queuedMessage.value = null
+      inputText.value = queued.content
+      await nextTick()
+      sendMessage()
+    }
   }
 }
 
@@ -6783,6 +6893,49 @@ onActivated(() => {
 @keyframes typing {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
   30% { transform: translateY(-6px); opacity: 1; }
+}
+
+/* ===== 排队消息样式 ===== */
+.queued-message .message-content {
+  opacity: 0.7;
+}
+
+.queued-msg-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #fdf6ec;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #e6a23c;
+}
+
+.queued-msg-content i.fa-hourglass-half {
+  animation: hourglass 2s infinite;
+}
+
+@keyframes hourglass {
+  0% { transform: rotate(0deg); }
+  50% { transform: rotate(180deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* ===== 插话消息标记 ===== */
+.message.user ._is_interrupt .message-content {
+  border-left: 3px solid #e6a23c;
+}
+
+.interrupt-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: #fdf6ec;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #e6a23c;
+  margin-bottom: 4px;
 }
 
 /* ===== Lookup 信息查询卡片样式 ===== */

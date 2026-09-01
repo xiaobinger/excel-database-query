@@ -205,6 +205,7 @@ const ai = {
   sendMessage: (chatId, data) => http.post(`/ai/chats/${chatId}/send`, data, { timeout: 180000 }),
   sendMessageStream: (chatId, data) => `/api/ai/chats/${chatId}/send-stream`,
   abortRequest: (chatId) => http.post(`/ai/chats/${chatId}/abort`),
+  sendInterruptMessage: (chatId) => `/api/ai/chats/${chatId}/interrupt`,
   getStreamStatus: (chatId) => http.get(`/ai/chats/${chatId}/stream-status`),
   resumeStreamUrl: (chatId) => `/api/ai/chats/${chatId}/resume-stream`,
   uploadFile: (formData) => http.post('/ai/upload-file', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),

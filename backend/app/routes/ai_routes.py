@@ -2234,7 +2234,23 @@ def send_message_stream(chat_id):
                             round_num += 1
                             _active_streams[chat_id]['status'] = 'tool_calling'
                             current_tool_results = []
-
+                            
+                            # ── 检查是否有插话消息 ──
+                            _interrupt_msgs = _active_streams.get(chat_id, {}).get('interrupt_messages', [])
+                            if _interrupt_msgs:
+                                # 有插话消息，注入到上下文
+                                for interrupt_msg in _interrupt_msgs:
+                                    messages.append({
+                                        'role': 'user',
+                                        'content': interrupt_msg['content'],
+                                    })
+                                    yield f"data: {json.dumps({'type': 'content', 'content': f'\n\n[用户插话] {interrupt_msg["content"]}\n\n'}, ensure_ascii=False)}\n\n"
+                                    logger.info(f'注入插话消息: chat_id={chat_id}, content={interrupt_msg["content"][:50]}')
+                                # 清空已处理的插话消息
+                                _active_streams[chat_id]['interrupt_messages'] = []
+                                # 让AI基于新的上下文重新决策
+                                break
+                            
                             # ── 1. 执行本轮工具调用 ──
                             for idx in sorted(accumulated_tool_calls.keys()):
                                 tc = accumulated_tool_calls[idx]
@@ -2961,6 +2977,45 @@ def abort_chat_request(chat_id):
         logger.info(f'用户终止AI请求: chat_id={chat_id}, request_id={stream_info.get("request_id")}')
         return jsonify({'success': True, 'message': '请求已终止'})
     return jsonify({'success': True, 'message': '无活跃请求'})
+
+
+@ai_bp.route('/chats/<int:chat_id>/interrupt', methods=['POST'])
+@login_required
+def interrupt_chat(chat_id):
+    """插话发送：将用户消息注入到当前正在进行的流式请求中"""
+    current_user = get_current_user()
+    chat = AiChat.query.filter_by(id=chat_id, user_id=current_user.id).first()
+    if not chat:
+        return jsonify({'success': False, 'message': '对话不存在'}), 404
+
+    data = request.get_json()
+    content = data.get('content', '').strip()
+    if not content:
+        return jsonify({'success': False, 'message': '消息内容不能为空'}), 400
+
+    # 保存用户消息到数据库
+    user_message = AiChatMessage(
+        chat_id=chat_id,
+        role='user',
+        content=content,
+    )
+    db.session.add(user_message)
+    db.session.commit()
+
+    # 将插话消息注入到活跃流中
+    stream_info = _active_streams.get(chat_id)
+    if stream_info and not stream_info.get('aborted'):
+        if 'interrupt_messages' not in stream_info:
+            stream_info['interrupt_messages'] = []
+        stream_info['interrupt_messages'].append({
+            'content': content,
+            'message_id': user_message.id,
+            'timestamp': time.time(),
+        })
+        logger.info(f'插话消息已注入: chat_id={chat_id}, content={content[:50]}')
+        return jsonify({'success': True, 'message': '插话消息已发送，AI将立即采纳'})
+    
+    return jsonify({'success': False, 'message': '当前没有正在进行的AI请求'}), 400
 
 
 # ============ Resume Stream (断线重连) ============
