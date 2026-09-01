@@ -338,6 +338,24 @@ WHERE merchant_id = :value
 
 ## 近期新增功能
 
+### 复核证据详情可点击查看 (v2.4.8)
+
+**功能说明**：
+- 监督者复核标记可点击展开查看复核详情
+- 复核详情包含：
+  - 用户问题
+  - 执行者回复
+  - 工具调用记录
+  - 自定义复核规则
+  - 监督者判定（为什么通过/为什么被鞭答）
+- 每轮复核记录独立展示，支持多轮复核
+- 通过/需改正/需人工复核分别用绿色/橙色/红色标识
+- 历史消息加载时恢复复核记录
+
+**技术实现**：
+- `backend/app/routes/ai_routes.py`：新增 `_save_review_record` 保存复核详情到metadata；SSE事件增加 `review_record` 字段
+- `frontend/src/views/AiChat.vue`：新增复核详情面板（`.review-detail-panel`）；`supervision` 事件处理增加 `review_record` 保存；历史消息加载时恢复 `supervision_records`
+
 ### 支持自定义复核规则 (v2.4.7)
 
 **功能说明**：
