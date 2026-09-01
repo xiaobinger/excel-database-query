@@ -635,7 +635,7 @@
                 v-model="inputText"
                 type="textarea"
                 :autosize="{ minRows: 3, maxRows: 8 }"
-                :placeholder="canSwitchModel ? '输入消息，@ 选择模型，按 Enter 发送，Shift+Enter 换行...' : '输入消息，按 Enter 发送，Shift+Enter 换行...'"
+                :placeholder="canSwitchModel ? '输入消息，@ 选择模型，Enter 发送，Shift/Alt+Enter 换行...' : '输入消息，Enter 发送，Shift/Alt+Enter 换行...'"
                 resize="none"
                 @keydown="handleKeydown"
                 @input="handleInputChange"
@@ -3052,7 +3052,8 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
 function handleKeydown(e) {
   // Handle Escape for @mention popup
   if (handleMentionKeydown(e)) return
-  if (e.key === 'Enter' && !e.shiftKey) {
+  // Enter 发送，Shift+Enter 或 Alt+Enter 换行
+  if (e.key === 'Enter' && !e.shiftKey && !e.altKey) {
     e.preventDefault()
     sendMessage()
   }
