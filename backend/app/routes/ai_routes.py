@@ -2764,7 +2764,9 @@ def send_message_stream(chat_id):
                 try:
                     yield f"data: {json.dumps({'type': 'supervision', 'status': 'reviewing', 'content': '监督者正在复核回复质量…'}, ensure_ascii=False)}\n\n"
                     from app.services.chat_supervisor import review_response, mark_message
-                    _verdict = review_response(_sup_prompt, user_message_content, full_content, tool_results_list, stream_ordered_configs)
+                    # 获取自定义复核规则
+                    _custom_rules = _current_agent.review_rules if _current_agent else ''
+                    _verdict = review_response(_sup_prompt, user_message_content, full_content, tool_results_list, stream_ordered_configs, custom_rules=_custom_rules)
                     _sup_round += 1
                     logger.info(f'监督者复核结果: chat_id={chat_id}, 第{_sup_round}轮, verdict={_verdict["verdict"]}')
                     if _verdict['verdict'] == 'approved':

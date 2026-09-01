@@ -111,7 +111,7 @@ def _parse_verdict(content: str) -> dict:
 
 
 def review_response(supervisor_prompt: str, user_content: str, assistant_content: str,
-                    tool_results: list, configs: list) -> dict:
+                    tool_results: list, configs: list, custom_rules: str = '') -> dict:
     """调用监督者Agent复核一次回复。
 
     Args:
@@ -120,6 +120,7 @@ def review_response(supervisor_prompt: str, user_content: str, assistant_content
         assistant_content: 主Agent的回复正文
         tool_results: 工具执行记录列表 [{'name', 'result'}, ...]
         configs: 模型配置快照列表（dict: api_key/api_base/provider/model_name/...），支持故障转移
+        custom_rules: 自定义复核规则（来自执行者Agent的review_rules配置）
 
     Returns:
         {'verdict': 'approved'|'retry'|'flag_human', 'feedback': str, 'raw': str}
@@ -127,11 +128,15 @@ def review_response(supervisor_prompt: str, user_content: str, assistant_content
     from app.services.ai_service import post_chat_completions, _apply_cache_control
 
     tool_summary = _summarize_tools(tool_results)
+    # 构建复核提示，如果有自定义规则则注入
     review_user = REVIEW_TEMPLATE.format(
         user_content=(user_content or '')[:4000],
         assistant_content=(assistant_content or '')[:6000],
         tool_summary=tool_summary,
     )
+    # 如果有自定义复核规则，追加到复核提示末尾
+    if custom_rules:
+        review_user += f'\n\n## 自定义复核规则（必须严格遵守）\n{custom_rules}'
     messages = [
         {'role': 'system', 'content': supervisor_prompt or '你是AI对话质量的监督者。'},
         {'role': 'user', 'content': review_user},

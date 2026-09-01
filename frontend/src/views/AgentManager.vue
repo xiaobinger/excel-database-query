@@ -143,6 +143,14 @@
             </div>
           </div>
         </el-form-item>
+        <el-form-item v-if="form.agent_role === 'executor' && form.enable_chat_review" label="复核规则">
+          <div style="width: 100%">
+            <el-input v-model="form.review_rules" type="textarea" :rows="6" placeholder="自定义复核规则，监督者会按此规则评估执行者的回复质量。&#10;&#10;例如：&#10;1. 评估回复态度是否谦逊、专业，装逼飘了要鞭答改正&#10;2. 检查是否完整回答了用户问题，有无遗漏&#10;3. 验证数据是否与工具执行结果一致，严禁编造" />
+            <div style="font-size: 12px; color: #999; line-height: 1.4; margin-top: 4px;">
+              自定义复核规则，监督者会严格按照此规则评估执行者回复。不填写则使用系统默认规则（准确性+态度评估）
+            </div>
+          </div>
+        </el-form-item>
         <el-form-item label="系统提示词" prop="system_prompt">
           <el-input v-model="form.system_prompt" type="textarea" :rows="12" placeholder="Agent的系统提示词，定义Agent的行为规则和能力范围" />
         </el-form-item>
@@ -296,6 +304,7 @@ const defaultForm = {
   can_retry_processing: false,
   can_close_ticket: false,
   enable_chat_review: false,
+  review_rules: '',
   max_supervisor_rounds: 3,
   system_prompt: '',
   enabled_tools: null,
@@ -338,6 +347,7 @@ function openDialog(row) {
       can_retry_processing: !!row.can_retry_processing,
       can_close_ticket: !!row.can_close_ticket,
       enable_chat_review: !!row.enable_chat_review,
+      review_rules: row.review_rules || '',
       max_supervisor_rounds: row.max_supervisor_rounds || 3,
       system_prompt: row.system_prompt || '',
       enabled_tools: row.enabled_tools ? [...row.enabled_tools] : null,
