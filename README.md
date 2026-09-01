@@ -338,6 +338,19 @@ WHERE merchant_id = :value
 
 ## 近期新增功能
 
+### 支持自动保存SKILLS/规则 + 监督者监督 (v2.5.1)
+
+**功能说明**：
+- 新增 `save_skill` 工具，AI可主动保存用户要求的SKILLS/规则
+- 当用户说“提炼SKILLS”、“记住规则”、“保存知识”、“下次也这样”时，AI自动调用保存
+- 当用户表达有价值的规则/经验/注意事项时，AI会主动询问是否保存
+- 同名技能自动更新，不重复创建
+- 监督者复核时会检查执行者是否遗漏了用户的规则要求
+
+**技术实现**：
+- `backend/app/services/ai_service.py`：新增 `save_skill` 工具定义 + `_tool_save_skill` 实现
+- `backend/app/routes/ai_routes.py`：新增 `SKILLS_SAVE_RULE` 常量，注入系统提示词
+
 ### 输入框支持Alt+Enter换行 (v2.5.0)
 
 - Enter 发送消息
