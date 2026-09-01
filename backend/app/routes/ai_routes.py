@@ -2224,6 +2224,20 @@ def send_message_stream(chat_id):
                         round_num = 0
                         round_content = full_content  # 最近一轮AI回复文本（与工具调用一起回传API）
 
+                        # ── 在工具调用前检查是否有插话消息 ──
+                        _interrupt_msgs_pre = _active_streams.get(chat_id, {}).get('interrupt_messages', [])
+                        if _interrupt_msgs_pre:
+                            for interrupt_msg in _interrupt_msgs_pre:
+                                messages.append({
+                                    'role': 'user',
+                                    'content': interrupt_msg['content'],
+                                })
+                                yield f"data: {json.dumps({'type': 'content', 'content': f'\n\n[用户插话] {interrupt_msg["content"]}\n\n'}, ensure_ascii=False)}\n\n"
+                                logger.info(f'工具调用前注入插话消息: chat_id={chat_id}, content={interrupt_msg["content"][:50]}')
+                            _active_streams[chat_id]['interrupt_messages'] = []
+                            # 有插话消息，重新请求AI
+                            accumulated_tool_calls = {}  # 清空工具调用，让AI重新决策
+
                         if _active_streams.get(chat_id, {}).get('aborted'):
                             # 用户已终止请求，跳过工具调用
                             logger.info(f'工具调用前检测到终止: chat_id={chat_id}')

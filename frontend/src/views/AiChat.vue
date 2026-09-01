@@ -2825,13 +2825,28 @@ async function handleToolResults(toolResults) {
         console.log(`跳过重复确认卡片: ${tr.name}(${result.action_type})，同轮已有select_options卡片`)
         continue
       }
-      // 监督者已自动执行，不创建确认卡片，显示简短结果
+      // 监督者已自动执行，不创建确认卡片，显示简短结果并自动执行
       if (result._supervisor_auto_executed) {
-        messages.value.push({
+        const autoMsg = {
           id: tr.message_id || Date.now() + Math.random(),
           role: 'assistant',
           content: `✅ 监督者已评估通过并自动执行：${result.confirm_message || result.task_name || result.script_name || ''}${result._supervisor_feedback ? '\n评估意见：' + result._supervisor_feedback : ''}`,
-        })
+          _type: 'tool',
+          _dismissed: false,
+          tool_data: result,
+        }
+        messages.value.push(autoMsg)
+        saveMessageState(autoMsg)
+        // 自动执行对应的任务
+        if (result.action_type === 'export') {
+          confirmExport(autoMsg)
+        } else if (result.action_type === 'profit_share') {
+          confirmProfitShare(autoMsg)
+        } else if (result.action_type === 'query') {
+          confirmQuery(autoMsg)
+        } else if (result.action_type === 'system_task') {
+          confirmSystemTask(autoMsg)
+        }
         continue
       }
       if (result.error) {
