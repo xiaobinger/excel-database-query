@@ -338,6 +338,13 @@ WHERE merchant_id = :value
 
 ## 近期新增功能
 
+### 输入框支持Alt+Enter换行 (v2.5.0)
+
+- Enter 发送消息
+- Shift+Enter 换行
+- Alt+Enter 换行（新增）
+- 更新 placeholder 提示文字
+
 ### 自定义复核规则权限控制 (v2.4.9)
 
 **权限规则**：
