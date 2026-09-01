@@ -308,6 +308,7 @@ def get_tasks():
                 and 'org_no' in params
             )
             task_dict['is_profit_share'] = is_profit_share
+            from app.models.script import Script
             script = Script.query.get(task.script_id) if task.script_id else None
             if is_profit_share:
                 task_dict['script_name'] = f'分润导出({params.get("org_no", "")})'
