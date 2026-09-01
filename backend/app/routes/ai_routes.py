@@ -1482,6 +1482,40 @@ def send_message(chat_id):
                         logger.info(f'跳过重复确认卡片: {tr["name"]}({result.get("action_type")})，同轮已有select_options卡片')
                         saved_tool_messages.append(tr)
                     else:
+                        # ── 监督者自动评估确认卡片 ──
+                        _auto_confirmed = False
+                        _sup_agent_nc = None
+                        try:
+                            from app.services.chat_supervisor import resolve_supervisor_agent, evaluate_tool_action
+                            _sup_agent_nc = resolve_supervisor_agent(agent_id)
+                            if _sup_agent_nc and _sup_agent_nc.can_confirm_execution:
+                                _sup_prompt_nc = _sup_agent_nc.system_prompt or ''
+                                _nc_configs = ordered_configs[:3] if ordered_configs else []
+                                _nc_cfg_dicts = [{
+                                    'api_key': c.get_api_key(),
+                                    'api_base': c.api_base or 'https://api.openai.com/v1',
+                                    'provider': c.provider or 'openai',
+                                    'model_name': c.model_name,
+                                    'name': c.name,
+                                } for c in _nc_configs]
+                                _eval = evaluate_tool_action(
+                                    _sup_prompt_nc,
+                                    data.get('content', ''),
+                                    result,
+                                    tr['name'],
+                                    _nc_cfg_dicts
+                                )
+                                logger.info(f'监督者工具评估(非流式): action_type={result.get("action_type")}, approved={_eval["approved"]}, feedback={_eval["feedback"]}')
+                                if _eval['approved']:
+                                    result['_supervisor_approved'] = True
+                                    result['_supervisor_feedback'] = _eval['feedback']
+                                    _auto_confirmed = True
+                                else:
+                                    result['_supervisor_approved'] = False
+                                    result['_supervisor_feedback'] = _eval['feedback']
+                        except Exception as eval_err:
+                            logger.warning(f'监督者工具评估失败(非流式): {eval_err}')
+                        
                         tool_msg = AiChatMessage(
                             chat_id=chat_id,
                             agent_id=agent_id,
@@ -1490,6 +1524,7 @@ def send_message(chat_id):
                             msg_metadata=json.dumps({
                                 '_type': 'tool',
                                 'tool_data': result,
+                                '_supervisor_auto_confirmed': _auto_confirmed,
                             }, ensure_ascii=False),
                         )
                         db.session.add(tool_msg)
@@ -2235,10 +2270,39 @@ def send_message_stream(chat_id):
                                             logger.info(f'跳过重复确认卡片: {tr["name"]}({result.get("action_type")})，同轮已有select_options卡片')
                                             saved_tool_messages.append(tr)
                                         else:
+                                            # ── 监督者自动评估确认卡片 ──
+                                            _auto_confirmed = False
+                                            if _sup_agent and _sup_agent.can_confirm_execution:
+                                                try:
+                                                    from app.services.chat_supervisor import evaluate_tool_action
+                                                    _eval = evaluate_tool_action(
+                                                        _sup_prompt or '',
+                                                        user_message_content,
+                                                        result,
+                                                        tr['name'],
+                                                        stream_ordered_configs
+                                                    )
+                                                    logger.info(f'监督者工具评估: action_type={result.get("action_type")}, approved={_eval["approved"]}, feedback={_eval["feedback"]}')
+                                                    if _eval['approved']:
+                                                        # 监督者评估通过，自动执行
+                                                        result['_supervisor_approved'] = True
+                                                        result['_supervisor_feedback'] = _eval['feedback']
+                                                        _auto_confirmed = True
+                                                        # 发送监督者评估结果给前端
+                                                        yield f"data: {json.dumps({'type': 'supervision', 'status': 'tool_approved', 'content': f'监督者已评估通过：{_eval["feedback"]}', 'tool_call_id': tr['tool_call_id']}, ensure_ascii=False)}\n\n"
+                                                    else:
+                                                        # 监督者评估不通过，标记需要人工确认
+                                                        result['_supervisor_approved'] = False
+                                                        result['_supervisor_feedback'] = _eval['feedback']
+                                                        yield f"data: {json.dumps({'type': 'supervision', 'status': 'tool_rejected', 'content': f'监督者评估意见：{_eval["feedback"]}', 'tool_call_id': tr['tool_call_id']}, ensure_ascii=False)}\n\n"
+                                                except Exception as eval_err:
+                                                    logger.warning(f'监督者工具评估失败: {eval_err}')
+                                            
                                             tool_msg = AiChatMessage(
                                                 chat_id=chat_id, agent_id=stream_agent_id, role='assistant', content='',
                                                 msg_metadata=json.dumps({
                                                     '_type': 'tool', 'tool_data': result,
+                                                    '_supervisor_auto_confirmed': _auto_confirmed,
                                                 }, ensure_ascii=False),
                                             )
                                             db.session.add(tool_msg)

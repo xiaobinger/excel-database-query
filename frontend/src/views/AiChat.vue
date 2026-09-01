@@ -373,9 +373,21 @@
                       <template v-else-if="msg._failed">执行失败</template>
                       <template v-else>{{ msg.tool_data.action_type === 'export' ? '导出任务确认' : msg.tool_data.action_type === 'system_task' ? '系统任务确认' : msg.tool_data.action_type === 'profit_share' ? '分润导出确认' : '查询任务确认' }}</template>
                     </span>
+                    <!-- 监督者评估标记 -->
+                    <span v-if="msg.tool_data._supervisor_approved === true" class="supervisor-badge supervisor-approved">
+                      <i class="fas fa-shield-alt"></i> 监督者已确认
+                    </span>
+                    <span v-else-if="msg.tool_data._supervisor_approved === false" class="supervisor-badge supervisor-rejected">
+                      <i class="fas fa-exclamation-triangle"></i> 监督者有异议
+                    </span>
                   </div>
                   <div class="tool-card-body">
                     <p class="tool-confirm-msg">{{ msg.tool_data.confirm_message }}</p>
+                    <!-- 监督者评估意见 -->
+                    <div v-if="msg.tool_data._supervisor_feedback" class="supervisor-feedback">
+                      <i class="fas fa-shield-alt"></i>
+                      <span>监督者评估：{{ msg.tool_data._supervisor_feedback }}</span>
+                    </div>
                     <!-- 系统任务参数展示 -->
                     <div v-if="msg.tool_data.action_type === 'system_task' && msg.tool_data.params && msg.tool_data.params.length > 0 && !msg._executing && !msg._done" class="tool-params-preview">
                       <div v-for="p in msg.tool_data.params" :key="p.name" class="tool-param-row">
@@ -2670,14 +2682,31 @@ async function handleToolResults(toolResults) {
         })
         continue
       }
-      messages.value.push({
+      // 创建确认卡片
+      const toolCard = {
         id: tr.message_id || Date.now() + Math.random(),
         role: 'assistant',
         content: '',
         _type: 'tool',
         _dismissed: false,
         tool_data: result,
-      })
+      }
+      messages.value.push(toolCard)
+      saveMessageState(toolCard)
+      // 监督者自动确认：如果有 _supervisor_approved 标记，自动执行
+      if (result._supervisor_approved) {
+        console.log(`监督者已评估通过，自动执行: ${result.action_type}`)
+        // 根据 action_type 自动执行对应操作
+        if (result.action_type === 'export') {
+          confirmExport(toolCard)
+        } else if (result.action_type === 'query') {
+          confirmQuery(toolCard)
+        } else if (result.action_type === 'system_task') {
+          confirmSystemTask(toolCard)
+        } else if (result.action_type === 'profit_share') {
+          confirmProfitShare(toolCard)
+        }
+      }
     } else if (result && result._select_mode) {
       messages.value.push({
         id: tr.message_id || Date.now() + Math.random(),
@@ -2858,6 +2887,12 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
               } else if (event.status === 'flagged') {
                 streamMsg._supervision = event.content || '⚠️ 监督者标记本回复需人工复核'
                 streamMsg._supervision_flagged = true
+              } else if (event.status === 'tool_approved') {
+                // 监督者评估工具操作通过，显示评估结果
+                ElMessage.success(event.content || '监督者已评估通过，将自动执行')
+              } else if (event.status === 'tool_rejected') {
+                // 监督者评估工具操作不通过，显示评估意见
+                ElMessage.warning(event.content || '监督者评估不通过，请人工确认')
               }
             } else if (event.type === 'tool_results') {
               // 处理工具调用结果（渲染为卡片）
@@ -5189,6 +5224,46 @@ onActivated(() => {
   font-weight: 600;
   font-size: 14px;
   color: #303133;
+}
+
+/* 监督者评估标记 */
+.supervisor-badge {
+  margin-left: auto;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.supervisor-approved {
+  background: #f0f9eb;
+  color: #67c23a;
+  border: 1px solid #e1f3d8;
+}
+
+.supervisor-rejected {
+  background: #fdf6ec;
+  color: #e6a23c;
+  border: 1px solid #faecd8;
+}
+
+/* 监督者评估意见 */
+.supervisor-feedback {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 12px;
+  margin: 8px 0;
+  background: #f4f4f5;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.5;
+}
+
+.supervisor-feedback i {
+  color: #409eff;
+  margin-top: 2px;
 }
 
 .tool-card-body {

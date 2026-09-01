@@ -182,3 +182,131 @@ def mark_message(msg_id: int, verdict: dict, supervisor_agent_id=None) -> bool:
     msg.msg_metadata = json.dumps(meta, ensure_ascii=False)
     db.session.commit()
     return True
+
+
+# ── 工具确认卡片监督者自动评估 ──
+
+
+# 工具确认评估提示模板
+TOOL_CONFIRM_TEMPLATE = (
+    '## 工具执行安全评估任务\n'
+    '你是AI对话的监督者，需要评估一个待确认的工具操作是否安全、合理。\n\n'
+    '## 用户原始需求\n{user_content}\n\n'
+    '## 待确认的工具操作\n'
+    '- 工具类型：{action_type}\n'
+    '- 工具名称：{tool_name}\n'
+    '- 操作描述：{confirm_message}\n'
+    '- 参数详情：{params_detail}\n\n'
+    '## 评估要求\n'
+    '请从以下维度评估该操作：\n'
+    '1. **安全性**：操作是否可能造成数据丢失、资金损失等不可逆影响\n'
+    '2. **合理性**：操作参数是否与用户需求匹配，有无明显错误\n'
+    '3. **完整性**：必填参数是否齐全，参数值是否合理\n\n'
+    '请只输出一个JSON对象（不要输出任何其他内容），格式如下：\n'
+    '{{"approved": true/false, "feedback": "简要评估意见"}}\n'
+    '- approved=true：操作安全合理，可以执行\n'
+    '- approved=false：操作存在风险或参数有误，feedback中写明原因\n'
+)
+
+
+def evaluate_tool_action(supervisor_prompt: str, user_content: str, tool_result: dict,
+                         tool_name: str, configs: list) -> dict:
+    """监督者评估待确认的工具操作是否安全合理。
+
+    Args:
+        supervisor_prompt: 监督者Agent的系统提示词
+        user_content: 用户原始问题
+        tool_result: 工具返回的结果（含 action_type, confirm_message, params 等）
+        tool_name: 工具名称（request_export/request_query/request_system_task等）
+        configs: 模型配置快照列表，支持故障转移
+
+    Returns:
+        {'approved': bool, 'feedback': str, 'raw': str}
+    """
+    from app.services.ai_service import post_chat_completions, _apply_cache_control
+
+    action_type = tool_result.get('action_type', 'unknown')
+    confirm_message = tool_result.get('confirm_message', '')
+    params = tool_result.get('params', tool_result.get('params_values', {}))
+    if isinstance(params, list):
+        # params 是参数配置列表，提取 params_values
+        params = tool_result.get('params_values', {})
+    params_detail = json.dumps(params, ensure_ascii=False, indent=2) if params else '（无参数）'
+
+    # 限制参数详情长度
+    if len(params_detail) > 2000:
+        params_detail = params_detail[:2000] + '\n...（已截断）'
+
+    review_user = TOOL_CONFIRM_TEMPLATE.format(
+        user_content=(user_content or '')[:2000],
+        action_type=action_type,
+        tool_name=tool_name,
+        confirm_message=confirm_message[:500],
+        params_detail=params_detail,
+    )
+    messages = [
+        {'role': 'system', 'content': supervisor_prompt or '你是AI对话的监督者，负责评估工具操作的安全性。'},
+        {'role': 'user', 'content': review_user},
+    ]
+
+    default_result = {'approved': False, 'feedback': '监督者评估失败，默认需要人工确认', 'raw': ''}
+    last_error = None
+    for cfg in configs:
+        try:
+            api_base = cfg['api_base']
+            url = f"{api_base.rstrip('/')}/chat/completions"
+            headers = {
+                'Authorization': f"Bearer {cfg['api_key']}",
+                'Content-Type': 'application/json',
+            }
+            cached_messages = _apply_cache_control(messages, cfg['provider'], api_base)
+            payload = {
+                'model': cfg['model_name'],
+                'messages': cached_messages,
+                'max_tokens': 512,
+                'temperature': 0.1,
+            }
+            resp = post_chat_completions(url, headers, payload, timeout=60)
+            resp.raise_for_status()
+            result = resp.json()
+            content = ''
+            if result.get('choices') and len(result['choices']) > 0:
+                content = result['choices'][0].get('message', {}).get('content', '') or ''
+            logger.info(f'监督者工具评估完成: model={cfg["model_name"]}, action_type={action_type}, content_len={len(content)}')
+            return _parse_tool_eval(content)
+        except Exception as e:
+            last_error = e
+            logger.warning(f'监督者工具评估模型调用失败({cfg.get("name")}): {e}，尝试下一个')
+            continue
+    logger.error(f'监督者工具评估所有模型调用失败: {last_error}')
+    return default_result
+
+
+def _parse_tool_eval(content: str) -> dict:
+    """解析监督者工具评估输出的JSON，解析失败时按关键词兜底"""
+    result = {'approved': False, 'feedback': '', 'raw': content or ''}
+    if not content:
+        return result
+    # 提取第一个JSON对象
+    m = re.search(r'\{[\s\S]*\}', content)
+    if m:
+        try:
+            parsed = json.loads(m.group(0))
+            result['approved'] = bool(parsed.get('approved', False))
+            result['feedback'] = str(parsed.get('feedback', '') or '').strip()
+            return result
+        except (json.JSONDecodeError, TypeError):
+            pass
+    # 关键词兜底
+    content_lower = content.lower()
+    if any(k in content_lower for k in ('approved', '可以执行', '安全', '通过', '允许')):
+        result['approved'] = True
+        result['feedback'] = content.strip()
+    elif any(k in content_lower for k in ('rejected', '拒绝', '风险', '不建议', '禁止', '危险')):
+        result['approved'] = False
+        result['feedback'] = content.strip()
+    else:
+        # 默认不通过，需人工确认
+        result['approved'] = False
+        result['feedback'] = content.strip()
+    return result
