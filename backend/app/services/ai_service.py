@@ -480,6 +480,44 @@ AI_TOOLS = [
                 "required": ["name", "description", "content"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_email",
+            "description": "发送邮件通知。当用户要求发送邮件、邮件通知、发送报告、发送结果时调用此工具。支持纯文本邮件和HTML格式邮件，可附加文件附件。重要：1、必须提供收件人邮箱；2、主题和正文至少填一项；3、如需附件，附件路径来自之前导出任务的输出文件",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to_emails": {
+                        "type": "string",
+                        "description": "收件人邮箱，多个用逗号分隔，如 'a@test.com,b@test.com'"
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": "邮件主题"
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "邮件正文，支持HTML格式"
+                    },
+                    "content_type": {
+                        "type": "string",
+                        "enum": ["text", "html"],
+                        "description": "正文类型：text=纯文本，html=HTML格式，默认text"
+                    },
+                    "attachment_path": {
+                        "type": "string",
+                        "description": "附件文件路径（来自导出任务的输出文件）"
+                    },
+                    "attachment_name": {
+                        "type": "string",
+                        "description": "附件显示名称，不填则使用文件名"
+                    }
+                },
+                "required": ["to_emails", "subject", "body"]
+            }
+        }
     }
 ]
 
@@ -1100,6 +1138,8 @@ class AiService:
             return AiService._tool_request_pay_withdraw(args, user_id)
         elif tool_name == 'save_skill':
             return AiService._tool_save_skill(args, user_id)
+        elif tool_name == 'send_email':
+            return AiService._tool_send_email(args, user_id)
         else:
             return {'error': f'未知工具: {tool_name}'}
 
@@ -2580,6 +2620,113 @@ AI回复：{ai_response[:500] if ai_response else ''}
             db.session.rollback()
             logger.error(f'保存技能失败: {e}')
             return {'error': f'保存技能失败: {str(e)}'}
+
+    @staticmethod
+    def _tool_send_email(args: dict, user_id: int = None) -> dict:
+        """发送邮件通知"""
+        import os
+        from app.models.system_config import SystemConfig
+        
+        to_emails = args.get('to_emails', '').strip()
+        subject = args.get('subject', '').strip()
+        body = args.get('body', '').strip()
+        content_type = args.get('content_type', 'text')
+        attachment_path = args.get('attachment_path', '').strip()
+        attachment_name = args.get('attachment_name', '').strip()
+        
+        if not to_emails:
+            return {'error': '收件人邮箱不能为空'}
+        if not subject and not body:
+            return {'error': '邮件主题和正文至少填一项'}
+        
+        # 解析收件人列表
+        email_list = [e.strip() for e in to_emails.replace('，', ',').split(',') if e.strip()]
+        if not email_list:
+            return {'error': '收件人邮箱格式错误'}
+        
+        # 获取SMTP配置
+        def _get_config(key):
+            config = SystemConfig.query.filter_by(config_key=key).first()
+            return config.config_value if config and config.config_value else ''
+        
+        def _get_encrypted_config(key):
+            config = SystemConfig.query.filter_by(config_key=key).first()
+            return config.get_encrypted_value() if config else ''
+        
+        smtp_host = _get_config(SystemConfig.EMAIL_SMTP_HOST)
+        smtp_port = _get_config(SystemConfig.EMAIL_SMTP_PORT)
+        smtp_user = _get_config(SystemConfig.EMAIL_SMTP_USER)
+        smtp_password = _get_encrypted_config(SystemConfig.EMAIL_SMTP_PASSWORD)
+        smtp_ssl = _get_config(SystemConfig.EMAIL_SMTP_SSL)
+        from_name = _get_config(SystemConfig.EMAIL_FROM_NAME) or 'Excel Database Query'
+        from_address = _get_config(SystemConfig.EMAIL_FROM_ADDRESS) or smtp_user
+        
+        if not smtp_host:
+            return {'error': 'SMTP主机未配置，请在系统配置中设置'}
+        if not smtp_user:
+            return {'error': 'SMTP用户未配置，请在系统配置中设置'}
+        if not smtp_password:
+            return {'error': 'SMTP密码未配置，请在系统配置中设置'}
+        
+        try:
+            import smtplib
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+            from email.mime.base import MIMEBase
+            from email import encoders
+            from email.utils import formataddr, formatdate, make_msgid
+            
+            port = int(smtp_port) if smtp_port else 465
+            use_ssl = smtp_ssl.lower() in ('true', '1', 'yes') if smtp_ssl else True
+            
+            # 构建邮件
+            msg = MIMEMultipart()
+            msg['From'] = formataddr((from_name, from_address))
+            msg['To'] = ', '.join(email_list)
+            msg['Subject'] = subject
+            msg['Date'] = formatdate(localtime=True)
+            msg['Message-ID'] = make_msgid()
+            
+            # 添加正文
+            if content_type == 'html':
+                msg.attach(MIMEText(body, 'html', 'utf-8'))
+            else:
+                msg.attach(MIMEText(body, 'plain', 'utf-8'))
+            
+            # 添加附件
+            if attachment_path:
+                if not os.path.exists(attachment_path):
+                    return {'error': f'附件文件不存在: {attachment_path}'}
+                
+                filename = attachment_name or os.path.basename(attachment_path)
+                with open(attachment_path, 'rb') as f:
+                    part = MIMEBase('application', 'octet-stream')
+                    part.set_payload(f.read())
+                    encoders.encode_base64(part)
+                    part.add_header('Content-Disposition', f'attachment; filename="{filename}"')
+                    msg.attach(part)
+            
+            # 发送邮件
+            if use_ssl:
+                server = smtplib.SMTP_SSL(smtp_host, port, timeout=30)
+            else:
+                server = smtplib.SMTP(smtp_host, port, timeout=30)
+                server.starttls()
+            
+            server.login(smtp_user, smtp_password)
+            server.sendmail(from_address, email_list, msg.as_string())
+            server.quit()
+            
+            logger.info(f'邮件发送成功: to={email_list}, subject={subject}')
+            return {
+                'success': True,
+                'to_emails': email_list,
+                'subject': subject,
+                'message': f'邮件已成功发送给 {len(email_list)} 个收件人'
+            }
+        except Exception as e:
+            logger.error(f'邮件发送失败: {e}')
+            return {'error': f'邮件发送失败: {str(e)}'}
 
     @staticmethod
     def _tool_fetch_url(args: dict) -> dict:

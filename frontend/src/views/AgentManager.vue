@@ -294,6 +294,12 @@ const toolOptions = [
   { name: 'list_lookup_options', label: '列出信息查询' },
   { name: 'request_lookup', label: '执行信息查询' },
   { name: 'fetch_url', label: '请求外部URL' },
+  { name: 'request_profit_share', label: '分润导出' },
+  { name: 'create_ticket', label: '创建工单' },
+  { name: 'list_pay_channels', label: '列出代付渠道' },
+  { name: 'request_pay_withdraw', label: '代付提现' },
+  { name: 'save_skill', label: '保存技能/规则' },
+  { name: 'send_email', label: '发送邮件' },
 ]
 
 const defaultForm = {
