@@ -150,6 +150,7 @@ const autoExport = {
   deleteAll: () => http.delete('/auto-export/all'),
   toggle: (id) => http.post(`/auto-export/${id}/toggle`),
   runNow: (id) => http.post(`/auto-export/${id}/run-now`),
+  resendEmail: (id) => http.post(`/auto-export/${id}/resend-email`),
   paramOptions: () => http.get('/auto-export/param-options'),
 }
 
