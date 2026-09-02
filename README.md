@@ -338,6 +338,32 @@ WHERE merchant_id = :value
 
 ## 近期新增功能
 
+### 新增send_email邮件发送工具 (v2.5.5)
+
+**功能说明**：
+- 新增 `send_email` 工具，Agent可通过对话发送邮件
+- 支持纯文本和HTML格式邮件
+- 支持添加文件附件（如导出结果文件）
+- 收件人支持多个（逗号分隔）
+- 复用系统SMTP配置
+
+**使用场景**：
+- 用户说「把刚才的导出结果发邮件给xxx@test.com」
+- 工单执行完成后自动发送邮件通知
+- 对话中发送报告/结果给指定邮箱
+
+**技术实现**：
+- `backend/app/services/ai_service.py`：新增 `send_email` 工具定义 + `_tool_send_email` 实现
+- `frontend/src/views/AgentManager.vue`：工具列表新增 `send_email` 选项
+
+**工具参数**：
+- `to_emails`：收件人邮箱（多个逗号分隔）
+- `subject`：邮件主题
+- `body`：邮件正文
+- `content_type`：正文类型（text/html）
+- `attachment_path`：附件文件路径
+- `attachment_name`：附件显示名称
+
 ### 自动导出任务支持手动重发邮件 (v2.5.4)
 
 **功能说明**：
