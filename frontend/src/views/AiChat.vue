@@ -3927,6 +3927,9 @@ function onSelectionChange(msg) {
 }
 
 async function confirmExport(msg) {
+  // 防重复执行
+  if (msg._executing || msg._done) return
+  
   const td = msg.tool_data
   const params = { ...td.params }
   const allChecked = td.all_checked || {}
@@ -4226,6 +4229,9 @@ async function confirmSystemTaskParamDialog() {
 
 // 确认系统任务（从tool卡片确认按钮触发）
 async function confirmSystemTask(msg) {
+  // 防重复执行
+  if (msg._executing || msg._done) return
+  
   const td = msg.tool_data
   msg._selected = [td.task_id]
   msg._selectedScripts = [{
@@ -4529,6 +4535,9 @@ function pollSystemTaskStatus(executionId, msg) {
 // ============ 分润导出相关函数 ============
 // 确认执行分润导出（从工具卡片触发）
 async function confirmProfitShare(msg) {
+  // 防重复执行
+  if (msg._executing || msg._done) return
+  
   const td = msg.tool_data
   msg._executing = true
   msg._progress = 5
