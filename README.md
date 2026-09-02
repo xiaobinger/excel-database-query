@@ -338,6 +338,20 @@ WHERE merchant_id = :value
 
 ## 近期新增功能
 
+### 自动导出任务支持手动重发邮件 (v2.5.4)
+
+**功能说明**：
+- 自动导出任务列表新增「重发邮件」按钮
+- 仅当任务满足以下条件时显示：
+  - 启用了邮件通知（`notify_enabled=true`）
+  - 有执行记录（`last_task_id` 不为空）
+- 点击后重新发送上次执行结果的邮件通知
+
+**技术实现**：
+- `backend/app/routes/auto_export_routes.py`：新增 `/resend-email` 接口
+- `frontend/src/views/AutoExportManager.vue`：新增 `handleResendEmail` 函数和按钮
+- `frontend/src/api/index.js`：新增 `resendEmail` API
+
 ### 修复监督者自动执行+插话发送问题 (v2.5.3)
 
 **修复内容**：
