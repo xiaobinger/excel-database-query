@@ -596,23 +596,26 @@
             </div>
           </div>
           <!-- 排队消息提示 -->
-          <div v-if="loading && queuedMessage" class="message assistant queued-message">
-            <div class="message-avatar"><i class="fas fa-clock"></i></div>
+          <div v-if="loading && queuedMessage" class="message assistant queued-message queued-slide-in">
+            <div class="message-avatar queued-avatar-pulse"><i class="fas fa-clock"></i></div>
             <div class="message-content">
-              <div class="queued-msg-content">
-                <i class="fas fa-hourglass-half"></i>
-                <span>排队中：{{ queuedMessage.content?.substring(0, 50) }}{{ (queuedMessage.content?.length || 0) > 50 ? '...' : '' }}</span>
-                <el-button text size="small" @click="cancelQueuedMessage" title="取消排队">
-                  <i class="fas fa-times"></i>
-                </el-button>
+              <div class="queued-msg-card">
+                <div class="queued-badge"><i class="fas fa-layer-group"></i> 排队中</div>
+                <div class="queued-text">{{ queuedMessage.content?.substring(0, 80) }}{{ (queuedMessage.content?.length || 0) > 80 ? '...' : '' }}</div>
+                <div class="queued-footer">
+                  <span class="queued-hint"><i class="fas fa-arrow-down"></i> 当前任务完成后自动发送</span>
+                  <el-button text size="small" class="queued-cancel-btn" @click="cancelQueuedMessage">
+                    <i class="fas fa-times"></i> 取消
+                  </el-button>
+                </div>
               </div>
             </div>
           </div>
           <div v-if="loading" class="message assistant">
             <div class="message-avatar"><i class="fas fa-robot"></i></div>
             <div class="message-content">
-              <div class="typing-indicator">
-                <span></span><span></span><span></span>
+              <div class="typing-wave">
+                <span></span><span></span><span></span><span></span><span></span>
               </div>
             </div>
           </div>
@@ -786,18 +789,29 @@
                   <el-button type="danger" @click="abortRequest" title="终止当前任务">
                     <i class="fas fa-stop"></i>
                   </el-button>
-                  <el-dropdown v-if="inputText.trim()" trigger="click" @command="handleInterruptCommand">
-                    <el-button type="warning" title="发送插话/引导指令">
-                      <i class="fas fa-paper-plane"></i>
-                      <i class="fas fa-bolt" style="font-size: 10px; margin-left: 2px;"></i>
-                    </el-button>
+                  <el-dropdown v-if="inputText.trim()" trigger="click" @command="handleInterruptCommand" popper-class="interrupt-dropdown">
+                    <button class="interrupt-trigger-btn" title="发送插话/引导指令">
+                      <i class="fas fa-bolt"></i>
+                    </button>
                     <template #dropdown>
                       <el-dropdown-menu>
-                        <el-dropdown-item command="interrupt">
-                          <i class="fas fa-bolt" style="color: #e6a23c;"></i> 插话发送（立即上送，AI立即采纳）
+                        <el-dropdown-item command="interrupt" class="interrupt-item-interrupt">
+                          <div class="interrupt-option">
+                            <div class="interrupt-option-icon interrupt-icon-bolt"><i class="fas fa-bolt"></i></div>
+                            <div class="interrupt-option-text">
+                              <div class="interrupt-option-title">⚡ 插话发送</div>
+                              <div class="interrupt-option-desc">立即上送，AI 立即采纳</div>
+                            </div>
+                          </div>
                         </el-dropdown-item>
-                        <el-dropdown-item command="queue">
-                          <i class="fas fa-clock" style="color: #909399;"></i> 排队发送（等当前任务完成后再处理）
+                        <el-dropdown-item command="queue" class="interrupt-item-queue">
+                          <div class="interrupt-option">
+                            <div class="interrupt-option-icon interrupt-icon-clock"><i class="fas fa-clock"></i></div>
+                            <div class="interrupt-option-text">
+                              <div class="interrupt-option-title">🕐 排队发送</div>
+                              <div class="interrupt-option-desc">等当前任务完成后处理</div>
+                            </div>
+                          </div>
                         </el-dropdown-item>
                       </el-dropdown-menu>
                     </template>
@@ -6897,52 +6911,256 @@ onActivated(() => {
   color: #606266;
 }
 
-.typing-indicator {
+/* ===== 打字波浪指示器 ===== */
+.typing-wave {
   display: flex;
-  gap: 4px;
-  padding: 12px 16px;
+  align-items: center;
+  gap: 3px;
+  padding: 14px 18px;
 }
 
-.typing-indicator span {
-  width: 8px;
-  height: 8px;
+.typing-wave span {
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  background: #c0c4cc;
-  animation: typing 1.4s infinite;
+  background: linear-gradient(135deg, #409eff, #79bbff);
+  animation: wave 1.5s ease-in-out infinite;
 }
 
-.typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
-.typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+.typing-wave span:nth-child(1) { animation-delay: 0s; }
+.typing-wave span:nth-child(2) { animation-delay: 0.1s; }
+.typing-wave span:nth-child(3) { animation-delay: 0.2s; }
+.typing-wave span:nth-child(4) { animation-delay: 0.3s; }
+.typing-wave span:nth-child(5) { animation-delay: 0.4s; }
 
-@keyframes typing {
-  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-  30% { transform: translateY(-6px); opacity: 1; }
+@keyframes wave {
+  0%, 100% {
+    transform: scaleY(0.5);
+    opacity: 0.4;
+  }
+  50% {
+    transform: scaleY(1.5);
+    opacity: 1;
+  }
 }
 
 /* ===== 排队消息样式 ===== */
-.queued-message .message-content {
-  opacity: 0.7;
+.queued-slide-in {
+  animation: queued-slide 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-.queued-msg-content {
+@keyframes queued-slide {
+  0% {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.queued-avatar-pulse {
+  animation: avatar-pulse 2s ease-in-out infinite;
+}
+
+@keyframes avatar-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(230, 162, 60, 0.3); }
+  50% { box-shadow: 0 0 0 8px rgba(230, 162, 60, 0); }
+}
+
+.queued-msg-card {
+  background: linear-gradient(135deg, #fdf6ec 0%, #fef3e0 100%);
+  border: 1px solid #fde8c0;
+  border-radius: 12px;
+  padding: 12px 16px;
+  max-width: 420px;
+  position: relative;
+  overflow: hidden;
+}
+
+.queued-msg-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 4px;
+  height: 100%;
+  background: linear-gradient(180deg, #e6a23c, #f0c78a);
+  border-radius: 4px 0 0 4px;
+}
+
+.queued-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  background: linear-gradient(135deg, #e6a23c, #f0c78a);
+  color: #fff;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  animation: badge-glow 2s ease-in-out infinite;
+}
+
+@keyframes badge-glow {
+  0%, 100% { box-shadow: 0 1px 4px rgba(230, 162, 60, 0.3); }
+  50% { box-shadow: 0 2px 12px rgba(230, 162, 60, 0.5); }
+}
+
+.queued-text {
+  font-size: 13px;
+  color: #8b6914;
+  line-height: 1.5;
+  margin-bottom: 8px;
+  word-break: break-all;
+}
+
+.queued-footer {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: #fdf6ec;
-  border-radius: 8px;
-  font-size: 13px;
+  justify-content: space-between;
+}
+
+.queued-hint {
+  font-size: 11px;
+  color: #b8860b;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  animation: hint-bounce 2s ease-in-out infinite;
+}
+
+@keyframes hint-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(2px); }
+}
+
+.queued-cancel-btn {
+  color: #c0840a !important;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.queued-cancel-btn:hover {
+  background: rgba(192, 132, 10, 0.12) !important;
+  color: #e65100 !important;
+}
+
+/* ===== 插话/排队下拉菜单 ===== */
+.interrupt-trigger-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #e6a23c, #f0c78a);
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  box-shadow: 0 2px 8px rgba(230, 162, 60, 0.3);
+  position: relative;
+  overflow: hidden;
+}
+
+.interrupt-trigger-btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.2), transparent);
+  border-radius: inherit;
+}
+
+.interrupt-trigger-btn:hover {
+  transform: scale(1.08);
+  box-shadow: 0 4px 16px rgba(230, 162, 60, 0.45);
+}
+
+.interrupt-trigger-btn:active {
+  transform: scale(0.95);
+}
+
+.interrupt-trigger-btn i {
+  animation: bolt-flicker 3s ease-in-out infinite;
+}
+
+@keyframes bolt-flicker {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.85; transform: scale(1.1); }
+  52% { opacity: 1; transform: scale(1); }
+}
+
+/* 下拉菜单选项卡片化 */
+:deep(.interrupt-dropdown) .el-dropdown-menu {
+  padding: 8px;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+}
+
+.interrupt-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 4px;
+  border-radius: 10px;
+  transition: background 0.2s;
+}
+
+.interrupt-option:hover {
+  background: #f5f7fa;
+}
+
+.interrupt-option-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.interrupt-icon-bolt {
+  background: linear-gradient(135deg, #fdf6ec, #fef3e0);
   color: #e6a23c;
+  border: 1px solid #fde8c0;
 }
 
-.queued-msg-content i.fa-hourglass-half {
-  animation: hourglass 2s infinite;
+.interrupt-icon-clock {
+  background: linear-gradient(135deg, #f0f9eb, #e1f3d8);
+  color: #67c23a;
+  border: 1px solid #d9f0be;
 }
 
-@keyframes hourglass {
-  0% { transform: rotate(0deg); }
-  50% { transform: rotate(180deg); }
-  100% { transform: rotate(360deg); }
+.interrupt-option-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+  line-height: 1.3;
+}
+
+.interrupt-option-desc {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 2px;
+}
+
+:deep(.interrupt-dropdown) .el-dropdown-menu__item {
+  padding: 4px;
+  border-radius: 10px;
+  line-height: 1.4;
+}
+
+:deep(.interrupt-dropdown) .el-dropdown-menu__item:not(.is-disabled):hover {
+  background: transparent;
 }
 
 /* ===== 插话消息标记 ===== */

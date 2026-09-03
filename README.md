@@ -338,6 +338,14 @@ WHERE merchant_id = :value
 
 ## 近期新增功能
 
+### AI对话排队/插话UI升级
+
+**排队消息**：从简单的 hourglass 图标升级为卡片式设计——渐变背景、左侧品牌色边框、发光徽章、滑入动画、头像脉冲光晕、向下箭头跳动提示。
+
+**插话/排队按钮**：从普通 el-button 升级为渐变色圆形触发按钮（⚡闪电图标+脉冲闪烁），下拉菜单选项卡片化（图标+标题+描述三行布局），hover 有圆角高亮。
+
+**打字指示器**：从3个圆点弹跳升级为5条竖线波浪动画（渐变蓝色，高低起伏）。
+
 ### AI模型Logo适配：新增阶跃星辰和美团
 
 **阶跃星辰 (StepFun)**：
@@ -1001,6 +1009,7 @@ API类型和本地脚本类型的系统任务支持**从SQL脚本动态获取参
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-09-03 | v2.6.0 | AI对话排队/插话UI升级：排队消息卡片化（渐变背景+左侧色条+发光徽章+滑入动画+头像脉冲+跳动提示）；插话/排队按钮升级为渐变圆形触发器（⚡脉冲闪烁），下拉选项卡片化（图标+标题+描述三行布局）；打字指示器从3圆点弹跳升级为5竖线波浪动画（渐变蓝+高低起伏） |
 | 2026-09-03 | v2.5.9 | AI模型Logo适配：新增阶跃星辰（StepFun，品牌蓝 #2B5AED）和美团（品牌黄 #FFD100）自动识别与logo渲染；识别规则覆盖 provider/apiBase（stepfun/step-/阶跃/meituan/美团/longcat）和模型名（step-2-*/step-1-*）；两个品牌同时在 providerLogo.js 和 ProviderLogo.vue 中注册，保持一致 |
 | 2026-09-03 | v2.5.8 | 修复 MCP 市场两处报错：①官方注册表 `packages` 字段为 list 格式时 `.items()` 报 AttributeError（兼容 dict/list 两种格式）；②`refresh_marketplace` 调用未定义的 `_clear_cache`（补齐缓存基础设施：`_market_cache`/`_get_cache`/`_set_cache`/`_clear_cache`，TTL 1小时）；外部服务名清洗（如 `ac.inference.sh/mcp` → `ac-inference-sh-mcp`，符合服务名校验规则） |
 | 2026-09-02 | v2.5.7 | MCP 市场增强：多市场源拉取（Smithery + 官方注册表 + 内置推荐）；Tab 切换（我的服务/市场）；手动刷新市场（清除缓存重新拉取）；已引入标记（绿色标签+禁用按钮）；工具查看按钮（直接查看工具清单 mcp__{服务名}__{工具名}）；新增工具刷新时间列、删除确认弹窗；后端新增 `/marketplace?source=`、`/marketplace/refresh`、`/marketplace/sources` 三个接口；市场数据带缓存（1小时 TTL） |
