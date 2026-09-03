@@ -28,6 +28,15 @@ from urllib.error import URLError, HTTPError
 
 logger = logging.getLogger(__name__)
 
+# ============ 缓存机制 ============
+
+# 内存缓存：source -> {'data': [...], 'time': monotonic_time}
+_market_cache = {}
+
+# 缓存过期时间（秒）
+CACHE_TTL = 3600  # 1小时
+
+
 # ============ 市场源配置 ============
 
 SMITHERY_API = "https://registry.smithery.ai/servers?limit=50"
@@ -192,6 +201,27 @@ STATIC_ITEMS = [
 ]
 
 
+def _get_cache(source):
+    """获取缓存数据，未命中或过期返回 None"""
+    entry = _market_cache.get(source)
+    if entry and time.monotonic() - entry['time'] < CACHE_TTL:
+        return entry['data']
+    return None
+
+
+def _set_cache(source, data):
+    """设置缓存数据"""
+    _market_cache[source] = {'data': data, 'time': time.monotonic()}
+
+
+def _clear_cache(source=None):
+    """清除指定或全部缓存"""
+    if source:
+        _market_cache.pop(source, None)
+    else:
+        _market_cache.clear()
+
+
 def _http_get(url, timeout=10):
     """HTTP GET 请求，返回 JSON"""
     req = Request(url)
@@ -204,8 +234,23 @@ def _http_get(url, timeout=10):
         return None
 
 
-def _fetch_smithery():
-    """从 Smithery Registry 拉取热门 MCP 服务"""
+def _sanitize_name(raw):
+    """将外部服务名清洗为合法服务名（字母开头，仅字母/数字/下划线/中划线，无连续下划线）"""
+    import re
+    name = re.sub(r'[^a-zA-Z0-9_-]', '-', (raw or '').strip())
+    name = re.sub(r'-{2,}', '-', name).strip('-')[:64]
+    if not name or not name[0].isalpha():
+        name = ('mcp-' + name) if name else 'mcp-server'
+    return name
+
+
+def _fetch_smithery(force_refresh=False):
+    """从 Smithery Registry 拉取热门 MCP 服务（带缓存）"""
+    if not force_refresh:
+        cached = _get_cache('smithery')
+        if cached is not None:
+            return cached
+
     data = _http_get(SMITHERY_API)
     if not data or 'servers' not in data:
         logger.warning("Smithery API 返回数据异常")
@@ -219,33 +264,27 @@ def _fetch_smithery():
                 continue
 
             qualified_name = srv.get('qualifiedName', '')
-            # 解析 category（根据名称或描述简单分类）
+            if not qualified_name:
+                continue
+
             cat = _infer_category(srv)
 
-            # 获取 env_keys（从 connections.configSchema）
-            env_keys = []
-            connections = srv.get('connections', [])
-            for conn in connections:
-                if conn.get('type') == 'http':
-                    schema = conn.get('configSchema', {})
-                    required = schema.get('required', [])
-                    properties = schema.get('properties', {})
-                    for prop_name, prop_info in properties.items():
-                        env_keys.append({
-                            'key': prop_name.upper(),
-                            'required': prop_name in required,
-                            'description': prop_info.get('description', prop_info.get('title', '')),
-                        })
+            # Smithery 列表 API 不返回 deploymentUrl，远程部署 URL 格式为 {短名}.run.tools
+            is_remote = bool(srv.get('remote'))
+            deployment_url = srv.get('deploymentUrl')
+            if not deployment_url and is_remote:
+                short_name = qualified_name.split('/')[-1]
+                deployment_url = f"https://{short_name}.run.tools"
 
             item = {
-                'name': qualified_name,
+                'name': _sanitize_name(qualified_name),
                 'title': srv.get('displayName', qualified_name),
                 'category': cat,
                 'description': srv.get('description', ''),
-                'transport_type': 'streamable_http' if srv.get('remote') else 'stdio',
-                'url': srv.get('deploymentUrl'),
-                'command': None if srv.get('remote') else f'npm install -g {qualified_name} && {qualified_name}',
-                'env_keys': env_keys,
+                'transport_type': 'streamable_http' if is_remote else 'stdio',
+                'url': deployment_url,
+                'command': None if is_remote else f'npx -y {qualified_name}',
+                'env_keys': [],
                 'note': srv.get('homepage'),
                 'source': 'smithery',
                 'icon_url': srv.get('iconUrl'),
@@ -259,11 +298,17 @@ def _fetch_smithery():
 
     # 按使用量排序
     items.sort(key=lambda x: x.get('use_count', 0), reverse=True)
+    _set_cache('smithery', items)
     return items
 
 
-def _fetch_official():
-    """从官方 MCP Registry 拉取服务"""
+def _fetch_official(force_refresh=False):
+    """从官方 MCP Registry 拉取服务（带缓存）"""
+    if not force_refresh:
+        cached = _get_cache('official')
+        if cached is not None:
+            return cached
+
     data = _http_get(OFFICIAL_API)
     if not data or 'servers' not in data:
         logger.warning("Official Registry API 返回数据异常")
@@ -285,20 +330,26 @@ def _fetch_official():
                 if remote.get('type') in ('streamable-http', 'sse'):
                     urls.append(remote.get('url'))
 
-            # 获取 npm 包信息
+            # 获取 npm 包信息（packages 可能是 dict 或 list 两种格式）
             packages = srv.get('packages', {})
             npm_id = None
-            for reg_type, pkg_list in packages.items():
-                if isinstance(pkg_list, list) and pkg_list:
-                    npm_id = pkg_list[0].get('identifier')
-                    break
-                elif isinstance(pkg_list, dict):
-                    npm_id = pkg_list.get('identifier')
+            if isinstance(packages, list):
+                for pkg in packages:
+                    if isinstance(pkg, dict) and pkg.get('identifier'):
+                        npm_id = pkg.get('identifier')
+                        break
+            elif isinstance(packages, dict):
+                for reg_type, pkg_list in packages.items():
+                    if isinstance(pkg_list, list) and pkg_list:
+                        npm_id = pkg_list[0].get('identifier')
+                        break
+                    elif isinstance(pkg_list, dict):
+                        npm_id = pkg_list.get('identifier')
 
             cat = _infer_category_from_name(name)
 
             item = {
-                'name': name,
+                'name': _sanitize_name(name),
                 'title': srv.get('title') or name.split('/')[-1],
                 'category': cat,
                 'description': srv.get('description', ''),
@@ -315,6 +366,7 @@ def _fetch_official():
             logger.warning(f"Official Registry 解析条目失败 {name}: {e}")
             continue
 
+    _set_cache('official', items)
     return items
 
 
@@ -349,33 +401,34 @@ def _infer_category_from_name(name):
     return '其他'
 
 
-def get_marketplace(source=None, imported_names: set = None) -> list:
+def get_marketplace(source=None, imported_names: set = None, force_refresh=False) -> list:
     """返回市场目录。
 
-    source: 'smithery' | 'official' | None（拉取所有源）
+    source: 'smithery' | 'official' | 'static' | None（拉取所有源）
     imported_names: 已导入的服务名称集合，用于标记已导入的条目。
+    force_refresh: 是否绕过缓存强制重新拉取
     """
     imported_names = imported_names or set()
 
     # 拉取远程市场
-    remote_items = []
+    all_items = []
     if source is None or source == 'smithery':
         try:
-            remote_items.extend(_fetch_smithery())
+            all_items.extend(_fetch_smithery(force_refresh=force_refresh))
         except Exception as e:
             logger.warning(f"拉取 Smithery 市场失败: {e}")
 
     if source is None or source == 'official':
         try:
-            remote_items.extend(_fetch_official())
+            all_items.extend(_fetch_official(force_refresh=force_refresh))
         except Exception as e:
             logger.warning(f"拉取官方注册表失败: {e}")
 
     # 合并静态条目
-    static_items = [dict(item) for item in STATIC_ITEMS]
+    if source is None or source == 'static':
+        all_items.extend(dict(item) for item in STATIC_ITEMS)
 
     # 去重（按 name）
-    all_items = remote_items + static_items
     seen = set()
     unique_items = []
     for item in all_items:
@@ -403,8 +456,7 @@ def get_source_status():
     """获取各市场源的缓存状态"""
     status = {}
     for src in ['smithery', 'official']:
-        cache_key = f"marketplace_{src}"
-        entry = _market_cache.get(cache_key)
+        entry = _market_cache.get(src)
         now = time.monotonic()
 
         if entry and now - entry['time'] < CACHE_TTL:
@@ -415,12 +467,11 @@ def get_source_status():
                 'last_updated': entry['time'],
             }
         else:
-            try:
-                url = SMITHERY_API if src == 'smithery' else OFFICIAL_API
-                data = _http_get(url, timeout=5)
-                count = len(data.get('servers', [])) if data else 0
-                status[src] = {'available': True, 'count': count, 'cached': False}
-            except:
+            url = SMITHERY_API if src == 'smithery' else OFFICIAL_API
+            data = _http_get(url, timeout=5)
+            if data and data.get('servers') is not None:
+                status[src] = {'available': True, 'count': len(data.get('servers', [])), 'cached': False}
+            else:
                 status[src] = {'available': False, 'count': 0, 'cached': False}
     return status
 

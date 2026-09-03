@@ -987,6 +987,7 @@ API类型和本地脚本类型的系统任务支持**从SQL脚本动态获取参
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-09-03 | v2.5.8 | 修复 MCP 市场两处报错：①官方注册表 `packages` 字段为 list 格式时 `.items()` 报 AttributeError（兼容 dict/list 两种格式）；②`refresh_marketplace` 调用未定义的 `_clear_cache`（补齐缓存基础设施：`_market_cache`/`_get_cache`/`_set_cache`/`_clear_cache`，TTL 1小时）；外部服务名清洗（如 `ac.inference.sh/mcp` → `ac-inference-sh-mcp`，符合服务名校验规则） |
 | 2026-09-02 | v2.5.7 | MCP 市场增强：多市场源拉取（Smithery + 官方注册表 + 内置推荐）；Tab 切换（我的服务/市场）；手动刷新市场（清除缓存重新拉取）；已引入标记（绿色标签+禁用按钮）；工具查看按钮（直接查看工具清单 mcp__{服务名}__{工具名}）；新增工具刷新时间列、删除确认弹窗；后端新增 `/marketplace?source=`、`/marketplace/refresh`、`/marketplace/sources` 三个接口；市场数据带缓存（1小时 TTL） |
 | 2026-08-30 | v2.4.0 | 工单多Agent协作（执行者+监督者）：工单指派给AI时可额外配置监督者Agent，执行者Agent执行工单任务、监督者Agent审查执行结果是否满足要求并打分（0-100），不满足则反馈返工循环协作直到验收通过；最大协作轮数工单级可配置（1-20轮，默认3）；异步任务（导出/查询/分润/代付）完成后同样由监督者审查；**监督者授权确认执行**（Agent管理页为监督者开启后，工单进入「待确认」状态如SQL数据变更/生产代付时，由监督者直接审查确认/拒绝执行，无需提交者人工介入）；Agent管理新增角色字段与授权开关；工单创建/重指派支持选择监督者与轮数配置；工单详情展示监督评分与协作日志时间线；后端新增`multi_agent_service.py`、Ticket模型新增`supervisor_agent_id`/`collaboration_rounds`/`collaboration_log`/`max_collaboration_rounds`/`final_score`、AiAgent新增`agent_role`/`can_confirm_execution` |
 | 2026-08-29 | v2.3.22 | 运营数据看板统计指标面板：图表Y轴仅选择1个数值字段时，图表区域右上角自动显示四项关键统计指标（最大值、最小值、平均值、中位数）；大数智能格式化（万/亿），等宽数字字体对齐；面板带入场滑动动画；切换Y轴字段时自动重算 |
