@@ -116,6 +116,18 @@ const BRANDS = {
     title: '智谱GLM',
     svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 31.5 26.55" width="100%" height="100%" aria-hidden="true"><path fill="#1E51FF" d="M16.5376 0.0307374L14.3326 3.13223C14.1617 3.37577 13.9331 3.57415 13.6667 3.71001C13.4004 3.84586 13.1045 3.91504 12.8048 3.9115H0.787598V0.015152H16.5376V0.0307374Z"/><path fill="#1E51FF" d="M31.5 0.0321655L12.6 26.5273H0L18.9 0.0321655H31.5Z"/><path fill="#1E51FF" d="M14.9624 26.5272L17.1832 23.4101C17.3564 23.1689 17.5856 22.9723 17.8513 22.8368C18.1171 22.7012 18.4119 22.6306 18.7109 22.6308H30.7124V26.5272H14.9624Z"/></svg>`,
   },
+  // 阶跃星辰：StepFun 官方品牌蓝，logo为 stylized "S" 形（platform.stepfun.com）
+  stepfun: {
+    title: '阶跃星辰 StepFun',
+    color: '#2B5AED',
+    label: '跃',
+  },
+  // 美团：品牌黄 + 袋鼠/美字标识
+  meituan: {
+    title: '美团',
+    color: '#FFD100',
+    label: '美',
+  },
   // 以下厂商暂无官方SVG，使用品牌色+单字回退
   // 商汤：SenseNova（日日新）官方logo（platform.sensenova.cn，@lobehub/icons），
   // 紫 #5B2AD8 + 青绿 #06FDB7 双色四象限图形
@@ -170,6 +182,8 @@ function detectBrandKey(provider, apiBase, modelName) {
   if (base.includes('doubao') || base.includes('volc')) return 'doubao'
   if (base.includes('poolside')) return 'poolside'
   if (base.includes('nemotron') || base.includes('nvidia')) return 'nemotron'
+  if (base.includes('stepfun') || base.includes('step-') || base.includes('阶跃')) return 'stepfun'
+  if (base.includes('meituan') || base.includes('美团') || base.includes('longcat')) return 'meituan'
   if (base.includes('openai') || base.includes('gpt')) return 'openai'
 
   // 再综合模型名判断
@@ -191,6 +205,8 @@ function detectBrandKey(provider, apiBase, modelName) {
   if (s.includes('doubao') || s.includes('volc')) return 'doubao'
   if (s.includes('poolside') || s.includes('laguna')) return 'poolside'
   if (s.includes('nemotron')) return 'nemotron'
+  if (s.includes('stepfun') || s.includes('step-2') || s.includes('step-1') || s.includes('阶跃')) return 'stepfun'
+  if (s.includes('meituan') || s.includes('美团')) return 'meituan'
   if (s.includes('ox-alpha') || s.includes('ox_alpha') || s.includes('oxalpha')) return 'oxalpha'
   if (s.includes('gpt') || s.includes('openai') || s.includes('o1') || s.includes('o3') || s.includes('o4')) return 'openai'
   return 'generic'

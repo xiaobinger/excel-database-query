@@ -30,6 +30,8 @@ export const BRANDS = {
   poolside: 'Poolside',
   nemotron: 'Nemotron',
   oxalpha: 'OxAlpha',
+  stepfun: 'StepFun',
+  meituan: 'Meituan',
   generic: 'Generic',
 }
 
@@ -54,6 +56,8 @@ export function detectBrandKey(provider, apiBase, modelName) {
   if (base.includes('doubao') || base.includes('volc')) return 'doubao'
   if (base.includes('poolside')) return 'poolside'
   if (base.includes('nemotron') || base.includes('nvidia')) return 'nemotron'
+  if (base.includes('stepfun') || base.includes('step-') || base.includes('阶跃')) return 'stepfun'
+  if (base.includes('meituan') || base.includes('美团') || base.includes('longcat')) return 'meituan'
   if (base.includes('openai') || base.includes('gpt')) return 'openai'
 
   const s = `${base} ${modelName || ''}`.toLowerCase()
@@ -74,6 +78,8 @@ export function detectBrandKey(provider, apiBase, modelName) {
   if (s.includes('doubao') || s.includes('volc')) return 'doubao'
   if (s.includes('poolside') || s.includes('laguna')) return 'poolside'
   if (s.includes('nemotron')) return 'nemotron'
+  if (s.includes('stepfun') || s.includes('step-2') || s.includes('step-1') || s.includes('阶跃')) return 'stepfun'
+  if (s.includes('meituan') || s.includes('美团')) return 'meituan'
   if (s.includes('ox-alpha') || s.includes('ox_alpha') || s.includes('oxalpha')) return 'oxalpha'
   if (s.includes('gpt') || s.includes('openai') || s.includes('o1') || s.includes('o3') || s.includes('o4')) return 'openai'
   return 'generic'
