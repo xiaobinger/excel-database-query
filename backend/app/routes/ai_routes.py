@@ -2996,7 +2996,11 @@ def abort_chat_request(chat_id):
 @ai_bp.route('/chats/<int:chat_id>/interrupt', methods=['POST'])
 @login_required
 def interrupt_chat(chat_id):
-    """插话发送：将用户消息注入到当前正在进行的流式请求中"""
+    """插话发送：将用户消息注入到当前正在进行的流式请求中。
+    支持 mode 参数：
+    - 'inject'（默认）：注入到当前上下文，AI当前轮次结束后采纳
+    - 'stop_and_adopt'：立即终止当前流，保存新消息，让前端重新发起请求
+    """
     current_user = get_current_user()
     chat = AiChat.query.filter_by(id=chat_id, user_id=current_user.id).first()
     if not chat:
@@ -3004,6 +3008,7 @@ def interrupt_chat(chat_id):
 
     data = request.get_json()
     content = data.get('content', '').strip()
+    mode = data.get('mode', 'inject')
     if not content:
         return jsonify({'success': False, 'message': '消息内容不能为空'}), 400
 
@@ -3016,8 +3021,17 @@ def interrupt_chat(chat_id):
     db.session.add(user_message)
     db.session.commit()
 
-    # 将插话消息注入到活跃流中
     stream_info = _active_streams.get(chat_id)
+    
+    if mode == 'stop_and_adopt':
+        # 立即终止当前流
+        if stream_info and not stream_info.get('aborted'):
+            stream_info['aborted'] = True
+            logger.info(f'插话-立即停止: chat_id={chat_id}, content={content[:50]}')
+        # 将消息保存，前端会重新发起请求（新消息已存入数据库）
+        return jsonify({'success': True, 'message': '已停止AI，新指令已采纳，等待重新执行'})
+    
+    # 默认 inject 模式：注入到活跃流
     if stream_info and not stream_info.get('aborted'):
         if 'interrupt_messages' not in stream_info:
             stream_info['interrupt_messages'] = []

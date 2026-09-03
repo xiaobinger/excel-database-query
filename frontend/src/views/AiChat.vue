@@ -601,13 +601,44 @@
             <div class="message-content">
               <div class="queued-msg-card">
                 <div class="queued-badge"><i class="fas fa-layer-group"></i> 排队中</div>
-                <div class="queued-text">{{ queuedMessage.content?.substring(0, 80) }}{{ (queuedMessage.content?.length || 0) > 80 ? '...' : '' }}</div>
-                <div class="queued-footer">
-                  <span class="queued-hint"><i class="fas fa-arrow-down"></i> 当前任务完成后自动发送</span>
-                  <el-button text size="small" class="queued-cancel-btn" @click="cancelQueuedMessage">
-                    <i class="fas fa-times"></i> 取消
-                  </el-button>
-                </div>
+                <!-- 查看模式 -->
+                <template v-if="!isEditingQueue">
+                  <div class="queued-text">{{ queuedMessage.content?.substring(0, 120) }}{{ (queuedMessage.content?.length || 0) > 120 ? '...' : '' }}</div>
+                  <div class="queued-footer">
+                    <span class="queued-hint"><i class="fas fa-arrow-down"></i> 当前任务完成后自动发送</span>
+                    <div class="queued-actions">
+                      <el-button text size="small" class="queued-edit-btn" @click="startEditQueue">
+                        <i class="fas fa-pen"></i> 编辑
+                      </el-button>
+                      <el-button text size="small" class="queued-cancel-btn" @click="cancelQueuedMessage">
+                        <i class="fas fa-times"></i> 取消
+                      </el-button>
+                    </div>
+                  </div>
+                </template>
+                <!-- 编辑模式 -->
+                <template v-else>
+                  <el-input
+                    ref="queueEditInput"
+                    v-model="queueEditText"
+                    type="textarea"
+                    :autosize="{ minRows: 1, maxRows: 4 }"
+                    placeholder="编辑排队消息..."
+                    @keydown.enter.ctrl="saveEditQueue"
+                    @keydown.escape="cancelEditQueue"
+                  />
+                  <div class="queued-edit-footer">
+                    <span class="queued-edit-hint">Ctrl+Enter 发送 · Esc 取消</span>
+                    <div class="queued-actions">
+                      <el-button text size="small" class="queued-cancel-btn" @click="cancelEditQueue">
+                        <i class="fas fa-times"></i>
+                      </el-button>
+                      <el-button text size="small" class="queued-save-btn" @click="saveEditQueue">
+                        <i class="fas fa-check"></i> 保存
+                      </el-button>
+                    </div>
+                  </div>
+                </template>
               </div>
             </div>
           </div>
@@ -795,12 +826,21 @@
                     </button>
                     <template #dropdown>
                       <el-dropdown-menu>
+                        <el-dropdown-item command="stop_and_adopt" class="interrupt-item-interrupt">
+                          <div class="interrupt-option">
+                            <div class="interrupt-option-icon interrupt-icon-stop"><i class="fas fa-hand"></i></div>
+                            <div class="interrupt-option-text">
+                              <div class="interrupt-option-title">🛑 立即停止并采纳</div>
+                              <div class="interrupt-option-desc">立即停止AI，采纳你的新指令后继续</div>
+                            </div>
+                          </div>
+                        </el-dropdown-item>
                         <el-dropdown-item command="interrupt" class="interrupt-item-interrupt">
                           <div class="interrupt-option">
                             <div class="interrupt-option-icon interrupt-icon-bolt"><i class="fas fa-bolt"></i></div>
                             <div class="interrupt-option-text">
                               <div class="interrupt-option-title">⚡ 插话发送</div>
-                              <div class="interrupt-option-desc">立即上送，AI 立即采纳</div>
+                              <div class="interrupt-option-desc">注入上下文，AI当前轮次结束后采纳</div>
                             </div>
                           </div>
                         </el-dropdown-item>
@@ -1428,6 +1468,9 @@ const inputText = ref('')
 const loading = ref(false)
 const abortController = ref(null)  // 用于终止流式请求
 const queuedMessage = ref(null)  // 排队中的消息
+const isEditingQueue = ref(false)
+const queueEditText = ref('')
+const queueEditInput = ref(null)
 const messagesRef = ref(null)
 const uploadedFile = ref(null)
 const store = useAppStore()
@@ -2529,7 +2572,10 @@ function handleInterruptCommand(command) {
   const text = inputText.value.trim()
   if (!text) return
   
-  if (command === 'interrupt') {
+  if (command === 'stop_and_adopt') {
+    // 立即停止并采纳：先终止当前请求，然后发送新内容
+    sendStopAndAdopt(text)
+  } else if (command === 'interrupt') {
     // 插话发送：立即上送给AI
     sendInterruptMessage(text)
   } else if (command === 'queue') {
@@ -2543,7 +2589,101 @@ function handleInterruptCommand(command) {
 // 取消排队消息
 function cancelQueuedMessage() {
   queuedMessage.value = null
+  isEditingQueue.value = false
   ElMessage.info('已取消排队消息')
+}
+
+// 编辑排队消息
+function startEditQueue() {
+  queueEditText.value = queuedMessage.value?.content || ''
+  isEditingQueue.value = true
+  nextTick(() => {
+    queueEditInput.value?.focus()
+  })
+}
+
+function cancelEditQueue() {
+  isEditingQueue.value = false
+  queueEditText.value = ''
+}
+
+function saveEditQueue() {
+  const newText = queueEditText.value.trim()
+  if (!newText) {
+    ElMessage.warning('消息内容不能为空')
+    return
+  }
+  queuedMessage.value = { ...queuedMessage.value, content: newText }
+  isEditingQueue.value = false
+  queueEditText.value = ''
+  ElMessage.success('排队消息已更新')
+}
+
+// 立即停止并采纳新指令
+async function sendStopAndAdopt(text) {
+  if (!currentChatId.value || !text) return
+  
+  // 先终止当前AI请求
+  try {
+    const token = localStorage.getItem('token')
+    const abortUrl = api.ai.abortRequest?.(currentChatId.value)
+    if (abortUrl) {
+      await fetch(abortUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : '',
+        },
+      })
+    }
+  } catch (e) {
+    // 忽略终止失败
+  }
+
+  // 清空输入框
+  inputText.value = ''
+  
+  // 添加用户消息到界面（带特殊标记）
+  const userMsg = {
+    id: Date.now(),
+    role: 'user',
+    content: text,
+    _is_interrupt: true,
+    _is_stop_adopt: true,
+  }
+  messages.value.push(userMsg)
+  
+  // 发送停止并采纳指令到后端
+  try {
+    const token = localStorage.getItem('token')
+    const url = api.ai.sendInterruptMessage(currentChatId.value)
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': token ? `Bearer ${token}` : '',
+      },
+      body: JSON.stringify({ 
+        content: text,
+        mode: 'stop_and_adopt',
+      }),
+    })
+    const result = await response.json()
+    if (result.success) {
+      ElMessage.success('已停止AI，新指令已采纳')
+      // 短暂等待后重新发送消息（让AI基于新指令继续）
+      setTimeout(() => {
+        sendMessage()
+      }, 500)
+    } else {
+      ElMessage.error(result.message || '发送失败')
+    }
+  } catch (e) {
+    ElMessage.error('发送失败: ' + e.message)
+  }
+  
+  await nextTick()
+  scrollToBottom()
 }
 
 // 插话发送：立即上送给AI
@@ -7038,6 +7178,24 @@ onActivated(() => {
   50% { transform: translateY(2px); }
 }
 
+.queued-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.queued-edit-btn {
+  color: #b8860b !important;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.queued-edit-btn:hover {
+  background: rgba(184, 134, 11, 0.12) !important;
+  color: #e6a23c !important;
+}
+
 .queued-cancel-btn {
   color: #c0840a !important;
   font-size: 12px;
@@ -7049,6 +7207,46 @@ onActivated(() => {
 .queued-cancel-btn:hover {
   background: rgba(192, 132, 10, 0.12) !important;
   color: #e65100 !important;
+}
+
+.queued-save-btn {
+  color: #67c23a !important;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.queued-save-btn:hover {
+  background: rgba(103, 194, 58, 0.12) !important;
+  color: #529b2e !important;
+}
+
+.queued-edit-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.queued-edit-hint {
+  font-size: 11px;
+  color: #b8860b;
+}
+
+:deep(.queued-msg-card .el-textarea__inner) {
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid #fde8c0;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #8b6914;
+  padding: 8px 10px;
+  resize: none;
+}
+
+:deep(.queued-msg-card .el-textarea__inner:focus) {
+  border-color: #e6a23c;
+  box-shadow: 0 0 0 2px rgba(230, 162, 60, 0.15);
 }
 
 /* ===== 插话/排队下拉菜单 ===== */
@@ -7132,6 +7330,12 @@ onActivated(() => {
   background: linear-gradient(135deg, #fdf6ec, #fef3e0);
   color: #e6a23c;
   border: 1px solid #fde8c0;
+}
+
+.interrupt-icon-stop {
+  background: linear-gradient(135deg, #fef0f0, #fde2e2);
+  color: #f56c6c;
+  border: 1px solid #fab6b6;
 }
 
 .interrupt-icon-clock {
