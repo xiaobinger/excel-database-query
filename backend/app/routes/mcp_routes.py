@@ -255,20 +255,46 @@ def import_mcp_servers():
 @mcp_bp.route('/marketplace', methods=['GET'])
 @permission_required('system')
 def get_mcp_marketplace():
-    """获取MCP精选市场目录（供快速引入），自动标记已导入的服务"""
+    """获取MCP市场目录（支持外部市场拉取），自动标记已导入的服务
+
+    查询参数：
+    - source: smithery | official | static | all（默认all）
+    """
     from app.services.mcp_marketplace import get_marketplace
     # 查询已导入的服务名称，用于标记
     existing_names = {row.name for row in McpServer.query.with_entities(McpServer.name).all()}
-    return jsonify({'success': True, 'data': get_marketplace(imported_names=existing_names)})
+    source = request.args.get('source', 'all')
+    if source not in ('smithery', 'official', 'static', 'all'):
+        source = 'all'
+    source = None if source == 'all' else source
+    return jsonify({'success': True, 'data': get_marketplace(source=source, imported_names=existing_names)})
 
 
 @mcp_bp.route('/marketplace/refresh', methods=['POST'])
 @permission_required('system')
 def refresh_mcp_marketplace():
-    """刷新MCP市场目录（重新加载并标记已导入状态）"""
-    from app.services.mcp_marketplace import get_marketplace
+    """强制刷新MCP市场目录（清除缓存并重新拉取外部市场）
+
+    查询参数：
+    - source: smithery | official | all（默认all）
+    """
+    from app.services.mcp_marketplace import get_marketplace, refresh_marketplace
+    refresh_marketplace()
     existing_names = {row.name for row in McpServer.query.with_entities(McpServer.name).all()}
-    return jsonify({'success': True, 'data': get_marketplace(imported_names=existing_names)})
+    source = request.args.get('source', 'all')
+    if source not in ('smithery', 'official', 'all'):
+        source = 'all'
+    source = None if source == 'all' else source
+    data = get_marketplace(source=source, imported_names=existing_names, force_refresh=True)
+    return jsonify({'success': True, 'data': data, 'message': '市场已刷新'})
+
+
+@mcp_bp.route('/marketplace/sources', methods=['GET'])
+@permission_required('system')
+def get_mcp_marketplace_sources():
+    """获取各市场源状态（可用性/条目数/缓存状态）"""
+    from app.services.mcp_marketplace import get_source_status
+    return jsonify({'success': True, 'data': get_source_status()})
 
 
 @mcp_bp.route('/<int:server_id>', methods=['DELETE'])

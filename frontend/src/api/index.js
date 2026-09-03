@@ -365,8 +365,9 @@ const mcp = {
   test: (id) => http.post(`/mcp/${id}/test`),
   refreshTools: (id) => http.post(`/mcp/${id}/refresh-tools`),
   importJson: (data) => http.post('/mcp/import', data),
-  marketplace: () => http.get('/mcp/marketplace'),
-  refreshMarketplace: () => http.post('/mcp/marketplace/refresh'),
+  marketplace: (source) => http.get('/mcp/marketplace', { params: { source: source || 'all' } }),
+  refreshMarketplace: (source) => http.post('/mcp/marketplace/refresh', null, { params: { source: source || 'all' } }),
+  marketplaceSources: () => http.get('/mcp/marketplace/sources'),
 }
 
 const openApi = {

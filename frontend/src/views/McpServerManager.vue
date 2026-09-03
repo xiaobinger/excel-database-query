@@ -76,13 +76,25 @@
         <!-- ============ MCP 市场 ============ -->
         <el-tab-pane label="MCP 市场" name="market">
           <div class="market-toolbar">
-            <el-input v-model="marketSearch" placeholder="搜索名称 / 描述 / 分类" clearable style="width: 300px">
+            <el-input v-model="marketSearch" placeholder="搜索名称 / 描述 / 分类" clearable style="width: 260px">
               <template #prefix><i class="fas fa-search"></i></template>
             </el-input>
+            <el-select v-model="marketSource" placeholder="市场源" style="width: 140px" @change="handleSourceChange">
+              <el-option label="全部" value="all" />
+              <el-option label="Smithery" value="smithery" />
+              <el-option label="官方注册表" value="official" />
+              <el-option label="内置推荐" value="static" />
+            </el-select>
             <el-button type="primary" :loading="marketLoading" @click="handleRefreshMarket">
               <i class="fas fa-sync-alt"></i> 刷新市场
             </el-button>
             <span class="market-count">共 {{ filteredMarketItems.length }} 个服务</span>
+            <el-tag v-if="marketSourcesStatus.smithery" size="small" :type="marketSourcesStatus.smithery.available ? 'success' : 'danger'">
+              Smithery: {{ marketSourcesStatus.smithery.count || 0 }}
+            </el-tag>
+            <el-tag v-if="marketSourcesStatus.official" size="small" :type="marketSourcesStatus.official.available ? 'success' : 'danger'">
+              官方: {{ marketSourcesStatus.official.count || 0 }}
+            </el-tag>
           </div>
 
           <el-table :data="filteredMarketItems" stripe size="small" v-loading="marketLoading" style="width: 100%" max-height="500">
@@ -279,6 +291,8 @@ const importPlaceholder = `支持格式示例：
 const marketLoading = ref(false)
 const marketItems = ref([])
 const marketSearch = ref('')
+const marketSource = ref('all')
+const marketSourcesStatus = ref({})
 const filteredMarketItems = computed(() => {
   const kw = marketSearch.value.trim().toLowerCase()
   if (!kw) return marketItems.value
@@ -498,7 +512,7 @@ async function handleImportConfirm() {
 async function fetchMarket() {
   marketLoading.value = true
   try {
-    const res = await api.mcp.marketplace()
+    const res = await api.mcp.marketplace(marketSource.value)
     marketItems.value = res.data || []
   } catch {
     ElMessage.error('获取市场目录失败')
@@ -511,7 +525,7 @@ async function fetchMarket() {
 async function handleRefreshMarket() {
   marketLoading.value = true
   try {
-    const res = await api.mcp.refreshMarketplace()
+    const res = await api.mcp.refreshMarketplace(marketSource.value)
     marketItems.value = res.data || []
     ElMessage.success('市场目录已刷新')
   } catch {
@@ -519,6 +533,12 @@ async function handleRefreshMarket() {
   } finally {
     marketLoading.value = false
   }
+}
+
+function handleSourceChange(val) {
+  marketSource.value = val
+  marketItems.value = []
+  fetchMarket()
 }
 
 function handleMarketImport(row) {
@@ -546,9 +566,19 @@ function handleMarketImport(row) {
   dialogVisible.value = true
 }
 
+async function fetchMarketSources() {
+  try {
+    const res = await api.mcp.marketplaceSources()
+    marketSourcesStatus.value = res.data || {}
+  } catch {
+    // 忽略错误
+  }
+}
+
 onMounted(() => {
   fetchServers()
   fetchMarket()
+  fetchMarketSources()
 })
 </script>
 
