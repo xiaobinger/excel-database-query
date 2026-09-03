@@ -255,9 +255,20 @@ def import_mcp_servers():
 @mcp_bp.route('/marketplace', methods=['GET'])
 @permission_required('system')
 def get_mcp_marketplace():
-    """获取MCP精选市场目录（供快速引入）"""
+    """获取MCP精选市场目录（供快速引入），自动标记已导入的服务"""
     from app.services.mcp_marketplace import get_marketplace
-    return jsonify({'success': True, 'data': get_marketplace()})
+    # 查询已导入的服务名称，用于标记
+    existing_names = {row.name for row in McpServer.query.with_entities(McpServer.name).all()}
+    return jsonify({'success': True, 'data': get_marketplace(imported_names=existing_names)})
+
+
+@mcp_bp.route('/marketplace/refresh', methods=['POST'])
+@permission_required('system')
+def refresh_mcp_marketplace():
+    """刷新MCP市场目录（重新加载并标记已导入状态）"""
+    from app.services.mcp_marketplace import get_marketplace
+    existing_names = {row.name for row in McpServer.query.with_entities(McpServer.name).all()}
+    return jsonify({'success': True, 'data': get_marketplace(imported_names=existing_names)})
 
 
 @mcp_bp.route('/<int:server_id>', methods=['DELETE'])

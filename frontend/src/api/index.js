@@ -366,6 +366,7 @@ const mcp = {
   refreshTools: (id) => http.post(`/mcp/${id}/refresh-tools`),
   importJson: (data) => http.post('/mcp/import', data),
   marketplace: () => http.get('/mcp/marketplace'),
+  refreshMarketplace: () => http.post('/mcp/marketplace/refresh'),
 }
 
 const openApi = {

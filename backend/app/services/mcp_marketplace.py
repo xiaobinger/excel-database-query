@@ -232,6 +232,15 @@ MARKET_ITEMS = [
 ]
 
 
-def get_marketplace() -> list:
-    """返回市场目录（按分类排序）"""
-    return sorted(MARKET_ITEMS, key=lambda x: (x['category'], x['title']))
+def get_marketplace(imported_names: set = None) -> list:
+    """返回市场目录（按分类排序）。
+
+    imported_names: 已导入的服务名称集合，用于标记已导入的条目。
+    """
+    imported_names = imported_names or set()
+    items = []
+    for item in sorted(MARKET_ITEMS, key=lambda x: (x['category'], x['title'])):
+        item_copy = dict(item)
+        item_copy['imported'] = item['name'] in imported_names
+        items.append(item_copy)
+    return items
