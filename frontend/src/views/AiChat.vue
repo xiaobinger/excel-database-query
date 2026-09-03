@@ -826,21 +826,12 @@
                     </button>
                     <template #dropdown>
                       <el-dropdown-menu>
-                        <el-dropdown-item command="stop_and_adopt" class="interrupt-item-interrupt">
-                          <div class="interrupt-option">
-                            <div class="interrupt-option-icon interrupt-icon-stop"><i class="fas fa-hand"></i></div>
-                            <div class="interrupt-option-text">
-                              <div class="interrupt-option-title">🛑 立即停止并采纳</div>
-                              <div class="interrupt-option-desc">立即停止AI，采纳你的新指令后继续</div>
-                            </div>
-                          </div>
-                        </el-dropdown-item>
                         <el-dropdown-item command="interrupt" class="interrupt-item-interrupt">
                           <div class="interrupt-option">
                             <div class="interrupt-option-icon interrupt-icon-bolt"><i class="fas fa-bolt"></i></div>
                             <div class="interrupt-option-text">
                               <div class="interrupt-option-title">⚡ 插话发送</div>
-                              <div class="interrupt-option-desc">注入上下文，AI当前轮次结束后采纳</div>
+                              <div class="interrupt-option-desc">立即停止AI，采纳新指令后继续执行</div>
                             </div>
                           </div>
                         </el-dropdown-item>
@@ -2572,11 +2563,8 @@ function handleInterruptCommand(command) {
   const text = inputText.value.trim()
   if (!text) return
   
-  if (command === 'stop_and_adopt') {
-    // 立即停止并采纳：先终止当前请求，然后发送新内容
-    sendStopAndAdopt(text)
-  } else if (command === 'interrupt') {
-    // 插话发送：立即上送给AI
+  if (command === 'interrupt') {
+    // 插话发送：立即停止AI，采纳新指令后继续
     sendInterruptMessage(text)
   } else if (command === 'queue') {
     // 排队发送：保存到排队队列
@@ -2619,41 +2607,25 @@ function saveEditQueue() {
   ElMessage.success('排队消息已更新')
 }
 
-// 立即停止并采纳新指令
-async function sendStopAndAdopt(text) {
+// 插话发送：立即停止AI，采纳新指令后继续执行
+async function sendInterruptMessage(text) {
   if (!currentChatId.value || !text) return
   
-  // 先终止当前AI请求
-  try {
-    const token = localStorage.getItem('token')
-    const abortUrl = api.ai.abortRequest?.(currentChatId.value)
-    if (abortUrl) {
-      await fetch(abortUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': token ? `Bearer ${token}` : '',
-        },
-      })
-    }
-  } catch (e) {
-    // 忽略终止失败
-  }
-
-  // 清空输入框
+  // 先保存输入框内容（后端需要）
   inputText.value = ''
   
-  // 添加用户消息到界面（带特殊标记）
+  // 添加用户消息到界面（带插话标记）
   const userMsg = {
     id: Date.now(),
     role: 'user',
     content: text,
     _is_interrupt: true,
-    _is_stop_adopt: true,
   }
   messages.value.push(userMsg)
-  
-  // 发送停止并采纳指令到后端
+  await nextTick()
+  scrollToBottom()
+
+  // 发送插话指令到后端：停止当前流 + 保存新指令
   try {
     const token = localStorage.getItem('token')
     const url = api.ai.sendInterruptMessage(currentChatId.value)
@@ -2670,62 +2642,37 @@ async function sendStopAndAdopt(text) {
     })
     const result = await response.json()
     if (result.success) {
-      ElMessage.success('已停止AI，新指令已采纳')
-      // 短暂等待后重新发送消息（让AI基于新指令继续）
-      setTimeout(() => {
-        sendMessage()
-      }, 500)
+      ElMessage.success('插话指令已发送，AI将立即停止并采纳')
+      // 等待当前流完全停止，然后用新指令重新发起请求
+      // loading 会在流停止后变为 false（在 finally 块中）
+      // 监听 loading 变化，一旦变为 false 就重新发送
+      const waitForIdle = () => {
+        return new Promise((resolve) => {
+          const check = () => {
+            if (!loading.value) {
+              resolve()
+            } else {
+              setTimeout(check, 200)
+            }
+          }
+          check()
+        })
+      }
+      await waitForIdle()
+      // AI 已停止，现在用新指令重新发送
+      // 先把新指令放到输入框，然后调用 sendMessage
+      inputText.value = text
+      // 从消息列表中移除刚才添加的用户消息（sendMessage 会重新添加）
+      const idx = messages.value.indexOf(userMsg)
+      if (idx > -1) messages.value.splice(idx, 1)
+      await nextTick()
+      sendMessage()
     } else {
       ElMessage.error(result.message || '发送失败')
     }
   } catch (e) {
     ElMessage.error('发送失败: ' + e.message)
   }
-  
-  await nextTick()
-  scrollToBottom()
-}
-
-// 插话发送：立即上送给AI
-async function sendInterruptMessage(text) {
-  if (!currentChatId.value || !text) return
-  
-  // 清空输入框
-  inputText.value = ''
-  
-  // 添加用户消息到界面
-  const userMsg = {
-    id: Date.now(),
-    role: 'user',
-    content: text,
-    _is_interrupt: true,
-  }
-  messages.value.push(userMsg)
-  
-  // 发送插话指令到后端
-  try {
-    const token = localStorage.getItem('token')
-    const url = api.ai.sendInterruptMessage(currentChatId.value)
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': token ? `Bearer ${token}` : '',
-      },
-      body: JSON.stringify({ content: text }),
-    })
-    const result = await response.json()
-    if (result.success) {
-      ElMessage.success('插话指令已发送，AI将立即采纳')
-    } else {
-      ElMessage.error(result.message || '发送失败')
-    }
-  } catch (e) {
-    ElMessage.error('发送插话指令失败: ' + e.message)
-  }
-  
-  await nextTick()
-  scrollToBottom()
 }
 
 async function sendMessage() {
