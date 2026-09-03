@@ -32,6 +32,7 @@ REVIEW_TEMPLATE = (
     '   - 自吹自擂：过度强调自己的能力、智能程度\n'
     '   - 不尊重用户：质疑用户智商、用教训人的口吻说话\n'
     '   - 正确态度应该是：谦虚、专业、耐心、以解决问题为导向\n\n'
+    '{interrupt_section}'
     '请只输出一个JSON对象（不要输出任何其他内容），格式如下：\n'
     '{{"verdict": "approved|retry|flag_human", "feedback": "简要说明"}}\n'
     '- approved：回复质量合格，态度端正\n'
@@ -111,7 +112,8 @@ def _parse_verdict(content: str) -> dict:
 
 
 def review_response(supervisor_prompt: str, user_content: str, assistant_content: str,
-                    tool_results: list, configs: list, custom_rules: str = '') -> dict:
+                    tool_results: list, configs: list, custom_rules: str = '',
+                    interrupt_messages: list = None) -> dict:
     """调用监督者Agent复核一次回复。
 
     Args:
@@ -121,6 +123,7 @@ def review_response(supervisor_prompt: str, user_content: str, assistant_content
         tool_results: 工具执行记录列表 [{'name', 'result'}, ...]
         configs: 模型配置快照列表（dict: api_key/api_base/provider/model_name/...），支持故障转移
         custom_rules: 自定义复核规则（来自执行者Agent的review_rules配置）
+        interrupt_messages: 插话消息列表 [{'content', 'timestamp'}, ...]
 
     Returns:
         {'verdict': 'approved'|'retry'|'flag_human', 'feedback': str, 'raw': str}
@@ -128,11 +131,29 @@ def review_response(supervisor_prompt: str, user_content: str, assistant_content
     from app.services.ai_service import post_chat_completions, _apply_cache_control
 
     tool_summary = _summarize_tools(tool_results)
+    
+    # 构建插话信息段落
+    interrupt_section = ''
+    if interrupt_messages:
+        interrupt_texts = []
+        for i, msg in enumerate(interrupt_messages, 1):
+            content = msg.get('content', '')[:200]
+            interrupt_texts.append(f'  {i}. "{content}"')
+        interrupt_section = (
+            '## 插话记录（用户在AI执行过程中发送了以下插话指令）\n'
+            + '\n'.join(interrupt_texts) + '\n'
+            '**重要**：请额外检查AI的回复是否正确采纳了上述插话内容——\n'
+            '- 如果插话要求停止/修改方向，AI是否及时停止并转向？\n'
+            '- 如果插话提供了新指令/新内容，AI是否将其纳入上下文并执行？\n'
+            '- 如果AI完全忽略了插话内容，应 verdict=retry 并指出问题。\n\n'
+        )
+    
     # 构建复核提示，如果有自定义规则则注入
     review_user = REVIEW_TEMPLATE.format(
         user_content=(user_content or '')[:4000],
         assistant_content=(assistant_content or '')[:6000],
         tool_summary=tool_summary,
+        interrupt_section=interrupt_section,
     )
     # 如果有自定义复核规则，追加到复核提示末尾
     if custom_rules:

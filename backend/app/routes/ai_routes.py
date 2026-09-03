@@ -1931,6 +1931,8 @@ def send_message_stream(chat_id):
             'tool_calls': {},
             'status': 'streaming',  # streaming / tool_calling / done / error
             'started_at': time.time(),
+            'interrupt_messages': [],
+            'processed_interrupt_messages': [],  # 已处理的插话消息，供监督者复核
         }
         start_time = time.time()
         msg_saved = False  # 标记消息是否已保存，用于finally中判断是否需要补存
@@ -2234,6 +2236,8 @@ def send_message_stream(chat_id):
                                 })
                                 yield f"data: {json.dumps({'type': 'content', 'content': f'\n\n[用户插话] {interrupt_msg["content"]}\n\n'}, ensure_ascii=False)}\n\n"
                                 logger.info(f'工具调用前注入插话消息: chat_id={chat_id}, content={interrupt_msg["content"][:50]}')
+                            # 保存已处理的插话消息，供监督者复核时检查
+                            _active_streams[chat_id].setdefault('processed_interrupt_messages', []).extend(_interrupt_msgs_pre)
                             _active_streams[chat_id]['interrupt_messages'] = []
                             # 有插话消息，重新请求AI
                             accumulated_tool_calls = {}  # 清空工具调用，让AI重新决策
@@ -2260,6 +2264,8 @@ def send_message_stream(chat_id):
                                     })
                                     yield f"data: {json.dumps({'type': 'content', 'content': f'\n\n[用户插话] {interrupt_msg["content"]}\n\n'}, ensure_ascii=False)}\n\n"
                                     logger.info(f'注入插话消息: chat_id={chat_id}, content={interrupt_msg["content"][:50]}')
+                                # 保存已处理的插话消息，供监督者复核时检查
+                                _active_streams[chat_id].setdefault('processed_interrupt_messages', []).extend(_interrupt_msgs)
                                 # 清空已处理的插话消息
                                 _active_streams[chat_id]['interrupt_messages'] = []
                                 # 让AI基于新的上下文重新决策
@@ -2865,7 +2871,9 @@ def send_message_stream(chat_id):
                     from app.services.chat_supervisor import review_response, mark_message
                     # 获取自定义复核规则
                     _custom_rules = _current_agent.review_rules if _current_agent else ''
-                    _verdict = review_response(_sup_prompt, user_message_content, full_content, tool_results_list, stream_ordered_configs, custom_rules=_custom_rules)
+                    # 获取本次对话中已处理的插话消息（用于监督者检查AI是否正确采纳）
+                    _processed_interrupts = _active_streams.get(chat_id, {}).get('processed_interrupt_messages', [])
+                    _verdict = review_response(_sup_prompt, user_message_content, full_content, tool_results_list, stream_ordered_configs, custom_rules=_custom_rules, interrupt_messages=_processed_interrupts or None)
                     _sup_round += 1
                     logger.info(f'监督者复核结果: chat_id={chat_id}, 第{_sup_round}轮, verdict={_verdict["verdict"]}')
                     # 构建复核记录（保存到metadata供前端查看）
@@ -2876,6 +2884,7 @@ def send_message_stream(chat_id):
                         'user_content': user_message_content[:500],
                         'assistant_content': full_content[:1000],
                         'tool_summary': _summarize_tools_for_review(tool_results_list),
+                        'interrupt_messages': [m.get('content', '')[:100] for m in _processed_interrupts] if _processed_interrupts else [],
                         'custom_rules': _custom_rules,
                         'rules_created_by': _current_agent.created_by if _current_agent else None,
                         'timestamp': datetime.utcnow().isoformat(),
