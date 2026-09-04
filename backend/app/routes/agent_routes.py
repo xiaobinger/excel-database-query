@@ -132,6 +132,7 @@ def create_agent():
             enable_chat_review=bool(data.get('enable_chat_review', False)),
             review_rules=data.get('review_rules', ''),
             max_supervisor_rounds=_parse_max_rounds(data.get('max_supervisor_rounds')),
+            default_supervisor_id=data.get('default_supervisor_id'),
             system_prompt=data['system_prompt'],
             is_default=data.get('is_default', False),
             is_active=data.get('is_active', True),
@@ -192,6 +193,8 @@ def update_agent(agent_id):
             agent.review_rules = data.get('review_rules', '')
         if 'max_supervisor_rounds' in data:
             agent.max_supervisor_rounds = _parse_max_rounds(data.get('max_supervisor_rounds'))
+        if 'default_supervisor_id' in data:
+            agent.default_supervisor_id = data.get('default_supervisor_id')
         if 'system_prompt' in data:
             agent.system_prompt = data['system_prompt']
         if 'is_active' in data:

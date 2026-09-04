@@ -51,10 +51,22 @@ MAX_TOOLS = 10        # 最多携带的工具执行记录条数
 def resolve_supervisor_agent(main_agent_id=None):
     """解析对话级监督者Agent。
 
-    优先级：默认监督者（is_default=True）→ 任一活跃监督者。
+    优先级：执行者关联的默认监督者 → 全局默认监督者（is_default=True）→ 任一活跃监督者。
     主Agent本身是监督者时返回None（自己监督自己无意义）。
     """
     from app.models.ai_agent import AiAgent
+    # 优先：执行者自己关联的默认监督者
+    if main_agent_id:
+        main_agent = AiAgent.query.get(main_agent_id)
+        if main_agent and main_agent.default_supervisor_id:
+            sup = AiAgent.query.filter_by(
+                id=main_agent.default_supervisor_id,
+                is_active=True,
+                agent_role='supervisor'
+            ).first()
+            if sup and sup.id != main_agent_id:
+                return sup
+    # 其次：全局默认监督者
     sup = AiAgent.query.filter_by(is_active=True, agent_role='supervisor', is_default=True).first()
     if not sup:
         sup = AiAgent.query.filter_by(is_active=True, agent_role='supervisor').first()

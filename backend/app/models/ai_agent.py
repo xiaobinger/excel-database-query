@@ -17,6 +17,7 @@ class AiAgent(db.Model):
     enable_chat_review = db.Column(db.Boolean, default=False, comment='是否启用对话复核(仅执行者角色有意义，开启后监督者会复核回复质量)')
     review_rules = db.Column(db.Text, comment='自定义复核规则(仅执行者角色开启对话复核时生效，监督者会按此规则评估执行者回复)')
     max_supervisor_rounds = db.Column(db.Integer, default=3, comment='监督者最大监督轮次(仅监督者角色有意义，1-20默认3)')
+    default_supervisor_id = db.Column(db.Integer, db.ForeignKey('ai_agents.id'), nullable=True, comment='执行者默认关联的监督者Agent(仅执行者角色有意义)')
     system_prompt = db.Column(db.Text, nullable=False, comment='系统提示词')
     enabled_tools = db.Column(db.Text, comment='启用的AI工具列表JSON，null表示全部启用')
     mcp_server_ids = db.Column(db.Text, comment='授予的MCP Server ID列表JSON')
@@ -71,6 +72,7 @@ class AiAgent(db.Model):
             'enable_chat_review': bool(self.enable_chat_review),
             'review_rules': self.review_rules or '',
             'max_supervisor_rounds': self.max_supervisor_rounds if self.max_supervisor_rounds else 3,
+            'default_supervisor_id': self.default_supervisor_id,
             'system_prompt': self.system_prompt,
             'enabled_tools': self.get_enabled_tools(),
             'mcp_server_ids': self.get_mcp_server_ids(),

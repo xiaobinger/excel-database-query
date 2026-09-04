@@ -143,6 +143,21 @@
             </div>
           </div>
         </el-form-item>
+        <el-form-item v-if="form.agent_role === 'executor' && form.enable_chat_review" label="默认监督者">
+          <div style="width: 100%">
+            <el-select v-model="form.default_supervisor_id" placeholder="不指定则使用全局默认监督者" clearable style="width: 100%">
+              <el-option
+                v-for="s in supervisorAgents"
+                :key="s.id"
+                :label="s.name"
+                :value="s.id"
+              />
+            </el-select>
+            <div style="font-size: 12px; color: #999; line-height: 1.4; margin-top: 4px;">
+              为该执行者指定默认的监督者Agent，不指定则使用系统中全局默认的监督者
+            </div>
+          </div>
+        </el-form-item>
         <el-form-item v-if="form.agent_role === 'executor' && form.enable_chat_review" label="复核规则">
           <div style="width: 100%">
             <el-input v-model="form.review_rules" type="textarea" :rows="6" placeholder="自定义复核规则，监督者会按此规则评估执行者的回复质量。&#10;&#10;例如：&#10;1. 评估回复态度是否谦逊、专业，装逼飘了要鞭答改正&#10;2. 检查是否完整回答了用户问题，有无遗漏&#10;3. 验证数据是否与工具执行结果一致，严禁编造" />
@@ -265,6 +280,7 @@ const isEdit = ref(false)
 const editId = ref(null)
 const formRef = ref(null)
 const agents = ref([])
+const supervisorAgents = computed(() => agents.value.filter(a => a.agent_role === 'supervisor' && a.is_active))
 const selectedRows = ref([])
 const tableRef = ref(null)
 const useAllTools = ref(true)
@@ -312,6 +328,7 @@ const defaultForm = {
   enable_chat_review: false,
   review_rules: '',
   max_supervisor_rounds: 3,
+  default_supervisor_id: null,
   system_prompt: '',
   enabled_tools: null,
   mcp_server_ids: [],
@@ -355,6 +372,7 @@ function openDialog(row) {
       enable_chat_review: !!row.enable_chat_review,
       review_rules: row.review_rules || '',
       max_supervisor_rounds: row.max_supervisor_rounds || 3,
+      default_supervisor_id: row.default_supervisor_id || null,
       system_prompt: row.system_prompt || '',
       enabled_tools: row.enabled_tools ? [...row.enabled_tools] : null,
       mcp_server_ids: row.mcp_server_ids ? [...row.mcp_server_ids] : [],
