@@ -81,6 +81,17 @@
           </div>
         </el-col>
         <el-col :xs="12" :sm="8" :md="4">
+          <div class="summary-card summary-score">
+            <div class="summary-icon"><i class="fas fa-star"></i></div>
+            <div class="summary-info">
+              <div class="summary-value" :style="{ color: getScoreColor(summary.ai_overall_avg_score || 0) }">
+                {{ summary.ai_overall_avg_score || 0 }}
+              </div>
+              <div class="summary-label">综合平均分</div>
+            </div>
+          </div>
+        </el-col>
+        <el-col :xs="12" :sm="8" :md="4">
           <div class="summary-card summary-users">
             <div class="summary-icon"><i class="fas fa-users"></i></div>
             <div class="summary-info">
@@ -114,13 +125,25 @@
           <div class="table-header">
             <span><i class="fas fa-robot"></i> AI Agent 处理统计</span>
             <div class="ai-summary-inline">
-              <span class="ai-summary-item">指派 <b>{{ summary.ai_total_assigned || 0 }}</b></span>
-              <span class="ai-summary-item">完成 <b style="color: #67c23a">{{ summary.ai_total_completed || 0 }}</b></span>
-              <span class="ai-summary-item">待确认 <b style="color: #e6a23c">{{ summary.ai_total_pending || 0 }}</b></span>
-              <span class="ai-summary-item">失败 <b style="color: #f56c6c">{{ summary.ai_total_failed || 0 }}</b></span>
-              <span class="ai-summary-item">完成率 <b>{{ summary.ai_completion_rate || 0 }}%</b></span>
-              <span class="ai-summary-item">平均耗时 <b>{{ formatDuration(summary.ai_avg_duration_seconds || 0) }}</b></span>
-            </div>
+            <span class="ai-summary-item">指派 <b>{{ summary.ai_total_assigned || 0 }}</b></span>
+            <span class="ai-summary-item">完成 <b style="color: #67c23a">{{ summary.ai_total_completed || 0 }}</b></span>
+            <span class="ai-summary-item">待确认 <b style="color: #e6a23c">{{ summary.ai_total_pending || 0 }}</b></span>
+            <span class="ai-summary-item">失败 <b style="color: #f56c6c">{{ summary.ai_total_failed || 0 }}</b></span>
+            <span class="ai-summary-item">完成率 <b>{{ summary.ai_completion_rate || 0 }}%</b></span>
+            <span class="ai-summary-item">平均耗时 <b>{{ formatDuration(summary.ai_avg_duration_seconds || 0) }}</b></span>
+            <span class="ai-summary-item ai-token-item">
+              <i class="fas fa-coins"></i> Token总消耗 <b>{{ formatTokens(summary.ai_total_tokens || 0) }}</b>
+            </span>
+            <span v-if="(summary.ai_total_headroom_saved_tokens || 0) > 0" class="ai-summary-item ai-token-item">
+              <i class="fas fa-compress-arrows-alt"></i> Headroom节省 <b style="color: #67c23a">{{ formatTokens(summary.ai_total_headroom_saved_tokens || 0) }}</b>
+              <el-tag size="small" type="success" effect="plain" style="margin-left: 4px">
+                {{ formatCompressionRatio(summary.ai_total_headroom_saved_tokens, summary.ai_total_headroom_original_tokens) }}
+              </el-tag>
+            </span>
+            <span v-if="(summary.ai_overall_avg_score || 0) > 0" class="ai-summary-item ai-token-item">
+              <i class="fas fa-star"></i> 综合平均分 <b :style="{ color: getScoreColor(summary.ai_overall_avg_score) }">{{ summary.ai_overall_avg_score }}</b>
+            </span>
+          </div>
           </div>
         </template>
         <el-table :data="aiStats" stripe style="width: 100%">
@@ -169,6 +192,28 @@
             <template #default="{ row }">
               <span v-if="row.avg_duration_seconds > 0" :style="{ color: getDurationColor(row.avg_duration_seconds) }">
                 <i class="fas fa-clock"></i> {{ formatDuration(row.avg_duration_seconds) }}
+              </span>
+              <span v-else style="color: #c0c4cc">-</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="total_tokens" label="Token消耗" width="120" align="center" sortable>
+            <template #default="{ row }">
+              <span v-if="row.total_tokens > 0" class="token-stat-value">{{ formatTokens(row.total_tokens) }}</span>
+              <span v-else style="color: #c0c4cc">-</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="headroom_saved_tokens" label="Headroom节省" width="140" align="center" sortable>
+            <template #default="{ row }">
+              <span v-if="(row.headroom_saved_tokens || 0) > 0" style="color: #67c23a; font-weight: 600">
+                {{ formatTokens(row.headroom_saved_tokens) }}
+              </span>
+              <span v-else style="color: #c0c4cc">-</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="avg_score" label="平均评分" width="110" align="center" sortable>
+            <template #default="{ row }">
+              <span v-if="row.scored_count > 0" :style="{ color: getScoreColor(row.avg_score), fontWeight: '600' }">
+                <i class="fas fa-star"></i> {{ row.avg_score }}
               </span>
               <span v-else style="color: #c0c4cc">-</span>
             </template>
@@ -350,6 +395,12 @@ function getRateColor(rate) {
   return '#f56c6c'
 }
 
+function getScoreColor(score) {
+  if (score >= 80) return '#67c23a'   // 优秀 绿色
+  if (score >= 60) return '#e6a23c'   // 及格 黄色
+  return '#f56c6c'                     // 不及格 红色
+}
+
 function getDurationColor(seconds) {
   if (seconds <= 300) return '#67c23a'       // 5分钟内 绿色
   if (seconds <= 3600) return '#e6a23c'       // 1小时内 黄色
@@ -370,6 +421,23 @@ function formatDuration(seconds) {
   const days = Math.floor(seconds / 86400)
   const remainHours = Math.round((seconds % 86400) / 3600)
   return remainHours > 0 ? `${days}天${remainHours}小时` : `${days}天`
+}
+
+// 格式化 token 数字
+function formatTokens(n) {
+  if (n == null || isNaN(n)) return '0'
+  const v = Number(n)
+  if (v < 1000) return String(v)
+  if (v < 10000) return v.toLocaleString()
+  if (v < 1000000) return `${(v / 1000).toFixed(1)}K`
+  return `${(v / 1000000).toFixed(2)}M`
+}
+
+// 计算 headroom 压缩比例（百分比字符串）
+function formatCompressionRatio(saved, original) {
+  if (!saved || !original || original <= 0) return ''
+  const ratio = (saved / original) * 100
+  return `压缩 ${ratio.toFixed(1)}%`
 }
 
 onMounted(() => {
@@ -450,6 +518,7 @@ onMounted(() => {
 .summary-completed { background: linear-gradient(135deg, #67c23a, #85ce61); }
 .summary-rate { background: linear-gradient(135deg, #e6a23c, #ebb563); }
 .summary-duration { background: linear-gradient(135deg, #f56c6c, #f78989); }
+.summary-score { background: linear-gradient(135deg, #ff9800, #ffb74d); }
 .summary-users { background: linear-gradient(135deg, #722ed1, #9254de); }
 
 .trend-card {
@@ -559,5 +628,15 @@ onMounted(() => {
 
 :deep(.el-progress-bar__innerText) {
   font-size: 12px;
+}
+
+.ai-token-item {
+  color: #1677ff !important;
+  font-weight: 500;
+}
+
+.token-stat-value {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-weight: 600;
 }
 </style>

@@ -39,19 +39,21 @@ STATUS_PROCESSED = 'processed'
 STATUS_PENDING_ASSIGNMENT = 'pending_assignment'
 STATUS_PENDING_CONFIRMATION = 'pending_confirmation'
 STATUS_CLOSED = 'closed'
+STATUS_DRAFT = 'draft'
 
 ACTIVE_STATUSES = (STATUS_SUBMITTED, STATUS_RECEIVED, STATUS_PROCESSING, STATUS_PROCESSED, STATUS_REJECTED, STATUS_PENDING_ASSIGNMENT, STATUS_PENDING_CONFIRMATION)
 
 # 状态标签映射
 STATUS_LABELS = {
-    STATUS_SUBMITTED: '已提交',
-    STATUS_RECEIVED: '已接收',
-    STATUS_PROCESSING: '处理中',
-    STATUS_REJECTED: '拒绝',
-    STATUS_PROCESSED: '已处理',
-    STATUS_PENDING_ASSIGNMENT: '待指派',
-    STATUS_PENDING_CONFIRMATION: '待确认',
-    STATUS_CLOSED: '结束',
+ STATUS_DRAFT: '草稿',
+ STATUS_SUBMITTED: '已提交',
+ STATUS_RECEIVED: '已接收',
+ STATUS_PROCESSING: '处理中',
+ STATUS_REJECTED: '拒绝',
+ STATUS_PROCESSED: '已处理',
+ STATUS_PENDING_ASSIGNMENT: '待指派',
+ STATUS_PENDING_CONFIRMATION: '待确认',
+ STATUS_CLOSED: '结束',
 }
 
 # 进度条阶段顺序：已提交 → 已接收 → 已处理 → 结束
@@ -158,6 +160,11 @@ def _execute_export_for_ticket(ticket, result, tool_log_text, app):
                     f'导出任务执行失败\n\n---\n**处理过程：**\n{tool_log_text}',
                     'ai_process', is_ai=True)
                 t.ai_result = '导出任务执行失败'
+            # 多agent协作：监督者审查异步任务执行结果
+            if t.supervisor_agent_id:
+                from app.services.multi_agent_service import MultiAgentService
+                if MultiAgentService.review_async_result(ticket_id, t.ai_result, app):
+                    return
             t.status = STATUS_PROCESSED
             t.processed_at = datetime.utcnow()
             _add_comment(t, None, '任务执行完成，等待提交人核实', 'status_change', is_ai=True)
@@ -224,6 +231,11 @@ def _execute_profit_share_for_ticket(ticket, result, tool_log_text, app):
                     f'分润导出任务执行失败\n\n---\n**处理过程：**\n{tool_log_text}',
                     'ai_process', is_ai=True)
                 t.ai_result = '分润导出任务执行失败'
+            # 多agent协作：监督者审查异步任务执行结果
+            if t.supervisor_agent_id:
+                from app.services.multi_agent_service import MultiAgentService
+                if MultiAgentService.review_async_result(ticket_id, t.ai_result, app):
+                    return
             t.status = STATUS_PROCESSED
             t.processed_at = datetime.utcnow()
             _add_comment(t, None, '任务执行完成，等待提交人核实', 'status_change', is_ai=True)
@@ -320,6 +332,11 @@ def _execute_query_for_ticket(ticket, result, tool_log_text, app):
                     f'查询任务执行失败：{err}\n\n---\n**处理过程：**\n{tool_log_text}',
                     'ai_process', is_ai=True)
                 t.ai_result = f'查询任务执行失败：{err}'
+            # 多agent协作：监督者审查异步任务执行结果
+            if t.supervisor_agent_id:
+                from app.services.multi_agent_service import MultiAgentService
+                if MultiAgentService.review_async_result(ticket_id, t.ai_result, app):
+                    return
             t.status = STATUS_PROCESSED
             t.processed_at = datetime.utcnow()
             _add_comment(t, None, '任务执行完成，等待提交人核实', 'status_change', is_ai=True)
@@ -384,6 +401,11 @@ def _execute_pay_withdraw_for_ticket(ticket, result, tool_log_text, app):
                     f'代付提现任务执行失败：{message}\n\n**执行日志：**\n```\n{log_text}\n```\n\n---\n**处理过程：**\n{tool_log_text}',
                     'ai_process', is_ai=True)
                 t.ai_result = f'代付提现任务执行失败：{message}'
+            # 多agent协作：监督者审查异步任务执行结果
+            if t.supervisor_agent_id:
+                from app.services.multi_agent_service import MultiAgentService
+                if MultiAgentService.review_async_result(ticket_id, t.ai_result, app):
+                    return
             t.status = STATUS_PROCESSED
             t.processed_at = datetime.utcnow()
             _add_comment(t, None, '任务执行完成，等待提交人核实', 'status_change', is_ai=True)
@@ -417,16 +439,45 @@ def _execute_pay_withdraw_for_ticket(ticket, result, tool_log_text, app):
 
 
 def _process_ticket_with_ai_async(ticket_id, app):
-    """后台线程：用AI处理工单（支持工具调用，可匹配系统的导出/查询/系统任务等）"""
+    """后台线程：用AI处理工单（支持工具调用，可匹配系统的导出/查询/系统任务等）
+
+    若工单配置了监督者Agent（supervisor_agent_id），则转交多Agent协作服务
+    （执行者Agent + 监督者Agent 循环协作，直到验收通过）。
+    """
     with app.app_context():
         try:
             ticket = Ticket.query.get(ticket_id)
             if not ticket:
                 return
 
+            # 多agent协作：配置了监督者Agent时走执行者+监督者协作流程
+            if ticket.supervisor_agent_id:
+                # 智能检测：重试/重新发起/重新指派时，先让监督者评估当前执行状态
+                # 如果已执行完成，直接触发验收；如果有遗漏，返回反馈给执行者
+                need_execute = True
+                supervisor_feedback = None
+                
+                # 检查是否有历史执行记录（ai_result 或多条评论）
+                has_history = (ticket.ai_result and len(ticket.ai_result.strip()) > 10) or len(ticket.comments or []) > 1
+                
+                if has_history:
+                    from app.services.supervisor_monitor import trigger_supervisor_evaluate_before_retry
+                    need_execute, supervisor_feedback = trigger_supervisor_evaluate_before_retry(ticket_id, app)
+                
+                if not need_execute:
+                    # 监督者判定已执行完成，已触发验收，无需执行者处理
+                    logger.info(f'工单 {ticket.ticket_no} 监督者判定已执行完成，跳过执行者处理')
+                    return
+                
+                # 需要执行者处理（可能是补充执行）
+                from app.services.multi_agent_service import MultiAgentService
+                MultiAgentService.process_ticket(ticket_id, app, feedback=supervisor_feedback)
+                return
+
             # 状态改为处理中
             ticket.status = STATUS_PROCESSING
             ticket.received_at = datetime.utcnow()
+            ticket.last_activity_at = datetime.utcnow()
             db.session.commit()
 
             # 获取Agent配置
@@ -478,6 +529,8 @@ def _process_ticket_with_ai_async(ticket_id, app):
                 )
                 content = ai_response.get('content', '') or ''
                 tool_calls = ai_response.get('tool_calls', []) or []
+                # 累加token消耗指标（多轮调用合计）
+                ticket.accumulate_ai_token_usage(ai_response)
 
                 if not tool_calls:
                     # AI没有调用工具，直接返回文本回复
@@ -487,7 +540,7 @@ def _process_ticket_with_ai_async(ticket_id, app):
                 # 执行工具调用
                 tool_results = []
                 # 检测是否有需要确认执行的SQL系统任务或生产环境代付提现
-                pending_system_task = None
+                pending_system_tasks = []
                 pending_pay_withdraw = None
                 for tc in tool_calls:
                     func_name = tc.get('function', {}).get('name', '')
@@ -528,7 +581,7 @@ def _process_ticket_with_ai_async(ticket_id, app):
                                 task_type = result.get('task_type', 'sql')
                                 if task_type == 'sql':
                                     # SQL数据变更类任务，需用户确认后执行
-                                    pending_system_task = {
+                                    pending_system_tasks.append({
                                         'func_name': func_name,
                                         'func_args': func_args,
                                         'task_id': result.get('task_id'),
@@ -539,7 +592,7 @@ def _process_ticket_with_ai_async(ticket_id, app):
                                         'database_id': result.get('database_id'),
                                         'description': result.get('description', ''),
                                         'confirm_message': result.get('confirm_message', ''),
-                                    }
+                                    })
                                     result_summary = f"SQL系统任务「{result.get('task_name', '')}」需用户确认后执行"
                                 else:
                                     task_id = result.get('task_id', '')
@@ -590,12 +643,20 @@ def _process_ticket_with_ai_async(ticket_id, app):
                     tool_log.append(f'**调用工具**: `{func_name}` → {result_summary}')
 
                 # 如果检测到需要确认的SQL系统任务，暂停处理，等待用户确认
-                if pending_system_task:
-                    ticket.set_pending_action(pending_system_task)
+                if pending_system_tasks:
+                    ticket.set_pending_action({'tasks': pending_system_tasks})
                     ticket.status = STATUS_PENDING_CONFIRMATION
+                    # 构建任务列表描述
+                    task_lines = []
+                    for i, t in enumerate(pending_system_tasks, 1):
+                        task_lines.append(
+                            f"**{i}. {t['task_name']}**\n"
+                            f"   参数：{json.dumps(t['params_values'], ensure_ascii=False)}"
+                        )
+                    tasks_text = '\n\n'.join(task_lines)
                     ticket.ai_result = (
-                        f"AI识别到需要执行数据变更类操作：**{pending_system_task['task_name']}**\n\n"
-                        f"**参数：** {json.dumps(pending_system_task['params_values'], ensure_ascii=False)}\n\n"
+                        f"AI识别到需要执行数据变更类操作（共{len(pending_system_tasks)}个任务）：\n\n"
+                        f"{tasks_text}\n\n"
                         f"⚠️ 此操作会直接影响生产数据，请提交人确认后执行。\n"
                         f"可在下方评论「同意」、「确认执行」或点击「确认执行」按钮继续。"
                     )
@@ -603,9 +664,10 @@ def _process_ticket_with_ai_async(ticket_id, app):
                         tool_log_text = '\n\n'.join(tool_log)
                         ticket.ai_result = f'{ticket.ai_result}\n\n---\n**处理过程：**\n{tool_log_text}'
                     _add_comment(ticket, None, ticket.ai_result, 'ai_process', is_ai=True)
-                    _add_comment(ticket, None, '工单状态已转为「待确认」，等待提交人确认后执行数据变更操作', 'status_change', is_ai=True)
+                    _add_comment(ticket, None, f'工单状态已转为「待确认」，等待提交人确认后执行{len(pending_system_tasks)}个数据变更操作', 'status_change', is_ai=True)
                     db.session.commit()
-                    logger.info(f'工单 {ticket.ticket_no} AI处理暂停，需用户确认执行SQL系统任务: {pending_system_task["task_name"]}')
+                    task_names = ', '.join(t['task_name'] for t in pending_system_tasks)
+                    logger.info(f'工单 {ticket.ticket_no} AI处理暂停，需用户确认执行SQL系统任务: {task_names}')
                     return
 
                 # 如果检测到生产环境代付提现，暂停处理，等待用户确认
@@ -677,8 +739,15 @@ def _process_ticket_with_ai_async(ticket_id, app):
                             'content': json.dumps(tr['result'], ensure_ascii=False),
                         })
                     try:
-                        summary_content, _, _, _, _, _ = AiService.chat_with_failover(messages, use_tools=False, scope='ticket')
+                        summary_content, tokens, prompt_tokens, completion_tokens, cache_creation, cache_read, headroom_stats = AiService.chat_with_failover(messages, use_tools=False, scope='ticket')
                         final_content = summary_content or ''
+                        ticket.accumulate_ai_token_usage({
+                            'tokens': tokens, 'prompt_tokens': prompt_tokens,
+                            'completion_tokens': completion_tokens,
+                            'cache_creation_tokens': cache_creation,
+                            'cache_read_tokens': cache_read,
+                            'headroom_stats': headroom_stats,
+                        })
                     except Exception as se:
                         logger.warning(f'工单{ticket.ticket_no} AI归总回复失败: {se}')
                         final_content = '已触发相关任务执行，请到对应模块查看执行结果。'
@@ -700,8 +769,15 @@ def _process_ticket_with_ai_async(ticket_id, app):
                 # 最后一轮，请求AI生成最终回复（不带工具）
                 if round_idx == max_rounds - 1:
                     try:
-                        final_content, _, _, _, _, _ = AiService.chat_with_failover(messages, use_tools=False, scope='ticket')
+                        final_content, tokens, prompt_tokens, completion_tokens, cache_creation, cache_read, headroom_stats = AiService.chat_with_failover(messages, use_tools=False, scope='ticket')
                         final_content = final_content or ''
+                        ticket.accumulate_ai_token_usage({
+                            'tokens': tokens, 'prompt_tokens': prompt_tokens,
+                            'completion_tokens': completion_tokens,
+                            'cache_creation_tokens': cache_creation,
+                            'cache_read_tokens': cache_read,
+                            'headroom_stats': headroom_stats,
+                        })
                     except Exception as se:
                         logger.warning(f'工单{ticket.ticket_no} AI最终回复失败: {se}')
                         final_content = content or '处理完成'
@@ -842,6 +918,7 @@ def _confirm_ticket_action(ticket, current_user):
 
     # 转为处理中
     ticket.status = STATUS_PROCESSING
+    ticket.last_activity_at = datetime.utcnow()
     _add_comment(ticket, current_user.id, '提交人已确认执行数据变更操作，AI开始执行', 'status_change')
     db.session.commit()
 
@@ -934,7 +1011,10 @@ def _execute_pending_pay_withdraw(ticket, app):
 
 
 def _execute_pending_action_async(ticket_id, app):
-    """后台线程：执行待确认的数据变更操作（SQL系统任务 或 生产环境代付提现）"""
+    """后台线程：执行待确认的数据变更操作（SQL系统任务 或 生产环境代付提现）
+
+    支持多任务顺序执行：pending_action 可能为 {'tasks': [...]}（多任务）或单任务字典（兼容旧数据）。
+    """
     with app.app_context():
         try:
             ticket = Ticket.query.get(ticket_id)
@@ -950,89 +1030,125 @@ def _execute_pending_action_async(ticket_id, app):
                 _execute_pending_pay_withdraw(ticket, app)
                 return
 
-            task_id = pending_action.get('task_id')
-            params_values = pending_action.get('params_values', {})
-            database_id = pending_action.get('database_id')
+            # 兼容新旧格式：新格式 {'tasks': [...]}，旧格式单任务字典
+            if 'tasks' in pending_action:
+                tasks = pending_action.get('tasks') or []
+            else:
+                tasks = [pending_action]
 
-            logger.info(f'工单 {ticket.ticket_no} 开始执行待确认的SQL系统任务: task_id={task_id}')
+            if not tasks:
+                raise Exception('没有待确认执行的任务信息')
 
             from app.models.system_task import SystemTask, SystemTaskExecution
             from app.services.system_task_service import SystemTaskService
-
-            system_task = SystemTask.query.get(task_id) if task_id else None
-            if not system_task:
-                raise Exception(f'系统任务不存在(ID={task_id})')
-
-            # 创建执行记录并异步执行SQL任务
-            execution = SystemTaskService.create_execution(
-                system_task_id=system_task.id,
-                params_values=params_values,
-                created_by=ticket.created_by,
-            )
-            # 设置任务类型
-            execution.task_type = 'sql'
-            execution.status = 'running'
-            execution.started_at = datetime.utcnow()
-            db.session.commit()
-
-            # 异步执行
-            SystemTaskService.execute_async(
-                execution_id=execution.execution_id,
-                system_task_id=system_task.id,
-                params_values=params_values,
-                database_id=database_id,
-            )
-
-            # 等待执行完成（轮询检查状态，最多等待5分钟）
             import time
-            max_wait = 300  # 5分钟
-            waited = 0
-            while waited < max_wait:
-                db.session.expire(execution)
+
+            logger.info(f'工单 {ticket.ticket_no} 开始执行待确认的SQL系统任务，共{len(tasks)}个')
+
+            results = []  # 每个任务的执行结果摘要
+            all_success = True
+            failed_task_name = ''
+
+            for idx, task_info in enumerate(tasks, 1):
+                task_id = task_info.get('task_id')
+                params_values = task_info.get('params_values', {})
+                database_id = task_info.get('database_id')
+                task_name = task_info.get('task_name', f'任务{idx}')
+
+                logger.info(f'工单 {ticket.ticket_no} 执行第{idx}/{len(tasks)}个SQL系统任务: {task_name}(task_id={task_id})')
+
+                system_task = SystemTask.query.get(task_id) if task_id else None
+                if not system_task:
+                    results.append(f'❌ 第{idx}个任务「{task_name}」失败：系统任务不存在(ID={task_id})')
+                    all_success = False
+                    failed_task_name = task_name
+                    break
+
+                # 创建执行记录并异步执行SQL任务
+                execution = SystemTaskService.create_execution(
+                    system_task_id=system_task.id,
+                    params_values=params_values,
+                    created_by=ticket.created_by,
+                )
+                execution.task_type = 'sql'
+                execution.status = 'running'
+                execution.started_at = datetime.utcnow()
+                db.session.commit()
+
+                # 异步执行
+                SystemTaskService.execute_async(
+                    execution_id=execution.execution_id,
+                    system_task_id=system_task.id,
+                    params_values=params_values,
+                    database_id=database_id,
+                )
+
+                # 等待执行完成（轮询检查状态，最多等待5分钟）
+                max_wait = 300
+                waited = 0
+                while waited < max_wait:
+                    db.session.expire(execution)
+                    execution = SystemTaskExecution.query.filter_by(execution_id=execution.execution_id).first()
+                    if not execution:
+                        break
+                    if execution.status in ('completed', 'failed', 'cancelled'):
+                        break
+                    time.sleep(2)
+                    waited += 2
+
                 execution = SystemTaskExecution.query.filter_by(execution_id=execution.execution_id).first()
                 if not execution:
+                    results.append(f'❌ 第{idx}个任务「{task_name}」失败：执行记录丢失')
+                    all_success = False
+                    failed_task_name = task_name
                     break
-                if execution.status in ('completed', 'failed', 'cancelled'):
-                    break
-                time.sleep(2)
-                waited += 2
 
-            # 获取执行结果
-            execution = SystemTaskExecution.query.filter_by(execution_id=execution.execution_id).first()
-            if not execution:
-                raise Exception('执行记录丢失')
+                result_data = execution.get_result_data()
 
-            # 构建结果摘要
-            result_data = execution.get_result_data()
-            logs = execution.get_logs()
+                if execution.status == 'completed':
+                    task_summary = f'SQL系统任务执行成功'
+                    if isinstance(result_data, dict):
+                        affected = result_data.get('total_affected', 0)
+                        if affected:
+                            task_summary = f'SQL系统任务执行成功，影响{affected}行数据'
+                        elif result_data.get('message'):
+                            task_summary = f'SQL系统任务执行成功：{result_data["message"]}'
+                    results.append(f'✅ 第{idx}个任务「{task_name}」成功：{task_summary}（执行ID: {execution.execution_id[:8]}...）')
+                else:
+                    error_msg = execution.error_message or '执行失败'
+                    results.append(f'❌ 第{idx}个任务「{task_name}」失败：{error_msg}')
+                    all_success = False
+                    failed_task_name = task_name
+                    break  # 遇到失败立即停止后续任务
 
-            if execution.status == 'completed':
-                # 执行成功
-                result_summary = 'SQL系统任务执行成功'
-                if isinstance(result_data, dict):
-                    affected = result_data.get('total_affected', 0)
-                    if affected:
-                        result_summary = f'SQL系统任务执行成功，影响{affected}行数据'
-                    elif result_data.get('message'):
-                        result_summary = f'SQL系统任务执行成功：{result_data["message"]}'
+            # 汇总结果
+            results_text = '\n\n'.join(results)
 
+            if all_success:
                 ticket.status = STATUS_PROCESSED
                 ticket.processed_at = datetime.utcnow()
-                ticket.ai_result = f'✅ {result_summary}\n\n**任务名称：** {system_task.name}\n**执行ID：** {execution.execution_id[:8]}...'
+                ticket.last_activity_at = datetime.utcnow()
+                ticket.ai_result = f'✅ 全部{len(tasks)}个数据变更任务执行成功\n\n{results_text}'
                 ticket.clear_pending_action()
                 _add_comment(ticket, None, ticket.ai_result, 'ai_process', is_ai=True)
-                _add_comment(ticket, None, 'AI已完成数据变更操作，等待提交人核实', 'status_change', is_ai=True)
+                _add_comment(ticket, None, 'AI已完成所有数据变更操作，等待提交人核实', 'status_change', is_ai=True)
             else:
-                # 执行失败
-                error_msg = execution.error_message or '执行失败'
                 ticket.status = STATUS_PENDING_ASSIGNMENT
-                ticket.ai_result = f'❌ SQL系统任务执行失败：{error_msg}'
+                ticket.ai_result = f'❌ 数据变更任务执行失败（在任务「{failed_task_name}」处中止）\n\n{results_text}'
                 ticket.clear_pending_action()
                 _add_comment(ticket, None, ticket.ai_result, 'ai_process', is_ai=True)
                 _add_comment(ticket, None, '数据变更操作执行失败，工单已转为「待指派」，请重新指派或重试', 'status_change', is_ai=True)
 
             db.session.commit()
-            logger.info(f'工单 {ticket.ticket_no} 待确认任务执行完成，状态: {execution.status}')
+            logger.info(f'工单 {ticket.ticket_no} 待确认任务执行完成，结果: {"全部成功" if all_success else "失败"}')
+
+            # 触发监督者自动验收（如授权）
+            if all_success and ticket.supervisor_agent_id:
+                try:
+                    from app.services.supervisor_monitor import trigger_auto_close
+                    trigger_auto_close(ticket.id, app)
+                except Exception as e:
+                    logger.warning(f'触发监督者自动验收失败: {e}')
 
         except Exception as e:
             logger.error(f'工单待确认任务执行失败 ticket_id={ticket_id}: {e}', exc_info=True)
@@ -1071,8 +1187,13 @@ def list_tickets():
 
     query = Ticket.query
     if not is_admin and current_user:
+        # 普通用户可见：自己创建的 + 指派给自己的 + 自己创建的草稿
         query = query.filter(
-            db.or_(Ticket.created_by == current_user.id, Ticket.assignee_id == current_user.id)
+            db.or_(
+                Ticket.created_by == current_user.id,
+                Ticket.assignee_id == current_user.id,
+                db.and_(Ticket.is_draft == True, Ticket.created_by == current_user.id),
+            )
         )
 
     status = request.args.get('status')
@@ -1096,6 +1217,26 @@ def list_tickets():
         query = query.filter(
             db.or_(Ticket.title.contains(keyword), Ticket.ticket_no.contains(keyword))
         )
+
+    # 时间范围筛选
+    start_date = request.args.get('start_date')
+    if start_date:
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(start_date, '%Y-%m-%d')
+            query = query.filter(Ticket.created_at >= dt)
+        except (ValueError, TypeError):
+            pass
+
+    end_date = request.args.get('end_date')
+    if end_date:
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(end_date, '%Y-%m-%d')
+            dt = dt.replace(hour=23, minute=59, second=59)
+            query = query.filter(Ticket.created_at <= dt)
+        except (ValueError, TypeError):
+            pass
 
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 20, type=int)
@@ -1139,20 +1280,22 @@ def create_ticket():
     """创建工单
 
     任何登录用户均可提交工单。
-    必填：title, content
-    指派（二选一）：
+    必填：title
+    可选：content（草稿模式下可为空）
+    指派（二选一，提交时必填，草稿时可选）：
       - assignee_type='user' + assignee_id（指派给具体用户）
       - assignee_type='ai' + assignee_agent_id（指派给AI，可选，默认使用默认Agent）
-    可选：business_system_id
+    可选：business_system_id, is_draft（true 时暂存为草稿）
     """
     data = request.get_json() or {}
     title = (data.get('title') or '').strip()
     content = (data.get('content') or '').strip()
     assignee_type = (data.get('assignee_type') or 'user').strip()
+    is_draft = bool(data.get('is_draft', False))
 
     if not title:
         return jsonify({'success': False, 'message': '标题不能为空'}), 400
-    if not content:
+    if not is_draft and not content:
         return jsonify({'success': False, 'message': '工单内容不能为空'}), 400
 
     business_system_id = data.get('business_system_id')
@@ -1168,6 +1311,8 @@ def create_ticket():
     # 处理指派
     assignee_id = None
     assignee_agent_id = None
+    supervisor_agent_id = None
+    max_collaboration_rounds = None
 
     if assignee_type == 'ai':
         # 指派给AI
@@ -1194,21 +1339,50 @@ def create_ticket():
                 agent = AiAgent.query.filter_by(is_active=True).first()
             if agent:
                 assignee_agent_id = agent.id
-            else:
+            elif not is_draft:
                 return jsonify({'success': False, 'message': '未找到可用的AI Agent'}), 400
+
+        # 监督者Agent（多agent协作，可选）：监督执行者Agent是否执行了任务且结果满足要求
+        supervisor_agent_id = data.get('supervisor_agent_id')
+        sup = None
+        if supervisor_agent_id:
+            try:
+                supervisor_agent_id = int(supervisor_agent_id)
+            except (TypeError, ValueError):
+                supervisor_agent_id = None
+        if supervisor_agent_id:
+            if supervisor_agent_id == assignee_agent_id:
+                # 监督者与执行者相同无意义，忽略
+                supervisor_agent_id = None
+            else:
+                sup = AiAgent.query.get(supervisor_agent_id)
+                if not sup or not sup.is_active:
+                    supervisor_agent_id = None
+
+        # 无切换权限用户或未指定监督者时，自动填充默认监督者Agent（如有）
+        if not supervisor_agent_id:
+            default_sup = AiAgent.query.filter_by(is_active=True, agent_role='supervisor', is_default=True).first()
+            if not default_sup:
+                default_sup = AiAgent.query.filter_by(is_active=True, agent_role='supervisor').first()
+            if default_sup and default_sup.id != assignee_agent_id:
+                supervisor_agent_id = default_sup.id
+                sup = default_sup
+
+        # 最大协作轮数：自动从监督者Agent配置读取，无需用户输入
+        max_collaboration_rounds = sup.max_supervisor_rounds if sup else 3
     else:
         # 指派给具体用户
         assignee_id = data.get('assignee_id')
-        if not assignee_id:
+        if not assignee_id and not is_draft:
             return jsonify({'success': False, 'message': '请选择指派人'}), 400
-        try:
-            assignee_id = int(assignee_id)
-        except (TypeError, ValueError):
-            return jsonify({'success': False, 'message': '指派人ID格式错误'}), 400
-
-        assignee = User.query.get(assignee_id)
-        if not assignee or not assignee.is_active:
-            return jsonify({'success': False, 'message': '指派人不存在或已禁用'}), 400
+        if assignee_id:
+            try:
+                assignee_id = int(assignee_id)
+            except (TypeError, ValueError):
+                return jsonify({'success': False, 'message': '指派人ID格式错误'}), 400
+            assignee = User.query.get(assignee_id)
+            if not assignee or not assignee.is_active:
+                return jsonify({'success': False, 'message': '指派人不存在或已禁用'}), 400
 
     ticket = Ticket(
         ticket_no=_generate_ticket_no(),
@@ -1218,9 +1392,12 @@ def create_ticket():
         assignee_type=assignee_type,
         assignee_id=assignee_id,
         assignee_agent_id=assignee_agent_id,
+        supervisor_agent_id=supervisor_agent_id,
+        max_collaboration_rounds=max_collaboration_rounds,
         created_by=current_user.id,
-        status=STATUS_SUBMITTED,
-        submitted_at=now,
+        status=STATUS_DRAFT if is_draft else STATUS_SUBMITTED,
+        is_draft=is_draft,
+        submitted_at=None if is_draft else now,
     )
     db.session.add(ticket)
     db.session.commit()
@@ -1238,8 +1415,179 @@ def create_ticket():
                 att.ticket_id = ticket.id
         db.session.commit()
 
+    # 草稿模式：不触发AI处理
+    if is_draft:
+        return jsonify({'success': True, 'data': ticket.to_dict(), 'message': '草稿已暂存'})
+
     # 如果指派给AI，自动触发AI处理
     if assignee_type == 'ai':
+        _trigger_ai_processing(ticket)
+        return jsonify({'success': True, 'data': ticket.to_dict(), 'message': '工单已提交，AI正在处理中'})
+
+    return jsonify({'success': True, 'data': ticket.to_dict(), 'message': '工单已提交'})
+
+
+@ticket_bp.route('/<int:ticket_id>/draft', methods=['PUT'])
+@login_required
+def update_draft(ticket_id):
+    """更新草稿工单（仅创建人可操作，且工单必须处于草稿状态）
+
+    可更新：title, content, business_system_id, assignee_type, assignee_id, assignee_agent_id, attachment_ids
+    """
+    ticket = Ticket.query.get(ticket_id)
+    if not ticket:
+        return jsonify({'success': False, 'message': '工单不存在'}), 404
+    if not ticket.is_draft:
+        return jsonify({'success': False, 'message': '该工单不是草稿，无法编辑'}), 400
+    if ticket.created_by != get_current_user().id:
+        return jsonify({'success': False, 'message': '只能编辑自己创建的草稿'}), 403
+
+    data = request.get_json() or {}
+    title = (data.get('title') or '').strip()
+    content = (data.get('content') or '').strip()
+    assignee_type = (data.get('assignee_type') or 'user').strip()
+
+    if not title:
+        return jsonify({'success': False, 'message': '标题不能为空'}), 400
+
+    business_system_id = data.get('business_system_id')
+    if business_system_id:
+        try:
+            business_system_id = int(business_system_id)
+        except (TypeError, ValueError):
+            business_system_id = None
+
+    # 处理指派
+    assignee_id = None
+    assignee_agent_id = None
+    supervisor_agent_id = None
+    max_collaboration_rounds = None
+    current_user = get_current_user()
+
+    if assignee_type == 'ai':
+        assignee_agent_id = data.get('assignee_agent_id')
+        if assignee_agent_id:
+            try:
+                assignee_agent_id = int(assignee_agent_id)
+            except (TypeError, ValueError):
+                assignee_agent_id = None
+        if assignee_agent_id and not current_user.is_admin():
+            if not current_user.can_switch_agent():
+                assignee_agent_id = None
+            elif not current_user.can_use_agent(assignee_agent_id):
+                return jsonify({'success': False, 'message': '无权使用该AI Agent，请选择授权范围内的Agent'}), 403
+        if not assignee_agent_id:
+            agent = AiAgent.query.filter_by(is_active=True, is_default=True).first()
+            if not agent:
+                agent = AiAgent.query.filter_by(is_active=True).first()
+            if agent:
+                assignee_agent_id = agent.id
+
+        # 监督者Agent（多agent协作，可选）
+        supervisor_agent_id = data.get('supervisor_agent_id')
+        sup = None
+        if supervisor_agent_id:
+            try:
+                supervisor_agent_id = int(supervisor_agent_id)
+            except (TypeError, ValueError):
+                supervisor_agent_id = None
+        if supervisor_agent_id:
+            if supervisor_agent_id == assignee_agent_id:
+                supervisor_agent_id = None
+            else:
+                sup = AiAgent.query.get(supervisor_agent_id)
+                if not sup or not sup.is_active:
+                    supervisor_agent_id = None
+
+        # 无切换权限用户或未指定监督者时，自动填充默认监督者Agent（如有）
+        if not supervisor_agent_id:
+            default_sup = AiAgent.query.filter_by(is_active=True, agent_role='supervisor', is_default=True).first()
+            if not default_sup:
+                default_sup = AiAgent.query.filter_by(is_active=True, agent_role='supervisor').first()
+            if default_sup and default_sup.id != assignee_agent_id:
+                supervisor_agent_id = default_sup.id
+                sup = default_sup
+
+        # 最大协作轮数：自动从监督者Agent配置读取
+        max_collaboration_rounds = sup.max_supervisor_rounds if sup else 3
+    else:
+        assignee_id = data.get('assignee_id')
+        if assignee_id:
+            try:
+                assignee_id = int(assignee_id)
+            except (TypeError, ValueError):
+                return jsonify({'success': False, 'message': '指派人ID格式错误'}), 400
+            assignee = User.query.get(assignee_id)
+            if not assignee or not assignee.is_active:
+                return jsonify({'success': False, 'message': '指派人不存在或已禁用'}), 400
+
+    ticket.title = title
+    ticket.content = content
+    ticket.business_system_id = business_system_id
+    ticket.assignee_type = assignee_type
+    ticket.assignee_id = assignee_id
+    ticket.assignee_agent_id = assignee_agent_id
+    ticket.supervisor_agent_id = supervisor_agent_id
+    ticket.max_collaboration_rounds = max_collaboration_rounds
+
+    # 关联附件
+    attachment_ids = data.get('attachment_ids') or []
+    if attachment_ids and isinstance(attachment_ids, list):
+        for att_id in attachment_ids:
+            try:
+                att_id = int(att_id)
+            except (TypeError, ValueError):
+                continue
+            att = TicketAttachment.query.get(att_id)
+            if att and att.ticket_id is None and att.uploaded_by == current_user.id:
+                att.ticket_id = ticket.id
+        db.session.commit()
+
+    db.session.commit()
+    return jsonify({'success': True, 'data': ticket.to_dict(), 'message': '草稿已更新'})
+
+
+@ticket_bp.route('/<int:ticket_id>/submit', methods=['POST'])
+@login_required
+def submit_draft(ticket_id):
+    """提交草稿工单（仅创建人可操作，且工单必须处于草稿状态）
+
+    提交后：
+      - 状态从 draft → submitted
+      - 设置 submitted_at
+      - 如果指派给AI，自动触发AI处理
+    """
+    ticket = Ticket.query.get(ticket_id)
+    if not ticket:
+        return jsonify({'success': False, 'message': '工单不存在'}), 404
+    if not ticket.is_draft:
+        return jsonify({'success': False, 'message': '该工单不是草稿，无法提交'}), 400
+    if ticket.created_by != get_current_user().id:
+        return jsonify({'success': False, 'message': '只能提交自己创建的草稿'}), 403
+
+    # 校验必填字段
+    if not (ticket.content or '').strip():
+        return jsonify({'success': False, 'message': '工单内容不能为空，请补充内容后再提交'}), 400
+    if ticket.assignee_type == 'user' and not ticket.assignee_id:
+        return jsonify({'success': False, 'message': '请选择指派人后再提交'}), 400
+    if ticket.assignee_type == 'ai' and not ticket.assignee_agent_id:
+        # 尝试用默认Agent
+        agent = AiAgent.query.filter_by(is_active=True, is_default=True).first()
+        if not agent:
+            agent = AiAgent.query.filter_by(is_active=True).first()
+        if agent:
+            ticket.assignee_agent_id = agent.id
+        else:
+            return jsonify({'success': False, 'message': '未找到可用的AI Agent'}), 400
+
+    # 提交
+    ticket.is_draft = False
+    ticket.status = STATUS_SUBMITTED
+    ticket.submitted_at = datetime.utcnow()
+    db.session.commit()
+
+    # 如果指派给AI，自动触发AI处理
+    if ticket.assignee_type == 'ai':
         _trigger_ai_processing(ticket)
         return jsonify({'success': True, 'data': ticket.to_dict(), 'message': '工单已提交，AI正在处理中'})
 
@@ -1364,9 +1712,39 @@ def update_status(ticket_id):
                     agent = AiAgent.query.filter_by(is_active=True).first()
                 if agent:
                     new_assignee_agent_id = agent.id
+
+            # 监督者Agent（多agent协作，可选）
+            new_supervisor_agent_id = data.get('supervisor_agent_id')
+            if new_supervisor_agent_id:
+                try:
+                    new_supervisor_agent_id = int(new_supervisor_agent_id)
+                except (TypeError, ValueError):
+                    new_supervisor_agent_id = None
+            if new_supervisor_agent_id:
+                if new_supervisor_agent_id == new_assignee_agent_id:
+                    new_supervisor_agent_id = None
+                else:
+                    sup = AiAgent.query.get(new_supervisor_agent_id)
+                    if not sup or not sup.is_active:
+                        new_supervisor_agent_id = None
+
+            # 无切换权限用户或未指定监督者时，自动填充默认监督者Agent（如有）
+            if not new_supervisor_agent_id:
+                default_sup = AiAgent.query.filter_by(is_active=True, agent_role='supervisor', is_default=True).first()
+                if not default_sup:
+                    default_sup = AiAgent.query.filter_by(is_active=True, agent_role='supervisor').first()
+                if default_sup and default_sup.id != new_assignee_agent_id:
+                    new_supervisor_agent_id = default_sup.id
+                    sup = default_sup
+
+            # 最大协作轮数：自动从监督者Agent配置读取
+            new_max_collaboration_rounds = sup.max_supervisor_rounds if sup else 3
+
             ticket.assignee_type = 'ai'
             ticket.assignee_id = None
             ticket.assignee_agent_id = new_assignee_agent_id
+            ticket.supervisor_agent_id = new_supervisor_agent_id
+            ticket.max_collaboration_rounds = new_max_collaboration_rounds
         else:
             if not new_assignee_id:
                 return jsonify({'success': False, 'message': '请选择新的指派人'}), 400
@@ -1380,6 +1758,8 @@ def update_status(ticket_id):
             ticket.assignee_type = 'user'
             ticket.assignee_id = new_assignee_id
             ticket.assignee_agent_id = None
+            ticket.supervisor_agent_id = None
+            ticket.max_collaboration_rounds = 3
 
         ticket.status = STATUS_SUBMITTED
         ticket.submitted_at = now
@@ -1391,6 +1771,27 @@ def update_status(ticket_id):
         # 清空上次AI处理结果和待确认任务信息
         ticket.ai_result = None
         ticket.clear_pending_action()
+        # 重置多agent协作状态
+        ticket.collaboration_rounds = 0
+        ticket.collaboration_log = None
+        ticket.final_score = None
+
+        # 更新工单标题和内容（如果有提供），并记录修改历史
+        new_title = (data.get('title') or '').strip()
+        new_content = (data.get('content') or '').strip()
+        changes = []
+        if new_title and new_title != (ticket.title or ''):
+            changes.append(f'**标题**：\n- 旧：{ticket.title or "（空）"}\n- 新：{new_title}')
+            ticket.title = new_title
+        if new_content and new_content != (ticket.content or ''):
+            # 内容较长时截断显示
+            old_preview = (ticket.content or '')[:200] + ('...' if len(ticket.content or '') > 200 else '')
+            new_preview = new_content[:200] + ('...' if len(new_content) > 200 else '')
+            changes.append(f'**内容**已更新（{len(ticket.content or "")}字 → {len(new_content)}字）')
+            ticket.content = new_content
+        if changes:
+            change_log = '\n\n'.join(changes)
+            _add_comment(ticket, current_user.id, f'📝 工单内容已修改：\n\n{change_log}', 'status_change')
 
         if action == 'reassign':
             action_msg = '提交人重新指派了工单'
@@ -1587,10 +1988,14 @@ def cancel_ticket_action(ticket_id):
     if ticket.status != STATUS_PENDING_CONFIRMATION:
         return jsonify({'success': False, 'message': f'当前状态({STATUS_LABELS.get(ticket.status, ticket.status)})不允许取消操作'}), 400
 
-    task_name = ticket.get_pending_action().get('task_name', '')
+    pending_action = ticket.get_pending_action() or {}
+    if 'tasks' in pending_action and isinstance(pending_action['tasks'], list):
+        task_names = '、'.join(t.get('task_name', '未命名任务') for t in pending_action['tasks']) if pending_action['tasks'] else '数据变更操作'
+    else:
+        task_names = pending_action.get('task_name', '') or '数据变更操作'
     ticket.status = STATUS_PENDING_ASSIGNMENT
     ticket.clear_pending_action()
-    _add_comment(ticket, current_user.id, f'提交人取消了数据变更操作「{task_name}」，工单转为待指派', 'status_change')
+    _add_comment(ticket, current_user.id, f'提交人取消了数据变更操作「{task_names}」，工单转为待指派', 'status_change')
     db.session.commit()
 
     return jsonify({
@@ -1662,6 +2067,11 @@ def list_ai_agents():
             'id': a.id,
             'name': a.name,
             'description': a.description or '',
+            'agent_role': a.agent_role or 'general',
+            'can_confirm_execution': bool(a.can_confirm_execution),
+            'can_retry_processing': bool(a.can_retry_processing),
+            'can_close_ticket': bool(a.can_close_ticket),
+            'max_supervisor_rounds': a.max_supervisor_rounds if a.max_supervisor_rounds else 3,
             'is_default': a.is_default,
         }
         for a in agents
@@ -2050,6 +2460,36 @@ def get_analytics():
     )
     ai_duration_rows = ai_duration_query.all()
 
+    # AI Token 消耗明细（按 agent 聚合）
+    ai_token_query = processed_base.filter(
+        ai_assignee_filter,
+        Ticket.assignee_agent_id.isnot(None),
+        Ticket.ai_total_tokens > 0,
+    ).with_entities(
+        Ticket.assignee_agent_id.label('agent_id'),
+        func.sum(Ticket.ai_total_tokens).label('total_tokens'),
+        func.sum(Ticket.ai_prompt_tokens).label('prompt_tokens'),
+        func.sum(Ticket.ai_completion_tokens).label('completion_tokens'),
+        func.sum(Ticket.ai_cache_creation_tokens).label('cache_creation_tokens'),
+        func.sum(Ticket.ai_cache_read_tokens).label('cache_read_tokens'),
+        func.sum(Ticket.ai_headroom_original_tokens).label('headroom_original_tokens'),
+        func.sum(Ticket.ai_headroom_saved_tokens).label('headroom_saved_tokens'),
+    ).group_by(Ticket.assignee_agent_id)
+    ai_token_rows = ai_token_query.all()
+
+    # AI 评分统计（按 agent 聚合，只统计有评分的工单）
+    ai_score_query = processed_base.filter(
+        ai_assignee_filter,
+        Ticket.assignee_agent_id.isnot(None),
+        Ticket.final_score.isnot(None),
+        Ticket.final_score > 0,
+    ).with_entities(
+        Ticket.assignee_agent_id.label('agent_id'),
+        func.avg(Ticket.final_score).label('avg_score'),
+        func.count(Ticket.id).label('scored_count'),
+    ).group_by(Ticket.assignee_agent_id)
+    ai_score_rows = ai_score_query.all()
+
     # 汇总到用户维度
     user_map = {}  # user_id -> {submitted, assigned, completed, avg_duration, durations}
 
@@ -2086,6 +2526,23 @@ def get_analytics():
             delta_sec = (row.processed_at - start_time).total_seconds()
             if delta_sec > 0:
                 agent_map.setdefault(aid, {}).setdefault('durations', []).append(delta_sec)
+
+    # AI Token 消耗汇总到 agent_map
+    for row in ai_token_rows:
+        aid = row.agent_id
+        agent_map.setdefault(aid, {})['total_tokens'] = row.total_tokens or 0
+        agent_map.setdefault(aid, {})['prompt_tokens'] = row.prompt_tokens or 0
+        agent_map.setdefault(aid, {})['completion_tokens'] = row.completion_tokens or 0
+        agent_map.setdefault(aid, {})['cache_creation_tokens'] = row.cache_creation_tokens or 0
+        agent_map.setdefault(aid, {})['cache_read_tokens'] = row.cache_read_tokens or 0
+        agent_map.setdefault(aid, {})['headroom_original_tokens'] = row.headroom_original_tokens or 0
+        agent_map.setdefault(aid, {})['headroom_saved_tokens'] = row.headroom_saved_tokens or 0
+
+    # AI 评分汇总到 agent_map
+    for row in ai_score_rows:
+        aid = row.agent_id
+        agent_map.setdefault(aid, {})['avg_score'] = round(float(row.avg_score or 0), 1)
+        agent_map.setdefault(aid, {})['scored_count'] = row.scored_count or 0
 
     # 获取用户信息
     user_ids = list(user_map.keys())
@@ -2163,6 +2620,15 @@ def get_analytics():
             'completion_rate': completion_rate,
             'avg_duration_seconds': avg_sec,
             'processed_count': len(durations),
+            'total_tokens': stats.get('total_tokens', 0),
+            'prompt_tokens': stats.get('prompt_tokens', 0),
+            'completion_tokens': stats.get('completion_tokens', 0),
+            'cache_creation_tokens': stats.get('cache_creation_tokens', 0),
+            'cache_read_tokens': stats.get('cache_read_tokens', 0),
+            'headroom_original_tokens': stats.get('headroom_original_tokens', 0),
+            'headroom_saved_tokens': stats.get('headroom_saved_tokens', 0),
+            'avg_score': stats.get('avg_score', 0),
+            'scored_count': stats.get('scored_count', 0),
         })
 
     # AI 按指派数降序
@@ -2185,6 +2651,22 @@ def get_analytics():
     ai_completion_rate = round(ai_total_completed / ai_total_assigned * 100, 2) if ai_total_assigned > 0 else 0
     ai_durations = [a['avg_duration_seconds'] for a in ai_stats if a['avg_duration_seconds'] > 0]
     ai_avg_sec = round(sum(ai_durations) / len(ai_durations), 1) if ai_durations else 0
+    # AI Token 总览
+    ai_total_tokens = sum(a['total_tokens'] for a in ai_stats)
+    ai_total_prompt_tokens = sum(a['prompt_tokens'] for a in ai_stats)
+    ai_total_completion_tokens = sum(a['completion_tokens'] for a in ai_stats)
+    ai_total_cache_creation_tokens = sum(a['cache_creation_tokens'] for a in ai_stats)
+    ai_total_cache_read_tokens = sum(a['cache_read_tokens'] for a in ai_stats)
+    ai_total_headroom_original_tokens = sum(a['headroom_original_tokens'] for a in ai_stats)
+    ai_total_headroom_saved_tokens = sum(a['headroom_saved_tokens'] for a in ai_stats)
+
+    # AI 综合平均分（所有有评分的工单的平均分）
+    all_scored = [(a['avg_score'], a['scored_count']) for a in ai_stats if a['scored_count'] > 0]
+    if all_scored:
+        total_scored = sum(sc for _, sc in all_scored)
+        ai_overall_avg_score = round(sum(s * sc for s, sc in all_scored) / total_scored, 1) if total_scored > 0 else 0
+    else:
+        ai_overall_avg_score = 0
 
     return jsonify({
         'success': True,
@@ -2211,6 +2693,14 @@ def get_analytics():
                 'ai_completion_rate': ai_completion_rate,
                 'ai_avg_duration_seconds': ai_avg_sec,
                 'ai_agent_count': len(ai_stats),
+                'ai_total_tokens': ai_total_tokens,
+                'ai_total_prompt_tokens': ai_total_prompt_tokens,
+                'ai_total_completion_tokens': ai_total_completion_tokens,
+                'ai_total_cache_creation_tokens': ai_total_cache_creation_tokens,
+                'ai_total_cache_read_tokens': ai_total_cache_read_tokens,
+                'ai_total_headroom_original_tokens': ai_total_headroom_original_tokens,
+                'ai_total_headroom_saved_tokens': ai_total_headroom_saved_tokens,
+                'ai_overall_avg_score': ai_overall_avg_score,
             },
             'status_labels': STATUS_LABELS,
         }

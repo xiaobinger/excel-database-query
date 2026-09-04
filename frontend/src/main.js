@@ -16,6 +16,12 @@ app.use(pinia)
 app.use(router)
 app.use(ElementPlus, { locale: zhCn })
 
+// 全局错误兜底：单个页面组件渲染出错时仅记录日志并拦截冒泡，
+// 避免未捕获的渲染异常破坏整个组件树、导致后续路由切换全站白屏
+app.config.errorHandler = (err, instance, info) => {
+  console.error('[GlobalErrorHandler]', info, err)
+}
+
 app.directive('hasPermi', {
   mounted(el, binding) {
     const store = useAppStore()

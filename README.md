@@ -1,207 +1,256 @@
-# Excel Database Query - Excel数据库查询系统
+<div align="center">
 
-基于 Flask + Vue3 的企业级数据库查询与导出平台，支持多数据库连接、SSH隧道、智能匹配、SQL模板、自动导出、AI辅助等功能。
+<!-- 项目 Logo / ASCII Art -->
+<pre>
+ ███████╗ ██████╗ ██████╗ ███████╗ █████╗ ████████╗
+ ██╔════╝██╔═══██╗██╔══██╗██╔════╝██╔══██╗╚══██╔══╝
+ █████╗  ██║   ██║██████╔╝█████╗  ███████║   ██║   
+ ██╔══╝  ██║   ██║██╔═══╝ ██╔══╝  ██╔══██║   ██║   
+ ██║     ╚██████╔╝██║     ███████╗██║  ██║   ██║   
+ ╚═╝      ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═╝   ╚═╝   
+   ██████╗ ██╗   ██╗███████╗███████╗████████╗
+  ██╔═══██╗██║   ██║██╔════╝██╔════╝╚══██╔══╝
+  ██║   ██║██║   ██║█████╗  ███████╗   ██║   
+  ██║▄▄ ██║██║   ██║██╔══╝  ╚════██║   ██║   
+  ╚██████╔╝╚██████╔╝███████╗███████║   ██║   
+   ╚══▀▀═╝  ╚═════╝ ╚══════╝╚══════╝   ╚═╝   
+</pre>
 
-## 功能概览
+<h1>Excel Database Query</h1>
 
-### 核心功能
-- **查询执行**：上传Excel文件，选择查询选项，自动执行数据库查询并将结果写回Excel
-- **导出任务**：基于导出选项配置参数，直接从数据库导出数据到Excel
-- **自动导出**：Cron定时触发导出任务，支持邮件通知
-- **SQL模板**：Jinja2语法动态生成SQL，支持按月分表UNION ALL等场景
-- **智能匹配**：根据上传文件名自动推荐查询选项，支持直通模式（自动执行+下载）
+<p><strong>企业级 Excel 数据库查询与导出平台</strong></p>
+<p><em>Flask + Vue3 · 多数据库连接 · SSH隧道 · 智能匹配 · SQL模板 · 自动导出 · AI多Agent协作 · 代付流程编排</em></p>
 
-### 数据库支持
-- MySQL / MariaDB（pymysql）
-- PostgreSQL（psycopg2）
-- SQL Server（pyodbc）
-- SSH隧道连接（paramiko + sshtunnel）
+<!-- 徽章 -->
+<p>
+  <img src="https://img.shields.io/badge/version-2.6.4-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/python-3.10+-yellow?style=flat-square&logo=python&logoColor=white" alt="python" />
+  <img src="https://img.shields.io/badge/vue-3-green?style=flat-square&logo=vuedotjs&logoColor=white" alt="vue" />
+  <img src="https://img.shields.io/badge/flask-black?style=flat-square&logo=flask&logoColor=white" alt="flask" />
+  <img src="https://img.shields.io/badge/mysql-8.0-orange?style=flat-square&logo=mysql&logoColor=white" alt="mysql" />
+  <img src="https://img.shields.io/badge/license-internal-red?style=flat-square" alt="license" />
+</p>
 
-### 权限体系
-- RBAC角色权限（菜单权限 + 按钮权限）
-- 用户授权查询选项/导出选项/自动任务
-- 超级管理员/管理员查看所有数据，普通用户仅看自己的
+<p>
+  <a href="#-核心功能">核心功能</a> · 
+  <a href="#-ai-功能">AI 功能</a> · 
+  <a href="#-代付流程编排">代付流程</a> · 
+  <a href="#-快速开始">快速开始</a> · 
+  <a href="#-api-概览">API</a> · 
+  <a href="#-技术栈">技术栈</a> · 
+  <a href="#-变更日志">变更日志</a>
+</p>
 
-### AI功能
-- AI模型配置（OpenAI兼容API）
-- **AI模型Logo自动适配**：内置15+主流供应商Logo（OpenAI、Anthropic、Google、Azure、DeepSeek、Moonshot、Zhipu、百度、阿里、腾讯、商汤、OpenRouter、Poolside、Nemotron、ox-alpha），未匹配品牌自动通过DuckDuckGo Favicon服务获取远程Logo
-- 用户行为追踪与自主学习
-- AI技能管理（系统/用户/自动学习）
-- AI对话（Markdown渲染）
+</div>
 
-### 代付流程编排
-- **流程模板管理**：步骤列表式配置，支持拖拽排序节点
-- **节点配置**：每个节点独立配置支付动作（通道/接口/环境/实时代付/跑批步骤）
-- **条件流转**：基于当前节点响应字段值判断（等于/不等于/包含/大于/小于/成功/失败/在列表等），支持引用任意节点结果（`nodeId.fieldName`）
-- **循环执行**：节点可配置定时循环，支持多退出条件（AND/OR逻辑），满足条件后继续流转
-- **失败即停**：节点失败时流程立即停止，不会继续执行下一节点（资金安全）
-- **防重复执行**：多重安全检查确保同一行数据不会被重复处理（状态检查/时间检查/运行记录检查）
-- **节点通知**：每个节点可配置失败通知、结束节点通知，支持邮件模板变量替换
-- **执行记录**：每笔数据独立流程实例，实时查看执行状态与节点日志
-- **流程走势动画**：可视化展示流程进度，直观查看成功/失败状态与失败原因
-- **后台调度**：守护线程每5秒检查待执行实例，驱动循环节点与流程推进
-- **权限控制**：菜单权限 `pay_flow`（流程编排）/ `pay_flow_executions`（执行记录），支持角色权限独立配置
+---
 
-### 其他
-- 5套主题切换（默认蓝、粉色甜美、阳光橙色、暗黑、豆绿养眼）
-- 性别自动主题匹配
-- 列名同义词模糊匹配
-- 文件定时清理
-- SSE实时状态推送
-- 大数据量分批执行
+## ✨ 项目亮点
 
-## 项目结构
+<table>
+<tr>
+<td width="50%">
+
+### 🚀 核心能力
+- **批量查询** — 上传 Excel，自动匹配 SQL 脚本，批量查询多库
+- **数据导出** — 一键从数据库导出到 Excel
+- **自动导出** — Cron 定时触发，支持邮件通知
+- **SQL 模板** — Jinja2 语法，支持按月分表 UNION ALL
+
+</td>
+<td width="50%">
+
+### 🛡️ 企业特性
+- **多数据库** — MySQL / PostgreSQL / SQL Server
+- **SSH 隧道** — 安全连接内网数据库
+- **RBAC 权限** — 菜单 + 按钮级精细控制
+- **智能匹配** — 文件名自动推荐查询选项
+
+</td>
+</tr>
+<tr>
+<td>
+
+### 🤖 AI 智能
+- 多 Agent 协作（执行者 + 监督者）
+- Headroom 上下文压缩（节省 60-95% Token）
+- AI 技能自动学习与保存
+- 15+ 供应商 Logo 自动适配
+
+</td>
+<td>
+
+### 💰 代付流程
+- 可视化流程编排（拖拽节点）
+- 条件流转 + 循环执行
+- 失败即停（资金安全）
+- 防重复执行 + 批次聚合
+
+</td>
+</tr>
+</table>
+
+---
+
+## 🎯 核心功能
+
+<details>
+<summary><strong>📊 查询执行</strong> — 上传 Excel 文件，自动执行数据库查询</summary>
+
+- 上传 Excel 文件，选择查询选项，自动匹配 SQL 脚本
+- 支持 `IN :value` 批量查询，自动分批执行
+- 结果自动写回 Excel，支持多 Sheet
+- 智能匹配：根据文件名自动推荐查询选项
+
+</details>
+
+<details>
+<summary><strong>📤 导出任务</strong> — 直接从数据库导出数据到 Excel</summary>
+
+- 基于导出选项配置参数，一键导出
+- 支持多数据库联合查询合并结果
+- 结果合并策略：合并 / 分离
+- 支持列映射、主键更新
+
+</details>
+
+<details>
+<summary><strong>⏰ 自动导出</strong> — Cron 定时触发导出任务</summary>
+
+- Cron 表达式配置执行计划
+- 支持邮件通知（附件 / 正文）
+- 手动重发邮件功能
+- 任务状态实时监控
+
+</details>
+
+<details>
+<summary><strong>📝 SQL 模板</strong> — Jinja2 语法动态生成 SQL</summary>
+
+- 按月分表场景：`SELECT * FROM transaction_{{ m }}`
+- 支持日期范围、文本、数字变量类型
+- 自动渲染并执行
+
+</details>
+
+---
+
+## 🤖 AI 功能
+
+<table>
+<tr>
+<td width="33%">
+
+**🧠 多 Agent 协作**
+
+执行者负责执行工单任务，监督者审查结果并打分（0-100），循环协作直到验收通过。
+
+- 最大协作轮数可配置（1-20 轮）
+- 监督者可授权「确认执行」
+- 协作日志时间线展示
+
+</td>
+<td width="34%">
+
+**🗜️ Headroom 上下文压缩**
+
+智能识别内容类型，应用针对性压缩策略：
+
+| 内容类型 | 策略 | 节省率 |
+|---------|------|--------|
+| JSON 数组 | SmartCrusher | 70-90% |
+| 日志 | LogCompressor | 85-95% |
+| 代码 | CodeCompressor | 40-70% |
+| 文本 | TextCrusher | 30-60% |
+
+</td>
+<td width="33%">
+
+**🎨 AI 模型 Logo 自动适配**
+
+内置 15+ 主流供应商 Logo：
+
+OpenAI · Anthropic · Google · Azure · DeepSeek · Moonshot · Zhipu · 百度 · 阿里 · 腾讯 · 商汤 · OpenRouter · Poolside · Nemotron · ox-alpha
+
+未知品牌自动通过 DuckDuckGo Favicon 获取。
+
+</td>
+</tr>
+</table>
+
+### 💬 AI 对话特性
+
+| 特性 | 说明 |
+|------|------|
+| **插话/排队** | 🛑 立即停止并采纳 · ⚡ 插话发送 · 🕐 排队发送 |
+| **技能保存** | AI 自动保存用户要求的 SKILLS/规则 |
+| **用户感知** | AI 感知用户角色，区别尊称 |
+| **排队编辑** | 排队中消息支持行内编辑 |
+
+---
+
+## 💰 代付流程编排
+
+```
+┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐
+│  节点A   │───▶│  节点B   │───▶│  节点C   │───▶│  完成   │
+│  代付    │    │  验证    │    │  通知    │    │  ✅    │
+└─────────┘    └─────────┘    └─────────┘    └─────────┘
+                    │
+                    ▼ 失败
+               ┌─────────┐
+               │  停止   │
+               │  ❌    │
+               └─────────┘
+```
+
+- **流程模板管理** — 卡片式节点配置，支持拖拽排序
+- **条件流转** — 基于节点响应字段值判断（eq/neq/contains/gt/lt/success/fail）
+- **循环执行** — 支持多退出条件（AND/OR 逻辑）
+- **失败即停** — 资金安全保障，节点失败立即停止
+- **防重复执行** — 多重安全检查（状态/时间/运行记录/调度防重入）
+- **通知模板** — 统一管理，流程编排时下拉选择
+- **可视化走势** — 横向排列展示流程节点，实时查看执行进度
+
+---
+
+## 📁 项目结构
 
 ```
 excel-database-query/
-├── backend/                    # Flask后端
+├── backend/                    # Flask 后端
 │   ├── app/
-│   │   ├── __init__.py        # 应用工厂、数据库初始化、蓝图注册
-│   │   ├── config.py          # YAML配置加载
-│   │   ├── models/            # 数据模型
-│   │   │   ├── database.py    # 数据库连接
-│   │   │   ├── script.py      # 查询/导出选项（含SQL模板字段）
-│   │   │   ├── query_task.py  # 查询/导出任务
-│   │   │   ├── ssh_config.py  # SSH配置
-│   │   │   ├── user.py        # 用户
-│   │   │   ├── role.py        # 角色
-│   │   │   ├── system_config.py # 系统配置（邮件/同义词/AI）
-│   │   │   ├── auto_export_task.py # 自动导出任务
-│   │   │   │   ├── ai_config.py   # AI模型配置（含logo_url）
-│   │   │   │   ├── ai_skill.py    # AI技能
-│   │   │   │   ├── ai_chat.py     # AI对话
-│   │   │   │   ├── ai_agent.py   # AI Agent
-│   │   │   │   ├── ai_strategy.py # AI策略
-│   │   │   │   ├── agent_memory.py # Agent记忆
-│   │   │   │   ├── api_call_log.py # 开放API调用日志（含session_id）
-│   │   │   │   ├── api_key.py    # 开放API密钥
-│   │   │   │   ├── auto_export_task.py # 自动导出任务
-│   │   │   │   ├── business_system.py # 业务系统
-│   │   │   │   ├── mcp_server.py  # MCP服务器
-│   │   │   │   ├── pay_config.py  # 代付配置
-│   │   │   ├── pay_flow.py    # 代付流程编排（模板/实例/节点执行记录）
-│   │   │   ├── system_task.py # 系统任务（含响应字段映射）
-│   │   │   │   ├── ticket.py      # 工单
-│   │   │   │   ├── tool_memory.py # 工具记忆
-│   │   │   │   └── user_behavior.py # 用户行为
-│   │   ├── routes/            # API路由
-│   │   │   ├── auth_routes.py     # 认证（登录/滑块验证）
-│   │   │   ├── database_routes.py # 数据库连接管理
-│   │   │   ├── script_routes.py   # 查询/导出选项CRUD + 模板渲染
-│   │   │   ├── query_routes.py    # 查询执行 + 智能匹配
-│   │   │   ├── export_routes.py   # 导出执行
-│   │   │   ├── auto_export_routes.py # 自动导出管理
-│   │   │   ├── download_routes.py # 文件下载
-│   │   │   ├── user_routes.py     # 用户管理
-│   │   │   ├── role_routes.py     # 角色管理
-│   │   │   ├── system_routes.py   # 系统配置
-│   │   │   ├── ssh_routes.py      # SSH配置
-│   │   │   ├── ai_routes.py       # AI配置/技能/对话
-│   │   │   ├── agent_routes.py    # AI Agent管理
-│   │   │   ├── ai_strategy_routes.py # AI策略
-│   │   │   ├── api_admin_routes.py # 开放API管理（日志/统计/会话）
-│   │   │   ├── auto_export_routes.py # 自动导出管理
-│   │   │   ├── business_system_routes.py # 业务系统
-│   │   │   ├── cache_routes.py    # 缓存管理
-│   │   │   ├── download_routes.py # 文件下载
-│   │   │   ├── lookup_routes.py   # 字典查询
-│   │   │   ├── mcp_routes.py      # MCP服务器管理
-│   │   │   ├── open_api_routes.py # 开放API（/v1/*）
-│   │   │   ├── pay_routes.py      # 代付提现
-│   │   │   ├── pay_flow_routes.py # 代付流程编排API
-│   │   │   ├── profit_share_routes.py # 分润
-│   │   │   ├── system_task_routes.py # 系统任务
-│   │   │   ├── task_routes.py     # 查询/导出任务
-│   │   │   └── ticket_routes.py   # 工单管理
+│   │   ├── models/            # 数据模型（33 张表）
+│   │   ├── routes/            # API 路由（30+ 模块）
 │   │   ├── services/          # 业务服务
-│   │   │   ├── query_service.py       # 查询执行引擎
-│   │   │   ├── export_service.py      # 导出执行引擎
-│   │   │   ├── auto_export_scheduler.py # 自动导出调度器
-│   │   │   ├── excel_service.py       # Excel读写
-│   │   │   ├── database_service.py    # 数据库连接服务
-│   │   │   ├── ssh_service.py         # SSH隧道服务
-│   │   │   ├── ai_service.py          # AI服务
-│   │   │   ├── lookup_service.py      # 字典查询服务
-│   │   │   ├── mcp_service.py         # MCP服务
-│   │   │   ├── mcp_marketplace.py     # MCP市场
-│   │   │   ├── open_api_service.py    # 开放API服务
-│   │   │   ├── pay_service.py         # 代付服务
-│   │   │   ├── pay_flow_service.py    # 代付流程引擎（节点推进/条件流转/循环）
-│   │   │   ├── pay_flow_scheduler.py  # 代付流程后台调度器
-│   │   │   ├── profit_share_service.py # 分润服务
-│   │   │   └── system_task_service.py # 系统任务服务
 │   │   └── utils/             # 工具类
-│   │       ├── sql_validator.py   # SQL验证/格式化/列名提取
-│   │       ├── sql_template.py    # SQL模板渲染引擎（Jinja2）
-│   │       ├── db_connector.py    # 数据库连接器
-│   │       ├── excel_reader.py    # Excel读取
-│   │       ├── excel_writer.py    # Excel写入
-│   │       ├── auth.py            # JWT认证/权限装饰器
-│   │       ├── behavior_tracker.py # 用户行为追踪
-│   │       ├── helpers.py         # 工具函数（时区等）
-│   │       ├── file_cleanup.py    # 文件定时清理
-│   │       ├── connection_pool.py # 数据库连接池
-│   │       ├── error_sanitizer.py # 错误信息脱敏
-│   │       ├── rate_limiter.py    # 限流
-│   │       └── url_validator.py   # URL校验
 │   ├── config.yaml            # 应用配置
-│   ├── requirements.txt       # Python依赖
-│   ├── run.py                 # 启动入口
-│   └── seed_data.py           # 初始化数据
-├── frontend/                   # Vue3前端
+│   └── requirements.txt       # Python 依赖
+├── frontend/                   # Vue3 前端
 │   ├── src/
-│   │   ├── api/index.js       # API接口
+│   │   ├── views/             # 页面（30+ 页面）
 │   │   ├── components/        # 公共组件
-│   │   │   ├── Layout.vue     # 布局框架
-│   │   │   ├── SqlEditor.vue  # SQL编辑器（高亮+补全）
-│   │   │   ├── ThemeSwitch.vue # 主题切换
-│   │   │   ├── MarkdownEditor.vue # Markdown编辑器
-│   │   │   ├── ProviderLogo.vue # AI供应商Logo渲染
-│   │   │   ├── TagsView.vue    # 标签视图
-│   │   │   ├── TaskBadge.vue   # 任务徽章
-│   │   │   └── TaskNotificationCenter.vue # 任务通知中心
-│   │   ├── views/             # 页面
-│   │   │   ├── Login.vue                  # 登录
-│   │   │   ├── Dashboard.vue              # 仪表盘
-│   │   │   ├── QueryExecutor.vue           # 查询执行
-│   │   │   ├── ScriptManager.vue           # 查询选项管理
-│   │   │   ├── ExportExecutor.vue          # 导出执行
-│   │   │   ├── ExportManager.vue           # 导出选项管理
-│   │   │   ├── AutoExportManager.vue       # 自动导出管理
-│   │   │   ├── DatabaseManager.vue         # 数据库管理
-│   │   │   ├── History.vue                 # 执行历史
-│   │   │   ├── UserManager.vue             # 用户管理
-│   │   │   ├── RoleManager.vue             # 角色管理
-│   │   │   ├── SystemConfig.vue            # 系统配置
-│   │   │   ├── AiChat.vue                  # AI对话
-│   │   │   ├── SkillManager.vue            # 技能管理
-│   │   │   ├── AgentManager.vue            # Agent管理
-│   │   │   ├── ApiAdmin.vue                # 开放API管理
-│   │   │   ├── BusinessSystemManager.vue   # 业务系统管理
-│   │   │   ├── McpManager.vue              # MCP服务器管理
-│   │   │   ├── PayManager.vue              # 代付提现
-│   │   │   ├── PayFlowManager.vue          # 代付流程编排管理
-│   │   │   ├── PayFlowExecutions.vue       # 代付流程执行记录
-│   │   │   ├── ProfitShare.vue             # 分润管理
-│   │   │   ├── SystemTaskManager.vue       # 系统任务管理
-│   │   │   └── TicketManager.vue           # 工单管理
-│   │   ├── stores/index.js    # Pinia状态管理
-│   │   ├── router/index.js    # 路由
-│   │   ├── utils/             # 工具
-│   │   │   ├── providerLogo.js # Logo自动适配
-│   │   │   └── sql.js         # SQL工具
-│   │   └── styles/            # 样式（主题等）
+│   │   ├── stores/            # Pinia 状态管理
+│   │   └── utils/             # 工具函数
 │   └── package.json
-└── .trae/                      # Trae配置
+├── database/
+│   └── init.sql               # 数据库初始化脚本
+└── docs/                       # 项目文档
 ```
 
-## 快速开始
+---
+
+## 🚀 快速开始
 
 ### 环境要求
-- Python 3.10+
-- Node.js 18+
 
-### 后端启动
+| 依赖 | 版本 | 说明 |
+|------|------|------|
+| Python | 3.10+ | 后端运行环境 |
+| Node.js | 18+ | 前端构建环境 |
+| MySQL | 8.0+ | 元数据存储 |
+
+### 1️⃣ 后端启动
 
 ```bash
 cd backend
@@ -223,7 +272,7 @@ pip install -r requirements.txt
 python run.py
 ```
 
-### 前端启动
+### 2️⃣ 前端启动
 
 ```bash
 cd frontend
@@ -238,14 +287,18 @@ npm run dev
 npm run build
 ```
 
-### 默认账号
-- 超级管理员：`admin` / `admin123`
+### 3️⃣ 默认账号
 
-## 配置说明
+| 用户名 | 密码 | 角色 |
+|--------|------|------|
+| `admin` | `admin123` | 超级管理员 |
 
-### config.yaml
+---
+
+## ⚙️ 配置说明
 
 ```yaml
+# config.yaml
 server:
   host: "0.0.0.0"
   port: 5000
@@ -257,39 +310,63 @@ database:
   name: "excel_query_db"
   username: "root"
   password: "123456"
-  charset: "utf8mb4"
 
 security:
   secret_key: "your-secret-key"
   jwt_secret_key: "your-jwt-secret-key"
   encryption_key: "your-encryption-key-32-bytes-long!"
 
-storage:
-  upload_folder: "./uploads"
-  output_folder: "./outputs"
-  log_folder: "./logs"
-  max_content_length_mb: 50
-  file_retention_hours: 24
-
 smart_match:
   enabled: true
-  direct: false          # true时匹配到直接执行并下载，不弹窗确认
-  rules:
-      #匹配上传文件名中的关键词
-    - filename_keywords: [""]
-      # 匹配的查询选项标签
-      script_tags: [""]
-      # 默认参数列名
-      default_param_column: [""]
+  direct: false  # true 时匹配到直接执行并下载
 ```
 
-## SQL模板功能
+---
 
-查询选项和导出选项支持SQL模板模式，使用Jinja2语法动态生成SQL。
+## 📡 API 概览
+
+| 模块 | 路径 | 说明 |
+|------|------|------|
+| 认证 | `/api/auth/*` | 登录、验证码 |
+| 数据库 | `/api/databases/*` | 数据库连接 CRUD、测试连接 |
+| SSH | `/api/ssh/*` | SSH 配置 CRUD |
+| 查询选项 | `/api/scripts/*` | 查询/导出选项 CRUD、模板渲染 |
+| 查询执行 | `/api/query/*` | 查询执行、智能匹配、SSE 状态 |
+| 导出执行 | `/api/export/*` | 导出执行 |
+| 自动导出 | `/api/auto-export/*` | 自动导出任务 CRUD |
+| 用户 | `/api/users/*` | 用户 CRUD |
+| 角色 | `/api/roles/*` | 角色 CRUD、权限分配 |
+| AI | `/api/ai/*` | AI 模型、技能、对话 |
+| Agent | `/api/agents/*` | AI Agent 管理 |
+| 开放 API | `/api/open-api/*` | OpenAI 兼容端点 |
+| 代付流程 | `/api/pay-flow/*` | 流程模板、执行记录 |
+| 工单 | `/api/tickets/*` | 工单管理 |
+
+---
+
+## 🛠️ 技术栈
+
+<div align="center">
+
+| 层级 | 技术 | 说明 |
+|------|------|------|
+| **前端** | ![Vue](https://img.shields.io/badge/Vue-3-42b883?style=flat-square&logo=vuedotjs&logoColor=white) ![Vite](https://img.shields.io/badge/Vite-5-646CFF?style=flat-square&logo=vite&logoColor=white) ![Element+](https://img.shields.io/badge/Element+Plus-2.x-409EFF?style=flat-square) | 响应式管理界面 |
+| **后端** | ![Flask](https://img.shields.io/badge/Flask-3.x-000000?style=flat-square&logo=flask&logoColor=white) ![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-2.x-D71F00?style=flat-square) | RESTful API 服务 |
+| **数据库** | ![MySQL](https://img.shields.io/badge/MySQL-8.0-4479A1?style=flat-square&logo=mysql&logoColor=white) | 元数据存储 |
+| **AI** | ![OpenAI](https://img.shields.io/badge/OpenAI-兼容-412991?style=flat-square&logo=openai&logoColor=white) | 多模型支持 |
+| **部署** | ![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white) ![Nginx](https://img.shields.io/badge/Nginx-009639?style=flat-square&logo=nginx&logoColor=white) | 容器化部署 |
+
+</div>
+
+---
+
+## 📋 SQL 模板功能
+
+查询选项和导出选项支持 SQL 模板模式，使用 Jinja2 语法动态生成 SQL。
 
 ### 使用场景
 
-按月分表的场景，需要查询最近12个月的数据并UNION ALL：
+按月分表的场景，需要查询最近 12 个月的数据并 UNION ALL：
 
 ```jinja2
 {% for m in months %}
@@ -308,133 +385,95 @@ WHERE merchant_id = :value
 | `text` | 文本参数 | default |
 | `number` | 数字参数 | default |
 
-### date_range 示例
+---
 
-配置变量名 `months`，类型 `date_range`：
-- period: `month`，count: `12`，direction: `past`，format: `%Y%m`
-- 渲染结果：`months = ['202506', '202505', '202504', ..., '202407']`
+## 📝 变更日志
 
-## API概览
-
-| 模块 | 路径 | 说明 |
-|------|------|------|
-| 认证 | `/api/auth/*` | 登录、验证码 |
-| 数据库 | `/api/databases/*` | 数据库连接CRUD、测试连接 |
-| SSH | `/api/ssh/*` | SSH配置CRUD |
-| 查询选项 | `/api/scripts/*` | 查询/导出选项CRUD、模板渲染 |
-| 查询执行 | `/api/query/*` | 查询执行、智能匹配、SSE状态 |
-| 导出执行 | `/api/export/*` | 导出执行 |
-| 自动导出 | `/api/auto-export/*` | 自动导出任务CRUD |
-| 下载 | `/api/download/*` | 结果文件下载 |
-| 用户 | `/api/users/*` | 用户CRUD |
-| 角色 | `/api/roles/*` | 角色CRUD、权限分配 |
-| 系统配置 | `/api/system/*` | 邮件/同义词/AI配置 |
-| AI | `/api/ai/*` | AI模型、技能、对话 |
-| 开放API | `/api/open-api/*` | 开放API调用、日志、统计、会话聚合 |
-| 代付流程 | `/api/pay-flow/*` | 流程模板CRUD、发起流程、执行记录、走势动画 |
-
-## 近期新增功能
-
-### 代付流程编排系统 (v2.2+)
-
-支持用户自定义代付流程的走势与流转条件，实现灵活的多步骤自动化处理：
-
-**核心能力**：
-- **步骤列表式配置**：卡片式节点管理，支持添加/删除/排序
-- **节点支付配置**：每个节点独立配置支付动作（通道/接口/环境/实时代付/跑批步骤）
-- **条件流转引擎**：基于当前节点响应字段值判断（eq/neq/contains/gt/lt/success/fail/in/not_in等运算符），支持引用任意节点结果（`nodeId.fieldName`）
-- **定时循环执行**：节点可配置循环间隔、最大次数、多退出条件（AND/OR逻辑），满足条件后继续流转
-- **失败即停机制**：节点失败时流程立即停止，不会继续执行下一节点（资金安全）
-- **防重复执行**：多重安全检查确保同一行数据不会被重复处理（状态检查/时间检查/运行记录检查）
-- **节点通知配置**：每个节点可配置失败通知、结束节点标记及结束通知，支持邮件模板变量替换
-- **每笔数据独立实例**：每行Excel数据创建独立流程实例，互不影响
-- **可视化走势动画**：实时展示流程进度，脉冲动画标识当前运行节点
-- **执行日志详情**：每个节点记录完整执行日志，支持查看失败原因
-- **后台调度驱动**：守护线程每5秒检查待执行实例，自动推进流程
-
-**数据模型**：
-- `PayFlowTemplate`：流程模板（节点定义、流转条件）
-- `PayFlowExecution`：流程实例（每笔数据一个，含循环状态）
-- `PayFlowNodeExecution`：节点执行记录（日志、结果、时间戳）
-
-**API端点**：
-- `GET/POST/PUT/DELETE /api/pay-flow/templates`：模板CRUD
-- `POST /api/pay-flow/start`：发起流程（基于file_path + sheet_index）
-- `GET /api/pay-flow/executions`：执行记录列表
-- `GET /api/pay-flow/executions/{id}`：执行详情（含节点日志）
-- `POST /api/pay-flow/executions/{id}/cancel|retry`：取消/重试
-
-### AI模型Logo自动适配 (v2.1+)
-
-系统内置15+主流AI供应商的Logo渲染支持，并在保存AI配置时自动获取未匹配品牌的Logo：
-
-**内置品牌**：OpenAI、Anthropic (Claude)、Google (Gemini)、Azure OpenAI、DeepSeek、Moonshot (Kimi)、Zhipu (GLM)、百度 (文心一言)、阿里云 (通义千问)、腾讯云 (混元)、商汤 (SenseNova)、OpenRouter、Poolside、Nemotron (NVIDIA)、ox-alpha
-
-**自动获取机制**：
-- 保存AI配置时，前端调用 `autoFetchLogo()` 工具函数
-- 首先通过 `detectBrandKey()` 检测是否为内置品牌（基于provider、api_base、model_name三级判断）
-- 若为内置品牌，使用内置SVG渲染，无需远程请求
-- 若为未知品牌（generic），从 `api_base` 提取主机名，拼接 DuckDuckGo Favicon 服务 URL：`https://icons.duckduckgo.com/ip3/{host}.ico`
-- 远程Logo通过 `<img>` 标签加载，失败时自动回退到内置品牌渲染或首字母回退
-
-**Logo渲染优先级**：远程图片 → 内置SVG Path → 首字母回退
-
-### 系统任务响应字段映射增强 (v2.1+)
-
-支持业务状态判断与失败原因提取：
-
-- 新增 `is_status` 布尔字段：标识该映射是否用于业务成功/失败判断
-- 新增 `success_value` 字符串字段：业务成功时的期望值（如 `"true"`, `"success"`, `"0"`）
-- 新增 `error_field` 字符串字段：失败时提取错误信息的JSON路径（如 `msg`, `error.message`, `data.errMsg`）
-
-**判定逻辑**：
-1. 若 `is_status=true` 且响应中该字段值 == `success_value` → 业务成功
-2. 若 `is_status=true` 且响应中该字段值 != `success_value` → 业务失败，提取 `error_field` 作为失败原因
-3. 若 `is_status=false` → 仅作普通字段映射，不参与业务判断
-
-### 系统任务参数来源脚本 (v2.1+)
-
-API类型和本地脚本类型的系统任务支持**从SQL脚本动态获取参数**：
-
-**功能说明**：
-- 新建/编辑任务时可开启"从脚本获取参数"选项
-- 选择一个SQL脚本作为参数来源，指定执行数据库
-- 支持配置字段映射：将脚本返回的字段映射到任务参数名
-- 执行任务时，系统先运行参数来源脚本获取查询结果（取第一行），再将结果合并到任务参数中
-- **若参数来源脚本执行失败或返回为空，将中止主任务执行并记录错误日志**
-
-**典型场景**：
-- API接口需要动态Token：先执行SQL查询获取最新Token，再传给API
-- 脚本需要动态配置：从数据库读取配置参数，再执行本地脚本
-- 多步骤任务：先查询数据库获取业务数据，再调用外部接口处理
-
-**字段映射规则**：
-- 配置映射：`source_field`（脚本返回字段）→ `target_param`（任务参数名）
-- 不配置映射：自动合并所有字段（参数名与脚本字段名相同时自动匹配）
-
-### 开放API调用记录与统计优化 (v2.1+)
-
-- 调用记录新增 `session_id` 列，支持按会话聚合展示
-- 会话ID自动派生：基于 密钥ID + 首条user消息内容 SHA256 前32位，适配OpenAI协议无原生会话概念的场景
-- 统计卡片随筛选条件实时刷新（密钥/模型/状态/时间/会话ID）
-- 新增"会话聚合视图"：按session_id GROUP BY，显示对话数、Token总量、平均耗时、成功率、涉及模型列表
-- 展开行懒加载会话明细，详情对话框支持Markdown渲染AI回复
-- 调用方IP修复：支持IPv4映射IPv6（`::ffff:1.2.3.4`）、带端口IP、链路本地地址过滤、MAC地址识别回退
-
-## 技术栈
-
-**后端**：Flask + SQLAlchemy + PyJWT + Jinja2 + openpyxl + sshtunnel + croniter + MCP SDK + httpx
-
-**前端**：Vue3 + Vite + Element Plus + Pinia + Vue Router + marked + highlight.js
-
-**数据库**：SQLite（应用库）+ MySQL/PostgreSQL/SQLServer（业务库）
-
-## 变更日志
+<details>
+<summary><strong>📦 v2.6.x — 多Agent协作增强</strong></summary>
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
-| 2026-08-26 | v2.2.2 | 代付流程编排修复：修复节点重复执行问题（双重防重复检查+递归调用优化）；修复失败后仍继续执行问题（节点失败立即停止+递归调用状态修复）；修复失败通知未生效问题（通知函数独立+增强日志） |
-| 2026-08-26 | v2.2.1 | 代付流程编排增强：移除通知节点类型，改为每个节点可配置失败通知/结束通知；节点失败时流程立即停止；增加多重防重复执行检查（资金安全）；流转条件支持引用当前节点及任意节点结果（`nodeId.fieldName`）；循环退出条件支持多条件AND/OR逻辑 |
-| 2026-08-26 | v2.2 | 代付流程编排系统：步骤列表式配置、双节点类型（支付/通知）、条件流转引擎、定时循环执行、每笔数据独立实例、可视化走势动画、后台调度驱动 |
-| 2026-08-25 | v2.1 | AI模型Logo自动适配（内置15+品牌+DuckDuckGo Favicon兜底）；系统任务响应字段映射支持业务状态判断；开放API调用记录新增session_id会话聚合；调用方IP修复（IPv4映射IPv6/带端口/链路本地过滤） |
-| 2026-08-24 | v2.0 | 开放API调用记录与统计优化（会话聚合/统计随筛选/卡片化展示）；MCP服务器管理；代付提现增强；系统任务JSON输入框支持美化/压缩/转义 |
+| 2026-09-03 | v2.6.4 | 执行者Agent支持设置默认监督者 |
+| 2026-09-03 | v2.6.3 | AI Agent感知用户角色 |
+| 2026-09-03 | v2.6.2 | 修复插话发送不生效问题 |
+| 2026-09-03 | v2.6.1 | 排队消息支持重新编辑；插话三种模式 |
+| 2026-09-03 | v2.6.0 | AI对话排队/插话UI升级 |
+
+</details>
+
+<details>
+<summary><strong>📦 v2.5.x — MCP市场 + 工具增强</strong></summary>
+
+| 日期 | 版本 | 内容 |
+|------|------|------|
+| 2026-09-03 | v2.5.9 | AI模型Logo适配：新增阶跃星辰和美团 |
+| 2026-09-02 | v2.5.8 | 修复MCP市场两处报错 |
+| 2026-09-02 | v2.5.7 | MCP市场增强：多市场源拉取 + Tab切换 |
+| 2026-08-30 | v2.5.6 | 防重复执行 + 多参数适配 |
+| 2026-08-30 | v2.5.5 | 新增send_email邮件发送工具 |
+| 2026-08-30 | v2.5.4 | 自动导出任务支持手动重发邮件 |
+| 2026-08-30 | v2.5.3 | 修复监督者自动执行+插话发送问题 |
+| 2026-08-30 | v2.5.2 | AI对话支持插话/引导 |
+| 2026-08-30 | v2.5.1 | 支持自动保存SKILLS/规则 + 监督者监督 |
+| 2026-08-30 | v2.5.0 | 输入框支持Alt+Enter换行 |
+
+</details>
+
+<details>
+<summary><strong>📦 v2.4.x — 多Agent协作系统</strong></summary>
+
+| 日期 | 版本 | 内容 |
+|------|------|------|
+| 2026-08-30 | v2.4.9 | 自定义复核规则权限控制 |
+| 2026-08-30 | v2.4.8 | 复核证据详情可点击查看 |
+| 2026-08-30 | v2.4.7 | 支持自定义复核规则 |
+| 2026-08-30 | v2.4.6 | 监督者复核改为Agent级别配置 |
+| 2026-08-30 | v2.4.5 | 监督者增加态度评估，鞭答执行者改正 |
+| 2026-08-30 | v2.4.4 | 修复故障转移循环不退出问题 |
+| 2026-08-30 | v2.4.3 | 修复确认卡片重复 + 监督者自动执行 |
+| 2026-08-30 | v2.4.2 | 监督者自动评估确认卡片 |
+| 2026-08-30 | v2.4.1 | AI对话体验优化 |
+| 2026-08-30 | v2.4.0 | 工单多Agent协作：执行者 + 监督者 |
+
+</details>
+
+<details>
+<summary><strong>📦 v2.3.x — 代付流程 + Headroom压缩</strong></summary>
+
+| 日期 | 版本 | 内容 |
+|------|------|------|
+| 2026-08-29 | v2.3.22 | 运营数据看板统计指标面板 |
+| 2026-08-28 | v2.3.12 | 运营数据看板崩溃根治 |
+| 2026-08-28 | v2.3.11 | 运营数据看板脚本统一到scripts表 |
+| 2026-08-28 | v2.3.8 | 工单草稿暂存 |
+| 2026-08-27 | v2.3.5 | 修复流式对话路径Headroom压缩缺失 |
+| 2026-08-27 | v2.3.0 | Headroom上下文压缩 |
+
+</details>
+
+<details>
+<summary><strong>📦 v2.2.x — 代付流程编排</strong></summary>
+
+| 日期 | 版本 | 内容 |
+|------|------|------|
+| 2026-08-27 | v2.2.9 | 修复汇总通知邮件HTML标签不渲染 |
+| 2026-08-27 | v2.2.8 | 修复批次明细展开不显示问题 |
+| 2026-08-27 | v2.2.7 | 修复批次列表API 500错误 |
+| 2026-08-27 | v2.2.6 | 代付流程执行记录改为批次聚合视图 |
+| 2026-08-27 | v2.2.5 | 彻底修复节点重复执行问题 |
+| 2026-08-26 | v2.2.4 | 流程走势图改为横向排列 |
+| 2026-08-26 | v2.2.1 | 代付流程编排增强 |
+| 2026-08-26 | v2.2 | 代付流程编排系统 |
+
+</details>
+
+---
+
+<div align="center">
+
+**⭐ 如果这个项目对你有帮助，请给个 Star 支持一下！⭐**
+
+Made with ❤️ by Xiaomi LLM Core Team
+
+</div>

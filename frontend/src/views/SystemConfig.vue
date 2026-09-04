@@ -151,6 +151,29 @@
                   <el-tag :type="row.is_active ? 'success' : 'info'" size="small">{{ row.is_active ? '启用' : '禁用' }}</el-tag>
                 </template>
               </el-table-column>
+              <el-table-column label="余额" min-width="200" align="center" header-align="center">
+                <template #default="{ row }">
+                  <div v-if="row.is_free" style="color: #909399; font-size: 12px; display: flex; align-items: center; justify-content: center; gap: 6px">
+                    <span>免费模型</span>
+                  </div>
+                  <div v-else-if="balanceLoading[row.id]" style="color: #909399; font-size: 12px; display: flex; align-items: center; justify-content: center; gap: 6px">
+                    <i class="fas fa-spinner fa-spin"></i>
+                    <span>查询中...</span>
+                  </div>
+                  <div v-else-if="balanceData[row.id]" style="display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: wrap">
+                    <span :style="{ color: balanceData[row.id].is_available === false ? '#f56c6c' : '#67c23a', fontSize: '12px', lineHeight: 1.5 }">{{ balanceData[row.id].message }}</span>
+                    <el-button size="small" type="primary" text @click="refreshBalance(row.id)" :loading="balanceLoading[row.id]" style="padding: 2px 4px; margin: 0">
+                      <i class="fas fa-sync-alt" :class="{ 'fa-spin': balanceLoading[row.id] }"></i>
+                    </el-button>
+                  </div>
+                  <div v-else style="display: flex; align-items: center; justify-content: center; gap: 6px">
+                    <span style="color: #909399; font-size: 12px">-</span>
+                    <el-button size="small" type="primary" text @click="refreshBalance(row.id)" :loading="balanceLoading[row.id]" style="padding: 2px 4px; margin: 0">
+                      <i class="fas fa-sync-alt" :class="{ 'fa-spin': balanceLoading[row.id] }"></i> 刷新
+                    </el-button>
+                  </div>
+                </template>
+              </el-table-column>
               <el-table-column label="操作" width="220" align="center">
                 <template #default="{ row }">
                   <el-button size="small" type="primary" text @click="openAiConfigDialog(row)">
@@ -336,6 +359,10 @@
                   <el-switch v-model="aiConfigForm.enable_streaming" active-text="是" inactive-text="否" />
                   <span style="margin-left: 12px; color: #909399; font-size: 12px">启用后逐字打印AI回复内容</span>
                 </el-form-item>
+                <el-form-item label="Headroom压缩">
+                  <el-switch v-model="aiConfigForm.enable_headroom" active-text="是" inactive-text="否" />
+                  <span style="margin-left: 12px; color: #909399; font-size: 12px">启用后对上下文进行智能压缩，节省60-95%输入token（JSON/日志/代码等）</span>
+                </el-form-item>
                 <el-form-item label="免费模型">
                   <el-switch v-model="aiConfigForm.is_free" active-text="是" inactive-text="否" />
                   <span style="margin-left: 12px; color: #909399; font-size: 12px">标记为免费模型，可配合路由策略的「仅免费」过滤使用</span>
@@ -471,6 +498,44 @@
               </el-table-column>
             </el-table>
           </div>
+        </el-tab-pane>
+
+        <!-- 运营数据看板配置 -->
+        <el-tab-pane label="运营数据看板" name="dashboard">
+          <el-form label-width="140px" style="max-width: 640px; margin-top: 16px">
+            <el-form-item label="启用查询缓存">
+              <el-switch v-model="dashboardForm.cache_enabled" active-text="是" inactive-text="否" />
+              <span style="margin-left: 12px; color: #909399; font-size: 12px">开启后相同查询在有效期内直接返回缓存结果</span>
+            </el-form-item>
+            <el-form-item label="缓存有效期(秒)">
+              <el-input-number v-model="dashboardForm.cache_ttl" :min="0" :max="86400" :step="60" style="width: 200px" />
+            </el-form-item>
+            <el-form-item label="单次最大返回行数">
+              <el-input-number v-model="dashboardForm.max_rows" :min="100" :max="100000" :step="1000" style="width: 200px" />
+            </el-form-item>
+            <el-form-item label="默认统计维度">
+              <el-radio-group v-model="dashboardForm.default_dimension">
+                <el-radio-button value="day">按天</el-radio-button>
+                <el-radio-button value="month">按月</el-radio-button>
+                <el-radio-button value="year">按年</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item label="最大图表数量">
+              <el-input-number v-model="dashboardForm.max_chart_count" :min="1" :max="6" style="width: 200px" />
+              <span style="margin-left: 12px; color: #909399; font-size: 12px">看板页可同时展示的图表卡片数</span>
+            </el-form-item>
+            <el-form-item label="图表动画">
+              <el-switch v-model="dashboardForm.animation_enabled" active-text="是" inactive-text="否" />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="savingDashboard" @click="handleSaveDashboard">
+                <i class="fas fa-save"></i> 保存配置
+              </el-button>
+              <el-button :loading="clearingCache" @click="handleClearDashboardCache">
+                <i class="fas fa-broom"></i> 清空查询缓存
+              </el-button>
+            </el-form-item>
+          </el-form>
         </el-tab-pane>
       </el-tabs>
     </el-card>
@@ -729,6 +794,8 @@ const testingAi = ref(null)
 const aiConfigFormRef = ref(null)
 const tableRef = ref(null)
 const selectedRows = ref([])
+const balanceData = ref({})
+const balanceLoading = ref({})
 
 // ============ 代付配置 ============
 const payConfigs = ref([])
@@ -809,6 +876,45 @@ async function deletePayConfig(row) {
   } catch (e) { /* cancelled */ }
 }
 
+// ============ 运营数据看板配置 ============
+const dashboardForm = reactive({
+  cache_enabled: true,
+  cache_ttl: 600,
+  max_rows: 10000,
+  default_dimension: 'day',
+  max_chart_count: 4,
+  animation_enabled: true,
+})
+const savingDashboard = ref(false)
+const clearingCache = ref(false)
+
+async function fetchDashboardConfig() {
+  try {
+    const res = await api.dataDashboard.getSettings()
+    if (res.data) Object.assign(dashboardForm, res.data)
+  } catch {}
+}
+
+async function handleSaveDashboard() {
+  savingDashboard.value = true
+  try {
+    await api.dataDashboard.saveSettings({ ...dashboardForm })
+    ElMessage.success('看板配置已保存')
+  } catch {} finally {
+    savingDashboard.value = false
+  }
+}
+
+async function handleClearDashboardCache() {
+  clearingCache.value = true
+  try {
+    const res = await api.dataDashboard.clearCache()
+    ElMessage.success(res.message || '缓存已清空')
+  } catch {} finally {
+    clearingCache.value = false
+  }
+}
+
 function handleSelectionChange(rows) {
   selectedRows.value = rows
 }
@@ -855,6 +961,7 @@ const defaultAiConfigForm = {
   is_active: true,
   enable_thinking: false,
   enable_streaming: true,
+  enable_headroom: false,
   is_free: false,
   system_prompt: '',
 }
@@ -926,6 +1033,7 @@ function openAiConfigDialog(row) {
       is_active: row.is_active !== false,
       enable_thinking: row.enable_thinking || false,
       enable_streaming: row.enable_streaming || false,
+      enable_headroom: row.enable_headroom || false,
       is_free: row.is_free || false,
       system_prompt: row.system_prompt || '',
     })
@@ -978,6 +1086,23 @@ async function testAiConfig(id) {
   }
 }
 
+async function refreshBalance(id) {
+  balanceLoading.value = { ...balanceLoading.value, [id]: true }
+  try {
+    const res = await api.ai.getBalance(id)
+    if (res.success && res.data) {
+      balanceData.value = { ...balanceData.value, [id]: res.data }
+      if (!res.data.supported) {
+        ElMessage.info(res.data.message || '该提供商暂不支持余额查询')
+      }
+    }
+  } catch {
+    ElMessage.warning('余额查询失败，请稍后重试')
+  } finally {
+    balanceLoading.value = { ...balanceLoading.value, [id]: false }
+  }
+}
+
 async function deleteAiConfig(id) {
   try {
     await api.ai.deleteConfig(id)
@@ -992,6 +1117,7 @@ onMounted(() => {
   fetchStrategy()
   loadPayConfigs()
   loadPayChannels()
+  fetchDashboardConfig()
 })
 
 // AI Strategy

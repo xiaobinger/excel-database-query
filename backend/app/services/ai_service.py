@@ -136,7 +136,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "request_export",
-            "description": "当用户明确要执行导出任务时调用此工具。需要指定导出选项名称和参数值。注意：必须从用户的自然语言描述中提取所有可能的参数值填入params对象，未能提取的参数不要填入（系统会自动将其标记为'全部'不筛选）。",
+            "description": "当用户明确要执行导出任务时调用此工具。需要指定导出选项名称和参数值。注意：1、必须从用户的自然语言描述中提取所有可能的参数值填入params对象；2、多参数处理：如果用户通过换行给出了多个值（如多个商户号、多个SN号），且参数支持列表(IN查询)，则将多个值用逗号分隔填入同一个参数；如果参数不支持列表，则需要多次调用本工具分别执行；3、未能提取的参数不要填入（系统会自动将其标记为'全部'不筛选）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -146,7 +146,7 @@ AI_TOOLS = [
                     },
                     "params": {
                         "type": "object",
-                        "description": "参数键值对，键为参数名，值为用户提供的参数值。务必从用户描述中提取所有参数值。例如用户说'导出商户123456的信息'，如果参数有merchant_no，则params为{\"merchant_no\": \"123456\"}",
+                        "description": "参数键值对，键为参数名，值为用户提供的参数值。多值用逗号分隔，如 {\"merchant_no\": \"M001,M002,M003\"}",
                         "additionalProperties": {"type": "string"}
                     },
                     "output_format": {
@@ -205,7 +205,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "request_system_task",
-            "description": "当用户明确要执行系统任务（运维类任务）时调用此工具。系统任务与导出任务、查询任务完全不同，只有运维类操作才属于系统任务。需要指定系统任务名称和参数值。注意：1、必须从用户的自然语言描述中提取所有可能的参数值填入params对象；2、params的键名必须使用list_system_tasks返回的参数配置中的name字段值，不要自己编造参数名；3、如果之前没有调用list_system_tasks，请先调用以获取正确的参数名；4、如果任务关联了多个数据库连接，请从用户描述中提取数据库名称填入database_name；5、API类型任务参数齐全时会自动执行，结果中包含mapping_summary（映射摘要）字段，请直接根据映射摘要用自然语言告诉用户执行结果；6、如果用户同时要求对多个对象执行同样的API任务（如解绑多个SN），请在同一次回复中同时调用多个request_system_task，每个调用对应一个对象，系统会自动并行执行，你只需汇总所有结果用列表形式反馈给用户；7、对于type=enum的枚举参数（常用于环境切换），params中传入options里的label或value均可，若用户未明确指定环境，必须主动询问用户选择哪个环境后再调用。",
+            "description": "当用户明确要执行系统任务（运维类任务）时调用此工具。系统任务与导出任务、查询任务完全不同，只有运维类操作才属于系统任务。需要指定系统任务名称和参数值。注意：1、必须从用户的自然语言描述中提取所有可能的参数值填入params对象；2、params的键名必须使用list_system_tasks返回的参数配置中的name字段值，不要自己编造参数名；3、如果之前没有调用list_system_tasks，请先调用以获取正确的参数名；4、如果任务关联了多个数据库连接，请从用户描述中提取数据库名称填入database_name；5、API类型任务参数齐全时会自动执行，结果中包含mapping_summary（映射摘要）字段，请直接根据映射摘要用自然语言告诉用户执行结果；6、多参数处理：如果用户通过换行给出了多个值（如多个SN号），且参数支持列表(IN查询)，则将多个值用逗号分隔填入同一个参数；如果参数不支持列表或用户要求分别执行，则需要多次调用本工具分别执行，系统会自动并行执行；7、对于type=enum的枚举参数（常用于环境切换），params中传入options里的label或value均可，若用户未明确指定环境，必须主动询问用户选择哪个环境后再调用。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -451,6 +451,73 @@ AI_TOOLS = [
                 "required": ["channel", "interface_type", "environment", "file_path", "description"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_skill",
+            "description": "当用户要求提炼SKILLS、记住某规则、保存某知识、记住某偏好时调用此工具。将用户的要求保存为可复用的技能/规则，下次对话时会自动注入上下文。重要：1、必须从用户描述中提取技能名称、分类、内容；2、如果用户说的是规则/偏好，category填'规则'；3、content应包含完整的规则/知识内容，不要遗漏关键信息；4、同名技能会自动更新而非重复创建",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "技能/规则名称，简明扼要，如'导出日期格式规范'、'商户查询注意事项'"
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "分类，如'规则'、'偏好'、'知识'、'查询'、'导出'"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "技能/规则的简要描述，一句话概括"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "完整的技能/规则内容，保留所有关键细节"
+                    }
+                },
+                "required": ["name", "description", "content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_email",
+            "description": "发送邮件通知。当用户要求发送邮件、邮件通知、发送报告、发送结果时调用此工具。支持纯文本邮件和HTML格式邮件，可附加文件附件。重要：1、必须提供收件人邮箱；2、主题和正文至少填一项；3、如需附件，附件路径来自之前导出任务的输出文件",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to_emails": {
+                        "type": "string",
+                        "description": "收件人邮箱，多个用逗号分隔，如 'a@test.com,b@test.com'"
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": "邮件主题"
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "邮件正文，支持HTML格式"
+                    },
+                    "content_type": {
+                        "type": "string",
+                        "enum": ["text", "html"],
+                        "description": "正文类型：text=纯文本，html=HTML格式，默认text"
+                    },
+                    "attachment_path": {
+                        "type": "string",
+                        "description": "附件文件路径（来自导出任务的输出文件）"
+                    },
+                    "attachment_name": {
+                        "type": "string",
+                        "description": "附件显示名称，不填则使用文件名"
+                    }
+                },
+                "required": ["to_emails", "subject", "body"]
+            }
+        }
     }
 ]
 
@@ -528,6 +595,104 @@ class AiService:
             'model': result.get('model', ''),
             'usage': result.get('usage', {}),
         }
+
+    @staticmethod
+    def get_balance(config) -> dict:
+        """查询AI配置余额/余量
+        
+        支持的余额查询:
+        - DeepSeek: GET {base}/user/balance
+        - OpenRouter: GET https://openrouter.ai/api/v1/credits
+        - 其他提供商: 返回 unsupported 标记
+        
+        参数:
+            config: AiConfig 实例
+            
+        返回:
+            dict: {
+                'supported': bool,
+                'data': dict | None,  # 余额数据
+                'message': str        # 错误/状态信息
+            }
+        """
+        api_key = config.get_api_key()
+        if not api_key:
+            return {'supported': True, 'data': None, 'message': 'API密钥未配置'}
+
+        api_base = (config.api_base or '').rstrip('/')
+        headers = {'Authorization': f'Bearer {api_key}', 'Accept': 'application/json'}
+
+        try:
+            # DeepSeek
+            if 'deepseek.com' in api_base:
+                balance_url = f"{api_base}/user/balance"
+                resp = requests.get(balance_url, headers=headers, timeout=15)
+                resp.raise_for_status()
+                result = resp.json()
+                # 格式化显示余额
+                balance_infos = result.get('balance_infos', [])
+                formatted = []
+                for info in balance_infos:
+                    currency = info.get('currency', 'USD')
+                    total = info.get('total_balance', '0')
+                    granted = info.get('granted_balance', '0')
+                    topped = info.get('topped_up_balance', '0')
+                    formatted.append(f"{currency}: 总额 {total} (充值 {topped} + 赠送 {granted})")
+                return {
+                    'supported': True,
+                    'data': result,
+                    'message': ' | '.join(formatted) if formatted else '余额数据为空',
+                    'is_available': result.get('is_available', False),
+                }
+
+            # OpenRouter
+            elif 'openrouter.ai' in api_base:
+                credits_url = 'https://openrouter.ai/api/v1/credits'
+                resp = requests.get(credits_url, headers=headers, timeout=15)
+                resp.raise_for_status()
+                result = resp.json()
+                credits = result.get('data', [])
+                if isinstance(credits, list) and len(credits) > 0:
+                    total = sum(c.get('total', 0) for c in credits)
+                    return {
+                        'supported': True,
+                        'data': result,
+                        'message': f'OpenRouter 余额: ${total:.4f}',
+                        'is_available': True,
+                    }
+                return {'supported': True, 'data': result, 'message': '暂无可用积分', 'is_available': False}
+
+            # 其他：尝试通用 OpenAI 兼容的余额端点
+            else:
+                # OpenAI 官方余额端点 (v1)
+                openai_url = f"{api_base}/dashboard/billing/credit_grants"
+                try:
+                    resp = requests.get(openai_url, headers=headers, timeout=10)
+                    if resp.status_code == 200:
+                        result = resp.json()
+                        # 计算总可用余额
+                        grants = result.get('data', [])
+                        total_available = sum(
+                            (g.get('amount', 0) - g.get('used', 0))
+                            for g in grants if isinstance(g, dict)
+                        )
+                        return {
+                            'supported': True,
+                            'data': result,
+                            'message': f'OpenAI 余额: 总额 ${total_available:.4f}' if total_available != 0 else '余额数据已加载',
+                            'is_available': total_available > 0,
+                        }
+                except Exception:
+                    pass
+                # fallback: 不支持
+                return {'supported': False, 'data': None, 'message': '该提供商暂不支持余额查询'}
+
+        except requests.exceptions.Timeout:
+            return {'supported': True, 'data': None, 'message': '请求超时，请重试', 'is_available': None}
+        except requests.exceptions.RequestException as e:
+            return {'supported': True, 'data': None, 'message': f'请求失败: {str(e)}', 'is_available': None}
+        except Exception as e:
+            return {'supported': True, 'data': None, 'message': f'查询异常: {str(e)}', 'is_available': None}
 
     @staticmethod
     def _find_strategy_for_scope(scope: str = None):
@@ -648,11 +813,11 @@ class AiService:
                         db.session.commit()
                     return result
                 else:
-                    content, tokens, p_tokens, c_tokens, cache_create, cache_read = AiService.chat(config, messages)
+                    content, tokens, p_tokens, c_tokens, cache_create, cache_read, headroom_stats = AiService.chat(config, messages)
                     if strategy and tokens:
                         strategy.record_token_usage(config.id, tokens)
                         db.session.commit()
-                    return content, tokens, p_tokens, c_tokens, cache_create, cache_read
+                    return content, tokens, p_tokens, c_tokens, cache_create, cache_read, headroom_stats
             except Exception as e:
                 last_error = e
                 logger.warning(f"模型 {config.name} 调用失败: {str(e)}，尝试下一个")
@@ -674,6 +839,10 @@ class AiService:
 
         # 应用缓存控制
         messages = _apply_cache_control(messages, config.provider, api_base)
+
+        # Headroom 上下文压缩（如果启用）
+        from app.services.headroom_service import compress_if_enabled
+        messages, headroom_stats = compress_if_enabled(config, messages)
 
         headers = {
             'Authorization': f'Bearer {api_key}',
@@ -711,7 +880,7 @@ class AiService:
         if isinstance(prompt_details, dict) and 'cached_tokens' in prompt_details:
             cache_read_tokens = prompt_details.get('cached_tokens', 0)
 
-        return content, tokens, prompt_tokens, completion_tokens, cache_creation_tokens, cache_read_tokens
+        return content, tokens, prompt_tokens, completion_tokens, cache_creation_tokens, cache_read_tokens, headroom_stats
 
     @staticmethod
     def build_chat_context(user_id: int, chat_id: int = None, agent_id: int = None) -> str:
@@ -719,8 +888,16 @@ class AiService:
         注意：上下文会消耗token，需控制总量，避免每轮对话成本过高。"""
         from app.models.ai_skill import AiSkill
         from app.models.user_behavior import UserBehavior
+        from app.models.user import User
 
         context_parts = []
+
+        # 注入用户身份信息（让AI感知用户角色，用于区别尊称等）
+        user = User.query.get(user_id)
+        if user:
+            role_name = '管理员' if user.is_admin() else (user.role.name if user.role else '普通用户')
+            role_desc = user.role.description if user.role else ''
+            context_parts.append(f'## 当前用户信息\n- 用户名: {user.username}\n- 角色: {role_name}' + (f'（{role_desc}）' if role_desc else '') + ('\n- 管理员: 是' if user.is_admin() else ''))
 
         # Add user skills (当前Agent专属技能 + 无Agent关联的通用技能)
         # 只注入名称和描述，不注入content正文（正文可能很长，应通过RAG按需检索）
@@ -859,6 +1036,10 @@ class AiService:
         # 应用缓存控制
         messages = _apply_cache_control(messages, config.provider, api_base)
 
+        # Headroom 上下文压缩（如果启用）
+        from app.services.headroom_service import compress_if_enabled
+        messages, headroom_stats = compress_if_enabled(config, messages)
+
         headers = {
             'Authorization': f'Bearer {api_key}',
             'Content-Type': 'application/json',
@@ -919,6 +1100,7 @@ class AiService:
             'cache_read_tokens': cache_read_tokens,
             'finish_reason': finish_reason,
             'model': config.model_name or '',
+            'headroom_stats': headroom_stats,
         }
 
     @staticmethod
@@ -962,6 +1144,10 @@ class AiService:
             return AiService._tool_list_pay_channels(args, user_id)
         elif tool_name == 'request_pay_withdraw':
             return AiService._tool_request_pay_withdraw(args, user_id)
+        elif tool_name == 'save_skill':
+            return AiService._tool_save_skill(args, user_id)
+        elif tool_name == 'send_email':
+            return AiService._tool_send_email(args, user_id)
         else:
             return {'error': f'未知工具: {tool_name}'}
 
@@ -2380,6 +2566,175 @@ AI回复：{ai_response[:500] if ai_response else ''}
             )
 
         return result
+
+    @staticmethod
+    def _tool_save_skill(args: dict, user_id: int = None) -> dict:
+        """保存用户要求的SKILLS/规则"""
+        from app.models.ai_skill import AiSkill
+        from app import db
+        
+        name = args.get('name', '')
+        category = args.get('category', '规则')
+        description = args.get('description', '')
+        content = args.get('content', '')
+        
+        if not name or not content:
+            return {'error': '技能名称和内容不能为空'}
+        
+        if not user_id:
+            return {'error': '未登录用户无法保存技能'}
+        
+        try:
+            # 检查是否已存在同名技能（同一用户）
+            existing = AiSkill.query.filter_by(
+                user_id=user_id,
+                name=name,
+                skill_type='user'
+            ).first()
+            
+            if existing:
+                # 更新现有技能
+                existing.category = category
+                existing.description = description
+                existing.content = content
+                skill_id = existing.id
+                action = 'updated'
+            else:
+                # 创建新技能
+                skill = AiSkill(
+                    name=name,
+                    skill_type='user',
+                    category=category,
+                    description=description,
+                    content=content,
+                    user_id=user_id,
+                    source='chat',
+                    is_active=True,
+                )
+                db.session.add(skill)
+                db.session.flush()
+                skill_id = skill.id
+                action = 'created'
+            
+            db.session.commit()
+            logger.info(f'技能{action}: id={skill_id}, name={name}, user_id={user_id}')
+            return {
+                'success': True,
+                'skill_id': skill_id,
+                'action': action,
+                'message': f'技能「{name}」已{action}，下次对话时会自动生效'
+            }
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f'保存技能失败: {e}')
+            return {'error': f'保存技能失败: {str(e)}'}
+
+    @staticmethod
+    def _tool_send_email(args: dict, user_id: int = None) -> dict:
+        """发送邮件通知"""
+        import os
+        from app.models.system_config import SystemConfig
+        
+        to_emails = args.get('to_emails', '').strip()
+        subject = args.get('subject', '').strip()
+        body = args.get('body', '').strip()
+        content_type = args.get('content_type', 'text')
+        attachment_path = args.get('attachment_path', '').strip()
+        attachment_name = args.get('attachment_name', '').strip()
+        
+        if not to_emails:
+            return {'error': '收件人邮箱不能为空'}
+        if not subject and not body:
+            return {'error': '邮件主题和正文至少填一项'}
+        
+        # 解析收件人列表
+        email_list = [e.strip() for e in to_emails.replace('，', ',').split(',') if e.strip()]
+        if not email_list:
+            return {'error': '收件人邮箱格式错误'}
+        
+        # 获取SMTP配置
+        def _get_config(key):
+            config = SystemConfig.query.filter_by(config_key=key).first()
+            return config.config_value if config and config.config_value else ''
+        
+        def _get_encrypted_config(key):
+            config = SystemConfig.query.filter_by(config_key=key).first()
+            return config.get_encrypted_value() if config else ''
+        
+        smtp_host = _get_config(SystemConfig.EMAIL_SMTP_HOST)
+        smtp_port = _get_config(SystemConfig.EMAIL_SMTP_PORT)
+        smtp_user = _get_config(SystemConfig.EMAIL_SMTP_USER)
+        smtp_password = _get_encrypted_config(SystemConfig.EMAIL_SMTP_PASSWORD)
+        smtp_ssl = _get_config(SystemConfig.EMAIL_SMTP_SSL)
+        from_name = _get_config(SystemConfig.EMAIL_FROM_NAME) or 'Excel Database Query'
+        from_address = _get_config(SystemConfig.EMAIL_FROM_ADDRESS) or smtp_user
+        
+        if not smtp_host:
+            return {'error': 'SMTP主机未配置，请在系统配置中设置'}
+        if not smtp_user:
+            return {'error': 'SMTP用户未配置，请在系统配置中设置'}
+        if not smtp_password:
+            return {'error': 'SMTP密码未配置，请在系统配置中设置'}
+        
+        try:
+            import smtplib
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+            from email.mime.base import MIMEBase
+            from email import encoders
+            from email.utils import formataddr, formatdate, make_msgid
+            
+            port = int(smtp_port) if smtp_port else 465
+            use_ssl = smtp_ssl.lower() in ('true', '1', 'yes') if smtp_ssl else True
+            
+            # 构建邮件
+            msg = MIMEMultipart()
+            msg['From'] = formataddr((from_name, from_address))
+            msg['To'] = ', '.join(email_list)
+            msg['Subject'] = subject
+            msg['Date'] = formatdate(localtime=True)
+            msg['Message-ID'] = make_msgid()
+            
+            # 添加正文
+            if content_type == 'html':
+                msg.attach(MIMEText(body, 'html', 'utf-8'))
+            else:
+                msg.attach(MIMEText(body, 'plain', 'utf-8'))
+            
+            # 添加附件
+            if attachment_path:
+                if not os.path.exists(attachment_path):
+                    return {'error': f'附件文件不存在: {attachment_path}'}
+                
+                filename = attachment_name or os.path.basename(attachment_path)
+                with open(attachment_path, 'rb') as f:
+                    part = MIMEBase('application', 'octet-stream')
+                    part.set_payload(f.read())
+                    encoders.encode_base64(part)
+                    part.add_header('Content-Disposition', f'attachment; filename="{filename}"')
+                    msg.attach(part)
+            
+            # 发送邮件
+            if use_ssl:
+                server = smtplib.SMTP_SSL(smtp_host, port, timeout=30)
+            else:
+                server = smtplib.SMTP(smtp_host, port, timeout=30)
+                server.starttls()
+            
+            server.login(smtp_user, smtp_password)
+            server.sendmail(from_address, email_list, msg.as_string())
+            server.quit()
+            
+            logger.info(f'邮件发送成功: to={email_list}, subject={subject}')
+            return {
+                'success': True,
+                'to_emails': email_list,
+                'subject': subject,
+                'message': f'邮件已成功发送给 {len(email_list)} 个收件人'
+            }
+        except Exception as e:
+            logger.error(f'邮件发送失败: {e}')
+            return {'error': f'邮件发送失败: {str(e)}'}
 
     @staticmethod
     def _tool_fetch_url(args: dict) -> dict:

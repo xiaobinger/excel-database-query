@@ -337,6 +337,57 @@
                   <span v-if="(msg.cache_creation_tokens > 0 || msg.cache_read_tokens > 0)" class="cache-info">
                     <i class="fas fa-bolt"></i> 缓存: 写入{{ msg.cache_creation_tokens || 0 }} / 命中{{ msg.cache_read_tokens || 0 }}
                   </span>
+                  <span v-if="msg.headroom_saved_tokens > 0" class="headroom-info headroom-success">
+<i class="fas fa-compress-alt"></i> Headroom: {{ msg.headroom_original_tokens }} → {{ msg.headroom_original_tokens - msg.headroom_saved_tokens }} tokens, 节省{{ msg.headroom_saved_tokens }} (压缩率{{ (msg.headroom_compression_ratio * 100).toFixed(1) }}%)
+</span>
+<span v-else-if="msg.headroom_original_tokens > 0" class="headroom-info headroom-none">
+<i class="fas fa-compress-alt"></i> Headroom: 已分析，当前上下文无可压缩内容
+</span>
+<!-- 未启用 Headroom 时也显示占位信息 -->
+<span v-else-if="selectedModel?.enable_headroom" class="headroom-info headroom-none">
+<i class="fas fa-compress-alt"></i> Headroom: 0 K (压缩率 0.0%), 节省 0 K
+</span>
+                </div>
+                <!-- 对话级监督者复核标记（可点击展开查看复核详情） -->
+                <div v-if="msg._supervision && msg.role === 'assistant'" class="message-supervision" :class="{ 'supervision-flagged': msg._supervision_flagged }" @click="msg._show_review_detail = !msg._show_review_detail">
+                  <i :class="msg._supervision_flagged ? 'fas fa-exclamation-triangle' : 'fas fa-shield-alt'"></i> {{ msg._supervision }}
+                  <i v-if="msg._supervision_records && msg._supervision_records.length > 0" :class="msg._show_review_detail ? 'fas fa-chevron-up' : 'fas fa-chevron-down'" class="review-toggle"></i>
+                </div>
+                <!-- 复核详情展开区域 -->
+                <div v-if="msg._show_review_detail && msg._supervision_records && msg._supervision_records.length > 0" class="review-detail-panel">
+                  <div v-for="(record, idx) in msg._supervision_records" :key="idx" class="review-record">
+                    <div class="review-record-header">
+                      <span class="review-round">第{{ record.round }}轮复核</span>
+                      <el-tag :type="record.verdict === 'approved' ? 'success' : record.verdict === 'retry' ? 'warning' : 'danger'" size="small">
+                        {{ record.verdict === 'approved' ? '通过' : record.verdict === 'retry' ? '需改正' : '需人工复核' }}
+                      </el-tag>
+                      <span v-if="record.timestamp" class="review-time">{{ formatReviewTime(record.timestamp) }}</span>
+                    </div>
+                    <div class="review-record-body">
+                      <div class="review-section">
+                        <div class="review-section-title"><i class="fas fa-comment"></i> 用户问题</div>
+                        <div class="review-section-content">{{ record.user_content }}</div>
+                      </div>
+                      <div class="review-section">
+                        <div class="review-section-title"><i class="fas fa-robot"></i> 执行者回复</div>
+                        <div class="review-section-content">{{ record.assistant_content }}</div>
+                      </div>
+                      <div v-if="record.tool_summary" class="review-section">
+                        <div class="review-section-title"><i class="fas fa-tools"></i> 工具调用记录</div>
+                        <div class="review-section-content">{{ record.tool_summary }}</div>
+                      </div>
+                      <div v-if="record.custom_rules && (isAdmin || record.rules_created_by === store.user?.id)" class="review-section">
+                        <div class="review-section-title"><i class="fas fa-list-check"></i> 自定义复核规则</div>
+                        <div class="review-section-content">{{ record.custom_rules }}</div>
+                      </div>
+                      <div class="review-section review-feedback">
+                        <div class="review-section-title"><i class="fas fa-gavel"></i> 监督者判定</div>
+                        <div class="review-section-content" :class="{ 'feedback-approved': record.verdict === 'approved', 'feedback-retry': record.verdict === 'retry', 'feedback-flagged': record.verdict === 'flag_human' }">
+                          {{ record.feedback || (record.verdict === 'approved' ? '回复质量合格，态度端正' : '需重新生成') }}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 <!-- 重试按钮：仅AI文本消息且非流式中、非卡片类型、非临时错误消息 -->
                 <div v-if="msg.role === 'assistant' && !msg._streaming && !msg._type && msg.content.trim() && !msg._no_retry" class="message-retry">
@@ -359,9 +410,21 @@
                       <template v-else-if="msg._failed">执行失败</template>
                       <template v-else>{{ msg.tool_data.action_type === 'export' ? '导出任务确认' : msg.tool_data.action_type === 'system_task' ? '系统任务确认' : msg.tool_data.action_type === 'profit_share' ? '分润导出确认' : '查询任务确认' }}</template>
                     </span>
+                    <!-- 监督者评估标记 -->
+                    <span v-if="msg.tool_data._supervisor_approved === true" class="supervisor-badge supervisor-approved">
+                      <i class="fas fa-shield-alt"></i> 监督者已确认
+                    </span>
+                    <span v-else-if="msg.tool_data._supervisor_approved === false" class="supervisor-badge supervisor-rejected">
+                      <i class="fas fa-exclamation-triangle"></i> 监督者有异议
+                    </span>
                   </div>
                   <div class="tool-card-body">
                     <p class="tool-confirm-msg">{{ msg.tool_data.confirm_message }}</p>
+                    <!-- 监督者评估意见 -->
+                    <div v-if="msg.tool_data._supervisor_feedback" class="supervisor-feedback">
+                      <i class="fas fa-shield-alt"></i>
+                      <span>监督者评估：{{ msg.tool_data._supervisor_feedback }}</span>
+                    </div>
                     <!-- 系统任务参数展示 -->
                     <div v-if="msg.tool_data.action_type === 'system_task' && msg.tool_data.params && msg.tool_data.params.length > 0 && !msg._executing && !msg._done" class="tool-params-preview">
                       <div v-for="p in msg.tool_data.params" :key="p.name" class="tool-param-row">
@@ -532,11 +595,58 @@
               </template>
             </div>
           </div>
+          <!-- 排队消息提示 -->
+          <div v-if="loading && queuedMessage" class="message assistant queued-message queued-slide-in">
+            <div class="message-avatar queued-avatar-pulse"><i class="fas fa-clock"></i></div>
+            <div class="message-content">
+              <div class="queued-msg-card">
+                <div class="queued-badge"><i class="fas fa-layer-group"></i> 排队中</div>
+                <!-- 查看模式 -->
+                <template v-if="!isEditingQueue">
+                  <div class="queued-text">{{ queuedMessage.content?.substring(0, 120) }}{{ (queuedMessage.content?.length || 0) > 120 ? '...' : '' }}</div>
+                  <div class="queued-footer">
+                    <span class="queued-hint"><i class="fas fa-arrow-down"></i> 当前任务完成后自动发送</span>
+                    <div class="queued-actions">
+                      <el-button text size="small" class="queued-edit-btn" @click="startEditQueue">
+                        <i class="fas fa-pen"></i> 编辑
+                      </el-button>
+                      <el-button text size="small" class="queued-cancel-btn" @click="cancelQueuedMessage">
+                        <i class="fas fa-times"></i> 取消
+                      </el-button>
+                    </div>
+                  </div>
+                </template>
+                <!-- 编辑模式 -->
+                <template v-else>
+                  <el-input
+                    ref="queueEditInput"
+                    v-model="queueEditText"
+                    type="textarea"
+                    :autosize="{ minRows: 1, maxRows: 4 }"
+                    placeholder="编辑排队消息..."
+                    @keydown.enter.ctrl="saveEditQueue"
+                    @keydown.escape="cancelEditQueue"
+                  />
+                  <div class="queued-edit-footer">
+                    <span class="queued-edit-hint">Ctrl+Enter 发送 · Esc 取消</span>
+                    <div class="queued-actions">
+                      <el-button text size="small" class="queued-cancel-btn" @click="cancelEditQueue">
+                        <i class="fas fa-times"></i>
+                      </el-button>
+                      <el-button text size="small" class="queued-save-btn" @click="saveEditQueue">
+                        <i class="fas fa-check"></i> 保存
+                      </el-button>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
           <div v-if="loading" class="message assistant">
             <div class="message-avatar"><i class="fas fa-robot"></i></div>
             <div class="message-content">
-              <div class="typing-indicator">
-                <span></span><span></span><span></span>
+              <div class="typing-wave">
+                <span></span><span></span><span></span><span></span><span></span>
               </div>
             </div>
           </div>
@@ -555,6 +665,9 @@
                 <span v-if="selectedModel.enable_thinking" class="thinking-badge" title="深度思考">
                   <i class="fas fa-brain"></i>
                 </span>
+                <span v-if="selectedModel.enable_headroom" class="headroom-badge" title="Headroom上下文压缩已启用">
+                  <i class="fas fa-compress-alt"></i>
+                </span>
               </el-tag>
             </div>
             <div v-if="uploadedFile" class="file-attachment">
@@ -569,7 +682,7 @@
                 v-model="inputText"
                 type="textarea"
                 :autosize="{ minRows: 3, maxRows: 8 }"
-                :placeholder="canSwitchModel ? '输入消息，@ 选择模型，按 Enter 发送，Shift+Enter 换行...' : '输入消息，按 Enter 发送，Shift+Enter 换行...'"
+                :placeholder="canSwitchModel ? '输入消息，@ 选择模型，Enter 发送，Shift/Alt+Enter 换行...' : '输入消息，Enter 发送，Shift/Alt+Enter 换行...'"
                 resize="none"
                 @keydown="handleKeydown"
                 @input="handleInputChange"
@@ -597,6 +710,19 @@
                   </div>
                 </div>
               </div>
+            </div>
+            <div v-if="inputText.length > 0" class="input-stats-bar">
+              <span class="stat-item"><i class="fas fa-keyboard"></i> {{ inputText.length }} 字符</span>
+              <span class="stat-item"><i class="fas fa-coins"></i> ≈ {{ estimateTokens(inputText) }} tokens</span>
+              <span v-if="selectedModel?.enable_headroom && inputText.length >= 50" class="stat-item headroom-will-compress">
+                <i class="fas fa-compress-alt"></i> 会尝试压缩
+              </span>
+              <span v-else-if="selectedModel?.enable_headroom && inputText.length < 50" class="stat-item headroom-no-compress">
+                <i class="fas fa-compress-alt"></i> 太短不压缩
+              </span>
+              <span v-else class="stat-item headroom-no-compress">
+                <i class="fas fa-compress-alt"></i> 未启用压缩
+              </span>
             </div>
             <div class="input-bottom-bar">
               <el-dropdown v-if="canSwitchAgent" trigger="click" @command="selectDropdownAgent" class="agent-dropdown">
@@ -690,9 +816,38 @@
                 >
                   <i :class="isRecording ? 'fas fa-stop' : 'fas fa-microphone'"></i>
                 </el-button>
-                <el-button v-if="loading" type="danger" @click="abortRequest" title="终止任务">
-                  <i class="fas fa-stop"></i>
-                </el-button>
+                <template v-if="loading">
+                  <el-button type="danger" @click="abortRequest" title="终止当前任务">
+                    <i class="fas fa-stop"></i>
+                  </el-button>
+                  <el-dropdown v-if="inputText.trim()" trigger="click" @command="handleInterruptCommand" popper-class="interrupt-dropdown">
+                    <button class="interrupt-trigger-btn" title="发送插话/引导指令">
+                      <i class="fas fa-bolt"></i>
+                    </button>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item command="interrupt" class="interrupt-item-interrupt">
+                          <div class="interrupt-option">
+                            <div class="interrupt-option-icon interrupt-icon-bolt"><i class="fas fa-bolt"></i></div>
+                            <div class="interrupt-option-text">
+                              <div class="interrupt-option-title">⚡ 插话发送</div>
+                              <div class="interrupt-option-desc">立即停止AI，采纳新指令后继续执行</div>
+                            </div>
+                          </div>
+                        </el-dropdown-item>
+                        <el-dropdown-item command="queue" class="interrupt-item-queue">
+                          <div class="interrupt-option">
+                            <div class="interrupt-option-icon interrupt-icon-clock"><i class="fas fa-clock"></i></div>
+                            <div class="interrupt-option-text">
+                              <div class="interrupt-option-title">🕐 排队发送</div>
+                              <div class="interrupt-option-desc">等当前任务完成后处理</div>
+                            </div>
+                          </div>
+                        </el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                </template>
                 <el-button v-else type="primary" :disabled="!canSend" @click="sendMessage">
                   <i class="fas fa-paper-plane"></i>
                 </el-button>
@@ -1303,6 +1458,10 @@ const messages = ref([])
 const inputText = ref('')
 const loading = ref(false)
 const abortController = ref(null)  // 用于终止流式请求
+const queuedMessage = ref(null)  // 排队中的消息
+const isEditingQueue = ref(false)
+const queueEditText = ref('')
+const queueEditInput = ref(null)
 const messagesRef = ref(null)
 const uploadedFile = ref(null)
 const store = useAppStore()
@@ -1496,6 +1655,18 @@ async function reloadCurrentMessages() {
           base._done = true
           base.tool_data = meta.tool_data
           base.content = m.content || meta.tool_data?.confirm_message || ''
+        }
+        // 监督者复核标记
+        const sup = meta.supervision
+        if (sup) {
+          base._supervision_flagged = sup.verdict === 'flagged' || sup.verdict === 'flag_human'
+          base._supervision = base._supervision_flagged
+            ? ('⚠️ 监督者标记本回复需人工复核' + (sup.feedback ? '：' + sup.feedback : ''))
+            : '✓ 监督者复核通过'
+        }
+        // 恢复复核记录
+        if (meta.supervision_records && meta.supervision_records.length > 0) {
+          base._supervision_records = meta.supervision_records
         }
       }
       return base
@@ -1893,6 +2064,24 @@ async function checkAndResumeStream(chatId) {
             streamMsg._show_thinking = true
           } else if (event.type === 'content') {
             streamMsg.content += event.content
+          } else if (event.type === 'supervision') {
+            // 对话级监督者复核状态
+            if (event.status === 'reviewing') {
+              streamMsg._supervision = '监督者复核中…'
+              streamMsg._supervision_flagged = false
+            } else if (event.status === 'retry') {
+              // 监督者要求重新生成：清空已流式输出的内容，等待新回复
+              streamMsg.content = ''
+              streamMsg._thinking = ''
+              streamMsg._supervision = '监督者要求重新生成：' + (event.content || '')
+              streamMsg._supervision_flagged = false
+            } else if (event.status === 'approved') {
+              streamMsg._supervision = '✓ 监督者复核通过'
+              streamMsg._supervision_flagged = false
+            } else if (event.status === 'flagged') {
+              streamMsg._supervision = event.content || '⚠️ 监督者标记本回复需人工复核'
+              streamMsg._supervision_flagged = true
+            }
           } else if (event.type === 'done') {
             streamMsg._streaming = false
             streamMsg._thinking_done = true
@@ -2369,11 +2558,134 @@ async function smartMatchDirectExecute(cardMsg, fileInfo, defaultParamColumn) {
   }
 }
 
+// 处理插话/排队命令
+function handleInterruptCommand(command) {
+  const text = inputText.value.trim()
+  if (!text) return
+  
+  if (command === 'interrupt') {
+    // 插话发送：立即停止AI，采纳新指令后继续
+    sendInterruptMessage(text)
+  } else if (command === 'queue') {
+    // 排队发送：保存到排队队列
+    queuedMessage.value = { content: text, timestamp: Date.now() }
+    inputText.value = ''
+    ElMessage.info('消息已排队，当前任务完成后自动发送')
+  }
+}
 
+// 取消排队消息
+function cancelQueuedMessage() {
+  queuedMessage.value = null
+  isEditingQueue.value = false
+  ElMessage.info('已取消排队消息')
+}
+
+// 编辑排队消息
+function startEditQueue() {
+  queueEditText.value = queuedMessage.value?.content || ''
+  isEditingQueue.value = true
+  nextTick(() => {
+    queueEditInput.value?.focus()
+  })
+}
+
+function cancelEditQueue() {
+  isEditingQueue.value = false
+  queueEditText.value = ''
+}
+
+function saveEditQueue() {
+  const newText = queueEditText.value.trim()
+  if (!newText) {
+    ElMessage.warning('消息内容不能为空')
+    return
+  }
+  queuedMessage.value = { ...queuedMessage.value, content: newText }
+  isEditingQueue.value = false
+  queueEditText.value = ''
+  ElMessage.success('排队消息已更新')
+}
+
+// 插话发送：立即停止AI，采纳新指令后继续执行
+async function sendInterruptMessage(text) {
+  if (!currentChatId.value || !text) return
+  
+  // 先保存输入框内容（后端需要）
+  inputText.value = ''
+  
+  // 添加用户消息到界面（带插话标记）
+  const userMsg = {
+    id: Date.now(),
+    role: 'user',
+    content: text,
+    _is_interrupt: true,
+  }
+  messages.value.push(userMsg)
+  await nextTick()
+  scrollToBottom()
+
+  // 发送插话指令到后端：停止当前流 + 保存新指令
+  try {
+    const token = localStorage.getItem('token')
+    const url = api.ai.sendInterruptMessage(currentChatId.value)
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': token ? `Bearer ${token}` : '',
+      },
+      body: JSON.stringify({ 
+        content: text,
+        mode: 'stop_and_adopt',
+      }),
+    })
+    const result = await response.json()
+    if (result.success) {
+      ElMessage.success('插话指令已发送，AI将立即停止并采纳')
+      // 等待当前流完全停止，然后用新指令重新发起请求
+      // loading 会在流停止后变为 false（在 finally 块中）
+      // 监听 loading 变化，一旦变为 false 就重新发送
+      const waitForIdle = () => {
+        return new Promise((resolve) => {
+          const check = () => {
+            if (!loading.value) {
+              resolve()
+            } else {
+              setTimeout(check, 200)
+            }
+          }
+          check()
+        })
+      }
+      await waitForIdle()
+      // AI 已停止，现在用新指令重新发送
+      // 先把新指令放到输入框，然后调用 sendMessage
+      inputText.value = text
+      // 从消息列表中移除刚才添加的用户消息（sendMessage 会重新添加）
+      const idx = messages.value.indexOf(userMsg)
+      if (idx > -1) messages.value.splice(idx, 1)
+      await nextTick()
+      sendMessage()
+    } else {
+      ElMessage.error(result.message || '发送失败')
+    }
+  } catch (e) {
+    ElMessage.error('发送失败: ' + e.message)
+  }
+}
 
 async function sendMessage() {
   const text = inputText.value.trim()
-  if ((!text && !uploadedFile.value) || loading.value) return
+  if (!text && !uploadedFile.value) return
+  
+  // 如果正在loading，将消息保存到排队队列
+  if (loading.value) {
+    queuedMessage.value = { content: text, timestamp: Date.now() }
+    inputText.value = ''
+    ElMessage.info('消息已排队，当前任务完成后自动发送')
+    return
+  }
 
   if (!currentChatId.value) {
     await createNewChat()
@@ -2468,6 +2780,14 @@ async function sendMessage() {
   } finally {
     loading.value = false
     uploadedFile.value = null
+    // 任务完成后，自动发送排队消息
+    if (queuedMessage.value) {
+      const queued = queuedMessage.value
+      queuedMessage.value = null
+      inputText.value = queued.content
+      await nextTick()
+      sendMessage()
+    }
   }
 }
 
@@ -2479,6 +2799,18 @@ function quickAsk(text) {
 // 处理工具调用结果（普通和流式共用）
 async function handleToolResults(toolResults) {
   if (!toolResults || toolResults.length === 0) return
+  // 预检：同一轮中如果存在 select_options 卡片（list_*工具），则跳过对应的 request_* 确认卡片
+  // 避免重复出现「选项选择」和「任务确认」两个卡片
+  const selectActionTypes = new Set()
+  for (const tr of toolResults) {
+    const r = tr.result
+    if (r && r._select_mode) {
+      if (tr.name === 'list_export_options') selectActionTypes.add('export')
+      else if (tr.name === 'list_query_options') selectActionTypes.add('query')
+      else if (tr.name === 'list_system_tasks') selectActionTypes.add('system_task')
+      else if (tr.name === 'list_lookup_options') selectActionTypes.add('lookup')
+    }
+  }
   for (const tr of toolResults) {
     const result = tr.result
     // 工单创建：成功显示已创建卡片，失败/缺失参数由AI自然语言询问用户（不创建卡片）
@@ -2589,6 +2921,35 @@ async function handleToolResults(toolResults) {
         continue
       }
       // 导出/查询/system_task：成功才显示工具卡片，失败显示错误消息
+      // 同一轮已有选择卡片时，跳过重复的确认卡片
+      if (selectActionTypes.has(result.action_type)) {
+        console.log(`跳过重复确认卡片: ${tr.name}(${result.action_type})，同轮已有select_options卡片`)
+        continue
+      }
+      // 监督者已自动执行，不创建确认卡片，显示简短结果并自动执行
+      if (result._supervisor_auto_executed) {
+        const autoMsg = {
+          id: tr.message_id || Date.now() + Math.random(),
+          role: 'assistant',
+          content: `✅ 监督者已评估通过并自动执行：${result.confirm_message || result.task_name || result.script_name || ''}${result._supervisor_feedback ? '\n评估意见：' + result._supervisor_feedback : ''}`,
+          _type: 'tool',
+          _dismissed: false,
+          tool_data: result,
+        }
+        messages.value.push(autoMsg)
+        saveMessageState(autoMsg)
+        // 自动执行对应的任务
+        if (result.action_type === 'export') {
+          confirmExport(autoMsg)
+        } else if (result.action_type === 'profit_share') {
+          confirmProfitShare(autoMsg)
+        } else if (result.action_type === 'query') {
+          confirmQuery(autoMsg)
+        } else if (result.action_type === 'system_task') {
+          confirmSystemTask(autoMsg)
+        }
+        continue
+      }
       if (result.error) {
         messages.value.push({
           id: Date.now() + Math.random(),
@@ -2597,14 +2958,17 @@ async function handleToolResults(toolResults) {
         })
         continue
       }
-      messages.value.push({
+      // 创建确认卡片
+      const toolCard = {
         id: tr.message_id || Date.now() + Math.random(),
         role: 'assistant',
         content: '',
         _type: 'tool',
         _dismissed: false,
         tool_data: result,
-      })
+      }
+      messages.value.push(toolCard)
+      saveMessageState(toolCard)
     } else if (result && result._select_mode) {
       messages.value.push({
         id: tr.message_id || Date.now() + Math.random(),
@@ -2768,23 +3132,55 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
               if (eventCount <= 5) {
                 console.log('[SSE] 收到content事件 #' + eventCount + ', 当前内容长度:', streamMsg.content.length)
               }
+            } else if (event.type === 'supervision') {
+              // 对话级监督者复核状态
+              // 保存复核记录
+              if (event.review_record) {
+                if (!streamMsg._supervision_records) streamMsg._supervision_records = []
+                streamMsg._supervision_records.push(event.review_record)
+              }
+              if (event.status === 'reviewing') {
+                streamMsg._supervision = '监督者复核中…'
+                streamMsg._supervision_flagged = false
+              } else if (event.status === 'retry') {
+                // 监督者要求重新生成：清空已流式输出的内容，等待新回复
+                streamMsg.content = ''
+                streamMsg._thinking = ''
+                streamMsg._supervision = '监督者要求重新生成：' + (event.content || '')
+                streamMsg._supervision_flagged = false
+              } else if (event.status === 'approved') {
+                streamMsg._supervision = '✓ 监督者复核通过'
+                streamMsg._supervision_flagged = false
+              } else if (event.status === 'flagged') {
+                streamMsg._supervision = event.content || '⚠️ 监督者标记本回复需人工复核'
+                streamMsg._supervision_flagged = true
+              } else if (event.status === 'tool_approved') {
+                // 监督者评估工具操作通过，显示评估结果
+                ElMessage.success(event.content || '监督者已评估通过，将自动执行')
+              } else if (event.status === 'tool_rejected') {
+                // 监督者评估工具操作不通过，显示评估意见
+                ElMessage.warning(event.content || '监督者评估不通过，请人工确认')
+              }
             } else if (event.type === 'tool_results') {
               // 处理工具调用结果（渲染为卡片）
               handleToolResults(event.tool_results)
             } else if (event.type === 'done') {
-              streamMsg._streaming = false
-              streamMsg._thinking_done = true
-              streamMsg.id = event.message_id || streamMsg.id
-              streamMsg._tokens = event.tokens || 0
-              streamMsg._prompt_tokens = event.prompt_tokens || 0
-              streamMsg._completion_tokens = event.completion_tokens || 0
-              streamMsg.cache_creation_tokens = event.cache_creation_tokens || 0
-              streamMsg.cache_read_tokens = event.cache_read_tokens || 0
-              streamMsg._elapsed = event.elapsed || 0
-              streamMsg._model = event.model || streamMsg._model
-              // 同步真实用户消息ID（用于重新发送时复用原消息）
-              if (event.user_message_id && onUserMessageId) onUserMessageId(event.user_message_id)
-            } else if (event.type === 'truncated') {
+ streamMsg._streaming = false
+ streamMsg._thinking_done = true
+ streamMsg.id = event.message_id || streamMsg.id
+ streamMsg._tokens = event.tokens || 0
+ streamMsg._prompt_tokens = event.prompt_tokens || 0
+ streamMsg._completion_tokens = event.completion_tokens || 0
+ streamMsg.cache_creation_tokens = event.cache_creation_tokens || 0
+ streamMsg.cache_read_tokens = event.cache_read_tokens || 0
+ streamMsg.headroom_original_tokens = event.headroom_original_tokens || 0
+ streamMsg.headroom_saved_tokens = event.headroom_saved_tokens || 0
+ streamMsg.headroom_compression_ratio = event.headroom_compression_ratio || 0
+ streamMsg._elapsed = event.elapsed || 0
+ streamMsg._model = event.model || streamMsg._model
+ // 同步真实用户消息ID（用于重新发送时复用原消息）
+ if (event.user_message_id && onUserMessageId) onUserMessageId(event.user_message_id)
+} else if (event.type === 'truncated') {
               // 输出因max_tokens上限被截断，追加提示
               streamMsg.content += (streamMsg.content ? '\n\n' : '') + `*${event.content || 'AI输出因token上限被截断'}*`
             } else if (event.type === 'error') {
@@ -2822,16 +3218,21 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
           if (event.type === 'content') {
             streamMsg.content += event.content
           } else if (event.type === 'done') {
-            streamMsg._streaming = false
-            streamMsg._thinking_done = true
-            streamMsg.id = event.message_id || streamMsg.id
-            streamMsg._tokens = event.tokens || 0
-            streamMsg._prompt_tokens = event.prompt_tokens || 0
-            streamMsg._completion_tokens = event.completion_tokens || 0
-            streamMsg._elapsed = event.elapsed || 0
-            streamMsg._model = event.model || streamMsg._model
-            if (event.user_message_id && onUserMessageId) onUserMessageId(event.user_message_id)
-          } else if (event.type === 'error') {
+ streamMsg._streaming = false
+ streamMsg._thinking_done = true
+ streamMsg.id = event.message_id || streamMsg.id
+ streamMsg._tokens = event.tokens || 0
+ streamMsg._prompt_tokens = event.prompt_tokens || 0
+ streamMsg._completion_tokens = event.completion_tokens || 0
+ streamMsg.cache_creation_tokens = event.cache_creation_tokens || 0
+ streamMsg.cache_read_tokens = event.cache_read_tokens || 0
+ streamMsg.headroom_original_tokens = event.headroom_original_tokens || 0
+ streamMsg.headroom_saved_tokens = event.headroom_saved_tokens || 0
+ streamMsg.headroom_compression_ratio = event.headroom_compression_ratio || 0
+ streamMsg._elapsed = event.elapsed || 0
+ streamMsg._model = event.model || streamMsg._model
+ if (event.user_message_id && onUserMessageId) onUserMessageId(event.user_message_id)
+} else if (event.type === 'error') {
             streamMsg._streaming = false
             streamMsg.content = event.content || 'AI服务调用失败'
             streamMsg._no_retry = true
@@ -2859,8 +3260,8 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
     abortController.value = null
   }
 
-  // 如果流式消息内容为空且有工具结果，移除空消息
-  if (!streamMsg.content.trim() && !streamMsg._thinking) {
+  // 如果流式消息内容为空且有工具结果，移除空消息（但保留有监督者复核信息的消息）
+  if (!streamMsg.content.trim() && !streamMsg._thinking && !streamMsg._supervision) {
     const idx = messages.value.findIndex(m => m.id === streamMsg.id)
     if (idx > -1) messages.value.splice(idx, 1)
   }
@@ -2877,7 +3278,8 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
 function handleKeydown(e) {
   // Handle Escape for @mention popup
   if (handleMentionKeydown(e)) return
-  if (e.key === 'Enter' && !e.shiftKey) {
+  // Enter 发送，Shift+Enter 或 Alt+Enter 换行
+  if (e.key === 'Enter' && !e.shiftKey && !e.altKey) {
     e.preventDefault()
     sendMessage()
   }
@@ -2912,6 +3314,14 @@ function formatMsgTime(ts) {
     && d.getDate() === now.getDate()
   if (isSameDay) return hm
   return `${d.getMonth() + 1}/${d.getDate()} ${hm}`
+}
+
+function formatReviewTime(ts) {
+  if (!ts) return ''
+  const d = new Date(ts)
+  if (isNaN(d.getTime())) return ''
+  const pad = n => String(n).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
 function renderMarkdown(text) {
@@ -3618,6 +4028,9 @@ function onSelectionChange(msg) {
 }
 
 async function confirmExport(msg) {
+  // 防重复执行
+  if (msg._executing || msg._done) return
+  
   const td = msg.tool_data
   const params = { ...td.params }
   const allChecked = td.all_checked || {}
@@ -3917,6 +4330,9 @@ async function confirmSystemTaskParamDialog() {
 
 // 确认系统任务（从tool卡片确认按钮触发）
 async function confirmSystemTask(msg) {
+  // 防重复执行
+  if (msg._executing || msg._done) return
+  
   const td = msg.tool_data
   msg._selected = [td.task_id]
   msg._selectedScripts = [{
@@ -4220,6 +4636,9 @@ function pollSystemTaskStatus(executionId, msg) {
 // ============ 分润导出相关函数 ============
 // 确认执行分润导出（从工具卡片触发）
 async function confirmProfitShare(msg) {
+  // 防重复执行
+  if (msg._executing || msg._done) return
+  
   const td = msg.tool_data
   msg._executing = true
   msg._progress = 5
@@ -4464,9 +4883,9 @@ async function fetchAgentMemoryCount(agentId) {
 async function fetchAgents() {
   try {
     const res = await api.agent.list()
-    const agents = res.data || []
+    const agents = (res.data || []).filter(a => a.agent_role !== 'supervisor')  // 过滤掉监督者，只显示可对话的Agent
     canSwitchAgent.value = res.can_switch_agent || false
-    availableAgents.value = agents  // 包含所有Agent（含默认）
+    availableAgents.value = agents
     // 设置默认Agent
     const defaultAgent = agents.find(a => a.is_default)
     if (defaultAgent) {
@@ -4932,8 +5351,159 @@ onActivated(() => {
   font-size: 10px;
 }
 
+.message-supervision {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  background: rgba(64, 158, 255, 0.1);
+  color: #409eff;
+  cursor: pointer;
+  user-select: none;
+}
+
+.message-supervision:hover {
+  background: rgba(64, 158, 255, 0.15);
+}
+
+.message-supervision.supervision-flagged {
+  background: rgba(245, 108, 108, 0.1);
+  color: #f56c6c;
+}
+
+.message-supervision.supervision-flagged:hover {
+  background: rgba(245, 108, 108, 0.15);
+}
+
+.message-supervision i {
+  font-size: 12px;
+}
+
+.review-toggle {
+  margin-left: 4px;
+  transition: transform 0.2s;
+}
+
+/* 复核详情面板 */
+.review-detail-panel {
+  margin-top: 8px;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fafafa;
+}
+
+.review-record {
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.review-record:last-child {
+  border-bottom: none;
+}
+
+.review-record-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #f0f2f5;
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.review-round {
+  font-weight: 600;
+  font-size: 13px;
+  color: #303133;
+}
+
+.review-time {
+  margin-left: auto;
+  font-size: 12px;
+  color: #909399;
+}
+
+.review-record-body {
+  padding: 12px 14px;
+}
+
+.review-section {
+  margin-bottom: 12px;
+}
+
+.review-section:last-child {
+  margin-bottom: 0;
+}
+
+.review-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #606266;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.review-section-title i {
+  color: #909399;
+  font-size: 11px;
+}
+
+.review-section-content {
+  font-size: 13px;
+  color: #303133;
+  line-height: 1.6;
+  padding: 8px 12px;
+  background: #fff;
+  border-radius: 6px;
+  border: 1px solid #ebeef5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.review-feedback {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #e4e7ed;
+}
+
+.review-section-content.feedback-approved {
+  background: #f0f9eb;
+  border-color: #e1f3d8;
+  color: #67c23a;
+}
+
+.review-section-content.feedback-retry {
+  background: #fdf6ec;
+  border-color: #faecd8;
+  color: #e6a23c;
+}
+
+.review-section-content.feedback-flagged {
+  background: #fef0f0;
+  border-color: #fde2e2;
+  color: #f56c6c;
+}
+
 .cache-info {
   color: #67c23a;
+}
+
+.headroom-info {
+  color: #e6a23c;
+}
+
+.headroom-success {
+  color: #67c23a;
+}
+
+.headroom-none {
+  color: #c0c4cc;
 }
 
 .message-retry {
@@ -5057,6 +5627,46 @@ onActivated(() => {
   font-weight: 600;
   font-size: 14px;
   color: #303133;
+}
+
+/* 监督者评估标记 */
+.supervisor-badge {
+  margin-left: auto;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.supervisor-approved {
+  background: #f0f9eb;
+  color: #67c23a;
+  border: 1px solid #e1f3d8;
+}
+
+.supervisor-rejected {
+  background: #fdf6ec;
+  color: #e6a23c;
+  border: 1px solid #faecd8;
+}
+
+/* 监督者评估意见 */
+.supervisor-feedback {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 12px;
+  margin: 8px 0;
+  background: #f4f4f5;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.5;
+}
+
+.supervisor-feedback i {
+  color: #409eff;
+  margin-top: 2px;
 }
 
 .tool-card-body {
@@ -5935,6 +6545,30 @@ onActivated(() => {
   box-shadow: none !important;
 }
 
+/* 输入统计栏 */
+.input-stats-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+  font-size: 12px;
+  color: #909399;
+}
+.input-stats-bar .stat-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.input-stats-bar .stat-item i {
+  font-size: 11px;
+}
+.input-stats-bar .headroom-will-compress {
+  color: #34d399;
+}
+.input-stats-bar .headroom-no-compress {
+  color: #c0c4cc;
+}
+
 /* 模型下拉选择 */
 .model-dropdown {
   flex-shrink: 0;
@@ -6202,6 +6836,12 @@ onActivated(() => {
   font-size: 12px;
 }
 
+.headroom-badge {
+  margin-left: 6px;
+  color: #34d399;
+  font-size: 12px;
+}
+
 .input-buttons {
   display: flex;
   gap: 4px;
@@ -6358,26 +6998,337 @@ onActivated(() => {
   color: #606266;
 }
 
-.typing-indicator {
+/* ===== 打字波浪指示器 ===== */
+.typing-wave {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 14px 18px;
+}
+
+.typing-wave span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #409eff, #79bbff);
+  animation: wave 1.5s ease-in-out infinite;
+}
+
+.typing-wave span:nth-child(1) { animation-delay: 0s; }
+.typing-wave span:nth-child(2) { animation-delay: 0.1s; }
+.typing-wave span:nth-child(3) { animation-delay: 0.2s; }
+.typing-wave span:nth-child(4) { animation-delay: 0.3s; }
+.typing-wave span:nth-child(5) { animation-delay: 0.4s; }
+
+@keyframes wave {
+  0%, 100% {
+    transform: scaleY(0.5);
+    opacity: 0.4;
+  }
+  50% {
+    transform: scaleY(1.5);
+    opacity: 1;
+  }
+}
+
+/* ===== 排队消息样式 ===== */
+.queued-slide-in {
+  animation: queued-slide 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes queued-slide {
+  0% {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.queued-avatar-pulse {
+  animation: avatar-pulse 2s ease-in-out infinite;
+}
+
+@keyframes avatar-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(230, 162, 60, 0.3); }
+  50% { box-shadow: 0 0 0 8px rgba(230, 162, 60, 0); }
+}
+
+.queued-msg-card {
+  background: linear-gradient(135deg, #fdf6ec 0%, #fef3e0 100%);
+  border: 1px solid #fde8c0;
+  border-radius: 12px;
+  padding: 12px 16px;
+  max-width: 420px;
+  position: relative;
+  overflow: hidden;
+}
+
+.queued-msg-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 4px;
+  height: 100%;
+  background: linear-gradient(180deg, #e6a23c, #f0c78a);
+  border-radius: 4px 0 0 4px;
+}
+
+.queued-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  background: linear-gradient(135deg, #e6a23c, #f0c78a);
+  color: #fff;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  animation: badge-glow 2s ease-in-out infinite;
+}
+
+@keyframes badge-glow {
+  0%, 100% { box-shadow: 0 1px 4px rgba(230, 162, 60, 0.3); }
+  50% { box-shadow: 0 2px 12px rgba(230, 162, 60, 0.5); }
+}
+
+.queued-text {
+  font-size: 13px;
+  color: #8b6914;
+  line-height: 1.5;
+  margin-bottom: 8px;
+  word-break: break-all;
+}
+
+.queued-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.queued-hint {
+  font-size: 11px;
+  color: #b8860b;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  animation: hint-bounce 2s ease-in-out infinite;
+}
+
+@keyframes hint-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(2px); }
+}
+
+.queued-actions {
   display: flex;
   gap: 4px;
-  padding: 12px 16px;
 }
 
-.typing-indicator span {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #c0c4cc;
-  animation: typing 1.4s infinite;
+.queued-edit-btn {
+  color: #b8860b !important;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  transition: all 0.2s;
 }
 
-.typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
-.typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+.queued-edit-btn:hover {
+  background: rgba(184, 134, 11, 0.12) !important;
+  color: #e6a23c !important;
+}
 
-@keyframes typing {
-  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-  30% { transform: translateY(-6px); opacity: 1; }
+.queued-cancel-btn {
+  color: #c0840a !important;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.queued-cancel-btn:hover {
+  background: rgba(192, 132, 10, 0.12) !important;
+  color: #e65100 !important;
+}
+
+.queued-save-btn {
+  color: #67c23a !important;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.queued-save-btn:hover {
+  background: rgba(103, 194, 58, 0.12) !important;
+  color: #529b2e !important;
+}
+
+.queued-edit-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.queued-edit-hint {
+  font-size: 11px;
+  color: #b8860b;
+}
+
+:deep(.queued-msg-card .el-textarea__inner) {
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid #fde8c0;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #8b6914;
+  padding: 8px 10px;
+  resize: none;
+}
+
+:deep(.queued-msg-card .el-textarea__inner:focus) {
+  border-color: #e6a23c;
+  box-shadow: 0 0 0 2px rgba(230, 162, 60, 0.15);
+}
+
+/* ===== 插话/排队下拉菜单 ===== */
+.interrupt-trigger-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #e6a23c, #f0c78a);
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  box-shadow: 0 2px 8px rgba(230, 162, 60, 0.3);
+  position: relative;
+  overflow: hidden;
+}
+
+.interrupt-trigger-btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.2), transparent);
+  border-radius: inherit;
+}
+
+.interrupt-trigger-btn:hover {
+  transform: scale(1.08);
+  box-shadow: 0 4px 16px rgba(230, 162, 60, 0.45);
+}
+
+.interrupt-trigger-btn:active {
+  transform: scale(0.95);
+}
+
+.interrupt-trigger-btn i {
+  animation: bolt-flicker 3s ease-in-out infinite;
+}
+
+@keyframes bolt-flicker {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.85; transform: scale(1.1); }
+  52% { opacity: 1; transform: scale(1); }
+}
+
+/* 下拉菜单选项卡片化 */
+:deep(.interrupt-dropdown) .el-dropdown-menu {
+  padding: 8px;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+}
+
+.interrupt-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 4px;
+  border-radius: 10px;
+  transition: background 0.2s;
+}
+
+.interrupt-option:hover {
+  background: #f5f7fa;
+}
+
+.interrupt-option-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.interrupt-icon-bolt {
+  background: linear-gradient(135deg, #fdf6ec, #fef3e0);
+  color: #e6a23c;
+  border: 1px solid #fde8c0;
+}
+
+.interrupt-icon-stop {
+  background: linear-gradient(135deg, #fef0f0, #fde2e2);
+  color: #f56c6c;
+  border: 1px solid #fab6b6;
+}
+
+.interrupt-icon-clock {
+  background: linear-gradient(135deg, #f0f9eb, #e1f3d8);
+  color: #67c23a;
+  border: 1px solid #d9f0be;
+}
+
+.interrupt-option-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+  line-height: 1.3;
+}
+
+.interrupt-option-desc {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 2px;
+}
+
+:deep(.interrupt-dropdown) .el-dropdown-menu__item {
+  padding: 4px;
+  border-radius: 10px;
+  line-height: 1.4;
+}
+
+:deep(.interrupt-dropdown) .el-dropdown-menu__item:not(.is-disabled):hover {
+  background: transparent;
+}
+
+/* ===== 插话消息标记 ===== */
+.message.user ._is_interrupt .message-content {
+  border-left: 3px solid #e6a23c;
+}
+
+.interrupt-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: #fdf6ec;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #e6a23c;
+  margin-bottom: 4px;
 }
 
 /* ===== Lookup 信息查询卡片样式 ===== */

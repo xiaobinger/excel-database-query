@@ -24,13 +24,18 @@ class Script(db.Model):
     new_sheet = db.Column(db.Boolean, default=True, comment='是否新建工作表')
     primary_key = db.Column(db.String(100), comment='主键字段(不新建工作表时使用)')
     is_active = db.Column(db.Boolean, default=True, comment='是否启用')
-    type = db.Column(db.String(20), default='query', comment='类型: query/export')
+    type = db.Column(db.String(20), default='query', comment='类型: query/export/system/lookup/dashboard')
     params_config = db.Column(db.Text, comment='导出参数配置(JSON)')
     sql_template = db.Column(db.Text, comment='SQL模板(Jinja2语法,启用模板时使用)')
     template_config = db.Column(db.Text, comment='模板变量配置(JSON)')
     is_template = db.Column(db.Boolean, default=False, comment='是否启用SQL模板')
     created_at = db.Column(db.DateTime, default=datetime.utcnow, comment='创建时间')
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment='更新时间')
+
+    # 看板专属字段
+    chart_type = db.Column(db.String(20), default='line', comment='图表类型: line/bar/area/pie/scatter/table/radar/gauge/funnel/mix')
+    conn_name = db.Column(db.String(200), default='', comment='主数据源名称')
+    merge_conn_names = db.Column(db.Text, comment='合并数据源名称列表(JSON)')
 
     def get_database_ids(self) -> list:
         if self.database_ids:
@@ -79,6 +84,17 @@ class Script(db.Model):
     def set_template_config(self, config: list):
         self.template_config = json.dumps(config, ensure_ascii=False) if config else None
 
+    def get_merge_conn_names(self) -> list:
+        if self.merge_conn_names:
+            try:
+                return json.loads(self.merge_conn_names)
+            except (json.JSONDecodeError, TypeError):
+                return []
+        return []
+
+    def set_merge_conn_names(self, names: list):
+        self.merge_conn_names = json.dumps(names, ensure_ascii=False) if names else None
+
     def to_dict(self) -> dict:
         return {
             'id': self.id,
@@ -103,6 +119,9 @@ class Script(db.Model):
             'sql_template': self.sql_template,
             'template_config': self.get_template_config(),
             'is_template': self.is_template,
+            'chart_type': self.chart_type or 'line',
+            'conn_name': self.conn_name or '',
+            'merge_conn_names': self.get_merge_conn_names(),
             'created_at': beijing_isoformat(self.created_at),
             'updated_at': beijing_isoformat(self.updated_at),
         }

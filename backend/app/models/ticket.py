@@ -1,6 +1,7 @@
 """工单模型
 
 状态流转：
+  draft                 草稿       用户暂存未提交的工单，仅创建人可见
   submitted             已提交     提交人创建 / 申诉重启 / 核实不通过重新发起 / 重新指派
   received              已接收     指派人接收
   processing            处理中     指派人开始处理 / AI处理中
@@ -33,6 +34,7 @@ class Ticket(db.Model):
     assignee_type = db.Column(db.String(10), default='user', nullable=False, comment='指派类型: user/ai')
     assignee_id = db.Column(db.Integer, db.ForeignKey('users.id'), comment='指派人ID(当assignee_type=user)')
     assignee_agent_id = db.Column(db.Integer, db.ForeignKey('ai_agents.id'), comment='指派AI Agent ID(当assignee_type=ai)')
+    supervisor_agent_id = db.Column(db.Integer, db.ForeignKey('ai_agents.id'), comment='监督者Agent ID(多agent协作时监督执行者Agent)')
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, comment='提交人ID')
 
     status = db.Column(db.String(20), default='submitted', nullable=False, comment='状态')
@@ -41,10 +43,30 @@ class Ticket(db.Model):
     ai_result = db.Column(db.Text, comment='AI处理结果')
     pending_action = db.Column(db.Text, comment='待确认执行的任务信息(JSON)，AI遇到数据变更类任务时存储')
 
+    # AI处理消耗的token指标（指派给AI时记录）
+    ai_total_tokens = db.Column(db.Integer, default=0, comment='AI处理总消耗token')
+    ai_prompt_tokens = db.Column(db.Integer, default=0, comment='AI处理Prompt token消耗')
+    ai_completion_tokens = db.Column(db.Integer, default=0, comment='AI处理Completion token消耗')
+    ai_cache_creation_tokens = db.Column(db.Integer, default=0, comment='AI处理缓存创建token消耗')
+    ai_cache_read_tokens = db.Column(db.Integer, default=0, comment='AI处理缓存读取token消耗')
+    ai_headroom_original_tokens = db.Column(db.Integer, default=0, comment='Headroom压缩前原始token')
+    ai_headroom_saved_tokens = db.Column(db.Integer, default=0, comment='Headroom压缩节省token')
+    ai_headroom_compression_ratio = db.Column(db.Float, default=0.0, comment='Headroom压缩比例')
+    ai_models_used = db.Column(db.Text, comment='AI处理使用过的模型列表(JSON数组)')
+
+    is_draft = db.Column(db.Boolean, default=False, comment='是否草稿（暂存未提交）')
+
+    # 多agent协作字段
+    collaboration_rounds = db.Column(db.Integer, default=0, comment='多agent协作已进行的轮数')
+    collaboration_log = db.Column(db.Text, comment='多agent协作日志(JSON数组)')
+    max_collaboration_rounds = db.Column(db.Integer, default=3, comment='多agent协作最大轮数(工单级可配置)')
+    final_score = db.Column(db.Integer, comment='监督者最终评分(0-100)')
+
     submitted_at = db.Column(db.DateTime, comment='提交时间')
     received_at = db.Column(db.DateTime, comment='接收时间')
     processed_at = db.Column(db.DateTime, comment='处理完成时间')
     closed_at = db.Column(db.DateTime, comment='结束时间')
+    last_activity_at = db.Column(db.DateTime, comment='最后活动时间(用于监督者超时检测)')
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -53,6 +75,7 @@ class Ticket(db.Model):
     creator = db.relationship('User', foreign_keys=[created_by], backref='created_tickets', lazy='joined')
     assignee = db.relationship('User', foreign_keys=[assignee_id], backref='assigned_tickets', lazy='joined')
     assignee_agent = db.relationship('AiAgent', foreign_keys=[assignee_agent_id], lazy='joined')
+    supervisor_agent = db.relationship('AiAgent', foreign_keys=[supervisor_agent_id], lazy='joined')
     business_system = db.relationship('BusinessSystem', foreign_keys=[business_system_id], lazy='joined')
     comments = db.relationship('TicketComment', backref='ticket', lazy='select', cascade='all, delete-orphan',
                                order_by='TicketComment.created_at.asc()')
@@ -76,6 +99,54 @@ class Ticket(db.Model):
         """清空待确认执行的任务信息"""
         self.pending_action = None
 
+    def get_collaboration_log(self) -> list:
+        """获取多agent协作日志列表"""
+        if not self.collaboration_log:
+            return []
+        try:
+            return json.loads(self.collaboration_log)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    def append_collaboration_log(self, entry: dict):
+        """追加一条多agent协作日志"""
+        log = self.get_collaboration_log()
+        log.append(entry)
+        self.collaboration_log = json.dumps(log, ensure_ascii=False)
+
+    def accumulate_ai_token_usage(self, usage: dict):
+        """累加AI处理的token消耗指标（支持多次调用累加）
+
+        usage: dict，来自 chat_with_tools/chat_with_failover 返回值，包含
+        tokens, prompt_tokens, completion_tokens, cache_creation_tokens,
+        cache_read_tokens, headroom_stats, model
+        """
+        if not usage:
+            return
+        self.ai_total_tokens = (self.ai_total_tokens or 0) + (usage.get('tokens') or usage.get('total_tokens') or 0)
+        self.ai_prompt_tokens = (self.ai_prompt_tokens or 0) + (usage.get('prompt_tokens') or 0)
+        self.ai_completion_tokens = (self.ai_completion_tokens or 0) + (usage.get('completion_tokens') or 0)
+        self.ai_cache_creation_tokens = (self.ai_cache_creation_tokens or 0) + (usage.get('cache_creation_tokens') or 0)
+        self.ai_cache_read_tokens = (self.ai_cache_read_tokens or 0) + (usage.get('cache_read_tokens') or 0)
+
+        # Headroom压缩指标累加
+        headroom = usage.get('headroom_stats') or {}
+        if headroom:
+            self.ai_headroom_original_tokens = (self.ai_headroom_original_tokens or 0) + (headroom.get('original_tokens') or 0)
+            self.ai_headroom_saved_tokens = (self.ai_headroom_saved_tokens or 0) + (headroom.get('saved_tokens') or 0)
+            # 压缩比例需要重新计算（节省/原始）
+            orig = self.ai_headroom_original_tokens or 0
+            saved = self.ai_headroom_saved_tokens or 0
+            self.ai_headroom_compression_ratio = round(saved / orig, 4) if orig > 0 else 0.0
+
+        # 记录参与模型（去重）
+        model = usage.get('model') or usage.get('model_name')
+        if model:
+            models = json.loads(self.ai_models_used) if self.ai_models_used else []
+            if model not in models:
+                models.append(model)
+            self.ai_models_used = json.dumps(models, ensure_ascii=False)
+
     def to_dict(self, include_comments=False) -> dict:
         # 指派人名称
         if self.assignee_type == 'ai':
@@ -95,6 +166,8 @@ class Ticket(db.Model):
             'assignee_type': self.assignee_type or 'user',
             'assignee_id': self.assignee_id,
             'assignee_agent_id': self.assignee_agent_id,
+            'supervisor_agent_id': self.supervisor_agent_id,
+            'supervisor_agent_name': self.supervisor_agent.name if self.supervisor_agent else None,
             'assignee_name': assignee_name,
             'assignee_username': assignee_username,
             'created_by': self.created_by,
@@ -111,6 +184,21 @@ class Ticket(db.Model):
             'closed_at': beijing_isoformat(self.closed_at),
             'created_at': beijing_isoformat(self.created_at),
             'updated_at': beijing_isoformat(self.updated_at),
+            # AI处理token指标
+            'ai_total_tokens': self.ai_total_tokens or 0,
+            'ai_prompt_tokens': self.ai_prompt_tokens or 0,
+            'ai_completion_tokens': self.ai_completion_tokens or 0,
+            'ai_cache_creation_tokens': self.ai_cache_creation_tokens or 0,
+            'ai_cache_read_tokens': self.ai_cache_read_tokens or 0,
+            'ai_headroom_original_tokens': self.ai_headroom_original_tokens or 0,
+            'ai_headroom_saved_tokens': self.ai_headroom_saved_tokens or 0,
+            'ai_headroom_compression_ratio': self.ai_headroom_compression_ratio or 0.0,
+            'ai_models_used': json.loads(self.ai_models_used) if self.ai_models_used else [],
+            'is_draft': bool(self.is_draft),
+            'collaboration_rounds': self.collaboration_rounds or 0,
+            'collaboration_log': self.get_collaboration_log(),
+            'max_collaboration_rounds': self.max_collaboration_rounds if self.max_collaboration_rounds else 3,
+            'final_score': self.final_score,
         }
         if include_comments:
             data['comments'] = [c.to_dict() for c in (self.comments or [])]

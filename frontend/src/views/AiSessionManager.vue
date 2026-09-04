@@ -106,11 +106,25 @@
             <template v-else>
               <div class="msg-text" v-html="renderMarkdown(msg.content)"></div>
             </template>
+            <!-- 指标统计（仅 assistant 消息） -->
+            <div v-if="msg.role === 'assistant' && (msg.tokens_used > 0 || msg.elapsed > 0 || msg.cache_creation_tokens > 0 || msg.cache_read_tokens > 0 || msg.headroom_saved_tokens > 0 || msg.headroom_original_tokens > 0)" class="message-meta">
+              <span v-if="msg.elapsed > 0"><i class="fas fa-clock"></i> {{ msg.elapsed }}s</span>
+              <span v-if="msg.tokens_used > 0"><i class="fas fa-coins"></i> {{ msg.tokens_used }} = ↑{{ msg.prompt_tokens || 0 }} + ↓{{ msg.completion_tokens || 0 }}</span>
+              <span v-if="(msg.cache_creation_tokens > 0 || msg.cache_read_tokens > 0)" class="cache-info">
+                <i class="fas fa-bolt"></i> 缓存: 写入{{ msg.cache_creation_tokens || 0 }} / 命中{{ msg.cache_read_tokens || 0 }}
+              </span>
+              <span v-if="msg.headroom_saved_tokens > 0" class="headroom-info headroom-success">
+                <i class="fas fa-compress-alt"></i> Headroom: {{ msg.headroom_original_tokens }} → {{ msg.headroom_original_tokens - msg.headroom_saved_tokens }} tokens, 节省{{ msg.headroom_saved_tokens }} (压缩率{{ (msg.headroom_compression_ratio * 100).toFixed(1) }}%)
+              </span>
+              <span v-else-if="msg.headroom_original_tokens > 0" class="headroom-info headroom-none">
+                <i class="fas fa-compress-alt"></i> Headroom: 已分析，当前上下文无可压缩内容
+              </span>
+            </div>
           </div>
         </div>
-        <el-empty v-if="!detailLoading && detailMessages.length === 0" description="暂无消息" :image-size="60" />
-      </div>
-    </el-dialog>
+ <el-empty v-if="!detailLoading && detailMessages.length === 0" description="暂无消息" :image-size="60" />
+ </div>
+ </el-dialog>
   </div>
 </template>
 
@@ -405,6 +419,39 @@ onMounted(() => {
   margin: 0;
 }
 .msg-text :deep(p) { margin: 4px 0; }
+
+/* 指标统计 */
+.message-meta {
+ display: flex;
+ flex-wrap: wrap;
+ gap: 12px;
+ margin-top: 8px;
+ padding-top: 6px;
+ border-top: 1px dashed rgba(0, 0, 0, 0.08);
+ font-size: 11px;
+ color: #909399;
+}
+.message-meta span {
+ display: inline-flex;
+ align-items: center;
+ gap: 3px;
+}
+.message-meta i {
+ margin-right: 3px;
+ font-size: 10px;
+}
+.cache-info {
+ color: #67c23a;
+}
+.headroom-info {
+ color: #e6a23c;
+}
+.headroom-success {
+ color: #67c23a;
+}
+.headroom-none {
+ color: #c0c4cc;
+}
 .msg-text :deep(pre) {
   background: #1e1e2e;
   color: #cdd6f4;

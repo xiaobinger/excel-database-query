@@ -23,7 +23,8 @@ def list_templates():
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 20, type=int)
     keyword = request.args.get('keyword')
-    result = flow_service.get_templates(page=page, per_page=per_page, keyword=keyword)
+    is_enabled = request.args.get('is_enabled', type=bool)
+    result = flow_service.get_templates(page=page, per_page=per_page, keyword=keyword, is_enabled=is_enabled)
     return jsonify({'success': True, 'data': result})
 
 
@@ -73,6 +74,86 @@ def node_fields():
     """返回节点字段定义，供前端编排页面使用"""
     from app.services.pay_flow_service import NODE_FIELDS, OPERATORS
     return jsonify({'success': True, 'data': {'node_fields': NODE_FIELDS, 'operators': OPERATORS}})
+
+
+# ---------------------------------------------------------------------------
+# 通知模板管理
+# ---------------------------------------------------------------------------
+
+@pay_flow_bp.route('/notify-templates', methods=['GET'])
+@login_required
+def list_notify_templates():
+    from app.models.pay_flow import PayFlowNotifyTemplate
+    keyword = request.args.get('keyword')
+    query = PayFlowNotifyTemplate.query
+    if keyword:
+        query = query.filter(PayFlowNotifyTemplate.name.contains(keyword))
+    items = query.order_by(PayFlowNotifyTemplate.id.desc()).all()
+    return jsonify({'success': True, 'data': [t.to_dict() for t in items]})
+
+
+@pay_flow_bp.route('/notify-templates/<int:tpl_id>', methods=['GET'])
+@login_required
+def get_notify_template(tpl_id):
+    from app.models.pay_flow import PayFlowNotifyTemplate
+    t = PayFlowNotifyTemplate.query.get(tpl_id)
+    if not t:
+        return jsonify({'success': False, 'message': '通知模板不存在'}), 404
+    return jsonify({'success': True, 'data': t.to_dict()})
+
+
+@pay_flow_bp.route('/notify-templates', methods=['POST'])
+@login_required
+def create_notify_template():
+    from flask import g
+    from app.models.pay_flow import PayFlowNotifyTemplate
+    from app import db
+    data = request.get_json()
+    if not data or not data.get('name'):
+        return jsonify({'success': False, 'message': '请填写模板名称'}), 400
+    user_id = g.get('user_id') if hasattr(g, 'user_id') else None
+    t = PayFlowNotifyTemplate(
+        name=data['name'],
+        description=data.get('description', ''),
+        title=data.get('title', ''),
+        content=data.get('content', ''),
+        webhook_url=data.get('webhook_url', ''),
+        receivers=data.get('receivers', ''),
+        is_enabled=data.get('is_enabled', True),
+        created_by=user_id,
+    )
+    db.session.add(t)
+    db.session.commit()
+    return jsonify({'success': True, 'data': t.to_dict()})
+
+
+@pay_flow_bp.route('/notify-templates/<int:tpl_id>', methods=['PUT'])
+@login_required
+def update_notify_template(tpl_id):
+    from app.models.pay_flow import PayFlowNotifyTemplate
+    from app import db
+    data = request.get_json()
+    t = PayFlowNotifyTemplate.query.get(tpl_id)
+    if not t:
+        return jsonify({'success': False, 'message': '通知模板不存在'}), 404
+    for field in ('name', 'description', 'title', 'content', 'webhook_url', 'receivers', 'is_enabled'):
+        if field in data:
+            setattr(t, field, data[field])
+    db.session.commit()
+    return jsonify({'success': True, 'data': t.to_dict()})
+
+
+@pay_flow_bp.route('/notify-templates/<int:tpl_id>', methods=['DELETE'])
+@login_required
+def delete_notify_template(tpl_id):
+    from app.models.pay_flow import PayFlowNotifyTemplate
+    from app import db
+    t = PayFlowNotifyTemplate.query.get(tpl_id)
+    if not t:
+        return jsonify({'success': False, 'message': '通知模板不存在'}), 404
+    db.session.delete(t)
+    db.session.commit()
+    return jsonify({'success': True, 'message': '已删除'})
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +211,7 @@ def start_flow():
                 'batch_id': batch_id,
                 'execution_ids': execution_ids,
                 'total': len(execution_ids),
+                'summary_notify_enabled': bool(params.get('summary_notify_enabled')),
             }
         })
     except ValueError as e:
@@ -180,15 +262,65 @@ def retry_execution(execution_id):
     return jsonify({'success': True, 'message': '已重试'})
 
 
+@pay_flow_bp.route('/executions/<execution_id>', methods=['DELETE'])
+@login_required
+def delete_execution(execution_id):
+    ok = flow_service.delete_execution(execution_id)
+    if not ok:
+        return jsonify({'success': False, 'message': '删除失败，执行记录不存在或正在运行中'}), 400
+    return jsonify({'success': True, 'message': '已删除'})
+
+
+@pay_flow_bp.route('/executions/batch-delete', methods=['POST'])
+@login_required
+def batch_delete_executions():
+    data = request.get_json()
+    if not data or not isinstance(data.get('ids'), list):
+        return jsonify({'success': False, 'message': '请提供要删除的执行ID列表'}), 400
+    ids = data['ids']
+    deleted, skipped = flow_service.batch_delete_executions(ids)
+    if deleted == 0:
+        return jsonify({'success': False, 'message': '未删除任何记录，可能记录不存在或正在运行中', 'skipped': skipped}), 400
+    return jsonify({'success': True, 'message': f'已删除 {deleted} 条记录', 'deleted': deleted, 'skipped': skipped})
+
+
 # ---------------------------------------------------------------------------
 # 批次
 # ---------------------------------------------------------------------------
+
+@pay_flow_bp.route('/batches', methods=['GET'])
+@login_required
+def list_batches():
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 20, type=int)
+    keyword = request.args.get('keyword')
+    result = flow_service.get_batches(page=page, per_page=per_page, keyword=keyword)
+    return jsonify({'success': True, 'data': result})
+
 
 @pay_flow_bp.route('/batches/<batch_id>/summary', methods=['GET'])
 @login_required
 def batch_summary(batch_id):
     summary = flow_service.get_batch_summary(batch_id)
     return jsonify({'success': True, 'data': summary})
+
+
+@pay_flow_bp.route('/batches/<batch_id>/detail', methods=['GET'])
+@login_required
+def batch_detail(batch_id):
+    detail = flow_service.get_batch_detail(batch_id)
+    if not detail:
+        return jsonify({'success': False, 'message': '批次不存在或无执行记录'}), 404
+    return jsonify({'success': True, 'data': detail})
+
+
+@pay_flow_bp.route('/batches/<batch_id>/retry', methods=['POST'])
+@login_required
+def retry_batch(batch_id):
+    success, message = flow_service.retry_batch(batch_id)
+    if not success:
+        return jsonify({'success': False, 'message': message}), 400
+    return jsonify({'success': True, 'message': message})
 
 
 @pay_flow_bp.route('/batches/<batch_id>/executions', methods=['GET'])

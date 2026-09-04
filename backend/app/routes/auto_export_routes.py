@@ -262,6 +262,41 @@ def run_now(task_id):
         return jsonify({'success': False, 'message': f'触发失败: {str(e)}'}), 500
 
 
+@auto_export_bp.route('/<int:task_id>/resend-email', methods=['POST'])
+@login_required
+def resend_email(task_id):
+    """重新发送上次执行结果的邮件通知"""
+    current_user = get_current_user()
+    if current_user and not current_user.is_admin():
+        allowed_ids = current_user.get_auto_task_ids()
+        if task_id not in allowed_ids:
+            return jsonify({'success': False, 'message': '无权操作此任务'}), 403
+    task = AutoExportTask.query.get(task_id)
+    if not task:
+        return jsonify({'success': False, 'message': '任务不存在'}), 404
+    
+    if not task.notify_enabled:
+        return jsonify({'success': False, 'message': '该任务未启用邮件通知'}), 400
+    
+    if not task.last_task_id:
+        return jsonify({'success': False, 'message': '该任务没有执行记录，无法重发邮件'}), 400
+    
+    # 查找上次执行的任务记录
+    from app.models.query_task import QueryTask
+    query_task = QueryTask.query.filter_by(task_id=task.last_task_id).first()
+    if not query_task:
+        return jsonify({'success': False, 'message': '未找到上次执行记录'}), 404
+    
+    try:
+        from app.services.auto_export_scheduler import send_auto_export_notification
+        status = 'completed' if query_task.status == 'completed' else 'failed'
+        send_auto_export_notification(current_app._get_current_object(), task, query_task, status)
+        return jsonify({'success': True, 'message': '邮件重发成功'})
+    except Exception as e:
+        logger.error(f'重发邮件失败: {e}', exc_info=True)
+        return jsonify({'success': False, 'message': f'邮件重发失败: {str(e)}'}), 500
+
+
 @auto_export_bp.route('/param-options', methods=['GET'])
 def get_param_options():
     time_options = [

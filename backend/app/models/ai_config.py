@@ -23,6 +23,7 @@ class AiConfig(db.Model):
     description = db.Column(db.String(500), comment='描述')
     enable_thinking = db.Column(db.Boolean, default=False, comment='是否启用深度思考(展示思考过程)')
     enable_streaming = db.Column(db.Boolean, default=True, comment='是否启用流式输出(逐字打印)')
+    enable_headroom = db.Column(db.Boolean, default=False, comment='是否启用Headroom上下文压缩(节省token)')
     is_free = db.Column(db.Boolean, default=False, comment='是否免费模型')
     logo_url = db.Column(db.String(500), comment='自定义Logo URL(自动适配或用户填写,留空走内置品牌匹配)')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -88,6 +89,7 @@ class AiConfig(db.Model):
             'description': self.description,
             'enable_thinking': self.enable_thinking or False,
             'enable_streaming': self.enable_streaming if self.enable_streaming is not None else True,
+            'enable_headroom': self.enable_headroom or False,
             'is_free': self.is_free or False,
             'logo_url': self.logo_url or '',
             'has_api_key': bool(self.api_key),

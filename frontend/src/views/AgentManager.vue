@@ -21,6 +21,19 @@
       <el-table ref="tableRef" :data="agents" stripe v-loading="loading" style="width: 100%" @selection-change="handleSelectionChange">
         <el-table-column type="selection" width="50" align="center" />
         <el-table-column prop="name" label="名称" min-width="140" show-overflow-tooltip />
+        <el-table-column label="角色" width="90" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.agent_role === 'supervisor'" type="warning" size="small">监督者</el-tag>
+            <el-tag v-else-if="row.agent_role === 'executor'" type="primary" size="small">执行者</el-tag>
+            <el-tag v-else type="info" size="small">通用</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="授权确认" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.agent_role === 'supervisor' && row.can_confirm_execution" type="success" size="small">已授权</el-tag>
+            <span v-else style="color: #c0c4cc; font-size: 12px">-</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
         <el-table-column label="启用工具" width="120" align="center">
           <template #default="{ row }">
@@ -77,6 +90,81 @@
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="form.description" type="textarea" :rows="2" placeholder="描述此Agent的功能和用途" />
+        </el-form-item>
+        <el-form-item label="角色">
+          <div style="width: 100%">
+            <el-radio-group v-model="form.agent_role">
+              <el-radio-button label="general">通用</el-radio-button>
+              <el-radio-button label="executor">执行者</el-radio-button>
+              <el-radio-button label="supervisor">监督者</el-radio-button>
+            </el-radio-group>
+            <div style="font-size: 12px; color: #999; line-height: 1.4; margin-top: 4px;">
+              通用：独立处理工单/对话；执行者：多Agent协作中负责执行工单任务；监督者：多Agent协作中负责审查执行者的处理结果是否满足要求
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item v-if="form.agent_role === 'supervisor'" label="授权确认执行">
+          <div style="width: 100%">
+            <el-switch v-model="form.can_confirm_execution" />
+            <div style="font-size: 12px; color: #999; line-height: 1.4; margin-top: 4px;">
+              授权后，该Agent作为监督者时，工单进入「待确认」状态（如SQL数据变更、生产环境代付提现）可直接由监督者审查并确认/拒绝执行，无需提交者人工介入
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item v-if="form.agent_role === 'supervisor'" label="智能重试处理">
+          <div style="width: 100%">
+            <el-switch v-model="form.can_retry_processing" />
+            <div style="font-size: 12px; color: #999; line-height: 1.4; margin-top: 4px;">
+              授权后，当工单在AI处理过程中疑似中断（处理超过10分钟无进展），监督者将自动评估并决定是否重新触发AI处理，或放弃重试转为人工介入
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item v-if="form.agent_role === 'supervisor'" label="自动验收结束">
+          <div style="width: 100%">
+            <el-switch v-model="form.can_close_ticket" />
+            <div style="font-size: 12px; color: #999; line-height: 1.4; margin-top: 4px;">
+              授权后，当执行者完成任务（工单变为「已处理」），监督者将自动最终验收并决定是否结束工单，无需提交者手动确认结束
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item v-if="form.agent_role === 'supervisor'" label="最大监督轮次">
+          <div style="width: 100%">
+            <el-input-number v-model="form.max_supervisor_rounds" :min="1" :max="20" :step="1" step-strictly style="width: 180px" />
+            <div style="font-size: 12px; color: #999; line-height: 1.4; margin-top: 4px;">
+              执行者与监督者循环协作的最大轮数，超过后强制完结并注明未完全验收（默认3轮，建议3-5轮）
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item v-if="form.agent_role === 'executor'" label="对话复核">
+          <div style="width: 100%">
+            <el-switch v-model="form.enable_chat_review" />
+            <div style="font-size: 12px; color: #999; line-height: 1.4; margin-top: 4px;">
+              开启后，该执行者Agent在对话中的每次回复都会由监督者Agent复核（准确性、态度等），复核不通过将鞭答执行者重新生成。需要系统中存在活跃的监督者角色Agent
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item v-if="form.agent_role === 'executor' && form.enable_chat_review" label="默认监督者">
+          <div style="width: 100%">
+            <el-select v-model="form.default_supervisor_id" placeholder="不指定则使用全局默认监督者" clearable style="width: 100%">
+              <el-option
+                v-for="s in supervisorAgents"
+                :key="s.id"
+                :label="s.name"
+                :value="s.id"
+              />
+            </el-select>
+            <div style="font-size: 12px; color: #999; line-height: 1.4; margin-top: 4px;">
+              为该执行者指定默认的监督者Agent，不指定则使用系统中全局默认的监督者
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item v-if="form.agent_role === 'executor' && form.enable_chat_review" label="复核规则">
+          <div style="width: 100%">
+            <el-input v-model="form.review_rules" type="textarea" :rows="6" placeholder="自定义复核规则，监督者会按此规则评估执行者的回复质量。&#10;&#10;例如：&#10;1. 评估回复态度是否谦逊、专业，装逼飘了要鞭答改正&#10;2. 检查是否完整回答了用户问题，有无遗漏&#10;3. 验证数据是否与工具执行结果一致，严禁编造" />
+            <div style="font-size: 12px; color: #999; line-height: 1.4; margin-top: 4px;">
+              自定义复核规则，监督者会严格按照此规则评估执行者回复。不填写则使用系统默认规则（准确性+态度评估）
+            </div>
+          </div>
         </el-form-item>
         <el-form-item label="系统提示词" prop="system_prompt">
           <el-input v-model="form.system_prompt" type="textarea" :rows="12" placeholder="Agent的系统提示词，定义Agent的行为规则和能力范围" />
@@ -179,7 +267,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onActivated } from 'vue'
+import { ref, reactive, computed, onMounted, onActivated } from 'vue'
 import api from '../api'
 import { useAppStore } from '../stores'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -192,6 +280,7 @@ const isEdit = ref(false)
 const editId = ref(null)
 const formRef = ref(null)
 const agents = ref([])
+const supervisorAgents = computed(() => agents.value.filter(a => a.agent_role === 'supervisor' && a.is_active))
 const selectedRows = ref([])
 const tableRef = ref(null)
 const useAllTools = ref(true)
@@ -221,11 +310,25 @@ const toolOptions = [
   { name: 'list_lookup_options', label: '列出信息查询' },
   { name: 'request_lookup', label: '执行信息查询' },
   { name: 'fetch_url', label: '请求外部URL' },
+  { name: 'request_profit_share', label: '分润导出' },
+  { name: 'create_ticket', label: '创建工单' },
+  { name: 'list_pay_channels', label: '列出代付渠道' },
+  { name: 'request_pay_withdraw', label: '代付提现' },
+  { name: 'save_skill', label: '保存技能/规则' },
+  { name: 'send_email', label: '发送邮件' },
 ]
 
 const defaultForm = {
   name: '',
   description: '',
+  agent_role: 'general',
+  can_confirm_execution: false,
+  can_retry_processing: false,
+  can_close_ticket: false,
+  enable_chat_review: false,
+  review_rules: '',
+  max_supervisor_rounds: 3,
+  default_supervisor_id: null,
   system_prompt: '',
   enabled_tools: null,
   mcp_server_ids: [],
@@ -262,6 +365,14 @@ function openDialog(row) {
     Object.assign(form, {
       name: row.name,
       description: row.description || '',
+      agent_role: row.agent_role || 'general',
+      can_confirm_execution: !!row.can_confirm_execution,
+      can_retry_processing: !!row.can_retry_processing,
+      can_close_ticket: !!row.can_close_ticket,
+      enable_chat_review: !!row.enable_chat_review,
+      review_rules: row.review_rules || '',
+      max_supervisor_rounds: row.max_supervisor_rounds || 3,
+      default_supervisor_id: row.default_supervisor_id || null,
       system_prompt: row.system_prompt || '',
       enabled_tools: row.enabled_tools ? [...row.enabled_tools] : null,
       mcp_server_ids: row.mcp_server_ids ? [...row.mcp_server_ids] : [],

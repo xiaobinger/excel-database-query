@@ -9,6 +9,17 @@ logger = logging.getLogger(__name__)
 agent_bp = Blueprint('agent', __name__, url_prefix='/api/agents')
 
 
+def _parse_max_rounds(raw):
+    """解析并校验监督者最大轮次（合法范围1-20，非法/未提供返回None回退默认3）"""
+    if raw is None or raw == '':
+        return None
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return v if 1 <= v <= 20 else None
+
+
 def _validate_mcp_server_ids(ids):
     """校验授予的MCP Server ID列表，返回错误信息或None"""
     from app.models.mcp_server import McpServer
@@ -114,6 +125,14 @@ def create_agent():
         agent = AiAgent(
             name=data['name'],
             description=data.get('description', ''),
+            agent_role=data.get('agent_role', 'general'),
+            can_confirm_execution=bool(data.get('can_confirm_execution', False)),
+            can_retry_processing=bool(data.get('can_retry_processing', False)),
+            can_close_ticket=bool(data.get('can_close_ticket', False)),
+            enable_chat_review=bool(data.get('enable_chat_review', False)),
+            review_rules=data.get('review_rules', ''),
+            max_supervisor_rounds=_parse_max_rounds(data.get('max_supervisor_rounds')),
+            default_supervisor_id=data.get('default_supervisor_id'),
             system_prompt=data['system_prompt'],
             is_default=data.get('is_default', False),
             is_active=data.get('is_active', True),
@@ -160,6 +179,22 @@ def update_agent(agent_id):
             agent.name = data['name']
         if 'description' in data:
             agent.description = data['description']
+        if 'agent_role' in data:
+            agent.agent_role = data.get('agent_role', 'general')
+        if 'can_confirm_execution' in data:
+            agent.can_confirm_execution = bool(data.get('can_confirm_execution', False))
+        if 'can_retry_processing' in data:
+            agent.can_retry_processing = bool(data.get('can_retry_processing', False))
+        if 'can_close_ticket' in data:
+            agent.can_close_ticket = bool(data.get('can_close_ticket', False))
+        if 'enable_chat_review' in data:
+            agent.enable_chat_review = bool(data.get('enable_chat_review', False))
+        if 'review_rules' in data:
+            agent.review_rules = data.get('review_rules', '')
+        if 'max_supervisor_rounds' in data:
+            agent.max_supervisor_rounds = _parse_max_rounds(data.get('max_supervisor_rounds'))
+        if 'default_supervisor_id' in data:
+            agent.default_supervisor_id = data.get('default_supervisor_id')
         if 'system_prompt' in data:
             agent.system_prompt = data['system_prompt']
         if 'is_active' in data:

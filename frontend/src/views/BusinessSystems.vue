@@ -3,28 +3,37 @@
     <!-- 顶部操作栏 -->
     <div class="page-header">
       <div class="header-info">
-        <h2 class="page-title"><i class="fas fa-th-large"></i> 业务系统</h2>
+        <h2 class="page-title"><i class="fas fa-building"></i> 业务系统</h2>
         <p class="page-desc">快速访问各业务系统，支持单点登录</p>
       </div>
       <div class="header-actions">
-        <el-input
-          v-model="searchText"
-          placeholder="搜索系统..."
-          clearable
-          style="width: 220px"
-        >
-          <template #prefix><i class="fas fa-search"></i></template>
-        </el-input>
-        <el-button v-if="store.hasButtonPermission('business:delete')" type="danger" :disabled="selectedRows.length === 0" @click="handleBatchDelete">
-          <i class="fas fa-trash-alt"></i> 批量删除{{ selectedRows.length > 0 ? `(${selectedRows.length})` : '' }}
-        </el-button>
-        <el-button v-if="store.hasButtonPermission('business:delete')" type="danger" plain @click="handleDeleteAll">
-          <i class="fas fa-trash"></i> 删除全部
-        </el-button>
-        <el-button v-if="store.hasButtonPermission('business:create')" type="primary" @click="openDialog()">
-          <i class="fas fa-plus"></i> 添加系统
-        </el-button>
-      </div>
+      <el-input
+        v-model="searchText"
+        placeholder="搜索系统..."
+        clearable
+        style="width: 220px"
+      >
+        <template #prefix><i class="fas fa-search"></i></template>
+      </el-input>
+      <el-select v-model="ssoFilter" placeholder="SSO状态" clearable style="width: 120px">
+        <el-option label="已启用" value="enabled" />
+        <el-option label="未启用" value="disabled" />
+      </el-select>
+      <el-select v-model="activeFilter" placeholder="启用状态" clearable style="width: 120px">
+        <el-option label="启用" value="enabled" />
+        <el-option label="禁用" value="disabled" />
+      </el-select>
+      <el-button @click="resetBizFilters" style="margin-left: 8px">重置</el-button>
+      <el-button v-if="store.hasButtonPermission('business:delete')" type="danger" :disabled="selectedRows.length === 0" @click="handleBatchDelete">
+        <i class="fas fa-trash-alt"></i> 批量删除{{ selectedRows.length > 0 ? `(${selectedRows.length})` : '' }}
+      </el-button>
+      <el-button v-if="store.hasButtonPermission('business:delete')" type="danger" plain @click="handleDeleteAll">
+        <i class="fas fa-trash"></i> 删除全部
+      </el-button>
+      <el-button v-if="store.hasButtonPermission('business:create')" type="primary" @click="openDialog()">
+        <i class="fas fa-plus"></i> 添加系统
+      </el-button>
+    </div>
     </div>
 
     <!-- 分类标签 -->
@@ -253,8 +262,24 @@ const filteredSystems = computed(() => {
       (s.category || '').toLowerCase().includes(kw)
     )
   }
+  if (ssoFilter.value) {
+    list = list.filter(s => ssoFilter.value === 'enabled' ? s.sso_enabled : !s.sso_enabled)
+  }
+  if (activeFilter.value) {
+    list = list.filter(s => activeFilter.value === 'enabled' ? s.is_active : !s.is_active)
+  }
   return list
 })
+
+const ssoFilter = ref('')
+const activeFilter = ref('')
+
+function resetBizFilters() {
+  searchText.value = ''
+  ssoFilter.value = ''
+  activeFilter.value = ''
+  activeCategory.value = ''
+}
 
 const isAdmin = computed(() => {
   return store.user?.role?.is_admin || false

@@ -169,7 +169,7 @@ def _openai_plain_response(api_key, model_name, messages, ip, extras=None, sessi
         # 工具调用透传：外部agent依赖tool_calls驱动执行
         message['tool_calls'] = result['tool_calls']
         finish_reason = 'tool_calls'
-    return jsonify({
+    response = {
         'id': f'chatcmpl-{uuid.uuid4().hex[:24]}',
         'object': 'chat.completion',
         'created': int(time.time()),
@@ -181,7 +181,11 @@ def _openai_plain_response(api_key, model_name, messages, ip, extras=None, sessi
         }],
         'usage': result.get('usage', {}),
         'system_fingerprint': 'excel-query-openapi',
-    })
+    }
+    # Headroom 压缩统计（如果启用）
+    if result.get('headroom'):
+        response['headroom'] = result['headroom']
+    return jsonify(response)
 
 
 def _openai_stream_response(api_key, model_name, messages, ip, extras=None, session_id=None):
@@ -210,13 +214,17 @@ def _openai_stream_response(api_key, model_name, messages, ip, extras=None, sess
                         'created': created, 'model': model_name_out,
                         'choices': [{'index': 0, 'delta': {}, 'finish_reason': (meta or {}).get('finish_reason') or 'stop'}],
                     }, ensure_ascii=False) + '\n\n'
-                    if meta and meta.get('usage'):
-                        yield 'data: ' + json.dumps({
+                    if meta and (meta.get('usage') or meta.get('headroom')):
+                        final_chunk = {
                             'id': completion_id, 'object': 'chat.completion.chunk',
                             'created': created, 'model': model_name_out,
                             'choices': [],
-                            'usage': meta['usage'],
-                        }, ensure_ascii=False) + '\n\n'
+                        }
+                        if meta.get('usage'):
+                            final_chunk['usage'] = meta['usage']
+                        if meta.get('headroom'):
+                            final_chunk['headroom'] = meta['headroom']
+                        yield 'data: ' + json.dumps(final_chunk, ensure_ascii=False) + '\n\n'
                 yield 'data: [DONE]\n\n'
             elif event:
                 if event['type'] == 'tool_calls':
@@ -308,6 +316,8 @@ def custom_chat():
         'usage': result.get('usage', {}),
         'elapsed': result.get('elapsed', 0),
     }
+    if result.get('headroom'):
+        data_out['headroom'] = result['headroom']
     if result.get('tool_calls'):
         # 工具调用透传：外部agent依赖tool_calls驱动执行
         data_out['tool_calls'] = result['tool_calls']

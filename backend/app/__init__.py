@@ -54,17 +54,20 @@ def create_app(config_name='default'):
         from app.models.api_call_log import ApiCallLog
         from app.models.ticket import Ticket, TicketComment
         from app.models.pay_config import PayConfig
+        from app.models.dashboard import DashboardQuickQuery
         db.create_all()
         _auto_migrate(app)
         _migrate_ticket_comments_nullable(app)
         _migrate_api_call_log_columns(app)
         _migrate_api_call_log_session(app)
         _init_default_admin(app)
+        _migrate_dashboard_scripts_to_scripts(app)
         _init_connection_pool(app)
         _recover_stale_ai_tickets(app)
 
     _start_auto_export_scheduler(app)
     _start_pay_flow_scheduler(app)
+    _start_supervisor_monitor(app)
 
     @app.route('/api/health', methods=['GET'])
     def health_check():
@@ -134,7 +137,11 @@ def _setup_logging(app):
 
             # Clean up old log files only if rotation succeeded
             if rotated and self.backupCount > 0:
-                for s in self.getFilesToDelete(self.baseFilename):
+                try:
+                    stale_files = self.getFilesToDelete(_time.time())
+                except TypeError:
+                    stale_files = self.getFilesToDelete()
+                for s in stale_files:
                     try:
                         os.remove(s)
                     except (PermissionError, OSError):
@@ -192,6 +199,7 @@ def _register_blueprints(app):
     from app.routes.ticket_routes import ticket_bp
     from app.routes.pay_routes import pay_bp
     from app.routes.pay_flow_routes import pay_flow_bp
+    from app.routes.dashboard_routes import dashboard_bp
 
     app.register_blueprint(ssh_bp)
     app.register_blueprint(database_bp)
@@ -219,6 +227,7 @@ def _register_blueprints(app):
     app.register_blueprint(ticket_bp)
     app.register_blueprint(pay_bp)
     app.register_blueprint(pay_flow_bp)
+    app.register_blueprint(dashboard_bp)
 
 
 def _register_error_handlers(app):
@@ -316,6 +325,11 @@ def _start_auto_export_scheduler(app):
 def _start_pay_flow_scheduler(app):
     from app.services.pay_flow_scheduler import start_pay_flow_scheduler
     start_pay_flow_scheduler(app)
+
+
+def _start_supervisor_monitor(app):
+    from app.services.supervisor_monitor import start_supervisor_monitor
+    start_supervisor_monitor(app)
 
 
 def _auto_migrate(app):
@@ -541,7 +555,7 @@ def _init_default_admin(app):
             name='超级管理员',
             description='系统超级管理员，拥有所有权限',
             is_admin=True,
-            menu_permissions='["dashboard","databases","scripts","query","exports","export_exec","auto_export","history","users","roles","system","ai_chat","skills","business_systems","system_tasks"]',
+            menu_permissions='["dashboard","databases","scripts","query","exports","export_exec","auto_export","history","users","roles","system","ai_chat","skills","business_systems","system_tasks","data_dashboard"]',
             button_permissions='["all"]',
         )
         db.session.add(admin_role)
@@ -550,7 +564,7 @@ def _init_default_admin(app):
         # 确保管理员角色包含新菜单权限
         try:
             menus = json.loads(admin_role.menu_permissions) if admin_role.menu_permissions else []
-            new_menus = ['ai_chat', 'ai_sessions', 'skills', 'agent_manager', 'mcp_servers', 'open_api', 'cache_stats', 'business_systems', 'system_tasks', 'profit_share', 'tickets', 'system_map', 'pay_withdraw', 'pay_flow', 'pay_flow_executions']
+            new_menus = ['ai_chat', 'ai_sessions', 'skills', 'agent_manager', 'mcp_servers', 'open_api', 'cache_stats', 'business_systems', 'system_tasks', 'profit_share', 'tickets', 'system_map', 'pay_withdraw', 'pay_flow', 'pay_flow_executions', 'data_dashboard']
             updated = False
             for m in new_menus:
                 if m not in menus:
@@ -610,6 +624,51 @@ def _init_default_admin(app):
         print(f'  请登录后立即修改密码！')
         print(f'{"="*60}\n')
         app.logger.warning(f'Admin account created - username: admin, password: {admin_password}')
+
+
+def _migrate_dashboard_scripts_to_scripts(app):
+    """将旧 dashboard_scripts 表中未迁移的看板脚本同步到 scripts 表（type='dashboard'）
+
+    使用 raw SQL 读取旧表（DashboardScript 模型已删除，旧表不再由 ORM 维护），
+    一次性数据搬迁后旧表即废弃，看板脚本统一由脚本管理页维护。
+    """
+    try:
+        from sqlalchemy import inspect as sqla_inspect, text as sqla_text
+        inspector = sqla_inspect(db.engine)
+        if 'dashboard_scripts' not in inspector.get_table_names():
+            return
+        rows = db.session.execute(sqla_text(
+            'SELECT name, sql_text, chart_type, conn_name, merge_conn_names, description '
+            'FROM dashboard_scripts'
+        )).fetchall()
+        if not rows:
+            return
+        from app.models.script import Script
+        migrated = 0
+        for name, sql_text, chart_type, conn_name, merge_conn_names, description in rows:
+            if Script.query.filter_by(name=name, type='dashboard').first():
+                continue
+            script = Script(
+                name=name,
+                sql_text=sql_text or '',
+                description=description or '',
+                type='dashboard',
+                chart_type=chart_type or 'line',
+                conn_name=conn_name or '',
+                is_active=True,
+            )
+            script.merge_conn_names = merge_conn_names  # 旧表同为 JSON 文本，直接搬
+            db.session.add(script)
+            migrated += 1
+        if migrated:
+            db.session.commit()
+            app.logger.info(f'看板脚本迁移完成：{migrated} 条记录同步到 scripts 表')
+    except Exception as e:
+        app.logger.warning(f'看板脚本迁移失败（忽略）: {e}')
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
 
 
 def _init_connection_pool(app):

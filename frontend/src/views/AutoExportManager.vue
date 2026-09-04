@@ -84,6 +84,9 @@
             <el-button v-if="store.hasButtonPermission('auto_export:execute')" size="small" type="primary" text @click="handleRunNow(row)">
               <i class="fas fa-play"></i> 立即执行
             </el-button>
+            <el-button v-if="store.hasButtonPermission('auto_export:execute') && row.notify_enabled && row.last_task_id" size="small" type="success" text @click="handleResendEmail(row)">
+              <i class="fas fa-envelope"></i> 重发邮件
+            </el-button>
             <el-popconfirm
               v-if="store.hasButtonPermission('auto_export:delete')"
               title="确定要删除此任务吗？"
@@ -719,6 +722,22 @@ async function handleRunNow(row) {
     ElMessage.success('任务已触发执行')
     fetchList()
   } catch {
+  }
+}
+
+async function handleResendEmail(row) {
+  try {
+    await ElMessageBox.confirm(
+      `确定要重新发送任务「${row.name}」上次执行结果的邮件吗？`,
+      '重发邮件',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' }
+    )
+    await api.autoExport.resendEmail(row.id)
+    ElMessage.success('邮件重发成功')
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error(e?.response?.data?.message || '邮件重发失败')
+    }
   }
 }
 

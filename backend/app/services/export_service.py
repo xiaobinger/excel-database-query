@@ -145,6 +145,42 @@ class ExportService:
                     number_params = {p['name'] for p in params_config if p.get('type') == 'number'}
                     neq_params = {p['name']: p for p in params_config if p.get('enum_enabled') and p.get('enum_mode') == 'neq' and p.get('neq_value')}
                     allow_all_params = {p['name'] for p in params_config if p.get('allow_all')}
+
+                    # 0. 日期范围参数归一化：兼容三种传参形式
+                    #    a) date_start / date_end 已拆分（前端执行页、自动导出均为此形式）
+                    #    b) date 参数值为数组 ["2024-01-01", "2024-01-31"]
+                    #    c) date 参数值为字符串 "2024-01-01,2024-01-31"（AI工具调用等场景）
+                    date_range_params = {p['name']: p for p in params_config
+                                         if p.get('type') in ('date', 'datetime') and p.get('range')}
+                    for pname, pconf in date_range_params.items():
+                        start_key = f'{pname}_start'
+                        end_key = f'{pname}_end'
+                        # 已拆分形式：直接使用，仅清理原始date键
+                        if start_key in script_params or end_key in script_params:
+                            script_params.pop(pname, None)
+                            continue
+                        if pname not in script_params:
+                            continue
+                        raw = script_params[pname]
+                        if isinstance(raw, list):
+                            parts = [str(v).strip() for v in raw if str(v).strip()]
+                        else:
+                            parts = [v.strip() for v in str(raw).split(',') if v.strip()]
+                        if not parts:
+                            del script_params[pname]
+                            continue
+                        start_val = parts[0]
+                        end_val = parts[1] if len(parts) > 1 else parts[0]
+                        # datetime格式：为纯日期值补全时分秒（起始00:00:00，截止23:59:59）
+                        if pconf.get('date_format') == 'datetime':
+                            if len(start_val) <= 10:
+                                start_val = f'{start_val[:10]} 00:00:00'
+                            if len(end_val) <= 10:
+                                end_val = f'{end_val[:10]} 23:59:59'
+                        script_params[start_key] = start_val
+                        script_params[end_key] = end_val
+                        del script_params[pname]
+                        task.add_log(f'导出选项 [{script.name}] 日期范围参数 {pname} 已拆分为 {start_key}/{end_key}: {start_val} ~ {end_val}')
                     
                     # 如果 all_checked 中有参数，将其从 script_params 中移除（视为未提供，触发 allow_all 逻辑）
                     if all_checked:

@@ -5,6 +5,45 @@ from app import db
 from app.utils.helpers import beijing_isoformat
 
 
+class PayFlowNotifyTemplate(db.Model):
+    """代付流程通知模板
+
+    统一维护节点通知的标题、正文、Webhook、接收人等配置，
+    在流程编排时通过 ID 引用，避免每个节点重复配置。
+    """
+    __tablename__ = 'pay_flow_notify_templates'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    name = db.Column(db.String(100), nullable=False, comment='模板名称')
+    description = db.Column(db.String(500), comment='模板描述')
+
+    # 通知内容
+    title = db.Column(db.String(255), comment='通知标题')
+    content = db.Column(db.Text, comment='通知正文模板')
+    webhook_url = db.Column(db.String(500), comment='Webhook 地址')
+    receivers = db.Column(db.String(500), comment='接收人(逗号分隔)')
+
+    is_enabled = db.Column(db.Boolean, default=True, comment='是否启用')
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'), comment='创建用户ID')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, comment='创建时间')
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment='更新时间')
+
+    def to_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'name': self.name,
+            'description': self.description,
+            'title': self.title,
+            'content': self.content,
+            'webhook_url': self.webhook_url,
+            'receivers': self.receivers,
+            'is_enabled': self.is_enabled,
+            'created_by': self.created_by,
+            'created_at': beijing_isoformat(self.created_at),
+            'updated_at': beijing_isoformat(self.updated_at),
+        }
+
+
 class PayFlowTemplate(db.Model):
     """代付流程模板
 
@@ -78,6 +117,12 @@ class PayFlowExecution(db.Model):
     next_run_at = db.Column(db.DateTime, comment='下次推进时间(循环间隔用)')
     loop_node_id = db.Column(db.String(64), comment='当前循环中的节点ID')
     loop_count = db.Column(db.Integer, default=0, comment='当前节点已循环次数')
+    last_dispatched_at = db.Column(db.DateTime, comment='调度器最后分发时间(防重入)')
+
+    # 汇总通知配置（发起流程时设置，批次内所有实例共享）
+    summary_notify_enabled = db.Column(db.Boolean, default=False, comment='是否启用汇总通知')
+    summary_notify_template_id = db.Column(db.Integer, db.ForeignKey('pay_flow_notify_templates.id'), comment='汇总通知模板ID')
+    summary_notify_sent = db.Column(db.Boolean, default=False, comment='汇总通知是否已发送')
 
     # 上下文（累积字段，供流转条件判断）
     context = db.Column(db.Text, comment='执行上下文字段(JSON dict)')
@@ -126,6 +171,9 @@ class PayFlowExecution(db.Model):
             'next_run_at': beijing_isoformat(self.next_run_at),
             'loop_node_id': self.loop_node_id,
             'loop_count': self.loop_count,
+            'summary_notify_enabled': self.summary_notify_enabled,
+            'summary_notify_template_id': self.summary_notify_template_id,
+            'summary_notify_sent': self.summary_notify_sent,
             'context': self.get_context(),
             'result_message': self.result_message,
             'error_message': self.error_message,

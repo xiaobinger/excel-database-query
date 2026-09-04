@@ -34,10 +34,15 @@ ALL_MENU_ITEMS = [
     {"path": "/mcp-servers", "title": "MCP 服务", "icon": "fa-plug", "permission": "mcp_servers"},
     {"path": "/open-api", "title": "开放API", "icon": "fa-key", "permission": "open_api"},
     {"path": "/cache-stats", "title": "缓存统计", "icon": "fa-bolt", "permission": "cache_stats"},
-    {"path": "/business", "title": "业务系统", "icon": "fa-th-large", "permission": "business_systems"},
+    {"path": "/business", "title": "业务系统", "icon": "fa-building", "permission": "business_systems"},
     {"path": "/system-tasks", "title": "系统任务", "icon": "fa-cogs", "permission": "system_tasks"},
-    {"path": "/tickets", "title": "工单管理", "icon": "fa-ticket", "permission": "tickets"},
+    {"path": "/tickets", "title": "工单管理", "icon": "fa-tasks", "permission": "tickets"},
+    {"path": "/pay-withdraw", "title": "代付提现", "icon": "fa-wallet", "permission": "pay_withdraw"},
+    {"path": "/pay-flow", "title": "代付流程编排", "icon": "fa-route", "permission": "pay_flow"},
+    {"path": "/pay-flow-executions", "title": "代付流程执行记录", "icon": "fa-list-check", "permission": "pay_flow_executions"},
+    {"path": "/ticket-analytics", "title": "工单统计", "icon": "fa-chart-pie", "permission": "ticket_analytics"},
     {"path": "/system-map", "title": "系统地图", "icon": "fa-sitemap", "permission": "system_map"},
+    {"path": "/data-dashboard", "title": "运营数据看板", "icon": "fa-chart-line", "permission": "data_dashboard"},
 ]
 
 # 默认菜单配置
@@ -46,6 +51,7 @@ DEFAULT_MENU_CONFIG = [
     {"type": "group", "title": "数据管理", "icon": "fa-database", "visible": True, "children": [
         {"path": "/databases", "title": "数据库管理", "icon": "fa-database", "permission": "databases", "visible": True},
         {"path": "/scripts", "title": "脚本管理", "icon": "fa-clipboard-list", "permission": "scripts", "visible": True},
+        {"path": "/data-dashboard", "title": "运营数据看板", "icon": "fa-chart-line", "permission": "data_dashboard", "visible": True},
     ]},
     {"type": "group", "title": "导出中心", "icon": "fa-download", "visible": True, "children": [
         {"path": "/query", "title": "查询执行", "icon": "fa-play-circle", "permission": "query", "visible": True},
@@ -67,9 +73,9 @@ DEFAULT_MENU_CONFIG = [
         {"path": "/mcp-servers", "title": "MCP 服务", "icon": "fa-plug", "permission": "mcp_servers", "visible": True},
         {"path": "/open-api", "title": "开放API", "icon": "fa-key", "permission": "open_api", "visible": True},
         {"path": "/cache-stats", "title": "缓存统计", "icon": "fa-bolt", "permission": "cache_stats", "visible": True},
-        {"path": "/business", "title": "业务系统", "icon": "fa-th-large", "permission": "business_systems", "visible": True},
+        {"path": "/business", "title": "业务系统", "icon": "fa-building", "permission": "business_systems", "visible": True},
         {"path": "/system-tasks", "title": "系统任务", "icon": "fa-cogs", "permission": "system_tasks", "visible": True},
-        {"path": "/tickets", "title": "工单管理", "icon": "fa-ticket", "permission": "tickets", "visible": True},
+        {"path": "/tickets", "title": "工单管理", "icon": "fa-tasks", "permission": "tickets", "visible": True},
         {"path": "/system-map", "title": "系统地图", "icon": "fa-sitemap", "permission": "system_map", "visible": True},
     ]},
 ]

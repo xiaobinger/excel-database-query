@@ -122,6 +122,7 @@ Authorization: Bearer sk-xxxxxxxx</pre>
             <el-col :span="4"><div class="stat-box"><div class="stat-num">{{ stats.success_rate ?? 0 }}%</div><div class="stat-label">成功率</div></div></el-col>
             <el-col :span="4"><div class="stat-box"><div class="stat-num">{{ stats.total_tokens || 0 }}</div><div class="stat-label">总Token</div></div></el-col>
             <el-col :span="4"><div class="stat-box"><div class="stat-num">{{ (stats.cache_read_tokens || 0) + (stats.cache_creation_tokens || 0) }}</div><div class="stat-label">缓存Token</div></div></el-col>
+            <el-col :span="4"><div class="stat-box"><div class="stat-num">{{ stats.headroom_saved_tokens || 0 }}</div><div class="stat-label">Headroom节省Token</div></div></el-col>
             <el-col :span="4"><div class="stat-box"><div class="stat-num">{{ stats.avg_elapsed || 0 }}s</div><div class="stat-label">平均耗时</div></div></el-col>
           </el-row>
 
@@ -393,6 +394,14 @@ Authorization: Bearer sk-xxxxxxxx</pre>
           <el-descriptions-item label="模型">{{ logDetail.model_requested }} → {{ logDetail.model_used }}</el-descriptions-item>
           <el-descriptions-item label="Token">{{ logDetail.tokens_used }}（↑{{ logDetail.prompt_tokens }} / ↓{{ logDetail.completion_tokens }}）</el-descriptions-item>
           <el-descriptions-item label="缓存Token">写入 {{ logDetail.cache_creation_tokens }} / 命中 {{ logDetail.cache_read_tokens }}</el-descriptions-item>
+          <el-descriptions-item label="Headroom压缩">
+            <template v-if="logDetail.headroom_original_tokens > 0">
+              {{ logDetail.headroom_original_tokens }} → {{ logDetail.headroom_original_tokens - logDetail.headroom_saved_tokens }} tokens
+              <span v-if="logDetail.headroom_saved_tokens > 0" style="color: #67c23a">（节省{{ logDetail.headroom_saved_tokens }}，压缩率{{ (logDetail.headroom_compression_ratio * 100).toFixed(1) }}%）</span>
+              <span v-else style="color: #909399">（无可压缩内容）</span>
+            </template>
+            <template v-else>未启用</template>
+          </el-descriptions-item>
           <el-descriptions-item label="耗时">{{ logDetail.elapsed }}s</el-descriptions-item>
           <el-descriptions-item label="调用方IP">{{ logDetail.caller_ip }}</el-descriptions-item>
         </el-descriptions>

@@ -300,16 +300,49 @@ class SystemTaskService:
                     sql_text = sql_text.replace(placeholder, val_str)
 
         # 过滤空值参数（SQLAlchemy bind parameter不允许None值）
+        # 并识别列表参数：将列表/逗号分隔字符串值保留为 list，供后续展开 IN 子句
         filtered_params = {}
+        list_params = {}  # key -> list[str]  纯标量参数存 filtered_params，列表存 list_params
         if params_values:
             for k, v in params_values.items():
-                if v is not None and v != '' and v != []:
+                if v is None or v == '':
+                    continue
+                # 列表值（前端 list 类型参数可能直接传 list，或 text/textarea 传逗号分隔字符串）
+                if isinstance(v, list):
+                    list_params[k] = [str(item).strip() for item in v if str(item).strip()]
+                elif isinstance(v, str) and re.search(r'[,，]\s*', v):
+                    parts = [p.strip() for p in re.split(r'[,，]', v) if p.strip()]
+                    if len(parts) >= 2:
+                        list_params[k] = parts
+                    else:
+                        filtered_params[k] = v
+                else:
                     filtered_params[k] = v
 
         # Split into multiple statements
         statements = SystemTaskService._split_sql_statements(sql_text)
         if not statements:
             raise ValueError('没有可执行的SQL语句')
+
+        # 展开列表参数：将 IN (:param) 中的列表值展开为 IN (:param_0, :param_1, ...)
+        if list_params:
+            expanded = []
+            for stmt in statements:
+                for key, values in list_params.items():
+                    # 匹配 IN (:key) 模式（不区分大小写，允许空格）
+                    pattern = rf'\bIN\s*\(\s*:{key}\s*\)'
+                    if re.search(pattern, stmt, re.IGNORECASE):
+                        placeholders = ', '.join(f':{key}_{i}' for i in range(len(values)))
+                        stmt = re.sub(pattern, f'IN ({placeholders})', stmt, flags=re.IGNORECASE)
+                        for i, val in enumerate(values):
+                            filtered_params[f'{key}_{i}'] = val
+                        execution.add_log(f'列表参数 [{key}] 展开为 {len(values)} 个值')
+                    else:
+                        # IN 子句以外的地方也可能用了 :key（极少见），直接展平为第一个值作为兜底
+                        if f':{key}' in stmt and not re.search(rf':{key}_\d+', stmt):
+                            filtered_params[key] = values[0]
+                expanded.append(stmt)
+            statements = expanded
 
         execution.progress = 20
         execution.add_log(f'SQL准备完成，共 {len(statements)} 条语句')

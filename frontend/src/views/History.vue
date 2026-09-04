@@ -5,12 +5,6 @@
         <div class="card-header">
           <span><i class="fas fa-history"></i> 执行历史</span>
           <div class="header-actions">
-            <el-button v-hasPermi="['history:delete']" type="danger" size="small" :disabled="selectedRows.length === 0" @click="handleBatchDelete">
-              <i class="fas fa-trash-alt"></i> 批量删除{{ selectedRows.length > 0 ? `(${selectedRows.length})` : '' }}
-            </el-button>
-            <el-button v-hasPermi="['history:delete']" type="danger" size="small" plain @click="handleDeleteAll">
-              <i class="fas fa-trash"></i> 删除全部
-            </el-button>
             <el-select
               v-model="statusFilter"
               placeholder="状态筛选"
@@ -25,6 +19,43 @@
               <el-option label="已取消" value="cancelled" />
               <el-option label="手动终止" value="manual_cancelled" />
             </el-select>
+            <el-select
+              v-model="typeFilter"
+              placeholder="任务类型"
+              clearable
+              style="width: 120px"
+              @change="fetchTasks"
+            >
+              <el-option label="查询" value="query" />
+              <el-option label="导出" value="export" />
+            </el-select>
+            <el-input
+              v-model="keywordFilter"
+              placeholder="搜索脚本名称/任务ID"
+              clearable
+              style="width: 200px"
+              @keyup.enter="fetchTasks"
+              @clear="fetchTasks"
+            >
+              <template #prefix><i class="fas fa-search"></i></template>
+            </el-input>
+            <el-date-picker
+              v-model="dateFilter"
+              type="daterange"
+              range-separator="至"
+              start-placeholder="开始日期"
+              end-placeholder="结束日期"
+              value-format="YYYY-MM-DD"
+              style="width: 280px"
+              @change="fetchTasks"
+            />
+            <el-button @click="resetHistoryFilters" style="margin-left: 8px">重置</el-button>
+            <el-button v-hasPermi="['history:delete']" type="danger" size="small" :disabled="selectedRows.length === 0" @click="handleBatchDelete">
+              <i class="fas fa-trash-alt"></i> 批量删除{{ selectedRows.length > 0 ? `(${selectedRows.length})` : '' }}
+            </el-button>
+            <el-button v-hasPermi="['history:delete']" type="danger" size="small" plain @click="handleDeleteAll">
+              <i class="fas fa-trash"></i> 删除全部
+            </el-button>
             <el-button type="primary" @click="fetchTasks" style="margin-left: 12px">
               <i class="fas fa-sync-alt"></i> 刷新
             </el-button>
@@ -302,6 +333,17 @@ const total = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(20)
 const statusFilter = ref('')
+const typeFilter = ref('')
+const keywordFilter = ref('')
+const dateFilter = ref(null)
+
+function resetHistoryFilters() {
+  statusFilter.value = ''
+  typeFilter.value = ''
+  keywordFilter.value = ''
+  dateFilter.value = null
+  fetchTasks()
+}
 const detailVisible = ref(false)
 const detailData = ref({})
 const detailLogs = ref([])
@@ -368,6 +410,16 @@ async function fetchTasks() {
     }
     if (statusFilter.value) {
       params.status = statusFilter.value
+    }
+    if (typeFilter.value) {
+      params.type = typeFilter.value
+    }
+    if (keywordFilter.value.trim()) {
+      params.keyword = keywordFilter.value.trim()
+    }
+    if (dateFilter.value && dateFilter.value.length === 2) {
+      params.start_date = dateFilter.value[0]
+      params.end_date = dateFilter.value[1]
     }
     const res = await api.query.tasks(params)
     const data = res.data || res || {}

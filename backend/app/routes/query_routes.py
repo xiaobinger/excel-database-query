@@ -244,13 +244,47 @@ def get_tasks():
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 20, type=int)
     status_filter = request.args.get('status')
-
     task_type = request.args.get('type')
+    keyword = request.args.get('keyword', '').strip()
+
+    # 时间范围筛选
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+
     query = QueryTask.query
     if task_type:
         query = query.filter_by(type=task_type)
     if status_filter:
         query = query.filter_by(status=status_filter)
+    if keyword:
+        # 按脚本名称或任务ID搜索
+        from app.models.script import Script
+        script_ids = Script.query.filter(Script.name.contains(keyword)).with_entities(Script.id).all()
+        script_id_list = [s[0] for s in script_ids]
+        if script_id_list:
+            query = query.filter(db.or_(
+                QueryTask.script_id.in_(script_id_list),
+                QueryTask.task_id.contains(keyword)
+            ))
+        else:
+            query = query.filter(QueryTask.task_id.contains(keyword))
+
+    if start_date:
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(start_date, '%Y-%m-%d')
+            query = query.filter(QueryTask.created_at >= dt)
+        except (ValueError, TypeError):
+            pass
+
+    if end_date:
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(end_date, '%Y-%m-%d')
+            dt = dt.replace(hour=23, minute=59, second=59)
+            query = query.filter(QueryTask.created_at <= dt)
+        except (ValueError, TypeError):
+            pass
 
     current_user = get_current_user()
     if current_user and not current_user.is_admin():
@@ -262,41 +296,47 @@ def get_tasks():
 
     tasks = []
     for task in pagination.items:
-        task_dict = task.to_dict()
-        # 识别分润导出任务（params_values 中带 task_type=profit_share 标识，
-        # 或历史数据：type=export 且无脚本关联 且参数含 org_no）
-        params = task.get_params_values() or {}
-        is_profit_share = params.get('task_type') == 'profit_share' or (
-            task.type == 'export'
-            and not task.get_script_ids_json()
-            and not task.script_id
-            and 'org_no' in params
-        )
-        task_dict['is_profit_share'] = is_profit_share
-        script = Script.query.get(task.script_id) if task.script_id else None
-        if is_profit_share:
-            task_dict['script_name'] = f'分润导出({params.get("org_no", "")})'
-        else:
-            task_dict['script_name'] = script.name if script else '未知'
-        task_dict['script_tag'] = script.tag if script else ''
-        if task.type == 'export' and task.get_script_ids_json() and not is_profit_share:
-            s_names = []
-            s_tags = []
-            for sid in task.get_script_ids_json():
-                s = Script.query.get(sid)
-                if s:
-                    s_names.append(s.name)
-                    if s.tag:
-                        s_tags.append(s.tag)
-            task_dict['script_names'] = s_names
-            task_dict['script_tags'] = s_tags
-        db_names = []
-        for db_id in task.get_database_ids():
-            conn = DatabaseConnection.query.get(db_id)
-            if conn:
-                db_names.append(conn.name)
-        task_dict['database_names'] = db_names
-        tasks.append(task_dict)
+        try:
+            task_dict = task.to_dict()
+            # 识别分润导出任务（params_values 中带 task_type=profit_share 标识，
+            # 或历史数据：type=export 且无脚本关联 且参数含 org_no）
+            params = task.get_params_values() or {}
+            is_profit_share = params.get('task_type') == 'profit_share' or (
+                task.type == 'export'
+                and not task.get_script_ids_json()
+                and not task.script_id
+                and 'org_no' in params
+            )
+            task_dict['is_profit_share'] = is_profit_share
+            from app.models.script import Script
+            script = Script.query.get(task.script_id) if task.script_id else None
+            if is_profit_share:
+                task_dict['script_name'] = f'分润导出({params.get("org_no", "")})'
+            else:
+                task_dict['script_name'] = script.name if script else '未知'
+            task_dict['script_tag'] = script.tag if script else ''
+            if task.type == 'export' and task.get_script_ids_json() and not is_profit_share:
+                s_names = []
+                s_tags = []
+                for sid in task.get_script_ids_json():
+                    s = Script.query.get(sid)
+                    if s:
+                        s_names.append(s.name)
+                        if s.tag:
+                            s_tags.append(s.tag)
+                task_dict['script_names'] = s_names
+                task_dict['script_tags'] = s_tags
+            db_names = []
+            for db_id in task.get_database_ids():
+                conn = DatabaseConnection.query.get(db_id)
+                if conn:
+                    db_names.append(conn.name)
+            task_dict['database_names'] = db_names
+            tasks.append(task_dict)
+        except Exception as e:
+            current_app.logger.error(f'处理任务 {task.task_id} (ID={task.id}) 时出错: {e}', exc_info=True)
+            # 即使单个任务处理失败，也返回一个基础信息，避免整个列表报错
+            tasks.append(task.to_dict())
 
     return jsonify({
         'success': True,

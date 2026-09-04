@@ -71,6 +71,8 @@ def create_script():
             type=data.get('type', 'query'),
             is_template=data.get('is_template', False),
             sql_template=data.get('sql_template', ''),
+            chart_type=data.get('chart_type', 'line'),
+            conn_name=data.get('conn_name', ''),
         )
 
         if 'database_ids' in data:
@@ -81,6 +83,8 @@ def create_script():
             script.set_params_config(data['params_config'])
         if 'template_config' in data:
             script.set_template_config(data['template_config'])
+        if 'merge_conn_names' in data:
+            script.set_merge_conn_names(data['merge_conn_names'])
 
         db.session.add(script)
         db.session.flush()  # 获取script.id
@@ -123,7 +127,8 @@ def update_script(script_id):
         simple_fields = ['name', 'description', 'sql_text', 'tag', 'result_sheet_name',
                          'batch_size', 'timeout', 'query_mode', 'param_column',
                          'database_connection_id', 'merge_strategy', 'new_sheet', 'is_active',
-                         'primary_key', 'type', 'is_template', 'sql_template']
+                         'primary_key', 'type', 'is_template', 'sql_template',
+                         'chart_type', 'conn_name']
         for key in simple_fields:
             if key in data:
                 setattr(script, key, data[key])
@@ -136,6 +141,8 @@ def update_script(script_id):
             script.set_params_config(data['params_config'])
         if 'template_config' in data:
             script.set_template_config(data['template_config'])
+        if 'merge_conn_names' in data:
+            script.set_merge_conn_names(data['merge_conn_names'])
 
         db.session.commit()
 

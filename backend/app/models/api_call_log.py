@@ -23,6 +23,9 @@ class ApiCallLog(db.Model):
     completion_tokens = db.Column(db.Integer, default=0, comment='输出token数')
     cache_creation_tokens = db.Column(db.Integer, default=0, comment='缓存写入token数')
     cache_read_tokens = db.Column(db.Integer, default=0, comment='缓存命中token数')
+    headroom_original_tokens = db.Column(db.Integer, default=0, comment='Headroom压缩前token数')
+    headroom_saved_tokens = db.Column(db.Integer, default=0, comment='Headroom节省token数')
+    headroom_compression_ratio = db.Column(db.Float, default=0, comment='Headroom压缩率(0-1)')
     elapsed = db.Column(db.Float, default=0, comment='响应耗时(秒)')
     is_success = db.Column(db.Boolean, default=True, comment='是否成功')
     error_msg = db.Column(db.Text, comment='失败原因')
@@ -43,6 +46,9 @@ class ApiCallLog(db.Model):
             'completion_tokens': self.completion_tokens,
             'cache_creation_tokens': self.cache_creation_tokens or 0,
             'cache_read_tokens': self.cache_read_tokens or 0,
+            'headroom_original_tokens': self.headroom_original_tokens or 0,
+            'headroom_saved_tokens': self.headroom_saved_tokens or 0,
+            'headroom_compression_ratio': self.headroom_compression_ratio or 0,
             'elapsed': self.elapsed,
             'is_success': self.is_success,
             'error_msg': self.error_msg,

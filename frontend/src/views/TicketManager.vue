@@ -3,14 +3,33 @@
     <el-card shadow="hover">
       <template #header>
         <div class="card-header">
-          <span><i class="fas fa-ticket"></i> 工单管理</span>
+          <span><i class="fas fa-tasks"></i> 工单管理</span>
           <div class="header-actions">
             <el-select v-model="statusFilter" placeholder="状态筛选" clearable style="width: 130px" @change="fetchTickets">
               <el-option v-for="(label, key) in statusLabels" :key="key" :label="label" :value="key" />
             </el-select>
+            <el-select v-model="assigneeFilter" placeholder="指派人" clearable style="width: 150px" @change="fetchTickets">
+              <el-option label="未指派" :value="''" />
+              <el-option v-for="u in assignees" :key="u.id" :label="u.name || u.username" :value="u.id" />
+            </el-select>
+            <el-select v-model="businessSystemFilter" placeholder="涉及系统" clearable style="width: 150px" @change="fetchTickets">
+              <el-option label="全部系统" :value="''" />
+              <el-option v-for="sys in businessSystems" :key="sys.id" :label="sys.name" :value="sys.id" />
+            </el-select>
+            <el-date-picker
+              v-model="dateFilter"
+              type="daterange"
+              range-separator="至"
+              start-placeholder="开始日期"
+              end-placeholder="结束日期"
+              value-format="YYYY-MM-DD"
+              style="width: 280px"
+              @change="fetchTickets"
+            />
             <el-input v-model="keyword" placeholder="搜索工单编号/标题" clearable style="width: 220px" @keyup.enter="fetchTickets" @clear="fetchTickets">
               <template #prefix><i class="fas fa-search"></i></template>
             </el-input>
+            <el-button @click="resetTicketFilters" style="margin-left: 8px">重置</el-button>
             <el-button type="primary" v-hasPermi="['ticket:create']" @click="openCreateDialog">
               <i class="fas fa-plus"></i> 提交工单
             </el-button>
@@ -54,6 +73,10 @@
             <el-tag v-else-if="row.assignee_type === 'ai' && row.status === 'pending_confirmation'" type="warning" effect="dark" size="small">
               <i class="fas fa-exclamation-triangle"></i> 待确认
             </el-tag>
+            <!-- 草稿：可点击进入编辑（仅创建人可见） -->
+            <el-tag v-else-if="row.status === 'draft'" type="info" effect="plain" size="small" style="cursor: pointer" @click.stop="editDraftFromList(row)">
+              <i class="fas fa-edit"></i> 草稿
+            </el-tag>
             <el-tag v-else :type="statusTagType(row.status)" size="small">{{ statusLabels[row.status] || row.status }}</el-tag>
           </template>
         </el-table-column>
@@ -89,62 +112,102 @@
     </el-card>
 
     <!-- 创建工单对话框 -->
-    <el-dialog v-model="createVisible" title="提交工单" width="780px" destroy-on-close top="5vh">
-      <el-form ref="createFormRef" :model="createForm" :rules="createRules" label-width="90px">
-        <el-form-item label="标题" prop="title">
-          <el-input v-model="createForm.title" placeholder="请输入工单标题" maxlength="100" show-word-limit />
-        </el-form-item>
-        <el-form-item label="涉及系统" prop="business_system_id">
-          <el-select v-model="createForm.business_system_id" placeholder="选择涉及的业务系统（可选）" clearable filterable style="width: 100%">
-            <el-option v-for="s in businessSystems" :key="s.id" :label="s.name" :value="s.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="指派类型" prop="assignee_type">
-          <el-radio-group v-model="createForm.assignee_type">
-            <el-radio-button label="user">指派给具体人</el-radio-button>
-            <el-radio-button label="ai">指派给AI</el-radio-button>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item v-if="createForm.assignee_type === 'user'" label="指派给" prop="assignee_id">
-          <el-select v-model="createForm.assignee_id" placeholder="选择处理人" filterable style="width: 100%">
-            <el-option v-for="u in assignees" :key="u.id" :label="u.display_name" :value="u.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-else label="AI Agent" prop="assignee_agent_id">
-          <el-select v-if="canSwitchAgent" v-model="createForm.assignee_agent_id" placeholder="选择AI Agent（留空使用默认）" clearable filterable style="width: 100%">
-            <el-option v-for="a in aiAgents" :key="a.id" :label="a.name + (a.is_default ? '（默认）' : '')" :value="a.id" />
-          </el-select>
-          <div v-else class="form-tip">
-            <i class="fas fa-info-circle"></i> 将指派给默认AI Agent自动处理（无切换Agent权限）
-          </div>
-          <div v-if="canSwitchAgent" class="form-tip"><i class="fas fa-info-circle"></i> 指派给AI后，AI将自动处理该工单。处理失败会转为"待指派"状态。</div>
-        </el-form-item>
-        <el-form-item label="工单内容" prop="content">
-          <MarkdownEditor v-model="createForm.content" :upload-fn="uploadAttachment" placeholder="详细描述工单内容，支持图片、视频和 Markdown 格式" :height="280" />
-        </el-form-item>
-        <el-form-item label="工单附件">
-          <el-upload
-            :file-list="attachmentFileList"
-            :auto-upload="true"
-            :http-request="customAttUpload"
-            :on-remove="handleAttRemove"
-            :show-file-list="true"
-            multiple
-          >
-            <el-button type="primary" plain>
-              <i class="fas fa-paperclip"></i> 上传附件
-            </el-button>
-            <template #tip>
-              <div class="el-upload__tip">支持 Excel/CSV/文本/压缩包/文档/图片，单个不超过50MB（如查询任务所需的Excel数据文件）</div>
+    <el-dialog v-model="createVisible" :title="editingDraftId ? '编辑草稿' : '提交工单'" width="800px" destroy-on-close top="5vh" :before-close="handleCreateDialogClose" class="ticket-create-dialog">
+      <el-form ref="createFormRef" :model="createForm" :rules="createRules" label-width="96px">
+        <!-- 基本信息 -->
+        <div class="form-section">
+          <div class="form-section-title"><i class="fas fa-edit"></i> 基本信息</div>
+          <el-form-item label="标题" prop="title">
+            <el-input v-model="createForm.title" placeholder="请输入工单标题" maxlength="100" show-word-limit />
+          </el-form-item>
+          <el-form-item label="涉及系统">
+            <el-select v-model="createForm.business_system_id" placeholder="选择涉及的业务系统（可选）" clearable filterable style="width: 100%">
+              <el-option v-for="s in businessSystems" :key="s.id" :label="s.name" :value="s.id" />
+            </el-select>
+          </el-form-item>
+        </div>
+
+        <!-- 指派设置 -->
+        <div class="form-section">
+          <div class="form-section-title"><i class="fas fa-user-tag"></i> 指派设置</div>
+          <el-form-item label="指派方式">
+            <el-radio-group v-model="createForm.assignee_type">
+              <el-radio-button label="user"><i class="fas fa-user"></i> 指派给具体人</el-radio-button>
+              <el-radio-button label="ai"><i class="fas fa-robot"></i> 指派给AI</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item v-if="createForm.assignee_type === 'user'" label="处理人" prop="assignee_id">
+            <el-select v-model="createForm.assignee_id" placeholder="选择处理人" filterable style="width: 100%">
+              <el-option v-for="u in assignees" :key="u.id" :label="u.display_name" :value="u.id" />
+            </el-select>
+          </el-form-item>
+          <template v-else>
+            <!-- 有切换权限：显示Agent选择 -->
+            <template v-if="canSwitchAgent">
+              <el-form-item label="执行者Agent">
+                <el-select v-model="createForm.assignee_agent_id" placeholder="选择执行者Agent（留空使用默认）" clearable filterable style="width: 100%">
+                  <el-option v-for="a in executorAgentOptions" :key="a.id" :label="a.name + (a.is_default ? '（默认）' : '')" :value="a.id" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="监督者Agent">
+                <el-select v-model="createForm.supervisor_agent_id" placeholder="选择监督者Agent（可选，监督执行结果）" clearable filterable style="width: 100%">
+                  <el-option v-for="a in supervisorAgentOptions" :key="a.id" :label="a.name + (a.can_confirm_execution ? '（可自动确认）' : '')" :value="a.id" />
+                </el-select>
+                <div class="form-tip" v-if="createForm.supervisor_agent_id"><i class="fas fa-users"></i> 已启用多Agent协作：执行者执行任务，监督者审查结果直到验收通过</div>
+              </el-form-item>
             </template>
-          </el-upload>
-        </el-form-item>
+            <!-- 无切换权限：优雅的默认指派卡片 -->
+            <div v-else class="ai-assign-card">
+              <div class="ai-assign-card-icon"><i class="fas fa-robot"></i></div>
+              <div class="ai-assign-card-body">
+                <div class="ai-assign-card-title">AI 自动处理</div>
+                <div class="ai-assign-card-desc">系统将使用默认的执行者Agent处理工单，处理失败时自动转为「待指派」状态。</div>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- 工单内容 -->
+        <div class="form-section">
+          <div class="form-section-title"><i class="fas fa-file-alt"></i> 工单内容</div>
+          <el-form-item label="内容详情" prop="content">
+            <MarkdownEditor v-model="createForm.content" :upload-fn="uploadAttachment" placeholder="详细描述工单需求，支持 Markdown 格式" :height="260" />
+          </el-form-item>
+          <el-form-item label="工单附件">
+            <div class="attachment-area">
+              <el-upload
+                :file-list="attachmentFileList"
+                :auto-upload="true"
+                :http-request="customAttUpload"
+                :on-remove="handleAttRemove"
+                :show-file-list="true"
+                multiple
+              >
+                <el-button type="primary" plain size="small">
+                  <i class="fas fa-paperclip"></i> 上传附件
+                </el-button>
+              </el-upload>
+              <div class="el-upload__tip">支持 Excel/CSV/文档/图片/压缩包，单个不超过50MB（查询任务需上传Excel数据文件）</div>
+            </div>
+          </el-form-item>
+        </div>
       </el-form>
       <template #footer>
-        <el-button @click="createVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="submitCreate">提交工单</el-button>
+        <div class="dialog-footer">
+          <div class="footer-left">
+            <el-button @click="handleCreateCancel">取消</el-button>
+          </div>
+          <div class="footer-right">
+            <el-button :loading="submitting" @click="submitCreateDraft">
+              <i class="fas fa-save"></i> 暂存草稿
+            </el-button>
+            <el-button type="primary" :loading="submitting" @click="submitCreate">
+              <i class="fas fa-paper-plane"></i> 提交工单
+            </el-button>
+          </div>
+        </div>
       </template>
-    </el-dialog>
+</el-dialog>
 
     <!-- 工单详情对话框 -->
     <el-dialog v-model="detailVisible" :title="`工单详情 - ${detailData.ticket_no || ''}`" width="900px" destroy-on-close top="3vh" @close="stopAiPolling">
@@ -184,7 +247,18 @@
             <div class="pending-confirmation-info">
               <div class="pending-confirmation-title">⚠️ AI需执行数据变更操作，等待您确认</div>
               <div class="pending-confirmation-detail" v-if="detailData.pending_action">
-                任务：{{ detailData.pending_action.task_name }} | 参数：{{ JSON.stringify(detailData.pending_action.params_values) }}
+                <template v-if="Array.isArray(detailData.pending_action.tasks)">
+                  共 {{ detailData.pending_action.tasks.length }} 个待确认任务：
+                  <ul style="margin: 4px 0; padding-left: 20px">
+                    <li v-for="(t, i) in detailData.pending_action.tasks" :key="i">
+                      {{ i + 1 }}. {{ t.task_name || '未命名任务' }}
+                      <span style="color: #999; font-size: 12px">（{{ JSON.stringify(t.params_values) }}）</span>
+                    </li>
+                  </ul>
+                </template>
+                <template v-else>
+                  任务：{{ detailData.pending_action.task_name }} | 参数：{{ JSON.stringify(detailData.pending_action.params_values) }}
+                </template>
               </div>
               <div class="pending-confirmation-hint">请在下方评论「同意」或「确认执行」，或点击下方按钮确认执行</div>
             </div>
@@ -203,6 +277,16 @@
               <i class="fas fa-robot"></i> {{ detailData.assignee_name || 'AI助手' }}
             </span>
             <span v-else>{{ detailData.assignee_name || detailData.assignee_username || '未指派' }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="detailData.assignee_type === 'ai' && detailData.supervisor_agent_id" label="监督者">
+            <span style="color: #fa8c16">
+              <i class="fas fa-user-check"></i> {{ detailData.supervisor_agent_name || detailData.supervisor_agent_id }}
+            </span>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="detailData.final_score != null" label="监督评分">
+            <span :style="{ color: scoreColor(detailData.final_score), fontWeight: '600' }">
+              <i class="fas fa-star"></i> {{ detailData.final_score }}分
+            </span>
           </el-descriptions-item>
           <el-descriptions-item label="涉及系统">
             <el-tag v-if="detailData.business_system_name" size="small" effect="plain">{{ detailData.business_system_name }}</el-tag>
@@ -231,6 +315,66 @@
         <div v-if="detailData.ai_result" class="reason-block ai-result">
           <div class="reason-title"><i class="fas fa-robot"></i> AI处理结果</div>
           <div class="reason-content" v-html="renderMarkdown(detailData.ai_result)"></div>
+        </div>
+
+        <!-- 多Agent协作日志 -->
+        <div v-if="collaborationLog.length" class="reason-block collab-log">
+          <div class="reason-title"><i class="fas fa-users"></i> 多Agent协作日志（{{ detailData.collaboration_rounds || collaborationLog.length }}轮）</div>
+          <div class="collab-timeline">
+            <div v-for="(entry, idx) in collaborationLog" :key="idx" class="collab-entry" :class="entry.role">
+              <div class="collab-entry-header">
+                <el-tag :type="entry.role === 'supervisor' ? 'warning' : 'primary'" size="small" effect="dark">{{ entry.role === 'supervisor' ? '监督者' : '执行者' }}</el-tag>
+                <span class="collab-agent">{{ entry.agent_name }}</span>
+                <span class="collab-round">第{{ entry.round }}轮</span>
+                <el-tag v-if="entry.role === 'supervisor' && entry.approved === true" type="success" size="small">验收通过</el-tag>
+                <el-tag v-else-if="entry.role === 'supervisor' && entry.approved === false" type="danger" size="small">需返工</el-tag>
+                <el-tag v-if="entry.role === 'supervisor' && entry.decision === 'confirm'" type="success" size="small">确认执行</el-tag>
+                <el-tag v-else-if="entry.role === 'supervisor' && entry.decision === 'reject'" type="danger" size="small">拒绝执行</el-tag>
+                <span v-if="entry.role === 'supervisor' && entry.score != null" class="collab-score" :style="{ color: scoreColor(entry.score) }">
+                  <i class="fas fa-star"></i> {{ entry.score }}分
+                </span>
+              </div>
+              <div v-if="entry.summary" class="collab-entry-body" v-html="renderMarkdown(entry.summary)"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- AI Token 消耗指标 -->
+        <div v-if="hasAiTokenUsage" class="reason-block ai-token-usage">
+          <div class="reason-title"><i class="fas fa-chart-bar"></i> AI Token 消耗指标</div>
+          <div class="token-metrics">
+            <div class="token-metrics-header">
+              <el-tag type="primary" size="small" effect="dark">
+                <i class="fas fa-coins"></i> 总消耗 {{ formatTokens(detailData.ai_total_tokens) }}
+              </el-tag>
+              <el-tag v-if="detailData.ai_models_used && detailData.ai_models_used.length" type="info" size="small" effect="plain">
+                <i class="fas fa-microchip"></i> 参与模型：{{ detailData.ai_models_used.join(', ') }}
+              </el-tag>
+            </div>
+            <el-descriptions :column="3" border size="small" class="token-descriptions">
+              <el-descriptions-item label="Prompt Tokens">
+                <span class="token-value">{{ formatTokens(detailData.ai_prompt_tokens) }}</span>
+              </el-descriptions-item>
+              <el-descriptions-item label="Completion Tokens">
+                <span class="token-value">{{ formatTokens(detailData.ai_completion_tokens) }}</span>
+              </el-descriptions-item>
+              <el-descriptions-item label="缓存创建">
+                <span class="token-value">{{ formatTokens(detailData.ai_cache_creation_tokens) }}</span>
+              </el-descriptions-item>
+              <el-descriptions-item label="缓存读取">
+                <span class="token-value">{{ formatTokens(detailData.ai_cache_read_tokens) }}</span>
+              </el-descriptions-item>
+              <el-descriptions-item label="Headroom 原始">
+                <span class="token-value">{{ formatTokens(detailData.ai_headroom_original_tokens) }}</span>
+              </el-descriptions-item>
+              <el-descriptions-item label="Headroom 节省">
+                <span class="token-value highlight-saved">{{ formatTokens(detailData.ai_headroom_saved_tokens) }}</span>
+                <el-tag v-if="detailData.ai_headroom_compression_ratio > 0" type="success" size="small" effect="plain" style="margin-left: 6px">
+                  压缩 {{ (detailData.ai_headroom_compression_ratio * 100).toFixed(1) }}%
+                </el-tag>
+              </el-descriptions-item>
+            </el-descriptions>
+          </div>
         </div>
 
         <!-- 拒绝/申诉信息 -->
@@ -267,6 +411,13 @@
           </template>
           <!-- 提交人操作 -->
           <template v-if="isCreator">
+            <!-- 草稿状态：支持编辑和提交 -->
+            <el-button v-if="detailData.is_draft || detailData.status === 'draft'" type="warning" @click="editDraft">
+              <i class="fas fa-edit"></i> 编辑草稿
+            </el-button>
+            <el-button v-if="detailData.is_draft || detailData.status === 'draft'" type="primary" :loading="submitting" @click="submitDraftItem">
+              <i class="fas fa-paper-plane"></i> 提交工单
+            </el-button>
             <el-button v-if="detailData.status === 'processed'" type="success" @click="handleAction('confirm')">
               <i class="fas fa-check-circle"></i> 核实通过
             </el-button>
@@ -351,48 +502,105 @@
     </el-dialog>
 
     <!-- 拒绝/申诉原因对话框 -->
-    <el-dialog v-model="reasonVisible" :title="reasonTitle" width="600px" append-to-body destroy-on-close>
-      <el-form :model="reasonForm">
-        <el-form-item label="原因说明" required>
-          <MarkdownEditor v-model="reasonForm.reason" :upload-fn="uploadAttachment" :placeholder="reasonPlaceholder" :height="180" />
-        </el-form-item>
-      </el-form>
+    <el-dialog v-model="reasonVisible" :title="reasonTitle" width="600px" append-to-body destroy-on-close class="ticket-create-dialog">
+      <div class="form-section">
+        <div class="form-section-title"><i class="fas fa-comment-dots"></i> 原因说明</div>
+        <el-form :model="reasonForm">
+          <el-form-item>
+            <MarkdownEditor v-model="reasonForm.reason" :upload-fn="uploadAttachment" :placeholder="reasonPlaceholder" :height="200" />
+          </el-form-item>
+        </el-form>
+      </div>
       <template #footer>
-        <el-button @click="reasonVisible = false">取消</el-button>
-        <el-button type="primary" :loading="actionLoading" @click="submitReason">确认</el-button>
+        <div class="dialog-footer">
+          <div class="footer-left">
+            <el-button @click="reasonVisible = false">取消</el-button>
+          </div>
+          <div class="footer-right">
+            <el-button type="primary" :loading="actionLoading" @click="submitReason">
+              <i class="fas fa-check"></i> 确认提交
+            </el-button>
+          </div>
+        </div>
       </template>
     </el-dialog>
 
     <!-- 重新指派/重新发起/移交工单 对话框 -->
-    <el-dialog v-model="reassignVisible" :title="reassignDialogTitle" width="520px" append-to-body destroy-on-close>
-      <el-form :model="reassignForm" label-width="90px">
-        <div v-if="reassignAction === 'transfer'" class="form-tip" style="margin-bottom: 12px">
-          <i class="fas fa-info-circle"></i> 移交后工单将重新进入"已提交"状态，由新指派人接收处理。
-          <span v-if="reassignForm.assignee_type === 'ai'">移交给AI后将自动处理，处理失败会转为"待指派"状态。</span>
+    <el-dialog v-model="reassignVisible" :title="reassignDialogTitle" width="580px" append-to-body destroy-on-close class="ticket-create-dialog">
+      <el-form :model="reassignForm" label-width="96px">
+        <!-- 提示信息 -->
+        <div v-if="reassignAction === 'transfer'" class="reassign-hint transfer">
+          <i class="fas fa-exchange-alt"></i>
+          <span>移交后工单将重新进入「已提交」状态，由新指派人接收处理。</span>
         </div>
-        <el-form-item label="指派类型">
-          <el-radio-group v-model="reassignForm.assignee_type">
-            <el-radio-button label="user">指派给具体人</el-radio-button>
-            <el-radio-button label="ai">指派给AI</el-radio-button>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item v-if="reassignForm.assignee_type === 'user'" label="指派给" required>
-          <el-select v-model="reassignForm.assignee_id" placeholder="选择处理人" filterable style="width: 100%">
-            <el-option v-for="u in assignees" :key="u.id" :label="u.display_name" :value="u.id" :disabled="reassignAction === 'transfer' && u.id === detailData.assignee_id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-else label="AI Agent">
-          <el-select v-if="canSwitchAgent" v-model="reassignForm.assignee_agent_id" placeholder="选择AI Agent（留空使用默认）" clearable filterable style="width: 100%">
-            <el-option v-for="a in aiAgents" :key="a.id" :label="a.name + (a.is_default ? '（默认）' : '')" :value="a.id" />
-          </el-select>
-          <div v-else class="form-tip">
-            <i class="fas fa-info-circle"></i> 将指派给默认AI Agent自动处理（无切换Agent权限）
-          </div>
-        </el-form-item>
+        <div v-else-if="reassignAction === 'reopen'" class="reassign-hint reopen">
+          <i class="fas fa-redo"></i>
+          <span>重新发起后工单将重新进入「已提交」状态，可更换指派人。</span>
+        </div>
+        <div v-else class="reassign-hint reassign">
+          <i class="fas fa-user-edit"></i>
+          <span>重新指派后工单将重新进入「已提交」状态。</span>
+        </div>
+
+        <!-- 工单内容 -->
+        <div class="form-section">
+          <div class="form-section-title"><i class="fas fa-file-alt"></i> 工单内容</div>
+          <el-form-item label="标题">
+            <el-input v-model="reassignForm.title" placeholder="工单标题" maxlength="100" show-word-limit />
+          </el-form-item>
+          <el-form-item label="内容详情">
+            <MarkdownEditor v-model="reassignForm.content" :upload-fn="uploadAttachment" placeholder="工单内容（支持Markdown）" :height="160" />
+          </el-form-item>
+        </div>
+
+        <!-- 指派设置 -->
+        <div class="form-section">
+          <div class="form-section-title"><i class="fas fa-user-tag"></i> 指派设置</div>
+          <el-form-item label="指派方式">
+            <el-radio-group v-model="reassignForm.assignee_type">
+              <el-radio-button label="user"><i class="fas fa-user"></i> 指派给具体人</el-radio-button>
+              <el-radio-button label="ai"><i class="fas fa-robot"></i> 指派给AI</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item v-if="reassignForm.assignee_type === 'user'" label="处理人" required>
+            <el-select v-model="reassignForm.assignee_id" placeholder="选择处理人" filterable style="width: 100%">
+              <el-option v-for="u in assignees" :key="u.id" :label="u.display_name" :value="u.id" :disabled="reassignAction === 'transfer' && u.id === detailData.assignee_id" />
+            </el-select>
+          </el-form-item>
+          <template v-else>
+            <template v-if="canSwitchAgent">
+              <el-form-item label="执行者Agent">
+                <el-select v-model="reassignForm.assignee_agent_id" placeholder="选择执行者Agent（留空使用默认）" clearable filterable style="width: 100%">
+                  <el-option v-for="a in reassignExecutorOptions" :key="a.id" :label="a.name + (a.is_default ? '（默认）' : '')" :value="a.id" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="监督者Agent">
+                <el-select v-model="reassignForm.supervisor_agent_id" placeholder="选择监督者Agent（可选，监督执行结果）" clearable filterable style="width: 100%">
+                  <el-option v-for="a in reassignSupervisorAgentOptions" :key="a.id" :label="a.name + (a.can_confirm_execution ? '（可自动确认）' : '')" :value="a.id" />
+                </el-select>
+              </el-form-item>
+            </template>
+            <div v-else class="ai-assign-card">
+              <div class="ai-assign-card-icon"><i class="fas fa-robot"></i></div>
+              <div class="ai-assign-card-body">
+                <div class="ai-assign-card-title">AI 自动处理</div>
+                <div class="ai-assign-card-desc">系统将使用默认的执行者Agent处理工单，处理失败时自动转为「待指派」状态。</div>
+              </div>
+            </div>
+          </template>
+        </div>
       </el-form>
       <template #footer>
-        <el-button @click="reassignVisible = false">取消</el-button>
-        <el-button type="primary" :loading="actionLoading" @click="submitReassign">确认</el-button>
+        <div class="dialog-footer">
+          <div class="footer-left">
+            <el-button @click="reassignVisible = false">取消</el-button>
+          </div>
+          <div class="footer-right">
+            <el-button type="primary" :loading="actionLoading" @click="submitReassign">
+              <i class="fas fa-check"></i> 确认{{ reassignAction === 'transfer' ? '移交' : reassignAction === 'reopen' ? '发起' : '指派' }}
+            </el-button>
+          </div>
+        </div>
       </template>
     </el-dialog>
   </div>
@@ -411,6 +619,7 @@ const isAdmin = computed(() => store.isAdmin)
 
 // 状态配置
 const statusLabels = {
+  draft: '草稿',
   submitted: '已提交',
   received: '已接收',
   processing: '处理中',
@@ -423,6 +632,7 @@ const statusLabels = {
 
 const statusTagType = (status) => {
   const map = {
+    draft: 'info',
     submitted: 'info',
     received: 'warning',
     processing: 'warning',
@@ -442,7 +652,20 @@ const total = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(20)
 const statusFilter = ref('')
+const assigneeFilter = ref('')
+const businessSystemFilter = ref('')
+const dateFilter = ref(null)
 const keyword = ref('')
+
+function resetTicketFilters() {
+  statusFilter.value = ''
+  assigneeFilter.value = ''
+  businessSystemFilter.value = ''
+  dateFilter.value = null
+  keyword.value = ''
+  currentPage.value = 1
+  fetchTickets()
+}
 
 // 列表中是否有AI处理中的工单（用于自动轮询刷新）
 const hasAiProcessing = computed(() =>
@@ -474,6 +697,12 @@ async function fetchTickets(silent = false) {
     const params = { page: currentPage.value, per_page: pageSize.value }
     if (statusFilter.value) params.status = statusFilter.value
     if (keyword.value.trim()) params.keyword = keyword.value.trim()
+    if (assigneeFilter.value !== '' && assigneeFilter.value !== null) params.assignee_id = assigneeFilter.value
+    if (businessSystemFilter.value !== '' && businessSystemFilter.value !== null) params.business_system_id = businessSystemFilter.value
+    if (dateFilter.value && dateFilter.value.length === 2) {
+      params.start_date = dateFilter.value[0]
+      params.end_date = dateFilter.value[1]
+    }
     const res = await api.tickets.list(params)
     const data = res.data || res || {}
     const oldList = tickets.value
@@ -513,26 +742,104 @@ async function fetchTickets(silent = false) {
 const createVisible = ref(false)
 const submitting = ref(false)
 const createFormRef = ref(null)
-const createForm = ref({ title: '', content: '', assignee_type: 'user', assignee_id: null, assignee_agent_id: null, business_system_id: null })
+const justSubmitted = ref(false)
+const createForm = ref({ title: '', content: '', assignee_type: 'user', assignee_id: null, assignee_agent_id: null, supervisor_agent_id: null, business_system_id: null })
 // 工单附件：fileList供el-upload展示，ids为已上传的附件ID（提交时关联）
 const attachmentFileList = ref([])
 const attachmentIds = ref([])
 const createRules = {
   title: [{ required: true, message: '请输入标题', trigger: 'blur' }],
-  content: [{ required: true, message: '请输入工单内容', trigger: 'blur' }],
+  // content 不强制必填：暂存草稿时允许为空，提交时再单独校验
+  content: [],
 }
 const assignees = ref([])
 const businessSystems = ref([])
 const aiAgents = ref([])
 const canSwitchAgent = ref(false)
 
+// 创建工单时可选执行者：只显示通用和执行者角色的Agent
+const executorAgentOptions = computed(() => {
+  return aiAgents.value.filter(a => a.agent_role !== 'supervisor')
+})
+
+// 创建工单时可选监督者：只显示监督者角色，且排除当前选中的执行者
+const supervisorAgentOptions = computed(() => {
+  const executorId = createForm.value.assignee_agent_id
+  return aiAgents.value.filter(a => a.agent_role === 'supervisor' && a.id !== executorId)
+})
+
+// 重指派时可选执行者：只显示通用和执行者角色
+const reassignExecutorOptions = computed(() => {
+  return aiAgents.value.filter(a => a.agent_role !== 'supervisor')
+})
+
+// 重指派时可选监督者：只显示监督者角色，且排除当前选中的执行者
+const reassignSupervisorAgentOptions = computed(() => {
+  const executorId = reassignForm.value.assignee_agent_id
+  return aiAgents.value.filter(a => a.agent_role === 'supervisor' && a.id !== executorId)
+})
+
 async function openCreateDialog() {
-  createForm.value = { title: '', content: '', assignee_type: 'user', assignee_id: null, assignee_agent_id: null, business_system_id: null }
+  createForm.value = { title: '', content: '', assignee_type: 'user', assignee_id: null, assignee_agent_id: null, supervisor_agent_id: null, business_system_id: null }
   attachmentFileList.value = []
   attachmentIds.value = []
+  editingDraftId.value = null
+  justSubmitted.value = false
   createVisible.value = true
   // 并行加载选项数据
   Promise.all([fetchAssignees(), fetchBusinessSystems(), fetchAiAgents()])
+}
+
+// 关闭创建对话框前的自动暂存逻辑
+function handleCreateDialogClose(done) {
+  autoSaveDraftIfNeeded().finally(() => {
+    justSubmitted.value = false
+    editingDraftId.value = null
+    attachmentFileList.value = []
+    attachmentIds.value = []
+    done()
+  })
+}
+
+function handleCreateCancel() {
+  autoSaveDraftIfNeeded().finally(() => {
+    justSubmitted.value = false
+    editingDraftId.value = null
+    attachmentFileList.value = []
+    attachmentIds.value = []
+    createVisible.value = false
+  })
+}
+
+// 静默自动暂存草稿（关闭对话框时触发，有内容才保存）
+async function autoSaveDraftIfNeeded() {
+  // 刚刚成功提交/暂存过，不重复保存
+  if (justSubmitted.value) return
+  const title = (createForm.value.title || '').trim()
+  const content = (createForm.value.content || '').trim()
+  // 没有标题且没有内容，不保存
+  if (!title && !content) return
+  try {
+    const payload = { ...createForm.value, is_draft: true }
+    if (payload.assignee_type === 'ai') {
+      delete payload.assignee_id
+    } else {
+      delete payload.assignee_agent_id
+      delete payload.supervisor_agent_id
+    }
+    if (attachmentIds.value.length) {
+      payload.attachment_ids = [...attachmentIds.value]
+    }
+    if (editingDraftId.value) {
+      await api.tickets.updateDraft(editingDraftId.value, payload)
+    } else {
+      await api.tickets.create(payload)
+    }
+    ElMessage.success('草稿已自动暂存')
+    fetchTickets()
+  } catch {
+    // 静默失败，不打扰用户
+  }
 }
 
 // 工单附件上传（选择文件即上传，暂存待提交时关联）
@@ -632,23 +939,37 @@ async function submitCreate() {
     ElMessage.warning('请选择指派人')
     return
   }
+  if (!(createForm.value.content || '').trim()) {
+    ElMessage.warning('请输入工单内容')
+    return
+  }
   await createFormRef.value.validate(async (valid) => {
     if (!valid) return
     submitting.value = true
     try {
       // 构造提交数据（按指派类型清理字段）
-      const payload = { ...createForm.value }
+      const payload = { ...createForm.value, is_draft: false }
       if (payload.assignee_type === 'ai') {
         delete payload.assignee_id
       } else {
         delete payload.assignee_agent_id
+        delete payload.supervisor_agent_id
       }
       if (attachmentIds.value.length) {
         payload.attachment_ids = [...attachmentIds.value]
       }
-      await api.tickets.create(payload)
-      ElMessage.success('工单已提交')
+      // 如果正在编辑草稿，调用 updateDraft + submitDraft；否则调用 create
+      if (editingDraftId.value) {
+        await api.tickets.updateDraft(editingDraftId.value, payload)
+        await api.tickets.submitDraft(editingDraftId.value)
+        ElMessage.success('草稿已更新并提交')
+      } else {
+        await api.tickets.create(payload)
+        ElMessage.success('工单已提交')
+      }
+      justSubmitted.value = true
       createVisible.value = false
+      editingDraftId.value = null
       attachmentFileList.value = []
       attachmentIds.value = []
       fetchTickets()
@@ -660,10 +981,121 @@ async function submitCreate() {
   })
 }
 
+// 暂存草稿：仅标题必填，内容与指派人可为空
+async function submitCreateDraft() {
+  if (!createFormRef.value) return
+  await createFormRef.value.validate(async (valid) => {
+    if (!valid) return
+    submitting.value = true
+    try {
+      const payload = { ...createForm.value, is_draft: true }
+      if (payload.assignee_type === 'ai') {
+        delete payload.assignee_id
+      } else {
+        delete payload.assignee_agent_id
+        delete payload.supervisor_agent_id
+      }
+      if (attachmentIds.value.length) {
+        payload.attachment_ids = [...attachmentIds.value]
+      }
+      // 如果正在编辑草稿，调用 updateDraft；否则调用 create
+      if (editingDraftId.value) {
+        await api.tickets.updateDraft(editingDraftId.value, payload)
+        ElMessage.success('草稿已更新')
+      } else {
+        await api.tickets.create(payload)
+        ElMessage.success('草稿已暂存')
+      }
+      justSubmitted.value = true
+      createVisible.value = false
+      editingDraftId.value = null
+      attachmentFileList.value = []
+      attachmentIds.value = []
+      fetchTickets()
+    } catch (e) {
+      ElMessage.error(e?.response?.data?.message || '暂存失败')
+    } finally {
+      submitting.value = false
+    }
+  })
+}
+
+// 从列表点击草稿标签，直接打开编辑草稿
+async function editDraftFromList(row) {
+  // 先加载完整工单详情（包含 attachments）
+  try {
+    const res = await api.tickets.get(row.id)
+    detailData.value = res.data || res || {}
+  } catch {}
+  editDraft()
+}
+
+// 编辑草稿：从详情对话框打开创建对话框，预填草稿数据
+async function editDraft() {
+  const t = detailData.value
+  if (!t || !t.id) return
+  // 预填表单
+  createForm.value = {
+    title: t.title || '',
+    content: t.content || '',
+    assignee_type: t.assignee_type || 'user',
+    assignee_id: t.assignee_id || null,
+    assignee_agent_id: t.assignee_agent_id || null,
+    business_system_id: t.business_system_id || null,
+  }
+  // 加载已有附件
+  attachmentFileList.value = []
+  attachmentIds.value = []
+  if (Array.isArray(t.attachments) && t.attachments.length) {
+    for (const a of t.attachments) {
+      attachmentIds.value.push(a.id)
+      attachmentFileList.value.push({ name: a.file_name, uid: a.id, attId: a.id })
+    }
+  }
+  // 标记当前正在编辑的草稿ID（提交时调用 updateDraft 而非 create）
+  editingDraftId.value = t.id
+  justSubmitted.value = false
+  // 关闭详情对话框
+  detailVisible.value = false
+  // 打开创建对话框
+  createVisible.value = true
+  // 并行加载选项数据
+  Promise.all([fetchAssignees(), fetchBusinessSystems(), fetchAiAgents()])
+}
+
+// 提交草稿：调用 submitDraft API
+async function submitDraftItem() {
+  const t = detailData.value
+  if (!t || !t.id) return
+  submitting.value = true
+  try {
+    await api.tickets.submitDraft(t.id)
+    ElMessage.success('工单已提交')
+    detailVisible.value = false
+    fetchTickets()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '提交失败')
+  } finally {
+    submitting.value = false
+  }
+}
+
 // 详情
 const detailVisible = ref(false)
 const detailLoading = ref(false)
 const detailData = ref({})
+const editingDraftId = ref(null)
+// 多agent协作日志（来自工单详情 collaboration_log 字段）
+const collaborationLog = computed(() => detailData.value.collaboration_log || [])
+
+// 监督者评分颜色：>=80绿，>=60橙黄，否则红
+function scoreColor(score) {
+  const s = Number(score)
+  if (Number.isNaN(s)) return '#909399'
+  if (s >= 80) return '#67c23a'
+  if (s >= 60) return '#e6a23c'
+  return '#f56c6c'
+}
 // AI处理中轮询定时器
 let aiPollingTimer = null
 // AI处理时长计时器（每秒更新，用于显示已处理时长）
@@ -715,6 +1147,29 @@ const isAiProcessing = computed(() =>
 const isPendingConfirmation = computed(() =>
   detailData.value.assignee_type === 'ai' && detailData.value.status === 'pending_confirmation'
 )
+
+// AI 是否产生了 token 消耗（用于控制是否渲染 token 指标区块）
+const hasAiTokenUsage = computed(() => {
+  const d = detailData.value
+  if (!d) return false
+  return (d.ai_total_tokens || 0) > 0
+    || (d.ai_prompt_tokens || 0) > 0
+    || (d.ai_completion_tokens || 0) > 0
+    || (d.ai_cache_creation_tokens || 0) > 0
+    || (d.ai_cache_read_tokens || 0) > 0
+    || (d.ai_headroom_original_tokens || 0) > 0
+    || (d.ai_headroom_saved_tokens || 0) > 0
+})
+
+// 格式化 token 数字（千分位 + 简写）
+function formatTokens(n) {
+  if (n == null || isNaN(n)) return '0'
+  const v = Number(n)
+  if (v < 1000) return String(v)
+  if (v < 10000) return v.toLocaleString()
+  if (v < 1000000) return `${(v / 1000).toFixed(1)}K`
+  return `${(v / 1000000).toFixed(2)}M`
+}
 
 // 进度条当前步骤
 const currentStep = computed(() => {
@@ -868,7 +1323,7 @@ async function submitReason() {
 
 // 重新指派/重新发起 对话框
 const reassignVisible = ref(false)
-const reassignForm = ref({ assignee_type: 'user', assignee_id: null, assignee_agent_id: null })
+const reassignForm = ref({ title: '', content: '', assignee_type: 'user', assignee_id: null, assignee_agent_id: null, supervisor_agent_id: null })
 const reassignAction = ref('reassign')
 
 const reassignDialogTitle = computed(() => {
@@ -879,17 +1334,21 @@ const reassignDialogTitle = computed(() => {
 
 async function openReassignDialog(action = 'reassign') {
   reassignAction.value = action
-  // 默认填充当前指派信息，方便用户修改
+  // 默认填充当前工单信息，方便用户修改
   const cur = detailData.value
   reassignForm.value = {
+    title: cur.title || '',
+    content: cur.content || '',
     assignee_type: cur.assignee_type || 'user',
     assignee_id: cur.assignee_type !== 'ai' ? cur.assignee_id : null,
     assignee_agent_id: cur.assignee_type === 'ai' ? cur.assignee_agent_id : null,
+    supervisor_agent_id: cur.assignee_type === 'ai' ? cur.supervisor_agent_id : null,
   }
   // 移交工单时，清空原指派人，强制选择新的指派对象
   if (action === 'transfer') {
     reassignForm.value.assignee_id = null
     reassignForm.value.assignee_agent_id = null
+    reassignForm.value.supervisor_agent_id = null
   }
   reassignVisible.value = true
   // 加载指派人和AI Agent选项
@@ -908,6 +1367,7 @@ async function submitReassign() {
       delete payload.assignee_id
     } else {
       delete payload.assignee_agent_id
+      delete payload.supervisor_agent_id
     }
     const res = await api.tickets.updateStatus(detailData.value.id, payload)
     ElMessage.success(res.message || '操作成功')
@@ -951,17 +1411,22 @@ async function handleRetryAi() {
 
 // 确认执行待确认的数据变更操作
 async function handleConfirmAction() {
-  const taskName = detailData.value.pending_action?.task_name || ''
+  const action = detailData.value.pending_action || {}
+  let confirmMsg = ''
+  if (Array.isArray(action.tasks)) {
+    const names = action.tasks.map((t, i) => `${i + 1}. ${t.task_name}`).join('\n')
+    confirmMsg = `确定要执行以下 ${action.tasks.length} 个数据变更操作吗？\n\n${names}\n\n此操作会直接影响生产数据，请谨慎确认！`
+  } else {
+    const taskName = action.task_name || ''
+    confirmMsg = `确定要执行数据变更操作「${taskName}」吗？\n此操作会直接影响生产数据，请谨慎确认！`
+  }
   try {
-    await ElMessageBox.confirm(
-      `确定要执行数据变更操作「${taskName}」吗？\n此操作会直接影响生产数据，请谨慎确认！`,
-      '确认执行数据变更',
-      {
-        confirmButtonText: '确认执行',
-        cancelButtonText: '取消',
-        type: 'warning',
-      }
-    )
+    await ElMessageBox.confirm(confirmMsg, '确认执行数据变更', {
+      confirmButtonText: '确认执行',
+      cancelButtonText: '取消',
+      type: 'warning',
+      dangerouslyUseHTMLString: false,
+    })
   } catch {
     return
   }
@@ -1120,6 +1585,134 @@ onUnmounted(() => {
 <style scoped>
 .ticket-manager {
   max-width: 1400px;
+}
+
+/* 创建工单对话框 - 分区样式 */
+.form-section {
+  background: #fafbfc;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  padding: 16px 20px 4px;
+  margin-bottom: 16px;
+}
+
+.form-section:last-child {
+  margin-bottom: 0;
+}
+
+.form-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.form-section-title i {
+  margin-right: 6px;
+  color: #409eff;
+}
+
+/* AI默认指派卡片（无切换权限用户） */
+.ai-assign-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  background: linear-gradient(135deg, #f0f5ff 0%, #f6f0ff 100%);
+  border: 1px solid #d9d2ec;
+  border-radius: 8px;
+  padding: 14px 18px;
+  margin-left: 96px;
+  margin-bottom: 12px;
+}
+
+.ai-assign-card-icon {
+  width: 40px;
+  height: 40px;
+  background: linear-gradient(135deg, #722ed1 0%, #9254de 100%);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.ai-assign-card-icon i {
+  color: #fff;
+  font-size: 18px;
+}
+
+.ai-assign-card-body {
+  flex: 1;
+}
+
+.ai-assign-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 4px;
+}
+
+.ai-assign-card-desc {
+  font-size: 12px;
+  color: #606266;
+  line-height: 1.5;
+}
+
+/* 附件区域 */
+.attachment-area {
+  width: 100%;
+}
+
+/* 底部按钮布局 */
+.dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.footer-left,
+.footer-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 重指派提示信息 */
+.reassign-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.reassign-hint i {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.reassign-hint.reassign {
+  background: #f0f9ff;
+  border: 1px solid #c6e2ff;
+  color: #409eff;
+}
+
+.reassign-hint.transfer {
+  background: #fdf6ec;
+  border: 1px solid #faecd8;
+  color: #e6a23c;
+}
+
+.reassign-hint.reopen {
+  background: #f0f9eb;
+  border: 1px solid #e1f3d8;
+  color: #67c23a;
 }
 
 .card-header {
@@ -1386,6 +1979,93 @@ onUnmounted(() => {
 .reason-block.ai-result {
   background: #f6f0ff;
   border: 1px solid #d9d2ec;
+}
+
+.reason-block.ai-token-usage {
+  background: #f0f9ff;
+  border: 1px solid #cfe8ff;
+}
+
+.reason-block.ai-token-usage .reason-title {
+  color: #1677ff;
+}
+
+.reason-block.collab-log {
+  background: #fdfaf0;
+  border: 1px solid #f5e8c8;
+}
+
+.reason-block.collab-log .reason-title {
+  color: #b88230;
+}
+
+.collab-timeline {
+  margin-top: 8px;
+}
+
+.collab-entry {
+  padding: 8px 12px;
+  border-left: 3px solid #409eff;
+  border-radius: 4px;
+  background: #fff;
+  margin-bottom: 8px;
+}
+
+.collab-entry.supervisor {
+  border-left-color: #e6a23c;
+}
+
+.collab-entry-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.collab-agent {
+  font-weight: 600;
+  font-size: 13px;
+  color: #303133;
+}
+
+.collab-round {
+  font-size: 12px;
+  color: #909399;
+}
+
+.collab-score {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.collab-entry-body {
+  margin-top: 6px;
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.6;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.token-metrics {
+  margin-top: 8px;
+}
+
+.token-metrics-header {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.token-descriptions .token-value {
+  font-weight: 600;
+  font-family: 'Consolas', 'Monaco', monospace;
+  color: #303133;
+}
+
+.token-descriptions .token-value.highlight-saved {
+  color: #67c23a;
 }
 
 .reason-title {

@@ -150,6 +150,7 @@ const autoExport = {
   deleteAll: () => http.delete('/auto-export/all'),
   toggle: (id) => http.post(`/auto-export/${id}/toggle`),
   runNow: (id) => http.post(`/auto-export/${id}/run-now`),
+  resendEmail: (id) => http.post(`/auto-export/${id}/resend-email`),
   paramOptions: () => http.get('/auto-export/param-options'),
 }
 
@@ -182,6 +183,7 @@ const ai = {
   batchDeleteConfigs: (ids) => http.post('/ai/configs/batch-delete', { ids }),
   deleteAllConfigs: () => http.delete('/ai/configs/all'),
   testConfig: (id) => http.post(`/ai/configs/${id}/test`),
+  getBalance: (id) => http.get(`/ai/configs/${id}/balance`),
   getSkills: (params) => http.get('/ai/skills', { params }),
   createSkill: (data) => http.post('/ai/skills', data),
   updateSkill: (id, data) => http.put(`/ai/skills/${id}`, data),
@@ -204,6 +206,7 @@ const ai = {
   sendMessage: (chatId, data) => http.post(`/ai/chats/${chatId}/send`, data, { timeout: 180000 }),
   sendMessageStream: (chatId, data) => `/api/ai/chats/${chatId}/send-stream`,
   abortRequest: (chatId) => http.post(`/ai/chats/${chatId}/abort`),
+  sendInterruptMessage: (chatId) => `/api/ai/chats/${chatId}/interrupt`,
   getStreamStatus: (chatId) => http.get(`/ai/chats/${chatId}/stream-status`),
   resumeStreamUrl: (chatId) => `/api/ai/chats/${chatId}/resume-stream`,
   uploadFile: (formData) => http.post('/ai/upload-file', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
@@ -296,22 +299,24 @@ const profitShare = {
 }
 
 const tickets = {
-  list: (params) => http.get('/tickets', { params }),
-  get: (id) => http.get(`/tickets/${id}`),
-  create: (data) => http.post('/tickets', data),
-  updateStatus: (id, data) => http.put(`/tickets/${id}/status`, data),
-  addComment: (id, data) => http.post(`/tickets/${id}/comments`, data),
-  delete: (id) => http.delete(`/tickets/${id}`),
-  assignees: () => http.get('/tickets/assignees'),
-  aiAgents: () => http.get('/tickets/ai-agents'),
-  retryAi: (id) => http.post(`/tickets/${id}/retry-ai`),
-  confirmAction: (id) => http.post(`/tickets/${id}/confirm-action`),
-  cancelAction: (id) => http.post(`/tickets/${id}/cancel-action`),
-  upload: (formData) => http.post('/tickets/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
-  uploadAttachment: (formData) => http.post('/tickets/attachments/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
-  deleteAttachment: (attId) => http.delete(`/tickets/attachments/${attId}`),
-  stats: () => http.get('/tickets/stats'),
-  analytics: (params) => http.get('/tickets/analytics', { params }),
+ list: (params) => http.get('/tickets', { params }),
+ get: (id) => http.get(`/tickets/${id}`),
+ create: (data) => http.post('/tickets', data),
+ updateStatus: (id, data) => http.put(`/tickets/${id}/status`, data),
+ updateDraft: (id, data) => http.put(`/tickets/${id}/draft`, data),
+ submitDraft: (id) => http.post(`/tickets/${id}/submit`),
+ addComment: (id, data) => http.post(`/tickets/${id}/comments`, data),
+ delete: (id) => http.delete(`/tickets/${id}`),
+ assignees: () => http.get('/tickets/assignees'),
+ aiAgents: () => http.get('/tickets/ai-agents'),
+ retryAi: (id) => http.post(`/tickets/${id}/retry-ai`),
+ confirmAction: (id) => http.post(`/tickets/${id}/confirm-action`),
+ cancelAction: (id) => http.post(`/tickets/${id}/cancel-action`),
+ upload: (formData) => http.post('/tickets/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+ uploadAttachment: (formData) => http.post('/tickets/attachments/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+ deleteAttachment: (attId) => http.delete(`/tickets/attachments/${attId}`),
+ stats: () => http.get('/tickets/stats'),
+ analytics: (params) => http.get('/tickets/analytics', { params }),
 }
 
 const pay = {
@@ -337,8 +342,18 @@ const payFlow = {
   getExecution: (id) => http.get(`/pay-flow/executions/${id}`),
   cancelExecution: (id) => http.post(`/pay-flow/executions/${id}/cancel`),
   retryExecution: (id) => http.post(`/pay-flow/executions/${id}/retry`),
+  deleteExecution: (id) => http.delete(`/pay-flow/executions/${id}`),
+  batchDeleteExecutions: (ids) => http.post('/pay-flow/executions/batch-delete', { ids }),
+  batches: (params) => http.get('/pay-flow/batches', { params }),
   batchSummary: (batchId) => http.get(`/pay-flow/batches/${batchId}/summary`),
+  batchDetail: (batchId) => http.get(`/pay-flow/batches/${batchId}/detail`),
+  retryBatch: (batchId) => http.post(`/pay-flow/batches/${batchId}/retry`),
   batchExecutions: (batchId, params) => http.get(`/pay-flow/batches/${batchId}/executions`, { params }),
+  getNotifyTemplates: (params) => http.get('/pay-flow/notify-templates', { params }),
+  getNotifyTemplate: (id) => http.get(`/pay-flow/notify-templates/${id}`),
+  createNotifyTemplate: (data) => http.post('/pay-flow/notify-templates', data),
+  updateNotifyTemplate: (id, data) => http.put(`/pay-flow/notify-templates/${id}`, data),
+  deleteNotifyTemplate: (id) => http.delete(`/pay-flow/notify-templates/${id}`),
 }
 
 const mcp = {
@@ -350,7 +365,9 @@ const mcp = {
   test: (id) => http.post(`/mcp/${id}/test`),
   refreshTools: (id) => http.post(`/mcp/${id}/refresh-tools`),
   importJson: (data) => http.post('/mcp/import', data),
-  marketplace: () => http.get('/mcp/marketplace'),
+  marketplace: (source) => http.get('/mcp/marketplace', { params: { source: source || 'all' } }),
+  refreshMarketplace: (source) => http.post('/mcp/marketplace/refresh', null, { params: { source: source || 'all' } }),
+  marketplaceSources: () => http.get('/mcp/marketplace/sources'),
 }
 
 const openApi = {
@@ -372,4 +389,20 @@ const openApi = {
   getStats: (params) => http.get('/open-api/stats', { params }),
 }
 
-export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, mcp, openApi, business, systemTask, lookup, profitShare, tickets, pay, payFlow }
+const dataDashboard = {
+  listScripts: () => http.get('/dashboard/scripts'),
+  listQuickQueries: () => http.get('/dashboard/quick-queries'),
+  createQuickQuery: (data) => http.post('/dashboard/quick-queries', data),
+  updateQuickQuery: (id, data) => http.put(`/dashboard/quick-queries/${id}`, data),
+  deleteQuickQuery: (id) => http.delete(`/dashboard/quick-queries/${id}`),
+  listConnections: () => http.get('/dashboard/connections'),
+  execute: (data) => http.post('/dashboard/execute', data),
+  parseParams: (data) => http.post('/dashboard/parse-params', data),
+  parseColumns: (data) => http.post('/dashboard/parse-columns', data),
+  getMetaConfig: () => http.get('/dashboard/config'),
+  getSettings: () => http.get('/dashboard/settings'),
+  saveSettings: (data) => http.post('/dashboard/settings', data),
+  clearCache: () => http.post('/dashboard/cache/clear'),
+}
+
+export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, mcp, openApi, business, systemTask, lookup, profitShare, tickets, pay, payFlow, dataDashboard }
