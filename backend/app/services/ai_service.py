@@ -888,8 +888,16 @@ class AiService:
         注意：上下文会消耗token，需控制总量，避免每轮对话成本过高。"""
         from app.models.ai_skill import AiSkill
         from app.models.user_behavior import UserBehavior
+        from app.models.user import User
 
         context_parts = []
+
+        # 注入用户身份信息（让AI感知用户角色，用于区别尊称等）
+        user = User.query.get(user_id)
+        if user:
+            role_name = '管理员' if user.is_admin() else (user.role.name if user.role else '普通用户')
+            role_desc = user.role.description if user.role else ''
+            context_parts.append(f'## 当前用户信息\n- 用户名: {user.username}\n- 角色: {role_name}' + (f'（{role_desc}）' if role_desc else '') + ('\n- 管理员: 是' if user.is_admin() else ''))
 
         # Add user skills (当前Agent专属技能 + 无Agent关联的通用技能)
         # 只注入名称和描述，不注入content正文（正文可能很长，应通过RAG按需检索）
