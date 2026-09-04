@@ -267,7 +267,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onActivated } from 'vue'
+import { ref, reactive, computed, onMounted, onActivated } from 'vue'
 import api from '../api'
 import { useAppStore } from '../stores'
 import { ElMessage, ElMessageBox } from 'element-plus'
