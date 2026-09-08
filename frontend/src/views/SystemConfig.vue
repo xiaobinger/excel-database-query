@@ -55,13 +55,13 @@
               <el-input v-model="dingtalkForm.dingtalk_secret" type="password" show-password placeholder="HMAC-SHA256 加签密钥，留空则不加签" />
               <div style="color: #909399; font-size: 12px; margin-top: 4px">在钉钉群机器人设置中获取，加密存储于数据库</div>
             </el-form-item>
-            <el-divider content-position="left">通知模板</el-divider>
+            <el-divider content-position="left">通知模板（Markdown 语法 + 模板变量）</el-divider>
             <el-form-item label="指派通知模板">
-              <el-input v-model="dingtalkForm.dingtalk_template_assign" type="textarea" :rows="4" placeholder="支持占位符：{ticket_no} {title} {assignee_name} {creator_name}" />
+              <MarkdownEditor v-model="dingtalkForm.dingtalk_template_assign" placeholder="支持 Markdown 语法和模板变量：{ticket_no} {title} {assignee_name} {creator_name}" :height="160" />
               <div style="color: #909399; font-size: 12px; margin-top: 4px">指派人收到工单时发送，自动 @指派人手机号</div>
             </el-form-item>
             <el-form-item label="完成通知模板">
-              <el-input v-model="dingtalkForm.dingtalk_template_complete" type="textarea" :rows="4" placeholder="支持占位符：{ticket_no} {title} {assignee_name} {creator_name}" />
+              <MarkdownEditor v-model="dingtalkForm.dingtalk_template_complete" placeholder="支持 Markdown 语法和模板变量：{ticket_no} {title} {assignee_name} {creator_name}" :height="160" />
               <div style="color: #909399; font-size: 12px; margin-top: 4px">提交人核实通过（质检验收）后发送，自动 @提交人手机号</div>
             </el-form-item>
             <el-form-item label="通知规则说明">
@@ -660,6 +660,7 @@ import { ref, reactive, onMounted, nextTick } from 'vue'
 import api from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import ProviderLogo from '../components/ProviderLogo.vue'
+import MarkdownEditor from '../components/MarkdownEditor.vue'
 import { autoFetchLogo } from '../utils/providerLogo.js'
 
 const activeTab = ref('email')
