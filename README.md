@@ -23,7 +23,7 @@
 
 <!-- 徽章 -->
 <p>
-  <img src="https://img.shields.io/badge/version-2.6.8-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-2.6.9-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/python-3.10+-yellow?style=flat-square&logo=python&logoColor=white" alt="python" />
   <img src="https://img.shields.io/badge/vue-3-green?style=flat-square&logo=vuedotjs&logoColor=white" alt="vue" />
   <img src="https://img.shields.io/badge/flask-black?style=flat-square&logo=flask&logoColor=white" alt="flask" />
@@ -394,6 +394,7 @@ WHERE merchant_id = :value
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-09-04 | v2.6.9 | 钉钉通知触发时机精细化 — 按指派类型区分（人工工单已处理时通知提交人核实，AI工单验收通过后通知完成） |
 | 2026-09-04 | v2.6.8 | 钉钉通知模板支持 Markdown 编辑 + 实时预览（工具栏/👁预览/模板变量） |
 | 2026-09-04 | v2.6.7 | 工单重启（管理员可重启已结束工单）+ 钉钉Webhook通知（指派/完成/重启通知，支持加签和模板） |
 | 2026-09-04 | v2.6.6 | 系统任务 UPDATE 语句支持列表参数注入，修复 SQL 验证器误报 DDL 危险关键字 |
