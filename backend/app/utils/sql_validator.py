@@ -81,12 +81,30 @@ class SQLValidator:
                     f"检测到危险关键字: {', '.join(dangerous_found)}",
                     warnings
                 )
+        else:
+            # DML 模式：允许 UPDATE/INSERT/DELETE，但仍然拦截破坏性 DDL
+            # （DROP/TRUNCATE/ALTER/CREATE/GRANT/REVOKE 这些不应出现在系统任务中）
+            ddl_dangerous = self._check_dangerous_keywords(sql)
+            # 仅保留 DDL 类危险词，放过 DML（UPDATE/INSERT/DELETE）
+            ddl_only = [k for k in ddl_dangerous if k in ('DROP', 'TRUNCATE', 'ALTER', 'CREATE', 'GRANT', 'REVOKE')]
+            if ddl_only:
+                return ValidationResult(
+                    False,
+                    f"检测到危险DDL关键字: {', '.join(ddl_only)}",
+                    warnings
+                )
 
         # 5. SQL 注入检查
         injection_risks = self._check_sql_injection(sql)
         if allow_dml:
-            # 系统脚本允许多语句（分号），过滤掉分号检查
-            injection_risks = [r for r in injection_risks if r != r";"]
+            # 系统脚本由管理员编写，允许以下模式：
+            # - 分号(;)：多语句分隔
+            # -- 注释(--)：SQL脚本中常见的行注释
+            # - 函数调用(=\s*\w+\s*\()：如 SET col = NOW(), SET col = UUID() 等
+            # - UNION SELECT：管理员可能需要合并查询结果
+            # - EXEC()：可能需要调用存储过程
+            dml_ignored = {r";", r"--", r"=\s*\w+\s*\(", r"union\s+select", r"exec\s*\("}
+            injection_risks = [r for r in injection_risks if r not in dml_ignored]
         if injection_risks:
             return ValidationResult(
                 False,
