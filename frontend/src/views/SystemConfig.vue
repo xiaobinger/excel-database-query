@@ -60,15 +60,20 @@
               <MarkdownEditor v-model="dingtalkForm.dingtalk_template_assign" placeholder="支持 Markdown 语法和模板变量：{ticket_no} {title} {assignee_name} {creator_name}" :height="160" />
               <div style="color: #909399; font-size: 12px; margin-top: 4px">指派人收到工单时发送，自动 @指派人手机号</div>
             </el-form-item>
+            <el-form-item label="已处理通知模板">
+              <MarkdownEditor v-model="dingtalkForm.dingtalk_template_processed" placeholder="支持 Markdown 语法和模板变量：{ticket_no} {title} {assignee_name} {creator_name}" :height="160" />
+              <div style="color: #909399; font-size: 12px; margin-top: 4px">指派给人的工单流转到「已处理」时通知提交人核实，自动 @提交人手机号</div>
+            </el-form-item>
             <el-form-item label="完成通知模板">
               <MarkdownEditor v-model="dingtalkForm.dingtalk_template_complete" placeholder="支持 Markdown 语法和模板变量：{ticket_no} {title} {assignee_name} {creator_name}" :height="160" />
-              <div style="color: #909399; font-size: 12px; margin-top: 4px">提交人核实通过（质检验收）后发送，自动 @提交人手机号</div>
+              <div style="color: #909399; font-size: 12px; margin-top: 4px">人工工单核实通过 或 AI工单监督者验收通过后通知提交人，自动 @提交人手机号</div>
             </el-form-item>
             <el-form-item label="通知规则说明">
               <div style="background: #f8fafc; border: 1px solid #eef2f7; border-radius: 6px; padding: 12px 16px; font-size: 13px; color: #606266; line-height: 1.8">
                 <div><strong>① 指派通知：</strong>工单提交后，@指派人（通过用户表中的手机号）</div>
-                <div><strong>② 完成通知：</strong>提交人核实通过 → 状态变为 closed，@提交人（通过手机号）</div>
-                <div><strong>③ 重启通知：</strong>管理员手动重启已结束工单，@指派人（通过手机号）</div>
+                <div><strong>② 已处理通知：</strong>指派给人的工单流转到「已处理」时，@提交人（通知核实）</div>
+                <div><strong>③ 完成通知：</strong>人工工单提交人核实通过 或 AI工单监督者验收通过 → 状态变为「结束」，@提交人</div>
+                <div><strong>④ 重启通知：</strong>管理员手动重启已结束工单，@指派人（通过手机号）</div>
                 <div><strong>模板变量：</strong>{ticket_no} {title} {assignee_name} {creator_name} {admin_name}</div>
               </div>
             </el-form-item>
@@ -695,6 +700,7 @@ const dingtalkForm = reactive({
   dingtalk_webhook_url: '',
   dingtalk_secret: '',
   dingtalk_template_assign: '',
+  dingtalk_template_processed: '',
   dingtalk_template_complete: '',
 })
 const savingDingtalk = ref(false)
@@ -793,6 +799,7 @@ async function handleSaveDingtalk() {
       { key: 'dingtalk_enabled', value: dingtalkForm.dingtalk_enabled ? 'true' : 'false' },
       { key: 'dingtalk_webhook_url', value: dingtalkForm.dingtalk_webhook_url || '' },
       { key: 'dingtalk_template_assign', value: dingtalkForm.dingtalk_template_assign || '' },
+      { key: 'dingtalk_template_processed', value: dingtalkForm.dingtalk_template_processed || '' },
       { key: 'dingtalk_template_complete', value: dingtalkForm.dingtalk_template_complete || '' },
     ]
     // 加签密钥：仅在填写时提交（加密存储，不回显）

@@ -1919,8 +1919,16 @@ def update_status(ticket_id):
 
     db.session.commit()
 
-    # 钉钉通知：质检验收通过（confirm）→ 通知提交人
-    if action == 'confirm':
+    # 钉钉通知规则：
+    # - 指派给人的工单：complete（processing→processed）→ 通知提交人核实
+    # - 人工/AI工单：confirm（质检验收通过 processed→closed）→ 通知提交人完成
+    if action == 'complete' and ticket.assignee_type == 'user':
+        try:
+            from app.services.dingtalk_service import notify_ticket_processed
+            notify_ticket_processed(ticket)
+        except Exception as e:
+            logger.warning(f'钉钉已处理通知发送失败 ticket_id={ticket.id}: {e}')
+    elif action == 'confirm':
         try:
             from app.services.dingtalk_service import notify_ticket_completed
             notify_ticket_completed(ticket)

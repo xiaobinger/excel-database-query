@@ -561,6 +561,12 @@ def _do_auto_close(ticket_id, app):
         ticket.closed_at = datetime.utcnow()
         _add_comment(ticket, None, f'✅ 监督者最终验收通过{score_text}，工单自动结束\n\n{decision}', 'status_change', is_ai=True)
         db.session.commit()
+        # AI工单监督者验收通过，通知提交人（完成通知）
+        try:
+            from app.services.dingtalk_service import notify_ticket_completed
+            notify_ticket_completed(ticket)
+        except Exception as e:
+            logger.warning(f'钉钉AI完成通知发送失败 ticket_id={ticket.id}: {e}')
     elif has_reject:
         # 监督者验收不通过，检查是否需要重新执行
         score_text = f'，综合评分：{final_score}分' if final_score is not None else ''
@@ -594,6 +600,12 @@ def _do_auto_close(ticket_id, app):
             ticket.closed_at = datetime.utcnow()
             _add_comment(ticket, None, f'⚠️ 已达最大补充处理轮数({max_retry_rounds}轮)，工单强制结束\n\n监督者最终意见：{decision}', 'status_change', is_ai=True)
             db.session.commit()
+            # 强制结束时也通知提交人
+            try:
+                from app.services.dingtalk_service import notify_ticket_completed
+                notify_ticket_completed(ticket)
+            except Exception as e:
+                logger.warning(f'钉钉AI完成通知发送失败 ticket_id={ticket.id}: {e}')
     else:
         # 未按格式输出，保守处理：不结束，记录监督者意见
         logger.warning(f'工单 {ticket.ticket_no} 监督者验收输出格式异常: {decision[:100]}')

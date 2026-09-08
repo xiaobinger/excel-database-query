@@ -27,6 +27,14 @@ DEFAULT_TEMPLATES = {
         "> **提交人**：{creator_name}\n"
         "\n请及时接收并处理该工单。"
     ),
+    'processed': (
+        "### ⏳ 工单待核实\n"
+        "> **工单编号**：{ticket_no}\n"
+        "> **标题**：{title}\n"
+        "> **提交人**：{creator_name}\n"
+        "> **指派人**：{assignee_name}\n"
+        "\n工单已处理完成，请核实处理结果。"
+    ),
     'complete': (
         "### ✅ 工单完成通知\n"
         "> **工单编号**：{ticket_no}\n"
@@ -171,26 +179,61 @@ def notify_ticket_assigned(ticket) -> bool:
     return send_dingtalk_markdown(title, text, at_mobiles=at_mobiles)
 
 
-def notify_ticket_completed(ticket) -> bool:
-    """工单完成通知：质检验收通过后通知提交人
+def _get_assignee_name(ticket) -> str:
+    """获取指派人显示名称（user/AI 通用）"""
+    if ticket.assignee_type == 'ai':
+        return ticket.assignee_agent.name if ticket.assignee_agent else 'AI助手'
+    return ticket.assignee.display_name or ticket.assignee.username if ticket.assignee else ''
 
-    触发时机：提交人核实通过（processed → closed）
+
+def notify_ticket_processed(ticket) -> bool:
+    """工单已处理通知：指派给人的工单流转到「已处理」时通知提交人核实
+
+    触发时机：指派人完成处理（processing → processed）
     @对象：提交人
     """
     creator = ticket.creator
     if not creator:
         return False
 
-    assignee_name = ''
-    if ticket.assignee_type == 'ai':
-        assignee_name = ticket.assignee_agent.name if ticket.assignee_agent else 'AI助手'
-    else:
-        assignee_name = ticket.assignee.display_name or ticket.assignee.username if ticket.assignee else ''
+    context = {
+        'ticket_no': ticket.ticket_no or f'#{ticket.id}',
+        'title': ticket.title or '',
+        'assignee_name': _get_assignee_name(ticket),
+        'creator_name': creator.display_name or creator.username or '',
+    }
+
+    from app.models.system_config import SystemConfig
+    tpl_row = SystemConfig.query.filter_by(config_key='dingtalk_template_processed').first()
+    template = tpl_row.config_value if tpl_row and tpl_row.config_value else DEFAULT_TEMPLATES['processed']
+
+    text = _render_template(template, context)
+
+    at_mobiles = []
+    if creator.phone:
+        at_mobiles.append(creator.phone)
+        text += f"\n\n@{creator.phone}"
+
+    title = f'工单待核实: {ticket.title[:30]}'
+    return send_dingtalk_markdown(title, text, at_mobiles=at_mobiles)
+
+
+def notify_ticket_completed(ticket) -> bool:
+    """工单完成通知：质检验收通过后通知提交人
+
+    触发时机：
+    - 人工工单：提交人核实通过（processed → closed）
+    - AI工单：监督者验收通过自动结束（processed → closed）
+    @对象：提交人
+    """
+    creator = ticket.creator
+    if not creator:
+        return False
 
     context = {
         'ticket_no': ticket.ticket_no or f'#{ticket.id}',
         'title': ticket.title or '',
-        'assignee_name': assignee_name,
+        'assignee_name': _get_assignee_name(ticket),
         'creator_name': creator.display_name or creator.username or '',
         'processed_at': ticket.processed_at.strftime('%Y-%m-%d %H:%M') if ticket.processed_at else '',
     }

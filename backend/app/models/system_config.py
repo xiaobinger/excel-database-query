@@ -29,6 +29,7 @@ class SystemConfig(db.Model):
     DINGTALK_WEBHOOK_URL = 'dingtalk_webhook_url'
     DINGTALK_SECRET = 'dingtalk_secret'  # 加签密钥（加密存储）
     DINGTALK_TEMPLATE_ASSIGN = 'dingtalk_template_assign'       # 指派通知模板
+    DINGTALK_TEMPLATE_PROCESSED = 'dingtalk_template_processed' # 已处理通知模板
     DINGTALK_TEMPLATE_COMPLETE = 'dingtalk_template_complete'   # 完成通知模板
 
     COLUMN_SYNONYM_GROUPS = 'column_synonym_groups'
