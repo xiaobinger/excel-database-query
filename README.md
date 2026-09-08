@@ -23,7 +23,7 @@
 
 <!-- 徽章 -->
 <p>
-  <img src="https://img.shields.io/badge/version-2.6.6-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-2.6.7-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/python-3.10+-yellow?style=flat-square&logo=python&logoColor=white" alt="python" />
   <img src="https://img.shields.io/badge/vue-3-green?style=flat-square&logo=vuedotjs&logoColor=white" alt="vue" />
   <img src="https://img.shields.io/badge/flask-black?style=flat-square&logo=flask&logoColor=white" alt="flask" />
@@ -394,6 +394,7 @@ WHERE merchant_id = :value
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-09-04 | v2.6.7 | 工单重启（管理员可重启已结束工单）+ 钉钉Webhook通知（指派/完成/重启通知，支持加签和模板） |
 | 2026-09-04 | v2.6.6 | 系统任务 UPDATE 语句支持列表参数注入，修复 SQL 验证器误报 DDL 危险关键字 |
 | 2026-09-04 | v2.6.5 | 工单涉及系统标签可点击跳转到业务系统页面；右上角进行中任务运行时间增加分钟精度并实时更新 |
 | 2026-09-03 | v2.6.4 | 执行者Agent支持设置默认监督者 |
