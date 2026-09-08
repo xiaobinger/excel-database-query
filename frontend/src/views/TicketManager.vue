@@ -289,7 +289,7 @@
             </span>
           </el-descriptions-item>
           <el-descriptions-item label="涉及系统">
-            <el-tag v-if="detailData.business_system_name" size="small" effect="plain">{{ detailData.business_system_name }}</el-tag>
+            <el-tag v-if="detailData.business_system_name" size="small" effect="plain" class="clickable-system-tag" @click="goToBusinessSystem">{{ detailData.business_system_name }}</el-tag>
             <span v-else>-</span>
           </el-descriptions-item>
           <el-descriptions-item label="提交时间">{{ detailData.submitted_at || '-' }}</el-descriptions-item>
@@ -608,12 +608,14 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import api from '../api'
 import { useAppStore } from '../stores'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { marked } from 'marked'
 import MarkdownEditor from '../components/MarkdownEditor.vue'
 
+const router = useRouter()
 const store = useAppStore()
 const isAdmin = computed(() => store.isAdmin)
 
@@ -919,6 +921,14 @@ async function fetchBusinessSystems() {
     const data = res.data || res || []
     businessSystems.value = Array.isArray(data) ? data : (data.data || [])
   } catch {}
+}
+
+function goToBusinessSystem() {
+  if (detailData.value && detailData.value.business_system_id) {
+    router.push({ path: '/business', query: { highlight: detailData.value.business_system_id } })
+  } else {
+    router.push('/business')
+  }
 }
 
 async function fetchAiAgents() {
@@ -1585,6 +1595,16 @@ onUnmounted(() => {
 <style scoped>
 .ticket-manager {
   max-width: 1400px;
+}
+
+.clickable-system-tag {
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.clickable-system-tag:hover {
+  color: var(--primary-color, #409eff);
+  border-color: var(--primary-color, #409eff);
+  background: var(--primary-light, #ecf5ff);
 }
 
 /* 创建工单对话框 - 分区样式 */

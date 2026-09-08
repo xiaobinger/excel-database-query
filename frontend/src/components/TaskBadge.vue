@@ -62,7 +62,7 @@
             成功 {{ task.success_count || 0 }} / 失败 {{ task.failure_count || 0 }} / 共 {{ task.total_rows }}
           </div>
           <div class="task-foot">
-            <span class="task-time">{{ formatTime(task.started_at || task.created_at) }}</span>
+            <span class="task-time">{{ formatTime(task.started_at || task.created_at) }}{{ _tick ? '' : '' }}</span>
             <span class="task-goto">查看 <i class="fas fa-arrow-right"></i></span>
           </div>
         </div>
@@ -72,7 +72,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useTaskMonitorStore } from '../stores/taskMonitor'
 
@@ -113,10 +113,19 @@ function formatTime(iso) {
     const now = new Date()
     const diff = (now - d) / 1000
     if (diff < 60) return '刚刚开始'
-    if (diff < 3600) return `已运行 ${Math.floor(diff / 60)} 分钟`
-    return `已运行 ${Math.floor(diff / 3600)} 小时`
+    const hours = Math.floor(diff / 3600)
+    const minutes = Math.floor((diff % 3600) / 60)
+    if (hours === 0) return `已运行 ${minutes} 分钟`
+    if (minutes === 0) return `已运行 ${hours} 小时`
+    return `已运行 ${hours} 小时 ${minutes} 分钟`
   } catch (e) { return '' }
 }
+
+// 实时更新：每60秒强制刷新一次，让运行时间实时跳动
+let _tickTimer = null
+const _tick = ref(0)
+onMounted(() => { _tickTimer = setInterval(() => { _tick.value++ }, 60000) })
+onUnmounted(() => { if (_tickTimer) { clearInterval(_tickTimer); _tickTimer = null } })
 
 async function refresh() {
   loading.value = true
