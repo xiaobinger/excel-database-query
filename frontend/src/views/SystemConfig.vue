@@ -42,6 +42,47 @@
           </el-form>
         </el-tab-pane>
 
+        <el-tab-pane label="钉钉通知" name="dingtalk">
+          <el-form :model="dingtalkForm" label-width="120px" style="max-width: 700px; margin-top: 16px">
+            <el-form-item label="启用钉钉通知">
+              <el-switch v-model="dingtalkForm.dingtalk_enabled" active-text="是" inactive-text="否" />
+              <span style="margin-left: 12px; color: #909399; font-size: 12px">关闭后所有钉钉通知将被跳过</span>
+            </el-form-item>
+            <el-form-item label="Webhook 地址">
+              <el-input v-model="dingtalkForm.dingtalk_webhook_url" placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxx" />
+            </el-form-item>
+            <el-form-item label="加签密钥（Secret）">
+              <el-input v-model="dingtalkForm.dingtalk_secret" type="password" show-password placeholder="HMAC-SHA256 加签密钥，留空则不加签" />
+              <div style="color: #909399; font-size: 12px; margin-top: 4px">在钉钉群机器人设置中获取，加密存储于数据库</div>
+            </el-form-item>
+            <el-divider content-position="left">通知模板</el-divider>
+            <el-form-item label="指派通知模板">
+              <el-input v-model="dingtalkForm.dingtalk_template_assign" type="textarea" :rows="4" placeholder="支持占位符：{ticket_no} {title} {assignee_name} {creator_name}" />
+              <div style="color: #909399; font-size: 12px; margin-top: 4px">指派人收到工单时发送，自动 @指派人手机号</div>
+            </el-form-item>
+            <el-form-item label="完成通知模板">
+              <el-input v-model="dingtalkForm.dingtalk_template_complete" type="textarea" :rows="4" placeholder="支持占位符：{ticket_no} {title} {assignee_name} {creator_name}" />
+              <div style="color: #909399; font-size: 12px; margin-top: 4px">提交人核实通过（质检验收）后发送，自动 @提交人手机号</div>
+            </el-form-item>
+            <el-form-item label="通知规则说明">
+              <div style="background: #f8fafc; border: 1px solid #eef2f7; border-radius: 6px; padding: 12px 16px; font-size: 13px; color: #606266; line-height: 1.8">
+                <div><strong>① 指派通知：</strong>工单提交后，@指派人（通过用户表中的手机号）</div>
+                <div><strong>② 完成通知：</strong>提交人核实通过 → 状态变为 closed，@提交人（通过手机号）</div>
+                <div><strong>③ 重启通知：</strong>管理员手动重启已结束工单，@指派人（通过手机号）</div>
+                <div><strong>模板变量：</strong>{ticket_no} {title} {assignee_name} {creator_name} {admin_name}</div>
+              </div>
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="savingDingtalk" @click="handleSaveDingtalk">
+                <i class="fas fa-save"></i> 保存配置
+              </el-button>
+              <el-button :loading="testingDingtalk" @click="handleTestDingtalk">
+                <i class="fab fa-rocketchat"></i> 发送测试消息
+              </el-button>
+            </el-form-item>
+          </el-form>
+        </el-tab-pane>
+
         <el-tab-pane label="列名同义词" name="synonym">
           <div class="synonym-section">
             <div class="synonym-header">
@@ -647,6 +688,17 @@ const emailForm = reactive({
   email_from_address: ''
 })
 
+// 钉钉通知配置
+const dingtalkForm = reactive({
+  dingtalk_enabled: false,
+  dingtalk_webhook_url: '',
+  dingtalk_secret: '',
+  dingtalk_template_assign: '',
+  dingtalk_template_complete: '',
+})
+const savingDingtalk = ref(false)
+const testingDingtalk = ref(false)
+
 const synonymGroups = ref([])
 const savingSynonym = ref(false)
 const addingWordIndex = ref(-1)
@@ -667,6 +719,13 @@ async function fetchConfig() {
           emailForm[key] = value === true || value === 'true' || value === '1'
         } else {
           emailForm[key] = value ?? ''
+        }
+      }
+      if (key && key in dingtalkForm) {
+        if (key === 'dingtalk_enabled') {
+          dingtalkForm[key] = value === true || value === 'true' || value === '1'
+        } else {
+          dingtalkForm[key] = value ?? ''
         }
       }
       if (key === 'column_synonym_groups' && value) {
@@ -723,6 +782,40 @@ async function handleTestEmail() {
   } catch {
   } finally {
     testing.value = false
+  }
+}
+
+async function handleSaveDingtalk() {
+  savingDingtalk.value = true
+  try {
+    const items = [
+      { key: 'dingtalk_enabled', value: dingtalkForm.dingtalk_enabled ? 'true' : 'false' },
+      { key: 'dingtalk_webhook_url', value: dingtalkForm.dingtalk_webhook_url || '' },
+      { key: 'dingtalk_template_assign', value: dingtalkForm.dingtalk_template_assign || '' },
+      { key: 'dingtalk_template_complete', value: dingtalkForm.dingtalk_template_complete || '' },
+    ]
+    // 加签密钥：仅在填写时提交（加密存储，不回显）
+    if (dingtalkForm.dingtalk_secret) {
+      items.push({ key: 'dingtalk_secret', value: dingtalkForm.dingtalk_secret })
+    }
+    await api.system.updateConfig({ items })
+    dingtalkForm.dingtalk_secret = ''
+    ElMessage.success('钉钉配置保存成功')
+  } catch {
+  } finally {
+    savingDingtalk.value = false
+  }
+}
+
+async function handleTestDingtalk() {
+  testingDingtalk.value = true
+  try {
+    await api.system.testDingtalk()
+    ElMessage.success('测试消息已发送，请检查钉钉群')
+  } catch (e) {
+    ElMessage.error('测试消息发送失败，请检查 Webhook 地址和加签密钥')
+  } finally {
+    testingDingtalk.value = false
   }
 }
 

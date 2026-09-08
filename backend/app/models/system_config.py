@@ -24,6 +24,13 @@ class SystemConfig(db.Model):
     EMAIL_FROM_NAME = 'email_from_name'
     EMAIL_FROM_ADDRESS = 'email_from_address'
 
+    # 钉钉通知配置
+    DINGTALK_ENABLED = 'dingtalk_enabled'
+    DINGTALK_WEBHOOK_URL = 'dingtalk_webhook_url'
+    DINGTALK_SECRET = 'dingtalk_secret'  # 加签密钥（加密存储）
+    DINGTALK_TEMPLATE_ASSIGN = 'dingtalk_template_assign'       # 指派通知模板
+    DINGTALK_TEMPLATE_COMPLETE = 'dingtalk_template_complete'   # 完成通知模板
+
     COLUMN_SYNONYM_GROUPS = 'column_synonym_groups'
 
     def set_encrypted_value(self, val: str):

@@ -158,6 +158,7 @@ const system = {
   getConfig: () => http.get('/system/config'),
   updateConfig: (data) => http.put('/system/config', data),
   testEmail: (data) => http.post('/system/test-email', data),
+  testDingtalk: () => http.post('/system/test-dingtalk'),
   batchDelete: (ids) => http.post('/system/config/batch-delete', { ids }),
   deleteAll: () => http.delete('/system/config/all'),
   getMenuConfig: () => http.get('/system/menu-config'),

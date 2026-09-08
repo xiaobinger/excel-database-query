@@ -454,6 +454,9 @@
           <el-button v-if="isAdmin && detailData.status !== 'closed'" type="info" @click="handleAction('close')">
             <i class="fas fa-times-circle"></i> 关闭工单
           </el-button>
+          <el-button v-if="isAdmin && detailData.status === 'closed'" type="warning" @click="handleRestart">
+            <i class="fas fa-redo-alt"></i> 重启工单
+          </el-button>
           <el-popconfirm v-if="isAdmin" title="确定删除此工单？此操作不可恢复" @confirm="handleDelete">
             <template #reference>
               <el-button type="danger" plain><i class="fas fa-trash"></i> 删除</el-button>
@@ -1287,6 +1290,29 @@ async function handleAction(action) {
   try {
     const res = await api.tickets.updateStatus(detailData.value.id, { action })
     ElMessage.success(res.message || '操作成功')
+    detailData.value = res.data || detailData.value
+    fetchTickets()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '操作失败')
+  } finally {
+    actionLoading.value = false
+  }
+}
+
+async function handleRestart() {
+  try {
+    await ElMessageBox.confirm(
+      '确定要重启该工单吗？\n\n重启后将：\n• 状态恢复为「已提交」\n• 清空AI处理结果和待确认任务信息\n• 保留原指派人/Agent',
+      '确认重启工单',
+      { confirmButtonText: '确定重启', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  actionLoading.value = true
+  try {
+    const res = await api.tickets.updateStatus(detailData.value.id, { action: 'restart' })
+    ElMessage.success(res.message || '工单已重启')
     detailData.value = res.data || detailData.value
     fetchTickets()
   } catch (e) {

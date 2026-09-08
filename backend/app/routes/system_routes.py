@@ -114,6 +114,11 @@ def update_config():
             if value:
                 config.set_encrypted_value(value)
             config.config_value = None
+        elif key == SystemConfig.DINGTALK_SECRET:
+            # 钉钉加签密钥加密存储
+            if value:
+                config.set_encrypted_value(value)
+            config.config_value = None
         else:
             config.config_value = str(value) if value is not None else None
 
@@ -224,6 +229,22 @@ def test_email():
         return jsonify({'success': True, 'message': '测试邮件发送成功，请检查收件箱（含垃圾邮件文件夹）'})
     except Exception as e:
         return jsonify({'success': False, 'message': f'邮件发送失败: {str(e)}'}), 500
+
+
+@system_bp.route('/test-dingtalk', methods=['POST'])
+@permission_required('system')
+def test_dingtalk():
+    """测试钉钉通知发送"""
+    from app.services.dingtalk_service import send_dingtalk_markdown
+    result = send_dingtalk_markdown(
+        title='测试通知 - Excel Database Query System',
+        text='这是一条测试通知，如果您收到此消息，说明钉钉配置正确。',
+        at_mobiles=[],
+        at_all=False,
+    )
+    if result:
+        return jsonify({'success': True, 'message': '钉钉测试通知发送成功，请检查钉钉'})
+    return jsonify({'success': False, 'message': '钉钉通知发送失败，请检查配置'}), 500
 
 
 # ── 菜单配置 API ──────────────────────────────────────────

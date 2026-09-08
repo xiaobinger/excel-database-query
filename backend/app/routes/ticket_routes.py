@@ -1422,7 +1422,20 @@ def create_ticket():
     # 如果指派给AI，自动触发AI处理
     if assignee_type == 'ai':
         _trigger_ai_processing(ticket)
+        # 钉钉通知：AI工单不@人，仅发送指派提醒
+        try:
+            from app.services.dingtalk_service import notify_ticket_assigned
+            notify_ticket_assigned(ticket)
+        except Exception as e:
+            logger.warning(f'钉钉指派通知发送失败 ticket_id={ticket.id}: {e}')
         return jsonify({'success': True, 'data': ticket.to_dict(), 'message': '工单已提交，AI正在处理中'})
+
+    # 钉钉通知：指派人收到工单提醒（@指派人手机号）
+    try:
+        from app.services.dingtalk_service import notify_ticket_assigned
+        notify_ticket_assigned(ticket)
+    except Exception as e:
+        logger.warning(f'钉钉指派通知发送失败 ticket_id={ticket.id}: {e}')
 
     return jsonify({'success': True, 'data': ticket.to_dict(), 'message': '工单已提交'})
 
@@ -1589,7 +1602,20 @@ def submit_draft(ticket_id):
     # 如果指派给AI，自动触发AI处理
     if ticket.assignee_type == 'ai':
         _trigger_ai_processing(ticket)
+        # 钉钉通知：AI工单不@人，仅发送指派提醒
+        try:
+            from app.services.dingtalk_service import notify_ticket_assigned
+            notify_ticket_assigned(ticket)
+        except Exception as e:
+            logger.warning(f'钉钉指派通知发送失败 ticket_id={ticket.id}: {e}')
         return jsonify({'success': True, 'data': ticket.to_dict(), 'message': '工单已提交，AI正在处理中'})
+
+    # 钉钉通知：指派人收到工单提醒（@指派人手机号）
+    try:
+        from app.services.dingtalk_service import notify_ticket_assigned
+        notify_ticket_assigned(ticket)
+    except Exception as e:
+        logger.warning(f'钉钉指派通知发送失败 ticket_id={ticket.id}: {e}')
 
     return jsonify({'success': True, 'data': ticket.to_dict(), 'message': '工单已提交'})
 
@@ -1609,6 +1635,7 @@ def update_status(ticket_id):
       appeal         提交人申诉重启（需reason） rejected → submitted
       reassign       提交人重新指派       pending_assignment → submitted（需 assignee_id 或 assignee_type='ai'）
       transfer       被指派人移交工单     received/processing → submitted（需 assignee_id 或 assignee_type='ai'）
+      restart        管理员重启工单       closed → submitted
       close          管理员关闭           any → closed
 
     请求体：{ action: str, reason?: str, comment?: str, assignee_id?: int, assignee_type?: str }
@@ -1642,6 +1669,7 @@ def update_status(ticket_id):
         'appeal': ([STATUS_REJECTED], STATUS_SUBMITTED, 'creator', True, 'appeal'),
         'reassign': ([STATUS_PENDING_ASSIGNMENT, STATUS_PENDING_CONFIRMATION], STATUS_SUBMITTED, 'creator', False, 'status_change'),
         'transfer': ([STATUS_RECEIVED, STATUS_PROCESSING], STATUS_SUBMITTED, 'assignee', False, 'status_change'),
+        'restart': ([STATUS_CLOSED], STATUS_SUBMITTED, 'admin', False, 'status_change'),
         'close': (list(STATUS_LABELS.keys()), STATUS_CLOSED, 'admin', False, 'status_change'),
     }
 
@@ -1668,6 +1696,41 @@ def update_status(ticket_id):
     # 必填原因校验
     if requires_reason and not reason:
         return jsonify({'success': False, 'message': '此操作必须填写原因'}), 400
+
+    # 管理员重启已结束工单：closed → submitted，保留原指派，重置时间戳和AI状态
+    if action == 'restart':
+        ticket.status = STATUS_SUBMITTED
+        ticket.submitted_at = now
+        ticket.received_at = None
+        ticket.processed_at = None
+        ticket.closed_at = None
+        ticket.reject_reason = None
+        ticket.appeal_reason = None
+        # 清空上次AI处理结果和待确认任务信息
+        ticket.ai_result = None
+        ticket.clear_pending_action()
+        # 重置多agent协作状态
+        ticket.collaboration_rounds = 0
+        ticket.collaboration_log = None
+        ticket.final_score = None
+        _add_comment(ticket, current_user.id, comment_text or '管理员重启了已结束的工单', 'status_change')
+        db.session.commit()
+
+        # 钉钉通知：重启 → @指派人（user类型）
+        try:
+            from app.services.dingtalk_service import notify_ticket_restarted
+            admin_name = current_user.display_name or current_user.username or '管理员'
+            notify_ticket_restarted(ticket, admin_name)
+        except Exception as e:
+            logger.warning(f'钉钉重启通知发送失败 ticket_id={ticket.id}: {e}')
+
+        # 如果原指派给AI，重新触发AI处理
+        if ticket.assignee_type == 'ai':
+            _trigger_ai_processing(ticket)
+            return jsonify({'success': True, 'data': ticket.to_dict(include_comments=True),
+                            'message': '工单已重启，AI正在处理中'})
+        return jsonify({'success': True, 'data': ticket.to_dict(include_comments=True),
+                        'message': '工单已重启'})
 
     # 重新指派 / 重新发起 / 移交工单 特殊处理（都需要重新指派）
     if action in ('reassign', 'reopen', 'transfer'):
@@ -1855,6 +1918,14 @@ def update_status(ticket_id):
         _add_comment(ticket, current_user.id, status_comment, 'status_change')
 
     db.session.commit()
+
+    # 钉钉通知：质检验收通过（confirm）→ 通知提交人
+    if action == 'confirm':
+        try:
+            from app.services.dingtalk_service import notify_ticket_completed
+            notify_ticket_completed(ticket)
+        except Exception as e:
+            logger.warning(f'钉钉完成通知发送失败 ticket_id={ticket.id}: {e}')
 
     return jsonify({
         'success': True,
