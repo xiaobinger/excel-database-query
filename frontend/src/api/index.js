@@ -40,6 +40,9 @@ const auth = {
   login: (data) => http.post('/auth/login', data),
   me: () => http.get('/auth/me'),
   changePassword: (data) => http.put('/auth/password', data),
+  updateProfile: (data) => http.put('/auth/profile', data),
+  uploadAvatar: (formData) => http.post('/auth/avatar', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  deleteAvatar: () => http.delete('/auth/avatar'),
 }
 
 const users = {

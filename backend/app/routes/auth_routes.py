@@ -139,3 +139,92 @@ def change_password():
     db.session.commit()
 
     return jsonify({'success': True, 'message': 'Password changed successfully'})
+
+
+@auth_bp.route('/profile', methods=['PUT'])
+@login_required
+def update_profile():
+    """更新个人资料"""
+    user = get_current_user()
+    data = request.get_json() or {}
+
+    if 'display_name' in data:
+        user.display_name = (data['display_name'] or '').strip() or None
+    if 'phone' in data:
+        user.phone = (data['phone'] or '').strip() or None
+    if 'gender' in data and data['gender'] in ('male', 'female', 'other'):
+        user.gender = data['gender']
+
+    db.session.commit()
+    return jsonify({'success': True, 'message': '资料已更新', 'data': user.to_dict_with_role()})
+
+
+import os
+import uuid
+from werkzeug.utils import secure_filename
+
+ALLOWED_AVATAR_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'}
+AVATAR_FOLDER = 'uploads/avatars'
+
+
+def _allowed_avatar(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_AVATAR_EXTENSIONS
+
+
+@auth_bp.route('/avatar', methods=['POST'])
+@login_required
+def upload_avatar():
+    """上传头像"""
+    user = get_current_user()
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'message': '请选择图片文件'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'success': False, 'message': '未选择文件'}), 400
+
+    if not _allowed_avatar(file.filename):
+        return jsonify({'success': False, 'message': '仅支持 PNG/JPG/GIF/WEBP/BMP 格式'}), 400
+
+    # 保存文件
+    os.makedirs(AVATAR_FOLDER, exist_ok=True)
+    ext = file.filename.rsplit('.', 1)[1].lower()
+    new_filename = f'{uuid.uuid4().hex}.{ext}'
+    filepath = os.path.join(AVATAR_FOLDER, new_filename)
+    file.save(filepath)
+
+    # 删除旧头像
+    if user.avatar:
+        old_path = os.path.join(AVATAR_FOLDER, os.path.basename(user.avatar))
+        if os.path.exists(old_path):
+            os.remove(old_path)
+
+    user.avatar = new_filename
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'message': '头像上传成功',
+        'data': {'avatar': user.avatar},
+    })
+
+
+@auth_bp.route('/avatar', methods=['DELETE'])
+@login_required
+def delete_avatar():
+    """删除头像"""
+    user = get_current_user()
+    if user.avatar:
+        filepath = os.path.join(AVATAR_FOLDER, os.path.basename(user.avatar))
+        if os.path.exists(filepath):
+            os.remove(filepath)
+        user.avatar = None
+        db.session.commit()
+    return jsonify({'success': True, 'message': '头像已删除'})
+
+
+@auth_bp.route('/avatar/<filename>', methods=['GET'])
+def serve_avatar(filename):
+    """提供头像文件访问"""
+    from flask import send_from_directory, current_app
+    return send_from_directory(AVATAR_FOLDER, filename)

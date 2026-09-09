@@ -72,7 +72,7 @@
           <TaskBadge />
           <el-dropdown trigger="click" @command="handleUserCommand">
             <div class="user-info">
-              <el-avatar :size="30" class="user-avatar">
+              <el-avatar :size="30" class="user-avatar" :src="avatarUrl" :fit="cover">
                 <i class="fas fa-user"></i>
               </el-avatar>
               <span class="user-name">{{ displayName }}</span>
@@ -80,10 +80,13 @@
             </div>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="changePassword">
+                <el-dropdown-item command="profile">
+                  <i class="fas fa-user-circle"></i> 个人中心
+                </el-dropdown-item>
+                <el-dropdown-item command="changePassword" divided>
                   <i class="fas fa-key"></i> 修改密码
                 </el-dropdown-item>
-                <el-dropdown-item command="logout" divided>
+                <el-dropdown-item command="logout">
                   <i class="fas fa-sign-out-alt"></i> 退出登录
                 </el-dropdown-item>
               </el-dropdown-menu>
@@ -135,6 +138,59 @@
         <el-button type="primary" :loading="passwordSubmitting" @click="handleChangePassword">确定</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="profileDialogVisible"
+      title="个人中心"
+      width="480px"
+      destroy-on-close
+      :close-on-click-modal="false"
+    >
+      <el-form :model="profileForm" label-width="80px" label-position="right">
+        <el-form-item label="头像">
+          <div class="avatar-uploader">
+            <el-avatar :size="80" :src="profileForm.avatarUrl" :fit="cover" class="profile-avatar">
+              <i class="fas fa-user" style="font-size: 32px"></i>
+            </el-avatar>
+            <div class="avatar-actions">
+              <el-upload
+                :show-file-list="false"
+                :before-upload="beforeAvatarUpload"
+                :http-request="handleAvatarUpload"
+                accept="image/*"
+              >
+                <el-button type="primary" size="small" :loading="avatarUploading">
+                  <i class="fas fa-upload"></i> 上传头像
+                </el-button>
+              </el-upload>
+              <el-button v-if="profileForm.avatarUrl" type="danger" size="small" text @click="handleDeleteAvatar">
+                <i class="fas fa-trash"></i> 删除
+              </el-button>
+              <div class="avatar-tip">支持 JPG/PNG/GIF/WEBP，≤2MB</div>
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item label="用户名">
+          <el-input :value="profileForm.username" disabled />
+        </el-form-item>
+        <el-form-item label="昵称">
+          <el-input v-model="profileForm.display_name" placeholder="请输入昵称" />
+        </el-form-item>
+        <el-form-item label="性别">
+          <el-radio-group v-model="profileForm.gender">
+            <el-radio value="male">男</el-radio>
+            <el-radio value="female">女</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="手机号">
+          <el-input v-model="profileForm.phone" placeholder="请输入手机号" maxlength="11" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="profileDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="profileSubmitting" @click="handleSaveProfile">保存</el-button>
+      </template>
+    </el-dialog>
   </el-container>
 </template>
 
@@ -159,6 +215,17 @@ const passwordDialogVisible = ref(false)
 const passwordSubmitting = ref(false)
 const passwordFormRef = ref(null)
 
+const profileDialogVisible = ref(false)
+const profileSubmitting = ref(false)
+const avatarUploading = ref(false)
+const profileForm = reactive({
+  username: '',
+  display_name: '',
+  gender: 'male',
+  phone: '',
+  avatarUrl: '',
+})
+
 function toggleCollapse() {
   isCollapsed.value = !isCollapsed.value
   localStorage.setItem('sidebar_collapsed', String(isCollapsed.value))
@@ -169,6 +236,13 @@ const currentYear = new Date().getFullYear()
 
 const displayName = computed(() => {
   return store.user?.display_name || store.user?.username || ''
+})
+
+const avatarUrl = computed(() => {
+  if (store.user?.avatar) {
+    return `/api/auth/avatar/${store.user.avatar}`
+  }
+  return ''
 })
 
 const currentTitle = computed(() => route.meta?.title || titleMap[route.path] || '仪表盘')
@@ -227,8 +301,85 @@ function handleUserCommand(command) {
   if (command === 'changePassword') {
     Object.assign(passwordForm, { old_password: '', new_password: '', confirm_password: '' })
     passwordDialogVisible.value = true
+  } else if (command === 'profile') {
+    openProfileDialog()
   } else if (command === 'logout') {
     store.logout()
+  }
+}
+
+function openProfileDialog() {
+  const u = store.user || {}
+  Object.assign(profileForm, {
+    username: u.username || '',
+    display_name: u.display_name || '',
+    gender: u.gender || 'male',
+    phone: u.phone || '',
+    avatarUrl: u.avatar ? `/api/auth/avatar/${u.avatar}` : '',
+  })
+  profileDialogVisible.value = true
+}
+
+async function handleSaveProfile() {
+  profileSubmitting.value = true
+  try {
+    const res = await api.auth.updateProfile({
+      display_name: profileForm.display_name,
+      gender: profileForm.gender,
+      phone: profileForm.phone,
+    })
+    if (res.data) {
+      store.user = { ...store.user, ...res.data }
+    }
+    ElMessage.success('资料已更新')
+    profileDialogVisible.value = false
+  } catch {
+  } finally {
+    profileSubmitting.value = false
+  }
+}
+
+function beforeAvatarUpload(file) {
+  const isImage = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp'].includes(file.type)
+  const isLt2M = file.size / 1024 / 1024 < 2
+  if (!isImage) {
+    ElMessage.error('仅支持 JPG/PNG/GIF/WEBP/BMP 格式')
+    return false
+  }
+  if (!isLt2M) {
+    ElMessage.error('图片大小不能超过 2MB')
+    return false
+  }
+  return true
+}
+
+async function handleAvatarUpload({ file }) {
+  avatarUploading.value = true
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+    const res = await api.auth.uploadAvatar(formData)
+    if (res.data?.avatar) {
+      const newUrl = `/api/auth/avatar/${res.data.avatar}?t=${Date.now()}`
+      profileForm.avatarUrl = newUrl
+      store.user = { ...store.user, avatar: res.data.avatar }
+    }
+    ElMessage.success('头像上传成功')
+  } catch {
+  } finally {
+    avatarUploading.value = false
+  }
+}
+
+async function handleDeleteAvatar() {
+  try {
+    await api.auth.deleteAvatar()
+    profileForm.avatarUrl = ''
+    if (store.user) {
+      store.user = { ...store.user, avatar: null }
+    }
+    ElMessage.success('头像已删除')
+  } catch {
   }
 }
 
@@ -483,5 +634,27 @@ onUnmounted(() => {
 
 .footer-divider {
   color: #c0c4cc;
+}
+
+.avatar-uploader {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.profile-avatar {
+  background: var(--user-avatar-bg);
+  flex-shrink: 0;
+}
+
+.avatar-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.avatar-tip {
+  color: #909399;
+  font-size: 12px;
 }
 </style>

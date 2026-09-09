@@ -14,6 +14,7 @@ class User(db.Model):
     display_name = db.Column(db.String(100))
     gender = db.Column(db.String(10), default='male')
     phone = db.Column(db.String(20), comment='手机号')
+    avatar = db.Column(db.String(500), comment='头像文件路径')
     role_id = db.Column(db.Integer, db.ForeignKey('roles.id'))
     is_active = db.Column(db.Boolean, default=True)
     lock_until = db.Column(db.DateTime, nullable=True, comment='账号锁定截止时间')
@@ -154,6 +155,7 @@ class User(db.Model):
             'display_name': self.display_name,
             'gender': self.gender or 'male',
             'phone': self.phone or '',
+            'avatar': self.avatar or '',
             'role_id': self.role_id,
             'is_active': self.is_active,
             'script_ids': self.get_script_ids(),
