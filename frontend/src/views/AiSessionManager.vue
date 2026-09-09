@@ -77,7 +77,8 @@
           @mouseleave="msg._showDelete = false"
         >
           <div class="dialog-msg-avatar">
-            <i :class="msg.role === 'user' ? 'fas fa-user' : 'fas fa-robot'"></i>
+            <img v-if="msg.role === 'user' && userAvatarUrl" :src="userAvatarUrl" class="dialog-msg-avatar-img" alt="" />
+            <i v-else :class="msg.role === 'user' ? 'fas fa-user' : 'fas fa-robot'"></i>
           </div>
           <div class="dialog-msg-content">
             <!-- 删除按钮（悬浮显示） -->
@@ -136,6 +137,15 @@ import { useAppStore } from '../stores'
 import { marked } from 'marked'
 
 const store = useAppStore()
+
+// 用户头像（有头像时用户消息显示实际图片，否则回退到图标）
+const userAvatarUrl = computed(() => {
+  if (store.user?.avatar) {
+    return `/api/auth/avatar/${store.user.avatar}`
+  }
+  return ''
+})
+
 const sessions = ref([])
 const users = ref([])
 const userMap = ref({})
@@ -347,6 +357,14 @@ onMounted(() => {
   justify-content: center;
   flex-shrink: 0;
   font-size: 12px;
+  overflow: hidden;
+}
+
+.dialog-msg-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 .dialog-msg.assistant .dialog-msg-avatar {
   background: #f0f2f5;

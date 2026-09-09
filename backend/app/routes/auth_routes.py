@@ -162,9 +162,16 @@ def update_profile():
 import os
 import uuid
 from werkzeug.utils import secure_filename
+from flask import current_app
 
 ALLOWED_AVATAR_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'}
-AVATAR_FOLDER = 'uploads/avatars'
+
+def _get_avatar_folder():
+    """获取头像存储绝对路径"""
+    base_dir = current_app.config.get('UPLOAD_FOLDER', os.path.join(os.path.dirname(os.path.dirname(__file__)), 'uploads'))
+    avatar_dir = os.path.join(base_dir, 'avatars')
+    os.makedirs(avatar_dir, exist_ok=True)
+    return avatar_dir
 
 
 def _allowed_avatar(filename):
@@ -187,15 +194,15 @@ def upload_avatar():
         return jsonify({'success': False, 'message': '仅支持 PNG/JPG/GIF/WEBP/BMP 格式'}), 400
 
     # 保存文件
-    os.makedirs(AVATAR_FOLDER, exist_ok=True)
+    avatar_dir = _get_avatar_folder()
     ext = file.filename.rsplit('.', 1)[1].lower()
     new_filename = f'{uuid.uuid4().hex}.{ext}'
-    filepath = os.path.join(AVATAR_FOLDER, new_filename)
+    filepath = os.path.join(avatar_dir, new_filename)
     file.save(filepath)
 
     # 删除旧头像
     if user.avatar:
-        old_path = os.path.join(AVATAR_FOLDER, os.path.basename(user.avatar))
+        old_path = os.path.join(avatar_dir, os.path.basename(user.avatar))
         if os.path.exists(old_path):
             os.remove(old_path)
 
@@ -215,7 +222,8 @@ def delete_avatar():
     """删除头像"""
     user = get_current_user()
     if user.avatar:
-        filepath = os.path.join(AVATAR_FOLDER, os.path.basename(user.avatar))
+        avatar_dir = _get_avatar_folder()
+        filepath = os.path.join(avatar_dir, os.path.basename(user.avatar))
         if os.path.exists(filepath):
             os.remove(filepath)
         user.avatar = None
@@ -227,4 +235,5 @@ def delete_avatar():
 def serve_avatar(filename):
     """提供头像文件访问"""
     from flask import send_from_directory, current_app
-    return send_from_directory(AVATAR_FOLDER, filename)
+    avatar_dir = _get_avatar_folder()
+    return send_from_directory(avatar_dir, filename)

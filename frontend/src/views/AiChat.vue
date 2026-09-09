@@ -71,7 +71,8 @@
         <div class="messages-area" ref="messagesRef">
           <div v-for="msg in messages" :key="msg.id" class="message" :class="[msg.role, { streaming: msg._streaming }]" @mouseenter="msg._showActions = true" @mouseleave="msg._showActions = false">
             <div class="message-avatar">
-              <i :class="msg.role === 'user' ? 'fas fa-user' : 'fas fa-robot'"></i>
+              <img v-if="msg.role === 'user' && userAvatarUrl" :src="userAvatarUrl" class="message-avatar-img" alt="" />
+              <i v-else :class="msg.role === 'user' ? 'fas fa-user' : 'fas fa-robot'"></i>
             </div>
             <div class="message-content" :class="{ 'full-width': msg._type === 'tool' || msg._type === 'file' || msg._type === 'lookup' || msg._type === 'ticket' }">
               <!-- 消息发送时间 -->
@@ -597,7 +598,10 @@
           </div>
           <!-- 排队消息提示 -->
           <div v-if="loading && queuedMessage" class="message assistant queued-message queued-slide-in">
-            <div class="message-avatar queued-avatar-pulse"><i class="fas fa-clock"></i></div>
+            <div class="message-avatar queued-avatar-pulse">
+              <img v-if="userAvatarUrl" :src="userAvatarUrl" class="message-avatar-img" alt="" />
+              <i v-else class="fas fa-clock"></i>
+            </div>
             <div class="message-content">
               <div class="queued-msg-card">
                 <div class="queued-badge"><i class="fas fa-layer-group"></i> 排队中</div>
@@ -1467,6 +1471,14 @@ const uploadedFile = ref(null)
 const store = useAppStore()
 
 const isAdmin = computed(() => store.isAdmin)
+
+// 用户头像（有头像时用户消息显示实际图片，否则回退到图标）
+const userAvatarUrl = computed(() => {
+  if (store.user?.avatar) {
+    return `/api/auth/avatar/${store.user.avatar}`
+  }
+  return ''
+})
 
 // @mention model selection
 const activeModels = ref([])
@@ -5273,6 +5285,14 @@ onActivated(() => {
   justify-content: center;
   flex-shrink: 0;
   font-size: 14px;
+  overflow: hidden;
+}
+
+.message-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .message.user .message-avatar {
