@@ -77,7 +77,7 @@
           @mouseleave="msg._showDelete = false"
         >
           <div class="dialog-msg-avatar">
-            <img v-if="msg.role === 'user' && userAvatarUrl" :src="userAvatarUrl" class="dialog-msg-avatar-img" alt="" />
+            <img v-if="msg.role === 'user' && chatUserAvatarUrl" :src="chatUserAvatarUrl" class="dialog-msg-avatar-img" alt="" />
             <i v-else :class="msg.role === 'user' ? 'fas fa-user' : 'fas fa-robot'"></i>
           </div>
           <div class="dialog-msg-content">
@@ -138,10 +138,11 @@ import { marked } from 'marked'
 
 const store = useAppStore()
 
-// 用户头像（有头像时用户消息显示实际图片，否则回退到图标）
-const userAvatarUrl = computed(() => {
-  if (store.user?.avatar) {
-    return `/api/auth/avatar/${store.user.avatar}`
+// 会话所有者信息（详情对话框按真实发送者渲染头像，而非当前登录用户）
+const chatUser = ref(null)
+const chatUserAvatarUrl = computed(() => {
+  if (chatUser.value?.avatar) {
+    return `/api/auth/avatar/${chatUser.value.avatar}`
   }
   return ''
 })
@@ -200,6 +201,7 @@ async function viewDetail(chatId) {
   detailLoading.value = true
   try {
     const res = await api.ai.getMessages(chatId)
+    chatUser.value = res.chat_user || null
     const msgs = res.data || []
     detailMessages.value = msgs.map(m => {
       const base = { ...m }

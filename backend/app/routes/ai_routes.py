@@ -12,6 +12,7 @@ from app.models.ai_skill import AiSkill
 from app.models.user_behavior import UserBehavior
 from app.models.ai_chat import AiChat, AiChatMessage
 from app.models.ai_agent import AiAgent
+from app.models.user import User
 from app.utils.auth import login_required, admin_required, get_current_user, permission_required
 import requests
 logger = logging.getLogger(__name__)
@@ -929,7 +930,17 @@ def get_messages(chat_id):
 
     messages = AiChatMessage.query.filter_by(chat_id=chat_id, is_deleted=False)\
         .order_by(AiChatMessage.created_at.asc()).all()
-    return jsonify({'success': True, 'data': [m.to_dict() for m in messages]})
+
+    # 会话所有者信息：管理员查看他人会话时，前端需按真实发送者渲染头像
+    chat_user = User.query.get(chat.user_id)
+    chat_user_info = {
+        'user_id': chat.user_id,
+        'username': chat_user.username if chat_user else '',
+        'display_name': chat_user.display_name if chat_user else '',
+        'avatar': chat_user.avatar if chat_user else None,
+    }
+
+    return jsonify({'success': True, 'data': [m.to_dict() for m in messages], 'chat_user': chat_user_info})
 
 
 @ai_bp.route('/chats/<int:chat_id>/send', methods=['POST'])
