@@ -33,6 +33,13 @@ class AiStrategy(db.Model):
     # Only route to free models
     route_to_free_only = db.Column(db.Boolean, default=False, comment='仅路由到免费模型')
 
+    # 大小模型协作模式: 大模型负责推理分析, 小模型负责整理输出; 简单问答由小模型一步完成
+    collaboration_enabled = db.Column(db.Boolean, default=False, comment='启用大小模型协作模式')
+    # 大模型ID列表(JSON array, 留空=自动根据模型规格判断)
+    large_model_ids = db.Column(db.Text, comment='大模型ID列表(JSON, 推理分析)')
+    # 小模型ID列表(JSON array, 留空=自动根据模型规格判断)
+    small_model_ids = db.Column(db.Text, comment='小模型ID列表(JSON, 整理输出)')
+
     # Scope: JSON array of applicable scopes (empty = all scopes)
     # Values: system_chat / open_api / ticket
     scope = db.Column(db.Text, comment='策略作用域(JSON数组，空=全部): system_chat/open_api/ticket')
@@ -76,6 +83,26 @@ class AiStrategy(db.Model):
     def set_scope(self, scope_list: list):
         self.scope = json.dumps(scope_list) if scope_list else None
 
+    def _get_json_ids(self, field_value) -> list:
+        if field_value:
+            try:
+                return json.loads(field_value)
+            except (json.JSONDecodeError, TypeError):
+                return []
+        return []
+
+    def get_large_model_ids(self) -> list:
+        return self._get_json_ids(self.large_model_ids)
+
+    def set_large_model_ids(self, ids: list):
+        self.large_model_ids = json.dumps(ids) if ids else None
+
+    def get_small_model_ids(self) -> list:
+        return self._get_json_ids(self.small_model_ids)
+
+    def set_small_model_ids(self, ids: list):
+        self.small_model_ids = json.dumps(ids) if ids else None
+
     def record_token_usage(self, model_id: int, tokens: int):
         usage = self.get_token_usage()
         usage[str(model_id)] = usage.get(str(model_id), 0) + tokens
@@ -101,6 +128,9 @@ class AiStrategy(db.Model):
             'token_usage': self.get_token_usage(),
             'round_robin_index': self.round_robin_index,
             'route_to_free_only': self.route_to_free_only or False,
+            'collaboration_enabled': self.collaboration_enabled or False,
+            'large_model_ids': self.get_large_model_ids(),
+            'small_model_ids': self.get_small_model_ids(),
             'scope': self.get_scope(),
             'sort_order': self.sort_order or 0,
             'description': self.description,

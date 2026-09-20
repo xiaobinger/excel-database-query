@@ -694,6 +694,154 @@ class AiService:
         except Exception as e:
             return {'supported': True, 'data': None, 'message': f'查询异常: {str(e)}', 'is_available': None}
 
+    # ── 大小模型协作模式 ──────────────────────────────────────
+
+    # 小模型名称关键词（模型名命中即视为小模型，用于留空时的自动分类）
+    SMALL_MODEL_PATTERN = re.compile(r'mini|flash|lite|small|turbo|haiku|nano|instant|air', re.IGNORECASE)
+
+    # 明确的任务/工具意图关键词（命中即视为复杂请求，跳过分类调用）
+    COMPLEX_INTENT_PATTERN = re.compile(
+        r'导出|查询|查一下|工单|任务|分润|解绑|绑定|激活|订单|商户|代理|报表|统计|分析|计算|对比|批量|出款|退款|上传|excel|lookup|export|task|脚本|清理|缓存')
+
+    @staticmethod
+    def get_collaboration_configs(strategy, candidate_configs=None):
+        """解析策略的大小模型协作配置，返回 (large_configs, small_configs)。
+
+        - 自定义列表优先（large_model_ids / small_model_ids）
+        - 均留空时自动分类：模型名匹配小模型关键词 → 小模型；其余 → 大模型。
+          若无任何小模型，取 context_window 最小的大模型作为小模型兜底。
+        """
+        from app.models.ai_config import AiConfig
+
+        if not strategy or not strategy.collaboration_enabled:
+            return [], []
+
+        def _load(ids):
+            configs = []
+            for mid in ids:
+                cfg = AiConfig.query.get(mid)
+                if cfg and cfg.is_active:
+                    configs.append(cfg)
+            return configs
+
+        large_custom = strategy.get_large_model_ids()
+        small_custom = strategy.get_small_model_ids()
+        if large_custom or small_custom:
+            return _load(large_custom), _load(small_custom)
+
+        # 自动分类：基于候选模型（优先用策略模型列表，否则全部启用模型）
+        if candidate_configs is None:
+            candidate_configs = AiService._configs_from_strategy(strategy)
+        if not candidate_configs:
+            return [], []
+
+        small, large = [], []
+        for cfg in candidate_configs:
+            if AiService.SMALL_MODEL_PATTERN.search(cfg.model_name or ''):
+                small.append(cfg)
+            else:
+                large.append(cfg)
+        # 未匹配到小模型：从大模型中取 context_window 最小的兜底为小模型
+        if small or len(large) <= 1:
+            return large, small
+        fallback_small = min(large, key=lambda c: (c.context_window or 128000))
+        large = [c for c in large if c.id != fallback_small.id]
+        small = [fallback_small]
+        return large, small
+
+    @staticmethod
+    def _as_config_like(cfg):
+        """将 AiConfig 对象或快照 dict 统一为 chat() 可用的 config-like 对象（供流式生成器内使用）"""
+        if isinstance(cfg, dict):
+            from types import SimpleNamespace
+            snap = dict(cfg)
+            snap.setdefault('enable_headroom', False)
+            return SimpleNamespace(
+                get_api_key=lambda: cfg.get('api_key'),
+                api_base=cfg.get('api_base'),
+                provider=cfg.get('provider'),
+                model_name=cfg.get('model_name'),
+                max_tokens=cfg.get('max_tokens'),
+                temperature=cfg.get('temperature'),
+                enable_headroom=cfg.get('enable_headroom'),
+                name=cfg.get('name'),
+            )
+        return cfg
+
+    @staticmethod
+    def classify_request_complexity(user_content: str, small_configs: list, has_file: bool = False) -> str:
+        """判断请求复杂程度: 'simple' | 'complex'。
+        simple → 小模型一步搞定；complex → 大模型推理 + 小模型整理输出。
+        规则短路（长消息/任务关键词→复杂，短问候→简单），中间地带由小模型轻量分类。
+        """
+        content = (user_content or '').strip()
+        if not content:
+            return 'simple'
+        if has_file:
+            return 'complex'
+        # 明确复杂：长消息或命中任务意图关键词
+        if len(content) > 150 or AiService.COMPLEX_INTENT_PATTERN.search(content):
+            return 'complex'
+        # 明确简单：很短且不含长数字编号（SN/单号等通常需要查询）
+        if len(content) <= 20 and not re.search(r'\d{3,}', content):
+            return 'simple'
+        # 中间地带：小模型轻量分类（一次快速调用），失败默认复杂
+        if not small_configs:
+            return 'complex'
+        prompt = ('判断用户消息属于"simple"还是"complex"。simple=日常问候、闲聊、简单事实问答，无需查询数据或执行任务；'
+                  'complex=需要查询数据、执行操作、多步推理或分析计算。只输出 simple 或 complex，不要输出其他内容。')
+        for cfg in small_configs:
+            try:
+                cfg_like = AiService._as_config_like(cfg)
+                result = AiService.chat(cfg_like, [
+                    {'role': 'system', 'content': prompt},
+                    {'role': 'user', 'content': content[:500]},
+                ])
+                answer = (result[0] or '').strip().lower()
+                if 'simple' in answer:
+                    return 'simple'
+                if 'complex' in answer:
+                    return 'complex'
+            except Exception as e:
+                logger.warning(f'小模型复杂度分类调用失败失败: {e}')
+                continue
+        return 'complex'
+
+    @staticmethod
+    def organize_output(small_configs: list, user_content: str, large_content: str, tool_summary: str = '') -> Optional[dict]:
+        """小模型整理大模型的分析结果，生成最终用户回复。
+        small_configs 支持 AiConfig 对象或流式快照 dict。
+        返回 {'content', 'tokens', 'model'}，全部失败返回 None（调用方回退大模型原文）。
+        """
+        if not small_configs or not (large_content or '').strip():
+            return None
+        system_prompt = (
+            '你是一名回复整理助手。一个强大的分析模型已经完成了对用户问题的推理分析，'
+            '你需要把它的分析结果整理成清晰、简洁、结构良好的最终回复，直接面向用户呈现。要求：\n'
+            '1. 完整保留所有关键信息、数据和结论，不得编造或遗漏；\n'
+            '2. 语气自然友好，适当使用Markdown格式（列表/加粗等）提升可读性；\n'
+            '3. 去掉冗余的铺垫和重复内容，让重点突出；\n'
+            '4. 不要提及"大模型""分析模型""整理"等内部处理过程，就像你直接回答用户一样。'
+        )
+        user_prompt = f'【用户问题】\n{user_content[:2000]}\n\n【分析结果】\n{large_content}'
+        if tool_summary:
+            user_prompt += f'\n\n【工具执行摘要】\n{tool_summary[:2000]}'
+        for cfg in small_configs:
+            try:
+                cfg_like = AiService._as_config_like(cfg)
+                result = AiService.chat(cfg_like, [
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': user_prompt},
+                ])
+                content = (result[0] or '').strip()
+                if content:
+                    return {'content': content, 'tokens': result[1],
+                            'model': cfg_like.model_name or cfg_like.name or ''}
+            except Exception as e:
+                logger.warning(f'小模型整理输出失败: {e}')
+                continue
+        return None
+
     @staticmethod
     def _find_strategy_for_scope(scope: str = None):
         """根据 scope 匹配最优策略。

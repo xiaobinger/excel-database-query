@@ -23,7 +23,7 @@
 
 <!-- 徽章 -->
 <p>
-  <img src="https://img.shields.io/badge/version-2.6.10-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-2.6.11-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/python-3.10+-yellow?style=flat-square&logo=python&logoColor=white" alt="python" />
   <img src="https://img.shields.io/badge/vue-3-green?style=flat-square&logo=vuedotjs&logoColor=white" alt="vue" />
   <img src="https://img.shields.io/badge/flask-black?style=flat-square&logo=flask&logoColor=white" alt="flask" />
@@ -139,7 +139,7 @@
 
 <table>
 <tr>
-<td width="33%">
+<td width="25%">
 
 **🧠 多 Agent 协作**
 
@@ -150,7 +150,14 @@
 - 协作日志时间线展示
 
 </td>
-<td width="34%">
+<td width="25%">
+
+**🔀 大小模型协作路由**
+
+路由策略支持开启"大小模型协作"：大模型负责推理分析（查询、多步推理），小模型负责整理最终输出；简单问答（问候、闲聊）由小模型一步完成，无需调用大模型。支持自定义大/小模型列表，留空自动按模型名（mini/flash/lite等）分类。
+
+</td>
+<td width="25%">
 
 **🗜️ Headroom 上下文压缩**
 
@@ -164,7 +171,7 @@
 | 文本 | TextCrusher | 30-60% |
 
 </td>
-<td width="33%">
+<td width="25%">
 
 **🎨 AI 模型 Logo 自动适配**
 
@@ -182,6 +189,7 @@ OpenAI · Anthropic · Google · Azure · DeepSeek · Moonshot · Zhipu · 百�
 
 | 特性 | 说明 |
 |------|------|
+| **大小模型协作** | 大模型负责推理分析（查询/多步推理），小模型负责整理输出；简单问答小模型一步完成 |
 | **插话/排队** | 🛑 立即停止并采纳 · ⚡ 插话发送 · 🕐 排队发送 |
 | **技能保存** | AI 自动保存用户要求的 SKILLS/规则 |
 | **用户感知** | AI 感知用户角色，区别尊称 |
@@ -394,6 +402,7 @@ WHERE merchant_id = :value
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-09-20 | v2.6.11 | 路由策略新增"大小模型协作"模式：大模型推理分析+小模型整理输出；简单问答小模型一步完成；支持自定义大/小模型列表，留空自动按模型名分类 |
 | 2026-09-04 | v2.6.10 | 个人中心（修改昵称/性别/手机号）+ 头像上传（右上角/聊天对话框显示头像） |
 | 2026-09-04 | v2.6.9 | 钉钉通知触发时机精细化 — 按指派类型区分（人工工单已处理时通知提交人核实，AI工单验收通过后通知完成） |
 | 2026-09-04 | v2.6.8 | 钉钉通知模板支持 Markdown 编辑 + 实时预览（工具栏/👁预览/模板变量） |

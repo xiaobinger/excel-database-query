@@ -276,6 +276,11 @@
                     <el-tag v-if="row.route_to_free_only" type="warning" size="small">仅免费</el-tag>
                   </template>
                 </el-table-column>
+                <el-table-column label="协作" width="80" align="center">
+                  <template #default="{ row }">
+                    <el-tag v-if="row.collaboration_enabled" type="success" size="small">大小模型</el-tag>
+                  </template>
+                </el-table-column>
                 <el-table-column prop="sort_order" label="权重" width="70" align="center" />
                 <el-table-column label="状态" width="80" align="center">
                   <template #default="{ row }">
@@ -476,6 +481,42 @@
                   <el-switch v-model="strategyForm.route_to_free_only" active-text="是" inactive-text="否" />
                   <span style="margin-left: 12px; color: #909399; font-size: 12px">开启后仅路由到标记为免费的AI模型配置</span>
                 </el-form-item>
+                <el-divider />
+                <el-form-item label="大小模型协作">
+                  <el-switch v-model="strategyForm.collaboration_enabled" active-text="启用" inactive-text="禁用" />
+                  <span style="margin-left: 12px; color: #909399; font-size: 12px">大模型负责推理分析，小模型负责整理输出；简单问答小模型一步完成</span>
+                </el-form-item>
+                <el-form-item label="大模型列表" v-if="strategyForm.collaboration_enabled">
+                  <el-select v-model="strategyForm.large_model_ids" multiple clearable style="width: 100%" placeholder="留空=自动按模型规格判断（非 mini/flash/lite 等模型）">
+                    <el-option
+                      v-for="c in aiConfigs.filter(c => c.is_active)"
+                      :key="c.id"
+                      :label="`${c.name} (${c.model_name || '?'})`"
+                      :value="c.id"
+                    />
+                  </el-select>
+                  <div style="color: #909399; font-size: 12px; margin-top: 4px">负责推理分析的模型；留空自动根据模型名/context_window判断</div>
+                </el-form-item>
+                <el-form-item label="小模型列表" v-if="strategyForm.collaboration_enabled">
+                  <el-select v-model="strategyForm.small_model_ids" multiple clearable style="width: 100%" placeholder="留空=自动按模型名关键词（mini/flash/lite/haiku等）判断">
+                    <el-option
+                      v-for="c in aiConfigs.filter(c => c.is_active)"
+                      :key="c.id"
+                      :label="`${c.name} (${c.model_name || '?'})`"
+                      :value="c.id"
+                    />
+                  </el-select>
+                  <div style="color: #909399; font-size: 12px; margin-top: 4px">负责整理输出的模型（简单请求也直接由此模型一步完成）</div>
+                </el-form-item>
+                <el-form-item v-if="strategyForm.collaboration_enabled">
+                  <template #label>&nbsp;</template>
+                  <div style="color: #909399; font-size: 12px; line-height: 1.6">
+                    <div>• 简单问答（短问候、闲聊）→ 小模型直接回复，无需调用大模型</div>
+                    <div>• 复杂请求（查询、分析、工具调用）→ 大模型推理 + 小模型整理输出</div>
+                    <div>• 复杂度由系统自动判断，大模型/小模型各需至少1个生效配置</div>
+                  </div>
+                </el-form-item>
+                <el-divider />
                 <el-form-item label="作用域">
                   <el-select v-model="strategyForm.scope" multiple style="width: 100%" placeholder="留空表示对所有场景生效">
                     <el-option label="系统AI对话" value="system_chat" />
@@ -1239,6 +1280,9 @@ const defaultStrategyForm = {
   scope: [],
   sort_order: 0,
   description: '',
+  collaboration_enabled: false,
+  large_model_ids: [],
+  small_model_ids: [],
 }
 const strategyForm = reactive({ ...defaultStrategyForm })
 
@@ -1271,6 +1315,9 @@ function openStrategyDialog(row) {
       scope: row.scope || [],
       sort_order: row.sort_order || 0,
       description: row.description || '',
+      collaboration_enabled: row.collaboration_enabled || false,
+      large_model_ids: row.large_model_ids || [],
+      small_model_ids: row.small_model_ids || [],
     })
   } else {
     isEditStrategy.value = false

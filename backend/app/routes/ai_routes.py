@@ -1046,6 +1046,27 @@ def send_message(chat_id):
             'assistant_message': assistant_message.to_dict(),
         }})
 
+    # ── 大小模型协作模式：简单请求小模型一步搞定；复杂请求大模型推理+小模型整理输出 ──
+    collab_mode = None
+    collab_small_configs = []
+    if not specified_config:
+        _collab_strategy = AiService._find_strategy_for_scope('system_chat')
+        _collab_large, _collab_small = AiService.get_collaboration_configs(_collab_strategy)
+        if current_user.can_switch_model():
+            _collab_large = [c for c in _collab_large if c.id in allowed_model_ids]
+            _collab_small = [c for c in _collab_small if c.id in allowed_model_ids]
+        if _collab_large and _collab_small:
+            collab_mode = AiService.classify_request_complexity(data['content'], _collab_small)
+            collab_small_configs = _collab_small
+            if collab_mode == 'simple':
+                logger.info(f"协作模式-简单请求: 小模型直接处理 {[c.name for c in _collab_small]}")
+                ordered_configs = _collab_small
+                ai_config = _collab_small[0]
+            else:
+                logger.info(f"协作模式-复杂请求: 大模型推理 {[c.name for c in _collab_large]} + 小模型整理 {[c.name for c in _collab_small]}")
+                ordered_configs = _collab_large
+                ai_config = _collab_large[0]
+
     # Build context with skills and behaviors
     try:
         context = AiService.build_chat_context(current_user.id, chat_id, agent_id=agent_id)
@@ -1127,7 +1148,7 @@ def send_message(chat_id):
         from app.services.ai_service import get_effective_tools
         nonstream_filtered_tools = get_effective_tools(agent)
         ai_response = AiService.chat_with_failover(messages, use_tools=True,
-            override_configs=ordered_configs if specified_config else None,
+            override_configs=ordered_configs if (specified_config or collab_mode) else None,
             tools=nonstream_filtered_tools, scope='system_chat')
         response_text = ai_response['content']
         model_used = ai_response.get('model') or ''
@@ -1143,7 +1164,7 @@ def send_message(chat_id):
                            '请立即根据用户的需求直接调用合适的工具执行任务，或直接给出回复，不要再只思考。）',
             })
             ai_response = AiService.chat_with_failover(messages, use_tools=True,
-                override_configs=ordered_configs if specified_config else None,
+                override_configs=ordered_configs if (specified_config or collab_mode) else None,
                 tools=nonstream_filtered_tools, scope='system_chat')
             response_text = ai_response['content']
             if not response_text.strip() and not ai_response.get('tool_calls'):
@@ -1350,7 +1371,7 @@ def send_message(chat_id):
                             'content': '\n'.join(reply_hints)
                         })
                     ai_response2 = AiService.chat_with_failover(messages, use_tools=True,
-                        override_configs=ordered_configs if specified_config else None,
+                        override_configs=ordered_configs if (specified_config or collab_mode) else None,
                         tools=nonstream_filtered_tools, scope='system_chat')
                     response_text = ai_response2['content']
                     model_used = ai_response2.get('model') or model_used
@@ -1463,6 +1484,30 @@ def send_message(chat_id):
                 except Exception as e:
                     logger.error(f'AI二次回复失败: {e}', exc_info=True)
                     response_text = '处理失败，请稍后重试'
+
+        # ── 协作模式-复杂请求：小模型整理大模型的分析结果作为最终回复 ──
+        if collab_mode == 'complex' and collab_small_configs and response_text.strip():
+            try:
+                tool_summary = ''
+                if tool_results:
+                    tool_summary = '\n'.join(
+                        f"- {tr['name']}: " + str((tr.get('result') or {}).get(
+                            'mapping_summary') or (tr.get('result') or {}).get('message')
+                            or (tr.get('result') or {}).get('description') or (tr.get('result') or {}).get('error') or '')[:200]
+                        for tr in tool_results[:5])
+                organized = AiService.organize_output(
+                    collab_small_configs, data['content'], response_text, tool_summary)
+                if organized:
+                    logger.info(f"协作模式-小模型整理完成: {organized['model']}, "
+                                f"原文{len(response_text)}字 → 整理后{len(organized['content'])}字")
+                    model_used = f"{model_used} + {organized['model']}" if model_used else organized['model']
+                    tokens += organized['tokens'] or 0
+                    completion_tokens += organized['tokens'] or 0
+                    response_text = organized['content']
+                else:
+                    logger.warning('协作模式-小模型整理失败，保留大模型原文')
+            except Exception as collab_err:
+                logger.warning(f'协作模式-整理输出异常，保留大模型原文: {collab_err}')
 
         # Build response payload
         response_payload = {
@@ -1792,6 +1837,27 @@ def send_message_stream(chat_id):
             yield f"data: {json.dumps({'type': 'error', 'content': 'AI服务未配置'}, ensure_ascii=False)}\n\n"
         return Response(stream_with_context(error_gen()), mimetype='text/event-stream')
 
+    # ── 大小模型协作模式：简单请求小模型一步搞定；复杂请求大模型推理+小模型整理输出 ──
+    collab_mode = None
+    collab_small_configs = []
+    if not specified_config:
+        _collab_strategy = AiService._find_strategy_for_scope('system_chat')
+        _collab_large, _collab_small = AiService.get_collaboration_configs(_collab_strategy)
+        if current_user.can_switch_model():
+            _collab_large = [c for c in _collab_large if c.id in allowed_model_ids]
+            _collab_small = [c for c in _collab_small if c.id in allowed_model_ids]
+        if _collab_large and _collab_small:
+            collab_mode = AiService.classify_request_complexity(data['content'], _collab_small)
+            collab_small_configs = _collab_small
+            if collab_mode == 'simple':
+                logger.info(f"协作模式-简单请求: 小模型直接处理 {[c.name for c in _collab_small]}")
+                ordered_configs = _collab_small
+                ai_config = _collab_small[0]
+            else:
+                logger.info(f"协作模式-复杂请求: 大模型推理 {[c.name for c in _collab_large]} + 小模型整理 {[c.name for c in _collab_small]}")
+                ordered_configs = _collab_large
+                ai_config = _collab_large[0]
+
     # 根据模型配置决定是否启用流式请求AI API
     config_enable_streaming = ai_config.enable_streaming if ai_config.enable_streaming is not None else True
 
@@ -1903,6 +1969,37 @@ def send_message_stream(chat_id):
     if effective_max_tokens != config_max_tokens:
         logger.info(f'深度思考模式max_tokens自适应提升: {config_max_tokens} -> {effective_max_tokens}, model={config_model_name}')
 
+    # ── 协作模式-流式-复杂请求：先由大模型完成推理分析（非流式），再由小模型流式整理输出 ──
+    _collab_large_content = None
+    if collab_mode == 'complex' and collab_small_configs:
+        try:
+            logger.info(f"协作模式-流式-大模型推理开始: {[c.name for c in ordered_configs]}")
+            _large_result = AiService.chat_with_failover(
+                messages, use_tools=True, override_configs=ordered_configs,
+                tools=stream_filtered_tools, scope='system_chat')
+            _collab_large_content = _large_result.get('content', '')
+            logger.info(f"协作模式-流式-大模型推理完成: {len(_collab_large_content)}字")
+        except Exception as collab_err:
+            logger.warning(f'协作模式-流式-大模型推理失败，回退小模型直接处理: {collab_err}')
+            _collab_large_content = None
+        if _collab_large_content is not None:
+            stream_ordered_configs = [
+                {
+                    'name': c.name or f'配置{c.id}',
+                    'api_key': c.get_api_key(),
+                    'api_base': c.api_base or 'https://api.openai.com/v1',
+                    'provider': c.provider or 'openai',
+                    'model_name': c.model_name or 'gpt-3.5-turbo',
+                    'enable_streaming': c.enable_streaming if c.enable_streaming is not None else True,
+                    'enable_thinking': False,
+                    'max_tokens': c.max_tokens or 4096,
+                    'temperature': c.temperature if c.temperature is not None else 0.7,
+                }
+                for c in collab_small_configs
+            ]
+            if stream_ordered_configs:
+                config_model_name = stream_ordered_configs[0]['model_name']
+
     def generate():
         from app.services.ai_service import post_chat_completions as _pcc
         full_content = ''
@@ -1939,6 +2036,25 @@ def send_message_stream(chat_id):
 
         # 先发送一个心跳事件，确认SSE连接已建立
         yield f"data: {json.dumps({'type': 'heartbeat'}, ensure_ascii=False)}\n\n"
+
+        # ── 协作模式-流式：注入大模型分析结果，让小模型整理输出 ──
+        if _collab_large_content is not None:
+            _collab_system_prompt = (
+                '你是一名回复整理助手。一个强大的分析模型已经完成了对用户问题的推理分析，'
+                '你需要把它的分析结果整理成清晰、简洁、结构良好的最终回复，直接面向用户呈现。要求：\n'
+                '1. 完整保留所有关键信息、数据和结论，不得编造或遗漏；\n'
+                '2. 语气自然友好，适当使用Markdown格式（列表/加粗等）提升可读性；\n'
+                '3. 去掉冗余的铺垫和重复内容，让重点突出；\n'
+                '4. 不要提及"大模型""分析模型""整理"等内部处理过程，就像你直接回答用户一样。'
+            )
+            _collab_user_prompt = (
+                f'【用户问题】\n{(data.get("content") or "")[:2000]}\n\n'
+                f'【分析结果】\n{_collab_large_content}'
+            )
+            messages[:] = [
+                {'role': 'system', 'content': _collab_system_prompt},
+                {'role': 'user', 'content': _collab_user_prompt},
+            ]
 
         try:
             # ── 对话级AI监督者复核（hybrid：AI自动复核 + 人工兜底标记）──

@@ -93,7 +93,8 @@ def reset_token_usage(strategy_id):
 
 def _apply_fields(strategy, data):
     simple_fields = ['name', 'strategy_type', 'failover_enabled', 'failover_max_retries',
-                     'failover_timeout', 'description', 'is_active', 'route_to_free_only', 'sort_order']
+                     'failover_timeout', 'description', 'is_active', 'route_to_free_only', 'sort_order',
+                     'collaboration_enabled']
     for field in simple_fields:
         if field in data:
             setattr(strategy, field, data[field])
@@ -102,6 +103,10 @@ def _apply_fields(strategy, data):
         strategy.set_model_ids(data['model_ids'])
     if 'scope' in data:
         strategy.set_scope(data['scope'])
+    if 'large_model_ids' in data:
+        strategy.set_large_model_ids(data['large_model_ids'])
+    if 'small_model_ids' in data:
+        strategy.set_small_model_ids(data['small_model_ids'])
 
     if 'strategy_type' in data:
         strategy.round_robin_index = 0
