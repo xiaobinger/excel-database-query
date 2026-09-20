@@ -111,13 +111,23 @@ function formatTime(iso) {
     const d = new Date(iso)
     if (isNaN(d.getTime())) return ''
     const now = new Date()
-    const diff = (now - d) / 1000
+    const diff = Math.floor((now - d) / 1000)
     if (diff < 60) return '刚刚开始'
-    const hours = Math.floor(diff / 3600)
-    const minutes = Math.floor((diff % 3600) / 60)
-    if (hours === 0) return `已运行 ${minutes} 分钟`
-    if (minutes === 0) return `已运行 ${hours} 小时`
-    return `已运行 ${hours} 小时 ${minutes} 分钟`
+    let rem = Math.floor(diff / 60)
+    const years = Math.floor(rem / 525600); rem %= 525600
+    const months = Math.floor(rem / 43200); rem %= 43200
+    const weeks = Math.floor(rem / 10080); rem %= 10080
+    const days = Math.floor(rem / 1440); rem %= 1440
+    const hours = Math.floor(rem / 60)
+    const minutes = rem % 60
+    const parts = []
+    if (years) parts.push(`${years} 年`)
+    if (months) parts.push(`${months} 月`)
+    if (weeks) parts.push(`${weeks} 周`)
+    if (days) parts.push(`${days} 天`)
+    if (hours) parts.push(`${hours} 小时`)
+    if (minutes) parts.push(`${minutes} 分钟`)
+    return `已运行 ${parts.join(' ')}`
   } catch (e) { return '' }
 }
 
