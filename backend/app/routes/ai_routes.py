@@ -1969,20 +1969,70 @@ def send_message_stream(chat_id):
     if effective_max_tokens != config_max_tokens:
         logger.info(f'深度思考模式max_tokens自适应提升: {config_max_tokens} -> {effective_max_tokens}, model={config_model_name}')
 
-    # ── 协作模式-流式-复杂请求：先由大模型完成推理分析（非流式），再由小模型流式整理输出 ──
+    # ── 协作模式-流式-复杂请求：先由大模型完成推理分析（非流式，含信息查询工具闭环），再由小模型流式整理输出 ──
     _collab_large_content = None
     if collab_mode == 'complex' and collab_small_configs:
         try:
             logger.info(f"协作模式-流式-大模型推理开始: {[c.name for c in ordered_configs]}")
+            _large_messages = list(messages)
             _large_result = AiService.chat_with_failover(
-                messages, use_tools=True, override_configs=ordered_configs,
+                _large_messages, use_tools=True, override_configs=ordered_configs,
                 tools=stream_filtered_tools, scope='system_chat')
-            _collab_large_content = _large_result.get('content', '')
-            logger.info(f"协作模式-流式-大模型推理完成: {len(_collab_large_content)}字")
+            _collab_large_content = _large_result.get('content', '') or ''
+            _collab_pending_calls = _large_result.get('tool_calls') or []
+            # 协作推理中仅闭环执行只读的信息查询类工具；操作型/选择卡片/其他工具需前端交互，回退常规流式处理
+            _collab_loop_tools = {'request_lookup', 'list_lookup_options'}
+            _collab_round = 0
+            while _collab_pending_calls and _collab_round < 5:
+                _collab_round += 1
+                if any((tc.get('function') or {}).get('name', '') not in _collab_loop_tools
+                       for tc in _collab_pending_calls):
+                    logger.info('协作模式-流式-大模型请求操作型/前端交互类工具，回退常规流式处理')
+                    _collab_large_content = None
+                    break
+                _collab_tool_msgs = []
+                _collab_fallback = False
+                for _tc in _collab_pending_calls:
+                    _fn = (_tc.get('function') or {}).get('name', '')
+                    _fa = (_tc.get('function') or {}).get('arguments', '')
+                    logger.info(f'协作模式-大模型调用工具: {_fn}({_fa})')
+                    _tr = AiService.execute_tool_call(_fn, _fa, user_id, agent_id=agent_id)
+                    if not _tr.get('error'):
+                        if _fn == 'list_lookup_options' and _tr.get('total', 0) > 1:
+                            logger.info('协作模式-流式-信息查询多匹配需选择卡片，回退常规流式处理')
+                            _collab_fallback = True
+                            break
+                        if _fn == 'request_lookup' and _tr.get('show_all_fields'):
+                            logger.info('协作模式-流式-全字段查询结果需前端卡片展示，回退常规流式处理')
+                            _collab_fallback = True
+                            break
+                    _collab_tool_msgs.append({
+                        'role': 'tool',
+                        'tool_call_id': _tc.get('id'),
+                        'content': json.dumps(_tr, ensure_ascii=False),
+                    })
+                if _collab_fallback:
+                    _collab_large_content = None
+                    break
+                _large_messages.append({
+                    'role': 'assistant',
+                    'content': _collab_large_content,
+                    'tool_calls': _collab_pending_calls,
+                })
+                _large_messages.extend(_collab_tool_msgs)
+                _large_result = AiService.chat_with_failover(
+                    _large_messages, use_tools=True, override_configs=ordered_configs,
+                    tools=stream_filtered_tools, scope='system_chat')
+                _collab_large_content = _large_result.get('content', '') or ''
+                _collab_pending_calls = _large_result.get('tool_calls') or []
+            if _collab_large_content is not None:
+                logger.info(f"协作模式-流式-大模型推理完成: {len(_collab_large_content)}字, 工具轮次={_collab_round}")
+                if not _collab_large_content.strip():
+                    _collab_large_content = None
         except Exception as collab_err:
             logger.warning(f'协作模式-流式-大模型推理失败，回退小模型直接处理: {collab_err}')
             _collab_large_content = None
-        if _collab_large_content is not None:
+        if _collab_large_content:
             stream_ordered_configs = [
                 {
                     'name': c.name or f'配置{c.id}',
@@ -2021,7 +2071,7 @@ def send_message_stream(chat_id):
         _active_streams[chat_id] = {
             'aborted': False,
             'request_id': request_id,
-            'user_id': current_user.id,
+            'user_id': user_id,
             'agent_id': stream_agent_id,
             'content': '',
             'thinking': '',
