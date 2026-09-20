@@ -43,6 +43,8 @@ ALL_MENU_ITEMS = [
     {"path": "/ticket-analytics", "title": "工单统计", "icon": "fa-chart-pie", "permission": "ticket_analytics"},
     {"path": "/system-map", "title": "系统地图", "icon": "fa-sitemap", "permission": "system_map"},
     {"path": "/data-dashboard", "title": "运营数据看板", "icon": "fa-chart-line", "permission": "data_dashboard"},
+    {"path": "/login-logs", "title": "登录日志", "icon": "fa-sign-in-alt", "permission": "login_logs"},
+    {"path": "/operation-logs", "title": "操作日志", "icon": "fa-clipboard-list", "permission": "operation_logs"},
 ]
 
 # 默认菜单配置
@@ -77,6 +79,8 @@ DEFAULT_MENU_CONFIG = [
         {"path": "/system-tasks", "title": "系统任务", "icon": "fa-cogs", "permission": "system_tasks", "visible": True},
         {"path": "/tickets", "title": "工单管理", "icon": "fa-tasks", "permission": "tickets", "visible": True},
         {"path": "/system-map", "title": "系统地图", "icon": "fa-sitemap", "permission": "system_map", "visible": True},
+        {"path": "/login-logs", "title": "登录日志", "icon": "fa-sign-in-alt", "permission": "login_logs", "visible": True},
+        {"path": "/operation-logs", "title": "操作日志", "icon": "fa-clipboard-list", "permission": "operation_logs", "visible": True},
     ]},
 ]
 

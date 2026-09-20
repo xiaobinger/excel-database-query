@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify
 from app import db
 from app.models.user import User
 from app.models.script import Script
+from app.models.login_log import LoginLog
 from app.utils.auth import generate_token, login_required, get_current_user
 from app.utils.rate_limiter import login_rate_limiter
 
@@ -17,6 +18,23 @@ def _get_client_ip():
     if xri:
         return xri.strip()
     return request.remote_addr or '127.0.0.1'
+
+
+def _record_login_log(username, user_id, status, fail_reason=None):
+    """记录登录日志"""
+    try:
+        log = LoginLog(
+            user_id=user_id,
+            username=username,
+            ip_address=_get_client_ip(),
+            user_agent=request.headers.get('User-Agent', '')[:500],
+            status=status,
+            fail_reason=fail_reason,
+        )
+        db.session.add(log)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
 
 
 @auth_bp.route('/login', methods=['POST'])
@@ -44,17 +62,21 @@ def login():
     user = User.query.filter_by(username=username).first()
     if not user:
         login_rate_limiter.record_attempt(client_ip, username, False)
+        _record_login_log(username, None, 'failed', '用户不存在')
         return jsonify({'success': False, 'message': 'Invalid username or password'}), 401
 
     if not user.is_active:
+        _record_login_log(username, user.id, 'failed', '账号已禁用')
         return jsonify({'success': False, 'message': 'User is disabled'}), 401
 
     if not user.check_password(password):
         login_rate_limiter.record_attempt(client_ip, username, False)
+        _record_login_log(username, user.id, 'failed', '密码错误')
         return jsonify({'success': False, 'message': 'Invalid username or password'}), 401
 
     # Successful login - record and continue
     login_rate_limiter.record_attempt(client_ip, username, True)
+    _record_login_log(username, user.id, 'success')
 
     token = generate_token(user.id)
 

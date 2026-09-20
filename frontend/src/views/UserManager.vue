@@ -20,6 +20,13 @@
 
       <el-table ref="tableRef" :data="userList" stripe v-loading="loading" style="width: 100%" @selection-change="handleSelectionChange">
         <el-table-column type="selection" width="50" align="center" />
+        <el-table-column label="头像" width="70" align="center">
+          <template #default="{ row }">
+            <el-avatar :size="36" :src="row.avatar ? `/api/auth/avatar/${row.avatar}` : ''" fit="cover" class="user-avatar-cell">
+              <i class="fas fa-user" style="font-size: 16px"></i>
+            </el-avatar>
+          </template>
+        </el-table-column>
         <el-table-column prop="username" label="用户名" min-width="120" show-overflow-tooltip />
         <el-table-column prop="display_name" label="显示名" min-width="120" show-overflow-tooltip>
           <template #default="{ row }">
@@ -93,6 +100,29 @@
             <span>基本信息</span>
           </div>
           <div class="section-body">
+            <el-form-item v-if="isEdit" label="头像">
+              <div class="avatar-uploader">
+                <el-avatar :size="72" :src="form.avatarUrl" fit="cover" class="user-avatar-preview">
+                  <i class="fas fa-user" style="font-size: 28px"></i>
+                </el-avatar>
+                <div class="avatar-actions">
+                  <el-upload
+                    :show-file-list="false"
+                    :before-upload="beforeAvatarUpload"
+                    :http-request="handleAdminAvatarUpload"
+                    accept="image/*"
+                  >
+                    <el-button type="primary" size="small" :loading="avatarUploading">
+                      <i class="fas fa-upload"></i> 上传头像
+                    </el-button>
+                  </el-upload>
+                  <el-button v-if="form.avatarUrl" type="danger" size="small" text @click="handleAdminDeleteAvatar">
+                    <i class="fas fa-trash"></i> 删除
+                  </el-button>
+                  <div class="avatar-tip">支持 JPG/PNG/GIF/WEBP，≤2MB，保存后立即生效</div>
+                </div>
+              </div>
+            </el-form-item>
             <el-row :gutter="20">
               <el-col :span="12">
                 <el-form-item label="用户名" prop="username">
@@ -228,6 +258,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 const store = useAppStore()
 const loading = ref(false)
 const submitting = ref(false)
+const avatarUploading = ref(false)
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const editId = ref(null)
@@ -249,7 +280,8 @@ const defaultForm = {
   role_id: null,
   script_ids: [],
   auto_task_ids: [],
-  system_task_ids: []
+  system_task_ids: [],
+  avatarUrl: '',
 }
 
 const form = reactive({ ...defaultForm })
@@ -305,7 +337,8 @@ function openDialog(row) {
       role_id: row.role_id,
       script_ids: row.script_ids || [],
       auto_task_ids: row.auto_task_ids || [],
-      system_task_ids: row.system_task_ids || []
+      system_task_ids: row.system_task_ids || [],
+      avatarUrl: row.avatar ? `/api/auth/avatar/${row.avatar}` : '',
     })
   } else {
     isEdit.value = false
@@ -352,6 +385,49 @@ async function handleDelete(id) {
   try {
     await api.users.delete(id)
     ElMessage.success('删除成功')
+    fetchData()
+  } catch {
+  }
+}
+
+function beforeAvatarUpload(file) {
+  const isImage = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp'].includes(file.type)
+  const isLt2M = file.size / 1024 / 1024 <= 2
+  if (!isImage) {
+    ElMessage.error('仅支持 JPG/PNG/GIF/WEBP/BMP 格式')
+    return false
+  }
+  if (!isLt2M) {
+    ElMessage.error('图片大小不能超过 2MB')
+    return false
+  }
+  return true
+}
+
+async function handleAdminAvatarUpload({ file }) {
+  if (!editId.value) return
+  avatarUploading.value = true
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+    const res = await api.users.uploadAvatar(editId.value, formData)
+    if (res.data?.avatar) {
+      form.avatarUrl = `/api/auth/avatar/${res.data.avatar}?t=${Date.now()}`
+    }
+    ElMessage.success('头像设置成功')
+    fetchData()
+  } catch {
+  } finally {
+    avatarUploading.value = false
+  }
+}
+
+async function handleAdminDeleteAvatar() {
+  if (!editId.value) return
+  try {
+    await api.users.deleteAvatar(editId.value)
+    form.avatarUrl = ''
+    ElMessage.success('头像已删除')
     fetchData()
   } catch {
   }
@@ -446,5 +522,37 @@ onMounted(() => {
 
 .section-body {
   padding: 20px 16px 4px;
+}
+
+.user-avatar-cell {
+  background: var(--user-avatar-bg, #66b1ff);
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.avatar-uploader {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+}
+
+.user-avatar-preview {
+  background: var(--user-avatar-bg, #66b1ff);
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.avatar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.avatar-tip {
+  width: 100%;
+  font-size: 12px;
+  color: var(--text-secondary, #909399);
 }
 </style>

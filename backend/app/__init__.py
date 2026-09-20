@@ -200,6 +200,7 @@ def _register_blueprints(app):
     from app.routes.pay_routes import pay_bp
     from app.routes.pay_flow_routes import pay_flow_bp
     from app.routes.dashboard_routes import dashboard_bp
+    from app.routes.log_routes import log_bp
 
     app.register_blueprint(ssh_bp)
     app.register_blueprint(database_bp)
@@ -228,6 +229,7 @@ def _register_blueprints(app):
     app.register_blueprint(pay_bp)
     app.register_blueprint(pay_flow_bp)
     app.register_blueprint(dashboard_bp)
+    app.register_blueprint(log_bp)
 
 
 def _register_error_handlers(app):

@@ -53,6 +53,15 @@ const users = {
   batchDelete: (ids) => http.post('/users/batch-delete', { ids }),
   deleteAll: () => http.delete('/users/all'),
   setScripts: (id, data) => http.put(`/users/${id}/scripts`, data),
+  uploadAvatar: (id, formData) => http.post(`/users/${id}/avatar`, formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  deleteAvatar: (id) => http.delete(`/users/${id}/avatar`),
+}
+
+const logs = {
+  login: (params) => http.get('/logs/login', { params }),
+  operation: (params) => http.get('/logs/operation', { params }),
+  clearLogin: () => http.delete('/logs/login'),
+  clearOperation: () => http.delete('/logs/operation'),
 }
 
 const roles = {
@@ -409,4 +418,4 @@ const dataDashboard = {
   clearCache: () => http.post('/dashboard/cache/clear'),
 }
 
-export default { auth, users, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, mcp, openApi, business, systemTask, lookup, profitShare, tickets, pay, payFlow, dataDashboard }
+export default { auth, users, logs, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, mcp, openApi, business, systemTask, lookup, profitShare, tickets, pay, payFlow, dataDashboard }

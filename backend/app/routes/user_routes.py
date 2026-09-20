@@ -3,6 +3,7 @@ from app import db
 from app.models.user import User
 from app.models.role import Role
 from app.utils.auth import admin_required
+from app.utils.operation_logger import log_operation
 
 user_bp = Blueprint('users', __name__, url_prefix='/api/users')
 
@@ -80,6 +81,7 @@ def create_user():
         db.session.add(user)
         db.session.commit()
 
+        log_operation('create', 'user', user.id, f'创建用户: {user.username}')
         return jsonify({'success': True, 'data': user.to_dict_with_role()}), 201
     except Exception as e:
         db.session.rollback()
@@ -134,6 +136,7 @@ def update_user(user_id):
 
         db.session.commit()
 
+        log_operation('update', 'user', user.id, f'更新用户信息: {user.username}')
         return jsonify({'success': True, 'data': user.to_dict_with_role()})
     except Exception as e:
         db.session.rollback()
@@ -152,8 +155,10 @@ def delete_user(user_id):
         return jsonify({'success': False, 'message': 'User not found'}), 404
 
     try:
+        username = user.username
         db.session.delete(user)
         db.session.commit()
+        log_operation('delete', 'user', user_id, f'删除用户: {username}')
         return jsonify({'success': True, 'message': 'User deleted successfully'})
     except Exception as e:
         db.session.rollback()
@@ -183,6 +188,7 @@ def batch_delete_users():
 
     try:
         db.session.commit()
+        log_operation('batch_delete', 'user', None, f'批量删除用户: {deleted_count}个 (IDs: {ids})')
         return jsonify({'success': True, 'message': f'成功删除{deleted_count}个用户', 'deleted_count': deleted_count})
     except Exception as e:
         db.session.rollback()
@@ -199,10 +205,84 @@ def delete_all_users():
             query = query.filter(User.id != current_user.id)
         deleted_count = query.delete()
         db.session.commit()
+        log_operation('delete_all', 'user', None, f'删除全部用户: {deleted_count}个')
         return jsonify({'success': True, 'message': f'成功删除{deleted_count}个用户', 'deleted_count': deleted_count})
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 400
+
+
+@user_bp.route('/<int:user_id>/avatar', methods=['POST'])
+@admin_required
+def set_user_avatar(user_id):
+    """管理员为用户设置头像"""
+    from flask import current_app
+    from werkzeug.utils import secure_filename
+    import os
+    import uuid
+
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'success': False, 'message': 'User not found'}), 404
+
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'message': '请选择图片文件'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'success': False, 'message': '未选择文件'}), 400
+
+    allowed_ext = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'}
+    if '.' not in file.filename or file.filename.rsplit('.', 1)[1].lower() not in allowed_ext:
+        return jsonify({'success': False, 'message': '仅支持 PNG/JPG/GIF/WEBP/BMP 格式'}), 400
+
+    base_dir = current_app.config.get('UPLOAD_FOLDER', os.path.join(os.path.dirname(os.path.dirname(__file__)), 'uploads'))
+    avatar_dir = os.path.join(base_dir, 'avatars')
+    os.makedirs(avatar_dir, exist_ok=True)
+
+    ext = file.filename.rsplit('.', 1)[1].lower()
+    new_filename = f'{uuid.uuid4().hex}.{ext}'
+    filepath = os.path.join(avatar_dir, new_filename)
+    file.save(filepath)
+
+    if user.avatar:
+        old_path = os.path.join(avatar_dir, os.path.basename(user.avatar))
+        if os.path.exists(old_path):
+            os.remove(old_path)
+
+    user.avatar = new_filename
+    db.session.commit()
+
+    log_operation('update', 'user', user.id, f'管理员设置用户头像: {user.username}')
+    return jsonify({
+        'success': True,
+        'message': '头像设置成功',
+        'data': {'avatar': user.avatar},
+    })
+
+
+@user_bp.route('/<int:user_id>/avatar', methods=['DELETE'])
+@admin_required
+def delete_user_avatar(user_id):
+    """管理员删除用户头像"""
+    import os
+    from flask import current_app
+
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'success': False, 'message': 'User not found'}), 404
+
+    if user.avatar:
+        base_dir = current_app.config.get('UPLOAD_FOLDER', os.path.join(os.path.dirname(os.path.dirname(__file__)), 'uploads'))
+        avatar_dir = os.path.join(base_dir, 'avatars')
+        filepath = os.path.join(avatar_dir, os.path.basename(user.avatar))
+        if os.path.exists(filepath):
+            os.remove(filepath)
+        user.avatar = None
+        db.session.commit()
+        log_operation('delete', 'user', user.id, f'管理员删除用户头像: {user.username}')
+
+    return jsonify({'success': True, 'message': '头像已删除'})
 
 
 @user_bp.route('/<int:user_id>/scripts', methods=['PUT'])
@@ -223,6 +303,7 @@ def set_user_scripts(user_id):
     try:
         user.set_script_ids(script_ids)
         db.session.commit()
+        log_operation('update', 'user', user.id, f'设置用户查询选项: {user.username} -> {script_ids}')
 
         return jsonify({
             'success': True,
