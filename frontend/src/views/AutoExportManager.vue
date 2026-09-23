@@ -342,7 +342,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onActivated } from 'vue'
 import api from '../api'
 import { useAppStore } from '../stores'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -789,6 +789,18 @@ onMounted(() => {
   fetchList()
   fetchExportScripts()
   fetchParamOptions()
+})
+
+// 页面被keep-alive缓存，从脚本管理等页面切回时自动刷新脚本下拉，
+// 避免新建导出脚本后本页仍显示旧快照、选不到新脚本
+let autoExportScriptsActivatedOnce = false
+onActivated(() => {
+  if (!autoExportScriptsActivatedOnce) {
+    // 首次激活时onMounted刚拉取过，跳过
+    autoExportScriptsActivatedOnce = true
+    return
+  }
+  fetchExportScripts()
 })
 </script>
 

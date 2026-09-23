@@ -520,7 +520,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onActivated, onUnmounted, nextTick } from 'vue'
 import api from '../api'
 import { useAppStore } from '../stores'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -1070,6 +1070,18 @@ async function fetchExportScripts() {
 
 onMounted(() => {
   store.fetchDatabases()
+  fetchExportScripts()
+})
+
+// 页面被keep-alive缓存，从脚本管理等页面切回时自动刷新脚本下拉，
+// 避免新建导出脚本后本页仍显示旧快照、选不到新脚本
+let exportScriptsActivatedOnce = false
+onActivated(() => {
+  if (!exportScriptsActivatedOnce) {
+    // 首次激活时onMounted刚拉取过，跳过
+    exportScriptsActivatedOnce = true
+    return
+  }
   fetchExportScripts()
 })
 
