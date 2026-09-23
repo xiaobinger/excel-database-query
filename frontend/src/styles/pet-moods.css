@@ -375,3 +375,31 @@
   height: 62%;
   border-radius: 50%;
 }
+
+/* ═══════════ 工作状态表情（叠加在 working 弧线眼之上） ═══════════ */
+/* focus 专注加油：举拳打气 */
+.ai-pet .creature.working.mood-focus::before {
+  content: '💪';
+  position: absolute;
+  top: -10px;
+  right: -4px;
+  font-size: 12px;
+  line-height: 1;
+  animation: pet-star-pop 1.1s ease-in-out infinite;
+  z-index: 5;
+}
+
+/* think 思考：视线抬高 + 思考泡泡 */
+.ai-pet .creature.working.mood-think .eye {
+  transform: translateY(-1.5px);
+}
+.ai-pet .creature.working.mood-think::before {
+  content: '💭';
+  position: absolute;
+  top: -12px;
+  right: -2px;
+  font-size: 12px;
+  line-height: 1;
+  animation: pet-zzz-float 2.4s ease-in-out infinite;
+  z-index: 5;
+}

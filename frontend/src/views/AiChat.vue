@@ -2718,6 +2718,7 @@ async function sendMessage() {
   const currentAgentId = selectedAgent.value?.id || null
   inputText.value = ''
   loading.value = true
+  emitPetEvent('chat_start')
 
   // 根据模型配置决定是否使用流式响应
   const modelConfig = currentModel || activeModels.value[0] || null
@@ -2752,6 +2753,7 @@ async function sendMessage() {
     const smartMatchResult = await trySmartMatchQuery(currentUploadedFile, text)
     if (smartMatchResult) {
       loading.value = false
+      emitPetEvent('chat_end', { ok: true })
       return
     }
     // 智能匹配失败，继续走AI对话流程
@@ -2792,6 +2794,7 @@ async function sendMessage() {
     ElMessage.error('发送失败')
   } finally {
     loading.value = false
+    emitPetEvent('chat_end', { ok: true })
     uploadedFile.value = null
     // 任务完成后，自动发送排队消息
     if (queuedMessage.value) {
@@ -3013,6 +3016,8 @@ async function handleToolResults(toolResults) {
 // 流式发送消息
 async function sendStreamMessage(content, modelId, agentId, options = {}) {
   const { resendMessageId = null, onUserMessageId = null } = options
+  emitPetEvent('chat_start')
+  let _aborted = false
   // 创建AI助手消息占位
   const streamMsg = reactive({
     id: Date.now(),
@@ -3258,6 +3263,7 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
   } catch (e) {
     streamMsg._streaming = false
     if (e.name === 'AbortError') {
+      _aborted = true
       // 用户主动终止
       if (!streamMsg.content.trim()) {
         streamMsg.content = '任务已被用户手动终止'
@@ -3271,6 +3277,7 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
     }
   } finally {
     abortController.value = null
+    emitPetEvent('chat_end', { ok: !_aborted })
   }
 
   // 如果流式消息内容为空且有工具结果，移除空消息（但保留有监督者复核信息的消息）

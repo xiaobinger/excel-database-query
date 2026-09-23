@@ -671,6 +671,7 @@ async function handleSend() {
     content,
   })
   sending.value = true
+  emitPetEvent('chat_start')
   await scrollToBottom()
 
   const streamMsg = reactive({
@@ -694,6 +695,7 @@ async function handleSend() {
   const token = localStorage.getItem('token')
   const controller = new AbortController()
   abortController.value = controller
+  let aborted = false
 
   try {
     const response = await fetch(url, {
@@ -716,6 +718,7 @@ async function handleSend() {
     }
   } catch (e) {
     if (e.name === 'AbortError') {
+      aborted = true
       streamMsg._streaming = false
       streamMsg._thinking_done = true
       if (!streamMsg.content.trim()) {
@@ -746,6 +749,7 @@ async function handleSend() {
   } finally {
     sending.value = false
     abortController.value = null
+    emitPetEvent('chat_end', { ok: !aborted })
     await scrollToBottom()
   }
 }
@@ -921,6 +925,7 @@ async function resumeActiveStream(chatId) {
     })
     messages.value.push(streamMsg)
     sending.value = true
+    emitPetEvent('chat_start')
     await scrollToBottom()
 
     const token = localStorage.getItem('token')
@@ -944,6 +949,7 @@ async function resumeActiveStream(chatId) {
     // 静默失败
   } finally {
     sending.value = false
+    emitPetEvent('chat_end', { ok: true })
   }
 }
 

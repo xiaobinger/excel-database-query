@@ -26,7 +26,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import api from '../api'
 import { onPetEvent } from '../utils/petBus'
 import AiPetChatDialog from './AiPetChatDialog.vue'
@@ -165,6 +165,15 @@ const READY_CHATS = [
   '任务搞定！文件在等你带回家 📦',
 ]
 
+/** 任务完成庆祝话术（工单完成 / 对话任务完成时蹦起来说） */
+const DONE_CHATS = [
+  '耶！任务搞定，交给我就是快 ⚡',
+  '呼——任务完成！快夸夸我 🎉',
+  '搞定收工！还有下一个任务吗？',
+  '任务完成度100%！蹦个庆祝舞 ✨',
+  '干完活啦～我去继续待命咯 🫡',
+]
+
 let pollTimer = null
 let rotateTimer = null
 let idleTimer = null
@@ -177,9 +186,15 @@ let specialRunning = false
 const lastMouse = { x: null, y: null }
 /** 最近一次围观触发时间（冷却用） */
 let lastPeekAt = 0
-/** 宠物表情状态：normal/happy/curious/sneaky/proud/excited/dizzy/sleepy/alert */
+/** 最近一次文件出炉提醒时间（对话任务完成去重用） */
+let lastFileReadyAt = 0
+/** 对话任务处理中（AI助手页/宠物对话框正在响应任务指令） */
+const chatWorking = ref(false)
+/** 宠物表情状态：normal/happy/curious/sneaky/proud/excited/dizzy/sleepy/alert/focus/think */
 const petMood = ref('normal')
 let moodTimer = null
+/** 工作状态表情轮换定时器 */
+let workMoodTimer = null
 
 /** 临时切换表情，到期自动回落 normal */
 function flashMood(mood, ms = 2600) {
@@ -194,7 +209,10 @@ function flashMood(mood, ms = 2600) {
 const idleChat = ref('')
 const idleAnim = ref('')
 
-const hasTasks = computed(() => tasks.value.length > 0)
+/** 工单任务处理中（有指派给AI的TICKET任务） */
+const hasTicketTasks = computed(() => tasks.value.length > 0)
+/** 努力工作中：工单任务 或 对话下达的任务指令处理中——期间暂停一切闲时互动 */
+const hasTasks = computed(() => hasTicketTasks.value || chatWorking.value)
 
 /** 气泡展示内容：任务播报优先，其次空闲闲聊 */
 const displayBubble = computed(() => bubbleText.value || idleChat.value)
@@ -306,13 +324,19 @@ async function fetchTasks() {
     const res = await api.tasks.getAiPetTasks()
     const list = res.data || []
     const prevActive = tasks.value.map(t => t.ticket_no + ':' + t.status).join('|')
+    const hadTasks = tasks.value.length > 0
     tasks.value = list
     const currActive = list.map(t => t.ticket_no + ':' + t.status).join('|')
     if (prevActive !== currActive) {
       bubbleIndex.value = 0
       rotateBubble()
     }
-    if (list.length) clearIdleChat()
+    if (list.length) {
+      clearIdleChat()
+    } else if (hadTasks) {
+      // 工单任务全部完成 → 蹦起来庆祝，恢复闲时互动
+      celebrateTaskDone()
+    }
   } catch {
     // 静默失败
   }
@@ -496,7 +520,7 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 /** 围观用户操作：慢慢凑近 → 俏皮话 → 跑开（查询/导出执行时由页面事件触发） */
 async function runPeek(op) {
   const now = Date.now()
-  if (specialRunning || chatVisible.value || isDragging.value || document.hidden) return
+  if (specialRunning || chatVisible.value || isDragging.value || document.hidden || hasTasks.value) return
   if (now - lastPeekAt < 30000) return
   const el = petRef.value
   if (!el || !el.animate) return
@@ -553,6 +577,7 @@ async function runPeek(op) {
 /** 文件生成提醒：气泡 + 弹跳庆祝 + 惊喜表情 */
 function notifyFileReady(op) {
   if (chatVisible.value || document.hidden) return
+  lastFileReadyAt = Date.now()
   clearIdleChat()
   flashMood('alert', 3400)
   const label = op?.label && op.label.length <= 14 ? `（${op.label}）` : ''
@@ -579,6 +604,65 @@ function notifyFileReady(op) {
   }
 }
 
+/** 任务完成庆祝：蹦起来 + 兴奋表情 + 恢复闲时排程 */
+function celebrateTaskDone() {
+  if (chatVisible.value || document.hidden) {
+    scheduleIdle()
+    return
+  }
+  clearIdleChat()
+  flashMood('excited', 3600)
+  idleChat.value = pickRandom(DONE_CHATS)
+  idleAnim.value = 'idle-hop'
+  if (idleHideTimer) clearTimeout(idleHideTimer)
+  idleHideTimer = setTimeout(() => {
+    idleChat.value = ''
+    idleAnim.value = ''
+    idleHideTimer = null
+  }, 5200)
+  const el = petRef.value
+  if (el && el.animate) {
+    el.animate(
+      [
+        { transform: 'translateY(0) scale(1, 1)' },
+        { transform: 'translateY(-26px) scale(0.95, 1.1)', offset: 0.35 },
+        { transform: 'translateY(0) scale(1.08, 0.9)', offset: 0.6 },
+        { transform: 'translateY(-12px) scale(1, 1)', offset: 0.8 },
+        { transform: 'translateY(0) scale(1, 1)' },
+      ],
+      { duration: 900, easing: 'ease-out' }
+    )
+  }
+  scheduleIdle()
+}
+
+/** 工作状态表情轮换：专注加油 / 思考 交替 */
+function startWorkMoodCycle() {
+  stopWorkMoodCycle()
+  const tick = () => {
+    if (!hasTasks.value) return
+    petMood.value = pickRandom(['focus', 'focus', 'think'])
+    workMoodTimer = setTimeout(tick, 6000 + Math.random() * 5000)
+  }
+  tick()
+}
+
+function stopWorkMoodCycle() {
+  if (workMoodTimer) { clearTimeout(workMoodTimer); workMoodTimer = null }
+  petMood.value = 'normal'
+}
+
+/** 工作中暂停一切闲时互动，任务完成恢复（并触发庆祝） */
+watch(hasTasks, (working) => {
+  if (working) {
+    clearIdleChat()
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null }
+    startWorkMoodCycle()
+  } else {
+    stopWorkMoodCycle()
+  }
+})
+
 function onMouseMove(e) {
   lastMouse.x = e.clientX
   lastMouse.y = e.clientY
@@ -594,7 +678,18 @@ onMounted(() => {
   window.addEventListener('mousemove', onMouseMove, { passive: true })
   const offOp = onPetEvent('operation', runPeek)
   const offReady = onPetEvent('file_ready', notifyFileReady)
-  eventCleanups.push(offOp, offReady)
+  const offStart = onPetEvent('chat_start', () => { chatWorking.value = true })
+  const offEnd = onPetEvent('chat_end', (payload) => {
+    if (!chatWorking.value) return
+    chatWorking.value = false
+    // 文件出炉提醒刚庆祝过则跳过重复庆祝
+    if (payload?.ok === false || Date.now() - lastFileReadyAt < 2000) {
+      scheduleIdle()
+      return
+    }
+    celebrateTaskDone()
+  })
+  eventCleanups.push(offOp, offReady, offStart, offEnd)
   scheduleIdle()
 })
 
@@ -604,6 +699,7 @@ onUnmounted(() => {
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null }
   if (idleHideTimer) { clearTimeout(idleHideTimer); idleHideTimer = null }
   if (moodTimer) { clearTimeout(moodTimer); moodTimer = null }
+  if (workMoodTimer) { clearTimeout(workMoodTimer); workMoodTimer = null }
   window.removeEventListener('mousemove', onMouseMove)
   eventCleanups.forEach(off => { try { off() } catch {} })
   eventCleanups.length = 0
