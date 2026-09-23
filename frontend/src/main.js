@@ -9,6 +9,7 @@ import { useAppStore } from './stores'
 import './styles/themes.css'
 import './styles/global.css'
 import './styles/pet-moods.css'
+import './styles/pet-fur.css'
 import 'highlight.js/styles/github-dark.css'
 
 const app = createApp(App)

@@ -1,5 +1,5 @@
 <template>
-  <div class="creature" :class="[{ working }, 'mood-' + (mood || 'normal')]">
+  <div class="creature pig" :class="[{ working }, 'mood-' + (mood || 'normal')]">
     <span class="pig-tail"></span>
     <div class="pig-body"></div>
     <div class="pig-head">

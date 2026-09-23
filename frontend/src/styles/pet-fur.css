@@ -1,0 +1,266 @@
+/* ═══════════════════════════════════════════════════════════
+   AI 宠物毛绒 / 仿真质感增强（全局样式）
+   作用域：.ai-pet 容器内 9 只小动物（机器人走金属质感，不在此处理）
+   手法：
+   - 呼吸起伏动画：全体小动物活体感
+   - 立体球形径向渐变：头/身体光源统一来自左上，替代扁平线性渐变
+   - 毛绒光晕：同色柔边外发光 + 内高光(顶) + 内阴影(底)，模拟毛绒褶皱
+   - 青蛙光滑皮肤：高对比釉面高光
+   优先级：本文件选择器 (0,4,0) 高于各组件 scoped (0,2,0)，稳定覆盖
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── 呼吸起伏（活体感，变换原点在脚底，轻微向上生长） ── */
+.ai-pet .creature.cat,
+.ai-pet .creature.bunny,
+.ai-pet .creature.bear,
+.ai-pet .creature.fox,
+.ai-pet .creature.panda,
+.ai-pet .creature.pig,
+.ai-pet .creature.frog,
+.ai-pet .creature.koala,
+.ai-pet .creature.chick {
+  animation: pet-breathe 3.8s ease-in-out infinite;
+  transform-origin: 50% 100%;
+}
+
+@keyframes pet-breathe {
+  0%, 100% { transform: scale(1, 1); }
+  50% { transform: scale(1.02, 1.045); }
+}
+
+/* ═══════════ 小猫：橘色毛绒 ═══════════ */
+.ai-pet .creature.cat .cat-head {
+  background: radial-gradient(circle at 32% 26%, #fcd9a6 0%, #f5bd78 48%, #eda45f 100%);
+  box-shadow:
+    0 0 0 1px rgba(237, 164, 95, 0.55),
+    0 5px 12px rgba(214, 138, 72, 0.35),
+    inset 0 3px 4px rgba(255, 255, 255, 0.5),
+    inset 0 -4px 6px rgba(210, 140, 78, 0.45);
+}
+.ai-pet .creature.cat .cat-body {
+  background: radial-gradient(circle at 32% 24%, #f8cd94 0%, #f0b269 55%, #e29850 100%);
+  box-shadow:
+    0 0 0 1px rgba(237, 164, 95, 0.55),
+    0 4px 10px rgba(214, 138, 72, 0.32),
+    inset 0 2px 3px rgba(255, 255, 255, 0.5),
+    inset 0 -3px 5px rgba(210, 140, 78, 0.4);
+}
+.ai-pet .creature.cat .cat-tail {
+  box-shadow: inset -1px -2px 3px rgba(210, 140, 78, 0.5), 0 2px 4px rgba(214, 138, 72, 0.3);
+}
+.ai-pet .creature.cat .cat-belly {
+  background: radial-gradient(circle at 50% 30%, #fdf0dc, #f6e0c0);
+  box-shadow: inset 0 2px 3px rgba(214, 138, 72, 0.25);
+}
+
+/* ═══════════ 兔子：雪白绒毛 ═══════════ */
+.ai-pet .creature.bunny .bunny-head {
+  background: radial-gradient(circle at 32% 24%, #ffffff 0%, #faf7f2 50%, #efe9e1 100%);
+  box-shadow:
+    0 0 0 1px rgba(227, 222, 214, 0.8),
+    0 5px 12px rgba(180, 170, 158, 0.3),
+    inset 0 3px 4px rgba(255, 255, 255, 0.95),
+    inset 0 -4px 6px rgba(214, 205, 194, 0.5);
+}
+.ai-pet .creature.bunny .bunny-body {
+  background: radial-gradient(circle at 32% 24%, #ffffff 0%, #f8f4ee 55%, #ede6dc 100%);
+  box-shadow:
+    0 0 0 1px rgba(227, 222, 214, 0.8),
+    0 4px 10px rgba(180, 170, 158, 0.28),
+    inset 0 2px 3px rgba(255, 255, 255, 0.9),
+    inset 0 -3px 5px rgba(214, 205, 194, 0.45);
+}
+.ai-pet .creature.bunny .bunny-tail {
+  box-shadow: 0 0 0 1px rgba(227, 222, 214, 0.8), 0 0 6px rgba(255, 255, 255, 0.9), inset 0 -2px 3px rgba(214, 205, 194, 0.5);
+}
+.ai-pet .creature.bunny .bunny-ear {
+  background: radial-gradient(circle at 50% 20%, #ffffff, #f6f1ea);
+}
+/* 闲时耳朵轻微摆动（工作中由 scoped 接管） */
+.ai-pet .creature.bunny:not(.working) .bunny-ear.ear-l { animation: bunny-ear-idle-l 3.4s ease-in-out infinite; }
+.ai-pet .creature.bunny:not(.working) .bunny-ear.ear-r { animation: bunny-ear-idle-r 3.4s ease-in-out infinite; }
+
+@keyframes bunny-ear-idle-l {
+  0%, 100% { transform: rotate(-7deg); }
+  50% { transform: rotate(-11deg); }
+}
+@keyframes bunny-ear-idle-r {
+  0%, 100% { transform: rotate(7deg); }
+  50% { transform: rotate(11deg); }
+}
+
+/* ═══════════ 小熊：棕色厚毛 ═══════════ */
+.ai-pet .creature.bear .bear-head {
+  background: radial-gradient(circle at 32% 26%, #d8a76e 0%, #c08f57 48%, #a97a48 100%);
+  box-shadow:
+    0 0 0 1px rgba(169, 122, 72, 0.6),
+    0 5px 12px rgba(150, 104, 62, 0.4),
+    inset 0 3px 4px rgba(255, 240, 220, 0.5),
+    inset 0 -4px 6px rgba(120, 82, 46, 0.45);
+}
+.ai-pet .creature.bear .bear-body {
+  background: radial-gradient(circle at 32% 24%, #d8a76e 0%, #bb8952 55%, #9f7340 100%);
+  box-shadow:
+    0 0 0 1px rgba(169, 122, 72, 0.6),
+    0 4px 10px rgba(150, 104, 62, 0.38),
+    inset 0 2px 3px rgba(255, 240, 220, 0.5),
+    inset 0 -3px 5px rgba(120, 82, 46, 0.4);
+}
+.ai-pet .creature.bear .bear-ear {
+  background: radial-gradient(circle at 40% 32%, #c9955f, #a87747 70%);
+}
+.ai-pet .creature.bear .bear-belly {
+  background: radial-gradient(circle at 50% 28%, #f6e6cc, #ead2b0);
+  box-shadow: inset 0 2px 3px rgba(150, 104, 62, 0.25);
+}
+/* 闲时耳朵轻微抖动 */
+.ai-pet .creature.bear:not(.working) .bear-ear.ear-l { animation: bear-ear-idle 3.6s ease-in-out infinite; }
+.ai-pet .creature.bear:not(.working) .bear-ear.ear-r { animation: bear-ear-idle 3.6s ease-in-out 0.4s infinite; }
+
+@keyframes bear-ear-idle {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1.5px); }
+}
+
+/* ═══════════ 狐狸：赤狐毛绒 ═══════════ */
+.ai-pet .creature.fox .fox-head {
+  background: radial-gradient(circle at 32% 26%, #f8ac63 0%, #f0903f 48%, #e67d2c 100%);
+  box-shadow:
+    0 0 0 1px rgba(230, 125, 44, 0.6),
+    0 5px 12px rgba(196, 100, 34, 0.4),
+    inset 0 3px 4px rgba(255, 230, 205, 0.55),
+    inset 0 -4px 6px rgba(196, 100, 34, 0.45);
+}
+.ai-pet .creature.fox .fox-body {
+  background: radial-gradient(circle at 32% 24%, #f8ac63 0%, #ec8532 55%, #dc7223 100%);
+  box-shadow:
+    0 0 0 1px rgba(230, 125, 44, 0.6),
+    0 4px 10px rgba(196, 100, 34, 0.38),
+    inset 0 2px 3px rgba(255, 230, 205, 0.55),
+    inset 0 -3px 5px rgba(196, 100, 34, 0.4);
+}
+.ai-pet .creature.fox .fox-tail {
+  background: linear-gradient(180deg, #f0903f, #dc7223);
+  box-shadow: inset -2px -2px 3px rgba(196, 100, 34, 0.5);
+}
+.ai-pet .creature.fox .fox-muzzle {
+  background: radial-gradient(circle at 50% 20%, #fffdf8, #fff1df);
+  box-shadow: inset 0 -2px 3px rgba(196, 100, 34, 0.15);
+}
+
+/* ═══════════ 熊猫：黑白厚绒 ═══════════ */
+.ai-pet .creature.panda .panda-head {
+  background: radial-gradient(circle at 32% 26%, #ffffff 0%, #f6f7f9 55%, #e8ebef 100%);
+  box-shadow:
+    0 0 0 1px rgba(223, 227, 232, 0.9),
+    0 5px 12px rgba(120, 130, 145, 0.3),
+    inset 0 3px 4px rgba(255, 255, 255, 0.95),
+    inset 0 -4px 6px rgba(190, 197, 206, 0.5);
+}
+.ai-pet .creature.panda .panda-body {
+  background: radial-gradient(circle at 32% 24%, #565d65 0%, #454b52 55%, #32373c 100%);
+  box-shadow:
+    0 0 0 1px rgba(58, 63, 69, 0.7),
+    0 4px 10px rgba(90, 98, 108, 0.4),
+    inset 0 2px 3px rgba(255, 255, 255, 0.18),
+    inset 0 -3px 5px rgba(20, 24, 28, 0.5);
+}
+.ai-pet .creature.panda .panda-ear {
+  background: radial-gradient(circle at 40% 30%, #4a5057, #2c3136 75%);
+}
+.ai-pet .creature.panda .panda-belly {
+  background: radial-gradient(circle at 50% 28%, #fafbfc, #eef1f4);
+  box-shadow: inset 0 2px 3px rgba(120, 130, 145, 0.25);
+}
+/* 闲时耳朵轻微抖动 */
+.ai-pet .creature.panda:not(.working) .panda-ear.ear-l { animation: bear-ear-idle 3.6s ease-in-out infinite; }
+.ai-pet .creature.panda:not(.working) .panda-ear.ear-r { animation: bear-ear-idle 3.6s ease-in-out 0.4s infinite; }
+
+/* ═══════════ 小猪：粉嫩毛绒 ═══════════ */
+.ai-pet .creature.pig .pig-head {
+  background: radial-gradient(circle at 32% 26%, #ffdbe3 0%, #fbc6d1 48%, #f2aebb 100%);
+  box-shadow:
+    0 0 0 1px rgba(242, 174, 187, 0.65),
+    0 5px 12px rgba(226, 137, 158, 0.35),
+    inset 0 3px 4px rgba(255, 255, 255, 0.6),
+    inset 0 -4px 6px rgba(214, 120, 142, 0.4);
+}
+.ai-pet .creature.pig .pig-body {
+  background: radial-gradient(circle at 32% 24%, #ffdbe3 0%, #f8bcc9 55%, #eda3b2 100%);
+  box-shadow:
+    0 0 0 1px rgba(242, 174, 187, 0.65),
+    0 4px 10px rgba(226, 137, 158, 0.33),
+    inset 0 2px 3px rgba(255, 255, 255, 0.6),
+    inset 0 -3px 5px rgba(214, 120, 142, 0.38);
+}
+.ai-pet .creature.pig .pig-ear {
+  background: radial-gradient(circle at 50% 30%, #f3aab8, #e78ba0 75%);
+}
+.ai-pet .creature.pig .pig-snout {
+  background: radial-gradient(circle at 50% 25%, #f3aab8, #e78ba0);
+  box-shadow: inset 0 -2px 0 rgba(214, 120, 142, 0.5), inset 0 1px 2px rgba(255, 255, 255, 0.5);
+}
+
+/* ═══════════ 青蛙：光滑釉面（无毛，走光泽仿真） ═══════════ */
+.ai-pet .creature.frog .frog-head {
+  background: radial-gradient(circle at 30% 22%, #b6eaa4 0%, #8fd67e 45%, #74bf64 100%);
+  box-shadow:
+    0 0 0 1px rgba(116, 191, 100, 0.7),
+    0 5px 12px rgba(98, 168, 82, 0.38),
+    inset 0 4px 5px rgba(255, 255, 255, 0.55),
+    inset 0 -4px 6px rgba(70, 140, 58, 0.4);
+}
+.ai-pet .creature.frog .frog-body {
+  background: radial-gradient(circle at 32% 22%, #a9e695 0%, #82cc72 55%, #6bb55a 100%);
+  box-shadow:
+    0 0 0 1px rgba(116, 191, 100, 0.7),
+    0 4px 10px rgba(98, 168, 82, 0.36),
+    inset 0 3px 4px rgba(255, 255, 255, 0.5),
+    inset 0 -3px 5px rgba(70, 140, 58, 0.38);
+}
+.ai-pet .creature.frog .eye-bump {
+  background: radial-gradient(circle at 40% 30%, #9fdc8f, #6fb95e 75%);
+}
+.ai-pet .creature.frog .frog-belly {
+  background: radial-gradient(circle at 50% 28%, #ecf7dd, #cfeab8);
+  box-shadow: inset 0 2px 3px rgba(98, 168, 82, 0.25);
+}
+
+/* ═══════════ 考拉：灰蓝绒毛 ═══════════ */
+.ai-pet .creature.koala .koala-head {
+  background: radial-gradient(circle at 32% 26%, #cdd5de 0%, #b3bdc9 48%, #9aa7b5 100%);
+  box-shadow:
+    0 0 0 1px rgba(154, 167, 181, 0.7),
+    0 5px 12px rgba(138, 152, 168, 0.4),
+    inset 0 3px 4px rgba(255, 255, 255, 0.5),
+    inset 0 -4px 6px rgba(120, 132, 146, 0.45);
+}
+.ai-pet .creature.koala .koala-body {
+  background: radial-gradient(circle at 32% 24%, #cdd5de 0%, #aeb9c5 55%, #96a3b1 100%);
+  box-shadow:
+    0 0 0 1px rgba(154, 167, 181, 0.7),
+    0 4px 10px rgba(138, 152, 168, 0.38),
+    inset 0 2px 3px rgba(255, 255, 255, 0.5),
+    inset 0 -3px 5px rgba(120, 132, 146, 0.4);
+}
+.ai-pet .creature.koala .koala-ear {
+  background: radial-gradient(circle at 40% 30%, #aeb9c5, #8d99a8 75%);
+}
+.ai-pet .creature.koala .koala-belly {
+  background: radial-gradient(circle at 50% 28%, #e6ebf0, #d0d8e0);
+  box-shadow: inset 0 2px 3px rgba(138, 152, 168, 0.25);
+}
+
+/* ═══════════ 小鸡：鹅黄绒毛 ═══════════ */
+.ai-pet .creature.chick .chick-blob {
+  background: radial-gradient(circle at 38% 26%, #fff0a0 0%, #ffe079 45%, #f6c83a 100%);
+  box-shadow:
+    0 0 0 1px rgba(246, 200, 58, 0.65),
+    0 5px 12px rgba(226, 178, 38, 0.4),
+    inset 0 4px 5px rgba(255, 255, 255, 0.6),
+    inset 0 -5px 7px rgba(214, 158, 20, 0.45);
+}
+.ai-pet .creature.chick .chick-wing {
+  background: radial-gradient(circle at 40% 30%, #ffdd6a, #edbc2c 80%);
+  box-shadow: inset -1px -2px 3px rgba(214, 158, 20, 0.5);
+}
