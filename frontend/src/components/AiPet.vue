@@ -67,11 +67,13 @@ const chatVisible = ref(false)
 
 const POLL_INTERVAL = 15000
 const ROTATE_INTERVAL = 6000
-/** 空闲自动互动：随机间隔范围（毫秒） */
-const IDLE_MIN_INTERVAL = 18000
-const IDLE_MAX_INTERVAL = 42000
+/** 空闲自动互动：随机间隔范围（毫秒）——稍频繁但不过度打扰 */
+const IDLE_MIN_INTERVAL = 10000
+const IDLE_MAX_INTERVAL = 24000
 /** 单条闲聊气泡展示时长（毫秒） */
 const IDLE_SHOW_DURATION = 6000
+/** 特殊大动效（滚动横穿/偷袭光标）触发概率 */
+const SPECIAL_PROBABILITY = 0.22
 /** 位移小于该阈值视为点击而非拖动 */
 const DRAG_THRESHOLD = 6
 const PET_SIZE = { w: 84, h: 104 }
@@ -90,15 +92,58 @@ const IDLE_CHATS = [
   '忙完了记得来看看我呀 🌟',
   '点我一下就能开始聊天咯',
   '数据海洋里，我是你的小导航 🧭',
+  'SQL 写得好，下班下得早 ✌️',
+  '偷偷问一句……今天要跑分润吗？',
+  '小天线收到了想查数据的电波 📡',
+  '别看我圆，跑起任务来可快了 ⚡',
+  '一键导出，交给我就好！',
+  '盯……监测到你在认真工作 👏',
+  '咕噜咕噜～肚子饿了，喂我点任务吧',
+  '今天也是元气满满的一天！',
+  '光标一闪一闪的，好像在叫我 ✨',
+  '久坐提醒：起来晃两下再战 💪',
+  'Ctrl+S 了吗？我帮你记着呢',
+  '监督者说我今天表现很乖 😇',
+  '悄悄说：我也能直接执行任务哦',
+  '翻了个身，继续待命 🌀',
+  '哇，屏幕好大，数据好多 🌏',
+  '电量满格，随时开工！🔋',
+  '打个哈欠……啊——还是想帮你查数据',
+  '发现问题？不，那是特性 😉',
 ]
 
-/** 空闲小动效 class 池 */
-const IDLE_ANIMS = ['idle-wave', 'idle-hop', 'idle-spin', 'idle-squash']
+/** 空闲小动效 class 池（纯 CSS） */
+const IDLE_ANIMS = ['idle-wave', 'idle-hop', 'idle-spin', 'idle-squash', 'idle-shimmy', 'idle-backflip']
+
+/** 特殊大动效池（JS 驱动）：滚动横穿屏幕 / 偷袭鼠标光标 */
+const IDLE_SPECIALS = ['idle-roll', 'idle-pounce']
+
+/** 特殊动效专用话术 */
+const SPECIAL_CHATS = {
+  'idle-roll': [
+    '咕噜咕噜——滚过去咯！',
+    '冲鸭——！咕噜噜噜～',
+    '看我无敌风火轮！🌀',
+    '咕噜咕噜，巡回演出开始～',
+    '滚一圈回来继续待命！',
+  ],
+  'idle-pounce': [
+    '发现光标！偷袭～',
+    '嘿！你的鼠标被我盯上了 😼',
+    '光标别跑！噗——',
+    '偷袭成功！爪下留情 🐾',
+    '突袭鼠标小分队，出动！',
+  ],
+}
 
 let pollTimer = null
 let rotateTimer = null
 let idleTimer = null
 let idleHideTimer = null
+/** 特殊大动效进行中标记（防止叠加触发） */
+let specialRunning = false
+/** 最近一次鼠标光标位置（偷袭光标动效使用） */
+const lastMouse = { x: null, y: null }
 
 const idleChat = ref('')
 const idleAnim = ref('')
@@ -240,20 +285,167 @@ function scheduleIdle() {
   idleTimer = setTimeout(triggerIdle, delay)
 }
 
+function pickRandom(list) {
+  return list[Math.floor(Math.random() * list.length)]
+}
+
+/** 特殊动效中途是否放弃（打开对话/切后台/开始拖动时终止） */
+function specialBailed() {
+  return chatVisible.value || document.hidden || isDragging.value
+}
+
+/** 光标目标位置（无移动记录时回退屏幕中心） */
+function mouseTarget() {
+  const w = window.innerWidth
+  const h = window.innerHeight
+  if (lastMouse.x == null || lastMouse.y == null) {
+    return { x: w * 0.5, y: h * 0.5 }
+  }
+  return { x: lastMouse.x, y: lastMouse.y }
+}
+
 function triggerIdle() {
   idleTimer = null
-  if (hasTasks.value || chatVisible.value || isDragging.value || document.hidden) {
+  if (hasTasks.value || chatVisible.value || isDragging.value || document.hidden || specialRunning) {
     scheduleIdle()
     return
   }
-  idleChat.value = IDLE_CHATS[Math.floor(Math.random() * IDLE_CHATS.length)]
-  idleAnim.value = IDLE_ANIMS[Math.floor(Math.random() * IDLE_ANIMS.length)]
+  // 小概率触发特殊大动效：滚动横穿屏幕 / 偷袭鼠标光标
+  if (Math.random() < SPECIAL_PROBABILITY) {
+    runSpecial(pickRandom(IDLE_SPECIALS))
+    return
+  }
+  idleChat.value = pickRandom(IDLE_CHATS)
+  idleAnim.value = pickRandom(IDLE_ANIMS)
   idleHideTimer = setTimeout(() => {
     idleChat.value = ''
     idleAnim.value = ''
     idleHideTimer = null
     scheduleIdle()
   }, IDLE_SHOW_DURATION)
+}
+
+/** 特殊大动效：专用话术 + JS 驱动动画，结束后自动恢复排程 */
+async function runSpecial(kind) {
+  specialRunning = true
+  clearIdleChat()
+  idleChat.value = pickRandom(SPECIAL_CHATS[kind] || ['～'])
+  try {
+    if (kind === 'idle-roll') {
+      await playRoll()
+    } else if (kind === 'idle-pounce') {
+      await playPounce()
+    }
+  } catch {
+    // 动画中断（WAAPI缺失/中途打开对话等）直接复位
+  } finally {
+    resetSpecialPose()
+    idleChat.value = ''
+    idleAnim.value = ''
+    specialRunning = false
+    scheduleIdle()
+  }
+}
+
+/** 清理 WAAPI 残留，让 CSS 悬浮动画自然接管 */
+function resetSpecialPose() {
+  const el = petRef.value
+  if (!el) return
+  el.getAnimations().forEach(a => a.cancel())
+  const robot = el.querySelector('.pet-robot')
+  if (robot) robot.getAnimations().forEach(a => a.cancel())
+}
+
+/** 滚动横穿屏幕：贴地滚到屏幕另一侧，停顿一下后滚回原位 */
+async function playRoll() {
+  const el = petRef.value
+  if (!el || !el.animate) throw new Error('no waapi')
+  const rect = el.getBoundingClientRect()
+  const w = window.innerWidth
+  const goingLeft = rect.left + rect.width / 2 > w / 2
+  const margin = 12
+  const targetX = goingLeft ? (margin - rect.left) : (w - margin - rect.right)
+  const dist = Math.abs(targetX)
+  if (dist < 40) throw new Error('too close')
+  const dur = Math.min(2400, Math.max(800, dist * 1.2))
+  const spinDeg = (goingLeft ? -1 : 1) * 360 * Math.max(1, Math.round(dist / 500))
+  const robot = el.querySelector('.pet-robot')
+  const easing = 'cubic-bezier(0.5, 0, 0.5, 1)'
+  // 滚出去（本体平移 + 造型本体翻滚，气泡保持水平可读）
+  const rollOut = el.animate(
+    [{ transform: 'translateX(0)' }, { transform: `translateX(${targetX}px)` }],
+    { duration: dur, easing, fill: 'forwards' }
+  )
+  const spinOut = robot
+    ? robot.animate(
+        [{ transform: 'translateX(-50%) rotate(0deg)' }, { transform: `translateX(-50%) rotate(${spinDeg}deg)` }],
+        { duration: dur, easing, fill: 'forwards' }
+      )
+    : null
+  await rollOut.finished
+  if (specialBailed()) throw new Error('bail')
+  await sleep(320)
+  // 滚回来（反向翻滚）
+  const rollBack = el.animate(
+    [{ transform: `translateX(${targetX}px)` }, { transform: 'translateX(0)' }],
+    { duration: dur, easing, fill: 'forwards' }
+  )
+  const spinBack = robot
+    ? robot.animate(
+        [{ transform: `translateX(-50%) rotate(${spinDeg}deg)` }, { transform: 'translateX(-50%) rotate(0deg)' }],
+        { duration: dur, easing, fill: 'forwards' }
+      )
+    : null
+  await rollBack.finished
+}
+
+/** 偷袭鼠标光标：蓄力下蹲 → 弧线猛扑到光标旁 → 得意停留 → 蹦回原位 */
+async function playPounce() {
+  const el = petRef.value
+  if (!el || !el.animate) throw new Error('no waapi')
+  const rect = el.getBoundingClientRect()
+  const w = window.innerWidth
+  const h = window.innerHeight
+  const cur = mouseTarget()
+  // 落点在光标右上方一点，不遮挡光标本体
+  const targetLeft = Math.min(Math.max(cur.x - rect.width / 2 + 34, 4), w - rect.width - 4)
+  const targetTop = Math.min(Math.max(cur.y - rect.height - 8, 4), h - rect.height - 4)
+  const dx = targetLeft - rect.left
+  const dy = targetTop - rect.top
+  if (Math.hypot(dx, dy) < 30) throw new Error('too close')
+  // 蓄力下蹲
+  await el.animate(
+    [{ transform: 'translate(0, 0) scale(1, 1)' }, { transform: 'translate(0, 7px) scale(1.14, 0.8)' }],
+    { duration: 240, easing: 'ease-in', fill: 'forwards' }
+  ).finished
+  // 猛扑（小弧线跳跃）
+  await el.animate(
+    [
+      { transform: 'translate(0, 7px) scale(1.14, 0.8)' },
+      { transform: `translate(${dx * 0.5}px, ${dy * 0.5 - 30}px) scale(0.92, 1.12)`, offset: 0.55 },
+      { transform: `translate(${dx}px, ${dy}px) scale(1.1, 0.88)`, offset: 0.85 },
+      { transform: `translate(${dx}px, ${dy}px) scale(1, 1)` },
+    ],
+    { duration: 520, easing: 'ease-out', fill: 'forwards' }
+  ).finished
+  if (specialBailed()) throw new Error('bail')
+  await sleep(620)
+  // 蹦回原地
+  await el.animate(
+    [
+      { transform: `translate(${dx}px, ${dy}px)` },
+      { transform: `translate(${dx * 0.45}px, ${dy * 0.45 - 44}px) scale(0.95, 1.08)`, offset: 0.5 },
+      { transform: 'translate(0, 0)' },
+    ],
+    { duration: 560, easing: 'ease-in-out', fill: 'forwards' }
+  ).finished
+}
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+
+function onMouseMove(e) {
+  lastMouse.x = e.clientX
+  lastMouse.y = e.clientY
 }
 
 onMounted(() => {
@@ -263,6 +455,7 @@ onMounted(() => {
   rotateTimer = setInterval(() => {
     if (!chatVisible.value) rotateBubble()
   }, ROTATE_INTERVAL)
+  window.addEventListener('mousemove', onMouseMove, { passive: true })
   scheduleIdle()
 })
 
@@ -271,6 +464,8 @@ onUnmounted(() => {
   if (rotateTimer) { clearInterval(rotateTimer); rotateTimer = null }
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null }
   if (idleHideTimer) { clearTimeout(idleHideTimer); idleHideTimer = null }
+  window.removeEventListener('mousemove', onMouseMove)
+  resetSpecialPose()
 })
 </script>
 
@@ -486,6 +681,31 @@ onUnmounted(() => {
   0%, 100% { scale: 1; }
   40% { scale: 0.88 1.12; }
   70% { scale: 1.1 0.9; }
+}
+
+/* 扭屁股小舞步 */
+.ai-pet.idle-shimmy .pet-robot {
+  animation: pet-float 3s ease-in-out infinite, pet-idle-shimmy 0.9s ease-in-out 3;
+}
+
+@keyframes pet-idle-shimmy {
+  0%, 100% { rotate: 0deg; translate: 0 0; }
+  20% { rotate: 9deg; translate: 5px 0; }
+  40% { rotate: -9deg; translate: -5px 0; }
+  60% { rotate: 9deg; translate: 5px 0; }
+  80% { rotate: -9deg; translate: -5px 0; }
+}
+
+/* 后空翻 */
+.ai-pet.idle-backflip .pet-robot {
+  animation: pet-float 3s ease-in-out infinite, pet-idle-backflip 0.95s ease-in-out 1;
+}
+
+@keyframes pet-idle-backflip {
+  0% { rotate: 0deg; translate: 0 0; }
+  35% { rotate: -130deg; translate: 0 -22px; }
+  70% { rotate: -300deg; translate: 0 -6px; }
+  100% { rotate: -360deg; translate: 0 0; }
 }
 
 /* 空闲互动时脚下阴影同步律动 */
