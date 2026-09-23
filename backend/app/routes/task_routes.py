@@ -15,6 +15,7 @@ from app.models.query_task import QueryTask
 from app.models.system_task import SystemTask, SystemTaskExecution
 from app.models.script import Script
 from app.utils.auth import login_required, get_current_user
+from app.utils.helpers import beijing_isoformat
 
 task_bp = Blueprint('task', __name__, url_prefix='/api/tasks')
 
@@ -81,9 +82,9 @@ def _normalize_query_task(task):
         'success_count': task.success_count or 0,
         'failure_count': task.failure_count or 0,
         'error_message': task.error_message,
-        'started_at': task.started_at.isoformat() if task.started_at else None,
-        'completed_at': task.completed_at.isoformat() if task.completed_at else None,
-        'created_at': task.created_at.isoformat() if task.created_at else None,
+        'started_at': beijing_isoformat(task.started_at),
+        'completed_at': beijing_isoformat(task.completed_at),
+        'created_at': beijing_isoformat(task.created_at),
         'url': _query_task_url(task),
     }
 
@@ -101,9 +102,9 @@ def _normalize_execution(execution):
         'success_count': 0,
         'failure_count': 0,
         'error_message': execution.error_message,
-        'started_at': execution.started_at.isoformat() if execution.started_at else None,
-        'completed_at': execution.completed_at.isoformat() if execution.completed_at else None,
-        'created_at': execution.created_at.isoformat() if execution.created_at else None,
+        'started_at': beijing_isoformat(execution.started_at),
+        'completed_at': beijing_isoformat(execution.completed_at),
+        'created_at': beijing_isoformat(execution.created_at),
         'url': _execution_url(execution),
     }
 
@@ -145,9 +146,9 @@ def _normalize_ticket(ticket):
         'success_count': 0,
         'failure_count': 0,
         'error_message': ticket.reject_reason,
-        'started_at': ticket.submitted_at.isoformat() if ticket.submitted_at else None,
-        'completed_at': ticket.closed_at.isoformat() if ticket.closed_at else None,
-        'created_at': ticket.created_at.isoformat() if ticket.created_at else None,
+        'started_at': beijing_isoformat(ticket.submitted_at),
+        'completed_at': beijing_isoformat(ticket.closed_at),
+        'created_at': beijing_isoformat(ticket.created_at),
         'url': '/tickets',
     }
 
