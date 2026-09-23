@@ -109,6 +109,9 @@
       </el-footer>
     </el-container>
 
+    <!-- AI宠物助手（个人中心可开关，默认开启） -->
+    <AiPet v-if="petEnabled" :sidebar-collapsed="isCollapsed" />
+
     <el-dialog
       v-model="passwordDialogVisible"
       title="修改密码"
@@ -185,6 +188,12 @@
         <el-form-item label="手机号">
           <el-input v-model="profileForm.phone" placeholder="请输入手机号" maxlength="11" />
         </el-form-item>
+        <el-form-item label="AI宠物">
+          <div class="pet-setting">
+            <el-switch v-model="profileForm.pet_enabled" active-text="开启" inactive-text="关闭" />
+            <div class="pet-setting-tip">开启后左下角常驻可爱机器人助手：点击可快捷开启 AI 新对话，并自动播报你提交给 AI 的工单处理进度</div>
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="profileDialogVisible = false">取消</el-button>
@@ -204,6 +213,7 @@ import { ElMessage } from 'element-plus'
 import ThemeSwitch from './ThemeSwitch.vue'
 import TagsView from './TagsView.vue'
 import TaskBadge from './TaskBadge.vue'
+import AiPet from './AiPet.vue'
 import { titleMap } from '../config/menuConfig'
 
 const route = useRoute()
@@ -224,7 +234,11 @@ const profileForm = reactive({
   gender: 'male',
   phone: '',
   avatarUrl: '',
+  pet_enabled: true,
 })
+
+/** AI宠物是否展示（默认开启，个人中心可关闭） */
+const petEnabled = computed(() => store.user?.pet_enabled !== false)
 
 function toggleCollapse() {
   isCollapsed.value = !isCollapsed.value
@@ -316,6 +330,7 @@ function openProfileDialog() {
     gender: u.gender || 'male',
     phone: u.phone || '',
     avatarUrl: u.avatar ? `/api/auth/avatar/${u.avatar}` : '',
+    pet_enabled: u.pet_enabled !== false,
   })
   profileDialogVisible.value = true
 }
@@ -327,6 +342,7 @@ async function handleSaveProfile() {
       display_name: profileForm.display_name,
       gender: profileForm.gender,
       phone: profileForm.phone,
+      pet_enabled: profileForm.pet_enabled,
     })
     if (res.data) {
       store.user = { ...store.user, ...res.data }
@@ -656,5 +672,18 @@ onUnmounted(() => {
 .avatar-tip {
   color: #909399;
   font-size: 12px;
+}
+
+.pet-setting {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pet-setting-tip {
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.5;
+  max-width: 320px;
 }
 </style>

@@ -185,6 +185,7 @@ const download = {
 const tasks = {
   getActive: () => http.get('/tasks/active'),
   getRecent: (params) => http.get('/tasks/recent', { params }),
+  getAiPetTasks: () => http.get('/tasks/ai-pet'),
 }
 
 const ai = {

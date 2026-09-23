@@ -176,6 +176,8 @@ def update_profile():
         user.phone = (data['phone'] or '').strip() or None
     if 'gender' in data and data['gender'] in ('male', 'female', 'other'):
         user.gender = data['gender']
+    if 'pet_enabled' in data and isinstance(data['pet_enabled'], bool):
+        user.pet_enabled = data['pet_enabled']
 
     db.session.commit()
     return jsonify({'success': True, 'message': '资料已更新', 'data': user.to_dict_with_role()})

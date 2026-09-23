@@ -24,6 +24,8 @@ class User(db.Model):
     auto_task_ids = db.Column(db.Text, comment='available auto export task id list (JSON)')
     system_task_ids = db.Column(db.Text, comment='available system task id list (JSON)')
 
+    pet_enabled = db.Column(db.Boolean, default=True, nullable=True, comment='AI宠物助手开关')
+
     role = db.relationship('Role', backref='users', lazy='joined')
 
     def set_password(self, password):
@@ -161,6 +163,7 @@ class User(db.Model):
             'script_ids': self.get_script_ids(),
             'auto_task_ids': self.get_auto_task_ids(),
             'system_task_ids': self.get_system_task_ids(),
+            'pet_enabled': self.pet_enabled is not False,
             'created_at': beijing_isoformat(self.created_at),
         }
 

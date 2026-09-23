@@ -153,6 +153,44 @@ def _normalize_ticket(ticket):
     }
 
 
+@task_bp.route('/ai-pet', methods=['GET'])
+@login_required
+def get_ai_pet_tasks():
+    """AI宠物播报：当前用户提交给AI、仍在处理链路上的工单
+
+    活跃状态：已提交（等待AI）/ 已接收 / 处理中 / 待确认（AI数据变更待用户确认）
+    仅返回当前登录用户自己创建的工单，按提交时间倒序，最多5条。
+    """
+    from app.models.ticket import Ticket
+    from app.routes.ticket_routes import STATUS_LABELS
+
+    current_user = get_current_user()
+    if not current_user:
+        return jsonify({'success': True, 'data': []})
+
+    active_statuses = ('submitted', 'received', 'processing', 'pending_confirmation')
+    tickets = Ticket.query.filter(
+        Ticket.created_by == current_user.id,
+        Ticket.assignee_type == 'ai',
+        Ticket.status.in_(active_statuses),
+        Ticket.is_draft == False,  # noqa: E712
+    ).order_by(Ticket.submitted_at.desc()).limit(5).all()
+
+    data = []
+    for t in tickets:
+        data.append({
+            'ticket_no': t.ticket_no,
+            'title': t.title,
+            'status': t.status,
+            'status_label': STATUS_LABELS.get(t.status, t.status),
+            'progress': TICKET_STATUS_PROGRESS.get(t.status, 0),
+            'agent_name': t.assignee_agent.name if t.assignee_agent else 'AI助手',
+            'submitted_at': beijing_isoformat(t.submitted_at),
+        })
+
+    return jsonify({'success': True, 'data': data})
+
+
 @task_bp.route('/active', methods=['GET'])
 @login_required
 def get_active_tasks():
