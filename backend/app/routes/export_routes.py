@@ -12,6 +12,7 @@ from app.models.database import DatabaseConnection
 from app.utils.auth import login_required, get_current_user
 from app.utils.behavior_tracker import track_behavior
 from app.utils.error_sanitizer import sanitize_error_for_user
+from app.utils.operation_logger import log_operation
 import time
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,9 @@ def execute_export():
                 'script_ids': script_ids,
                 'output_format': output_format,
             })
+
+        log_operation('execute', 'export', task.id,
+                      f'执行导出：查询选项 {script_ids}，格式 {output_format}')
 
         return jsonify({'success': True, 'task_id': task.task_id, 'message': '导出任务已提交'})
 

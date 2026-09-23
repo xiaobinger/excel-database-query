@@ -5,12 +5,8 @@
         <div class="card-header">
           <span><i class="fas fa-clipboard-list"></i> 操作日志</span>
           <div class="header-actions">
-            <el-select v-model="actionFilter" placeholder="操作类型" clearable style="width: 130px" @change="fetchData">
-              <el-option label="创建" value="create" />
-              <el-option label="更新" value="update" />
-              <el-option label="删除" value="delete" />
-              <el-option label="批量删除" value="batch_delete" />
-              <el-option label="删除全部" value="delete_all" />
+            <el-select v-model="actionFilter" placeholder="操作类型" clearable filterable style="width: 140px" @change="fetchData">
+              <el-option v-for="opt in actionOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
             </el-select>
             <el-input
               v-model="keywordFilter"
@@ -112,6 +108,26 @@ const ACTION_LABELS = {
   delete: '删除',
   batch_delete: '批量删除',
   delete_all: '删除全部',
+  login: '登录',
+  logout: '登出',
+  execute: '执行',
+  export: '导出',
+  chat: 'AI对话',
+  submit: '提交',
+  status_change: '状态流转',
+  test: '测试',
+  toggle: '启停',
+  cancel: '取消',
+  retry: '重试',
+  abort: '中止',
+  interrupt: '打断',
+  comment: '评论',
+  upload: '上传',
+  clear: '清空',
+  compress: '压缩',
+  refresh: '刷新',
+  confirm_action: '确认执行',
+  send_email: '发送邮件',
 }
 
 const TARGET_LABELS = {
@@ -120,17 +136,47 @@ const TARGET_LABELS = {
   script: '查询选项',
   database: '数据库',
   query: '查询',
+  export: '导出',
+  home_export: '首页导出',
+  auto_export: '自动导出',
   task: '任务',
+  ai_chat: 'AI对话',
+  ai_strategy: 'AI策略',
+  ticket: '工单',
+  system_task: '系统任务',
+  agent: 'AI Agent',
+  mcp_server: 'MCP服务',
+  business_system: '业务系统',
+  pay: '付款',
+  payment: '付款',
+  pay_flow: '付款流程',
+  profit_share: '分润',
+  api_key: 'API密钥',
+  ssh_config: 'SSH配置',
+  lookup: '查询',
+  dashboard: '仪表盘',
+  log: '日志',
+  auth: '认证',
+  scheduler: '调度',
+  strategy: '策略',
 }
+
+const actionOptions = Object.entries(ACTION_LABELS).map(([value, label]) => ({ value, label }))
 
 function actionLabel(action) {
   return ACTION_LABELS[action] || action
 }
 
+const DANGER_ACTIONS = ['delete', 'batch_delete', 'delete_all', 'abort', 'cancel']
+const SUCCESS_ACTIONS = ['create', 'login', 'submit']
+const PRIMARY_ACTIONS = ['update', 'execute', 'export', 'chat', 'status_change', 'confirm_action']
+const WARNING_ACTIONS = ['toggle', 'interrupt', 'retry']
+
 function actionTagType(action) {
-  if (action === 'create') return 'success'
-  if (action === 'update') return 'primary'
-  if (action === 'delete' || action === 'batch_delete' || action === 'delete_all') return 'danger'
+  if (DANGER_ACTIONS.includes(action)) return 'danger'
+  if (SUCCESS_ACTIONS.includes(action)) return 'success'
+  if (PRIMARY_ACTIONS.includes(action)) return 'primary'
+  if (WARNING_ACTIONS.includes(action)) return 'warning'
   return 'info'
 }
 

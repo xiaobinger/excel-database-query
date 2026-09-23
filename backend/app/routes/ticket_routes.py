@@ -26,6 +26,7 @@ from app.models.business_system import BusinessSystem
 from app.models.ai_agent import AiAgent
 from app.models.ai_config import AiConfig
 from app.utils.auth import login_required, admin_required, get_current_user
+from app.utils.operation_logger import log_operation
 
 logger = logging.getLogger(__name__)
 ticket_bp = Blueprint('ticket', __name__, url_prefix='/api/tickets')
@@ -1417,11 +1418,13 @@ def create_ticket():
 
     # 草稿模式：不触发AI处理
     if is_draft:
+        log_operation('create', 'ticket', ticket.id, f'暂存工单草稿：{title}')
         return jsonify({'success': True, 'data': ticket.to_dict(), 'message': '草稿已暂存'})
 
     # 如果指派给AI，自动触发AI处理
     if assignee_type == 'ai':
         _trigger_ai_processing(ticket)
+        log_operation('create', 'ticket', ticket.id, f'创建工单（指派AI）：{title}')
         # 钉钉通知：AI工单不@人，仅发送指派提醒
         try:
             from app.services.dingtalk_service import notify_ticket_assigned
@@ -1429,6 +1432,8 @@ def create_ticket():
         except Exception as e:
             logger.warning(f'钉钉指派通知发送失败 ticket_id={ticket.id}: {e}')
         return jsonify({'success': True, 'data': ticket.to_dict(), 'message': '工单已提交，AI正在处理中'})
+
+    log_operation('create', 'ticket', ticket.id, f'创建工单：{title}')
 
     # 钉钉通知：指派人收到工单提醒（@指派人手机号）
     try:
@@ -1599,6 +1604,8 @@ def submit_draft(ticket_id):
     ticket.submitted_at = datetime.utcnow()
     db.session.commit()
 
+    log_operation('submit', 'ticket', ticket.id, f'提交草稿工单：{ticket.title}')
+
     # 如果指派给AI，自动触发AI处理
     if ticket.assignee_type == 'ai':
         _trigger_ai_processing(ticket)
@@ -1723,6 +1730,8 @@ def update_status(ticket_id):
             notify_ticket_restarted(ticket, admin_name)
         except Exception as e:
             logger.warning(f'钉钉重启通知发送失败 ticket_id={ticket.id}: {e}')
+
+        log_operation('status_change', 'ticket', ticket.id, f'工单状态流转：重启 → 已提交（{ticket.title}）')
 
         # 如果原指派给AI，重新触发AI处理
         if ticket.assignee_type == 'ai':
@@ -1880,6 +1889,8 @@ def update_status(ticket_id):
             msg = '工单已移交' + ('给AI' if new_assignee_type == 'ai' else '')
         else:
             msg = '工单已重新发起'
+        log_operation('status_change', 'ticket', ticket.id,
+                      f'工单状态流转：{STATUS_LABELS.get(ticket.status, ticket.status)}（{ticket.title}）')
         return jsonify({
             'success': True,
             'data': ticket.to_dict(include_comments=True),
@@ -1934,6 +1945,9 @@ def update_status(ticket_id):
             notify_ticket_completed(ticket)
         except Exception as e:
             logger.warning(f'钉钉完成通知发送失败 ticket_id={ticket.id}: {e}')
+
+    log_operation('status_change', 'ticket', ticket.id,
+                  f'工单状态流转：{action} → {STATUS_LABELS.get(to_status, to_status)}（{ticket.title}）')
 
     return jsonify({
         'success': True,

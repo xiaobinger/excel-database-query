@@ -7,6 +7,7 @@ from app.models.auto_export_task import AutoExportTask
 from app.models.script import Script
 from app.models.query_task import QueryTask
 from app.utils.auth import login_required, get_current_user
+from app.utils.operation_logger import log_operation
 
 auto_export_bp = Blueprint('auto_export', __name__, url_prefix='/api/auto-export')
 
@@ -257,6 +258,7 @@ def run_now(task_id):
     try:
         from app.services.auto_export_scheduler import _execute_auto_task
         _execute_auto_task(current_app._get_current_object(), task)
+        log_operation('execute', 'auto_export', task.id, f'手动触发自动导出任务：{task.name}')
         return jsonify({'success': True, 'message': '手动触发成功'})
     except Exception as e:
         return jsonify({'success': False, 'message': f'触发失败: {str(e)}'}), 500
@@ -291,6 +293,7 @@ def resend_email(task_id):
         from app.services.auto_export_scheduler import send_auto_export_notification
         status = 'completed' if query_task.status == 'completed' else 'failed'
         send_auto_export_notification(current_app._get_current_object(), task, query_task, status)
+        log_operation('send_email', 'auto_export', task.id, f'重发自动导出结果邮件：{task.name}')
         return jsonify({'success': True, 'message': '邮件重发成功'})
     except Exception as e:
         logger.error(f'重发邮件失败: {e}', exc_info=True)

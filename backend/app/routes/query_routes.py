@@ -12,6 +12,7 @@ from app.utils.sql_validator import SQLValidator
 from app.utils.auth import login_required, get_current_user
 from app.utils.behavior_tracker import track_behavior
 from app.utils.error_sanitizer import sanitize_error_for_user
+from app.utils.operation_logger import log_operation
 import time
 
 query_bp = Blueprint('query', __name__, url_prefix='/api/query')
@@ -137,6 +138,9 @@ def execute_query():
                 'primary_key': primary_key,
                 'column_mapping': column_mapping if not new_sheet_bool else {},
             })
+
+        log_operation('execute', 'query', task.id,
+                      f'执行查询：查询选项 {script_ids}，输入文件 {os.path.basename(input_path)}')
 
         return jsonify({'success': True, 'task_id': task.task_id, 'message': '查询任务已提交'})
 

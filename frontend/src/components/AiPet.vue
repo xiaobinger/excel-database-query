@@ -2,13 +2,13 @@
   <div
     ref="petRef"
     class="ai-pet"
-    :class="{ working: hasTasks, dragging: isDragging }"
+    :class="[{ working: hasTasks, dragging: isDragging }, idleAnim]"
     :style="petPosStyle"
     title="点击和我聊天 · 拖动调整位置"
     @pointerdown="onPointerDown"
   >
     <transition name="bubble-fade">
-      <div v-if="bubbleText && !chatVisible" class="pet-bubble">{{ bubbleText }}</div>
+      <div v-if="displayBubble && !chatVisible" class="pet-bubble" :class="{ 'is-idle': !bubbleText }">{{ displayBubble }}</div>
     </transition>
 
     <div class="pet-robot">
@@ -67,14 +67,46 @@ const chatVisible = ref(false)
 
 const POLL_INTERVAL = 15000
 const ROTATE_INTERVAL = 6000
+/** 空闲自动互动：随机间隔范围（毫秒） */
+const IDLE_MIN_INTERVAL = 18000
+const IDLE_MAX_INTERVAL = 42000
+/** 单条闲聊气泡展示时长（毫秒） */
+const IDLE_SHOW_DURATION = 6000
 /** 位移小于该阈值视为点击而非拖动 */
 const DRAG_THRESHOLD = 6
 const PET_SIZE = { w: 84, h: 104 }
 
+/** 空闲闲聊文案库（无任务时随机播报） */
+const IDLE_CHATS = [
+  '在的哦，需要我帮你查点什么吗？',
+  '今天的数据都还好吗？😊',
+  '要不要让我帮你跑个查询？',
+  '忙里偷闲，喝口水吧 💧',
+  '我一直在这儿守着呢～',
+  '有工单就交给我，我盯着进度 👀',
+  '需要导出一份报表吗？',
+  '嘿嘿，被你发现我在发呆啦',
+  '任务有进展我会第一时间提醒你 🔔',
+  '忙完了记得来看看我呀 🌟',
+  '点我一下就能开始聊天咯',
+  '数据海洋里，我是你的小导航 🧭',
+]
+
+/** 空闲小动效 class 池 */
+const IDLE_ANIMS = ['idle-wave', 'idle-hop', 'idle-spin', 'idle-squash']
+
 let pollTimer = null
 let rotateTimer = null
+let idleTimer = null
+let idleHideTimer = null
+
+const idleChat = ref('')
+const idleAnim = ref('')
 
 const hasTasks = computed(() => tasks.value.length > 0)
+
+/** 气泡展示内容：任务播报优先，其次空闲闲聊 */
+const displayBubble = computed(() => bubbleText.value || idleChat.value)
 
 /* ── 拖动定位（默认右下角，拖动后以 left/top 持久化） ── */
 const petRef = ref(null)
@@ -189,9 +221,39 @@ async function fetchTasks() {
       bubbleIndex.value = 0
       rotateBubble()
     }
+    if (list.length) clearIdleChat()
   } catch {
     // 静默失败
   }
+}
+
+/* ── 空闲自动互动（无任务且未聊天时，随机播报闲聊 + 小动效） ── */
+function clearIdleChat() {
+  if (idleHideTimer) { clearTimeout(idleHideTimer); idleHideTimer = null }
+  idleChat.value = ''
+  idleAnim.value = ''
+}
+
+function scheduleIdle() {
+  if (idleTimer) clearTimeout(idleTimer)
+  const delay = IDLE_MIN_INTERVAL + Math.random() * (IDLE_MAX_INTERVAL - IDLE_MIN_INTERVAL)
+  idleTimer = setTimeout(triggerIdle, delay)
+}
+
+function triggerIdle() {
+  idleTimer = null
+  if (hasTasks.value || chatVisible.value || isDragging.value || document.hidden) {
+    scheduleIdle()
+    return
+  }
+  idleChat.value = IDLE_CHATS[Math.floor(Math.random() * IDLE_CHATS.length)]
+  idleAnim.value = IDLE_ANIMS[Math.floor(Math.random() * IDLE_ANIMS.length)]
+  idleHideTimer = setTimeout(() => {
+    idleChat.value = ''
+    idleAnim.value = ''
+    idleHideTimer = null
+    scheduleIdle()
+  }, IDLE_SHOW_DURATION)
 }
 
 onMounted(() => {
@@ -201,11 +263,14 @@ onMounted(() => {
   rotateTimer = setInterval(() => {
     if (!chatVisible.value) rotateBubble()
   }, ROTATE_INTERVAL)
+  scheduleIdle()
 })
 
 onUnmounted(() => {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
   if (rotateTimer) { clearInterval(rotateTimer); rotateTimer = null }
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null }
+  if (idleHideTimer) { clearTimeout(idleHideTimer); idleHideTimer = null }
 })
 </script>
 
@@ -266,6 +331,18 @@ onUnmounted(() => {
 .bubble-fade-leave-to {
   opacity: 0;
   transform: translateY(6px);
+}
+
+/* 空闲闲聊气泡：柔和底色，与任务播报区分 */
+.pet-bubble.is-idle {
+  background: linear-gradient(135deg, #f0f7ff, #eefbf3);
+  border-color: #d5e6ff;
+}
+
+.pet-bubble.is-idle::after {
+  background: #f0f7ff;
+  border-right-color: #d5e6ff;
+  border-bottom-color: #d5e6ff;
 }
 
 /* ── 宠物本体容器（具体造型由 pets/ 组件渲染） ── */
@@ -370,6 +447,50 @@ onUnmounted(() => {
   0%, 100% { rotate: 0deg; }
   25% { rotate: 2.5deg; }
   75% { rotate: -2.5deg; }
+}
+
+/* ── 空闲小动效（叠加在悬浮动画上，短促播放后自然停止） ── */
+.ai-pet.idle-wave .pet-robot {
+  animation: pet-float 3s ease-in-out infinite, pet-idle-wave 0.7s ease-in-out 3;
+}
+
+.ai-pet.idle-hop .pet-robot {
+  animation: pet-float 3s ease-in-out infinite, pet-idle-hop 0.5s ease-in-out 4;
+}
+
+.ai-pet.idle-spin .pet-robot {
+  animation: pet-float 3s ease-in-out infinite, pet-idle-spin 1.1s ease-in-out 1;
+}
+
+.ai-pet.idle-squash .pet-robot {
+  animation: pet-float 3s ease-in-out infinite, pet-idle-squash 0.6s ease-in-out 3;
+}
+
+@keyframes pet-idle-wave {
+  0%, 100% { rotate: 0deg; }
+  25% { rotate: -12deg; }
+  75% { rotate: 12deg; }
+}
+
+@keyframes pet-idle-hop {
+  0%, 100% { translate: 0 0; }
+  50% { translate: 0 -14px; }
+}
+
+@keyframes pet-idle-spin {
+  from { rotate: 0deg; }
+  to { rotate: 360deg; }
+}
+
+@keyframes pet-idle-squash {
+  0%, 100% { scale: 1; }
+  40% { scale: 0.88 1.12; }
+  70% { scale: 1.1 0.9; }
+}
+
+/* 空闲互动时脚下阴影同步律动 */
+.ai-pet.idle-hop .pet-shadow {
+  animation: shadow-breathe 0.5s ease-in-out 4;
 }
 
 /* 拖动中禁用悬浮动画，跟手更稳 */

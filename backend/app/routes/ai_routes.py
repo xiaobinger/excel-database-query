@@ -14,6 +14,7 @@ from app.models.ai_chat import AiChat, AiChatMessage
 from app.models.ai_agent import AiAgent
 from app.models.user import User
 from app.utils.auth import login_required, admin_required, get_current_user, permission_required
+from app.utils.operation_logger import log_operation
 import requests
 logger = logging.getLogger(__name__)
 ai_bp = Blueprint('ai', __name__, url_prefix='/api/ai')
@@ -575,6 +576,7 @@ def create_chat():
         )
         db.session.add(chat)
         db.session.commit()
+        log_operation('create', 'ai_chat', chat.id, f'发起AI对话：{chat.title}')
         return jsonify({'success': True, 'data': chat.to_dict()}), 201
     except Exception as e:
         db.session.rollback()
@@ -1004,6 +1006,9 @@ def send_message(chat_id):
         chat.model_id = data.get('ai_config_id')
 
     db.session.commit()
+
+    log_operation('chat', 'ai_chat', chat_id,
+                  f'AI对话发消息：{data["content"][:100]}')
 
     # Get ordered AI configs from strategy (with failover support)
     from app.services.ai_service import AiService
@@ -1940,6 +1945,8 @@ def send_message_stream(chat_id):
         return Response(stream_with_context(error_gen()), mimetype='text/event-stream')
 
     db.session.commit()
+
+    log_operation('chat', 'ai_chat', chat_id, f'AI对话流式发消息：{data["content"][:100]}')
 
     # 在请求上下文内保存需要的变量，避免在 generate() 闭包中访问过期的 SQLAlchemy session
     user_id = current_user.id

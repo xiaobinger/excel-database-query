@@ -26,6 +26,7 @@ def create_app(config_name='default'):
     _register_blueprints(app)
     _register_error_handlers(app)
     _register_security_headers(app)
+    _register_operation_logging(app)
     _ensure_directories(app)
     _start_file_cleanup(app)
     _init_rate_limiter(app)
@@ -300,6 +301,14 @@ def _register_security_headers(app):
             'camera=(), microphone=(), geolocation=(), payment=()'
         )
         return response
+
+
+def _register_operation_logging(app):
+    from app.utils.operation_logger import auto_log_operation
+
+    @app.after_request
+    def _auto_operation_log(response):
+        return auto_log_operation(response)
 
 
 def _ensure_directories(app):

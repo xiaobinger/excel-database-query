@@ -1,10 +1,11 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from app import db
 from app.models.user import User
 from app.models.script import Script
 from app.models.login_log import LoginLog
 from app.utils.auth import generate_token, login_required, get_current_user
 from app.utils.rate_limiter import login_rate_limiter
+from app.utils.operation_logger import log_operation
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
 
@@ -80,6 +81,9 @@ def login():
     # Successful login - record and continue
     login_rate_limiter.record_attempt(client_ip, username, True)
     _record_login_log(username, user.id, 'success')
+
+    g.user = user
+    log_operation('login', 'auth', user.id, f'用户登录：{user.username}')
 
     token = generate_token(user.id)
 
