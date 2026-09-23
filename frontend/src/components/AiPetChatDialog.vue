@@ -430,6 +430,7 @@
 import { ref, reactive, computed, watch, nextTick, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
+import { emitPetEvent } from '../utils/petBus'
 import { marked } from 'marked'
 
 marked.setOptions({ breaks: true, gfm: true })
@@ -1396,6 +1397,11 @@ function finishDone(msg, downloadUrl) {
   msg._download_url = downloadUrl
   saveMessageState(msg)
   scrollToBottom()
+  // 通知 AI 宠物提醒用户下载（对话框收起时也能收到气泡提醒）
+  emitPetEvent('file_ready', {
+    type: msg.tool_data?.action_type || 'export',
+    label: msg.tool_data?.script_name || msg.tool_data?.task_name || '',
+  })
 }
 
 function finishNoData(msg) {

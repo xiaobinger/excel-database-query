@@ -1,5 +1,5 @@
 <template>
-  <div class="creature" :class="{ working }">
+  <div class="creature" :class="[{ working }, 'mood-' + (mood || 'normal')]">
     <div class="antenna">
       <span class="antenna-line"></span>
       <span class="antenna-dot"></span>
@@ -24,7 +24,7 @@
 </template>
 
 <script setup>
-defineProps({ working: Boolean })
+defineProps({ working: Boolean, mood: { type: String, default: 'normal' } })
 </script>
 
 <style scoped>

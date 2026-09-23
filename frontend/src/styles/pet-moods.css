@@ -1,0 +1,377 @@
+/* ═══════════════════════════════════════════════════════════
+   AI 宠物表情系统（全局样式）
+   作用域：.ai-pet 容器内的宠物组件（.creature，根节点带造型类与 mood-x 类）
+   五官升级：实心圆点眼 → 眼白 + 瞳孔 + 高光，支持 8 种表情
+   优先级说明：
+   - 基础五官带 :not(.working) 守卫，不干扰各宠物 scoped 的 working 弧线眼
+   - 表情规则 (.mood-*) 位于文件后部，按序覆盖基础五官与 working 状态
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── 各宠物墨色（眼线/嘴/瞳孔通用） ── */
+.ai-pet .creature.robot { --pet-ink: #2c3e50; }
+.ai-pet .creature.cat   { --pet-ink: #3b2f2a; }
+.ai-pet .creature.bunny { --pet-ink: #3b2f2a; }
+.ai-pet .creature.bear  { --pet-ink: #3b2f2a; }
+.ai-pet .creature.fox   { --pet-ink: #3b2f2a; }
+.ai-pet .creature.pig   { --pet-ink: #4a3b3b; }
+.ai-pet .creature.koala { --pet-ink: #33393f; }
+.ai-pet .creature.chick { --pet-ink: #3b2f2a; }
+.ai-pet .creature.frog  { --pet-ink: #2c3e50; }
+.ai-pet .creature.panda { --pet-ink: #3a3f45; }
+
+/* ── 基础五官升级：8个实心点眼宠物（frog/panda 自带眼白结构，不处理） ── */
+.ai-pet .creature.robot:not(.working) .eye,
+.ai-pet .creature.cat:not(.working) .eye,
+.ai-pet .creature.bunny:not(.working) .eye,
+.ai-pet .creature.bear:not(.working) .eye,
+.ai-pet .creature.fox:not(.working) .eye,
+.ai-pet .creature.pig:not(.working) .eye,
+.ai-pet .creature.koala:not(.working) .eye,
+.ai-pet .creature.chick:not(.working) .eye {
+  background: #ffffff;
+  border: 1px solid rgba(44, 62, 80, 0.16);
+  box-shadow: inset 0 -1px 2px rgba(44, 62, 80, 0.08);
+}
+
+/* 瞳孔（::before，位于高光下层） */
+.ai-pet .creature.robot:not(.working) .eye::before,
+.ai-pet .creature.cat:not(.working) .eye::before,
+.ai-pet .creature.bunny:not(.working) .eye::before,
+.ai-pet .creature.bear:not(.working) .eye::before,
+.ai-pet .creature.fox:not(.working) .eye::before,
+.ai-pet .creature.pig:not(.working) .eye::before,
+.ai-pet .creature.koala:not(.working) .eye::before,
+.ai-pet .creature.chick:not(.working) .eye::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 58%;
+  height: 58%;
+  border-radius: 50%;
+  background: var(--pet-ink, #2c3e50);
+  transition: transform 0.28s ease, width 0.2s ease, height 0.2s ease;
+}
+
+/* 眼睛高光（::after，最上层小白点） */
+.ai-pet .creature.robot:not(.working) .eye::after,
+.ai-pet .creature.cat:not(.working) .eye::after,
+.ai-pet .creature.bunny:not(.working) .eye::after,
+.ai-pet .creature.bear:not(.working) .eye::after,
+.ai-pet .creature.fox:not(.working) .eye::after,
+.ai-pet .creature.pig:not(.working) .eye::after,
+.ai-pet .creature.koala:not(.working) .eye::after,
+.ai-pet .creature.chick:not(.working) .eye::after {
+  content: '';
+  position: absolute;
+  top: 16%;
+  left: 14%;
+  width: 30%;
+  height: 30%;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.95);
+  z-index: 1;
+}
+
+/* frog（自带眼白+瞳孔子元素）/ panda（眼斑+白眼）：仅补充高光 */
+.ai-pet .creature.frog:not(.working) .eye::after,
+.ai-pet .creature.panda:not(.working) .eye::after {
+  content: '';
+  position: absolute;
+  top: 16%;
+  left: 14%;
+  width: 30%;
+  height: 30%;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.95);
+  z-index: 2;
+}
+
+/* ── 表情公用：腮红增强 ── */
+.ai-pet .creature.mood-happy .blush,
+.ai-pet .creature.mood-proud .blush,
+.ai-pet .creature.mood-excited .blush {
+  opacity: 1;
+  transform: scaleX(1.35);
+  filter: saturate(1.3);
+}
+
+/* ── 表情公用：嘴部选择器集合（各宠物嘴类名不同） ──
+   mood-x 规则中用 .pet-mouth-hack 不存在；直接在每条规则内列举。 */
+
+/* ═══════════ 表情：happy 开心（弯月眼 + 大微笑） ═══════════ */
+.ai-pet .creature.mood-happy .eye {
+  background: transparent !important;
+  border: 2px solid var(--pet-ink, #2c3e50) !important;
+  border-bottom: none !important;
+  box-shadow: none !important;
+  height: 5px !important;
+  border-radius: 10px 10px 0 0 !important;
+  animation: none !important;
+  top: 12px;
+}
+.ai-pet .creature.mood-happy .eye::before,
+.ai-pet .creature.mood-happy .eye::after,
+.ai-pet .creature.mood-happy .pupil {
+  display: none;
+}
+.ai-pet .creature.mood-happy .mouth,
+.ai-pet .creature.mood-happy .cat-mouth,
+.ai-pet .creature.mood-happy .panda-mouth,
+.ai-pet .creature.mood-happy .bear-mouth,
+.ai-pet .creature.mood-happy .bunny-mouth,
+.ai-pet .creature.mood-happy .frog-mouth {
+  width: 10px !important;
+  height: 6px !important;
+  border-radius: 0 0 10px 10px !important;
+  background: var(--pet-ink, #2c3e50) !important;
+  border: none !important;
+}
+
+/* ═══════════ 表情：curious 好奇（大眼偷瞄 + 小O嘴） ═══════════ */
+.ai-pet .creature.mood-curious .eye {
+  transform: scale(1.28);
+  animation: none !important;
+}
+.ai-pet .creature.mood-curious .eye::before {
+  transform: translate(20%, -22%);
+}
+.ai-pet .creature.frog.mood-curious .pupil {
+  transform: translate(1.5px, -1.5px);
+}
+.ai-pet .creature.mood-curious .mouth,
+.ai-pet .creature.mood-curious .cat-mouth,
+.ai-pet .creature.mood-curious .panda-mouth,
+.ai-pet .creature.mood-curious .bear-mouth,
+.ai-pet .creature.mood-curious .bunny-mouth,
+.ai-pet .creature.mood-curious .frog-mouth {
+  width: 5px !important;
+  height: 5px !important;
+  border-radius: 50% !important;
+  background: var(--pet-ink, #2c3e50) !important;
+  border: none !important;
+}
+
+/* ═══════════ 表情：sneaky 偷看（眯眼斜视 + 坏笑 + 冷汗） ═══════════ */
+.ai-pet .creature.mood-sneaky .eye {
+  height: 4px !important;
+  border-radius: 4px !important;
+  transform: translateY(2px) scale(1.05);
+  animation: none !important;
+}
+.ai-pet .creature.mood-sneaky .eye::before {
+  transform: translate(28%, 10%);
+}
+.ai-pet .creature.mood-sneaky .eye.eye-right::before,
+.ai-pet .creature.mood-sneaky .eye.eye-r::before {
+  transform: translate(-28%, 10%);
+}
+.ai-pet .creature.mood-sneaky .mouth,
+.ai-pet .creature.mood-sneaky .cat-mouth,
+.ai-pet .creature.mood-sneaky .panda-mouth,
+.ai-pet .creature.mood-sneaky .bear-mouth,
+.ai-pet .creature.mood-sneaky .bunny-mouth,
+.ai-pet .creature.mood-sneaky .frog-mouth {
+  transform: translateX(-30%) rotate(-8deg) !important;
+  width: 8px !important;
+  height: 4px !important;
+  border-radius: 0 0 8px 3px !important;
+  background: var(--pet-ink, #2c3e50) !important;
+  border: none !important;
+}
+/* 冷汗一滴（挂在头顶右侧） */
+.ai-pet .creature.mood-sneaky::after {
+  content: '';
+  position: absolute;
+  top: -4px;
+  right: 2px;
+  width: 6px;
+  height: 8px;
+  background: #7ec8f7;
+  border-radius: 50% 50% 50% 50% / 62% 62% 38% 38%;
+  animation: pet-sweat-drip 1.2s ease-in infinite;
+  z-index: 5;
+}
+
+@keyframes pet-sweat-drip {
+  0% { transform: translateY(0); opacity: 0; }
+  30% { opacity: 1; }
+  100% { transform: translateY(9px); opacity: 0; }
+}
+
+/* ═══════════ 表情：proud 得意（闭眼笑 + 咧嘴） ═══════════ */
+.ai-pet .creature.mood-proud .eye {
+  background: transparent !important;
+  border: 2px solid var(--pet-ink, #2c3e50) !important;
+  border-top: none !important;
+  box-shadow: none !important;
+  height: 5px !important;
+  border-radius: 0 0 10px 10px !important;
+  animation: none !important;
+  top: 13px;
+}
+.ai-pet .creature.mood-proud .eye::before,
+.ai-pet .creature.mood-proud .eye::after,
+.ai-pet .creature.mood-proud .pupil {
+  display: none;
+}
+.ai-pet .creature.mood-proud .mouth,
+.ai-pet .creature.mood-proud .cat-mouth,
+.ai-pet .creature.mood-proud .panda-mouth,
+.ai-pet .creature.mood-proud .bear-mouth,
+.ai-pet .creature.mood-proud .bunny-mouth,
+.ai-pet .creature.mood-proud .frog-mouth {
+  width: 12px !important;
+  height: 7px !important;
+  border-radius: 2px 2px 8px 8px !important;
+  background: var(--pet-ink, #2c3e50) !important;
+  border: none !important;
+  box-shadow: inset 0 -4px 0 #fff;
+}
+
+/* ═══════════ 表情：excited 惊喜（大圆眼 + O嘴 + 星星） ═══════════ */
+.ai-pet .creature.mood-excited .eye {
+  transform: scale(1.4);
+  animation: none !important;
+}
+.ai-pet .creature.mood-excited .eye::before {
+  width: 50%;
+  height: 50%;
+}
+.ai-pet .creature.mood-excited .mouth,
+.ai-pet .creature.mood-excited .cat-mouth,
+.ai-pet .creature.mood-excited .panda-mouth,
+.ai-pet .creature.mood-excited .bear-mouth,
+.ai-pet .creature.mood-excited .bunny-mouth,
+.ai-pet .creature.mood-excited .frog-mouth {
+  width: 7px !important;
+  height: 8px !important;
+  border-radius: 50% !important;
+  background: var(--pet-ink, #2c3e50) !important;
+  border: none !important;
+}
+/* 头顶星星闪烁 */
+.ai-pet .creature.mood-excited::before {
+  content: '✨';
+  position: absolute;
+  top: -10px;
+  right: -4px;
+  font-size: 13px;
+  line-height: 1;
+  animation: pet-star-pop 0.9s ease-in-out infinite;
+  z-index: 5;
+}
+
+@keyframes pet-star-pop {
+  0%, 100% { transform: scale(1) rotate(0deg); opacity: 0.85; }
+  50% { transform: scale(1.35) rotate(18deg); opacity: 1; }
+}
+
+/* ═══════════ 表情：dizzy 晕乎乎（滚圈后专用，×眼 + 波浪嘴） ═══════════ */
+.ai-pet .creature.mood-dizzy .eye {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  animation: none !important;
+}
+.ai-pet .creature.mood-dizzy .pupil {
+  display: none;
+}
+/* × 眼：两根交叉短线 */
+.ai-pet .creature.mood-dizzy .eye::before {
+  display: block !important;
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 2px;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--pet-ink, #2c3e50);
+  transform: rotate(45deg);
+}
+.ai-pet .creature.mood-dizzy .eye::after {
+  display: block !important;
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 2px;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--pet-ink, #2c3e50);
+  transform: rotate(-45deg);
+}
+.ai-pet .creature.mood-dizzy .mouth,
+.ai-pet .creature.mood-dizzy .cat-mouth,
+.ai-pet .creature.mood-dizzy .panda-mouth,
+.ai-pet .creature.mood-dizzy .bear-mouth,
+.ai-pet .creature.mood-dizzy .bunny-mouth,
+.ai-pet .creature.mood-dizzy .frog-mouth {
+  width: 10px !important;
+  height: 3px !important;
+  border-radius: 3px !important;
+  background: var(--pet-ink, #2c3e50) !important;
+  border: none !important;
+  clip-path: polygon(0 40%, 20% 0, 40% 40%, 60% 0, 80% 40%, 100% 0, 100% 100%, 0 100%);
+}
+/* 头顶转圈星星 */
+.ai-pet .creature.mood-dizzy::before {
+  content: '💫';
+  position: absolute;
+  top: -10px;
+  right: -2px;
+  font-size: 12px;
+  line-height: 1;
+  animation: pet-dizzy-spin 1.6s linear infinite;
+  z-index: 5;
+}
+
+@keyframes pet-dizzy-spin {
+  0% { transform: rotate(0deg) translateX(4px) rotate(0deg); }
+  100% { transform: rotate(360deg) translateX(4px) rotate(-360deg); }
+}
+
+/* ═══════════ 表情：sleepy 犯困（闭眼线 + 呼噜泡） ═══════════ */
+.ai-pet .creature.mood-sleepy .eye {
+  background: var(--pet-ink, #2c3e50) !important;
+  border: none !important;
+  box-shadow: none !important;
+  height: 2px !important;
+  border-radius: 2px !important;
+  animation: none !important;
+  transform: translateY(2px);
+}
+.ai-pet .creature.mood-sleepy .eye::before,
+.ai-pet .creature.mood-sleepy .eye::after,
+.ai-pet .creature.mood-sleepy .pupil {
+  display: none;
+}
+/* 呼噜泡泡 */
+.ai-pet .creature.mood-sleepy::after {
+  content: '💤';
+  position: absolute;
+  top: -8px;
+  right: 0;
+  font-size: 11px;
+  line-height: 1;
+  animation: pet-zzz-float 2.2s ease-in-out infinite;
+  z-index: 5;
+}
+
+@keyframes pet-zzz-float {
+  0% { transform: translateY(2px) scale(0.8); opacity: 0; }
+  40% { opacity: 1; }
+  100% { transform: translateY(-8px) scale(1.15); opacity: 0; }
+}
+
+/* ═══════════ 表情：alert 警觉（瞪大眼 + 竖瞳，文件出炉提醒用） ═══════════ */
+.ai-pet .creature.mood-alert .eye {
+  transform: scale(1.32);
+  animation: none !important;
+}
+.ai-pet .creature.mood-alert .eye::before {
+  width: 34%;
+  height: 62%;
+  border-radius: 50%;
+}

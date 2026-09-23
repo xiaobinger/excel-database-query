@@ -524,6 +524,7 @@ import { ref, reactive, computed, onMounted, onActivated, onUnmounted, nextTick 
 import api from '../api'
 import { useAppStore } from '../stores'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { emitPetEvent } from '../utils/petBus'
 
 const store = useAppStore()
 
@@ -864,6 +865,7 @@ async function executeExport() {
     const res = await api.export.execute(data)
     const result = res.data || res
     taskId.value = result.task_id || result.id
+    emitPetEvent('operation', { type: 'export', label: '' })
     executing.value = true
     progress.value = 0
     logLines.value = []
@@ -905,6 +907,7 @@ function startSSE(tid) {
         eventSource = null
         if (data.status === 'completed') {
           progress.value = 100
+          emitPetEvent('file_ready', { type: 'export', label: data.output_file ? '导出文件' : '' })
         }
         store.notifyTaskChanged()
       }
@@ -934,6 +937,7 @@ async function fetchStatus(tid) {
       executing.value = false
       if (data.status === 'completed') {
         progress.value = 100
+        emitPetEvent('file_ready', { type: 'export', label: data.output_file ? '导出文件' : '' })
       }
     }
   } catch {

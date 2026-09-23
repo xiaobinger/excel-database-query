@@ -1430,6 +1430,7 @@
 <script setup>
 import { ref, reactive, onMounted, onActivated, nextTick, onUnmounted, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { emitPetEvent } from '../utils/petBus'
 import api from '../api'
 import { useAppStore } from '../stores'
 import { marked } from 'marked'
@@ -3753,6 +3754,7 @@ function pollQueryTaskStatus(taskId, msg) {
             msg._download_url = `/api/download/${taskId}`
             msg._status_text = '执行完成'
             saveMessageState(msg)
+            emitPetEvent('file_ready', { type: 'query', label: msg._selectedScripts?.[0]?.name || '查询结果' })
 
             ElMessageBox.confirm(
               '查询任务已完成，是否立即下载文件？',
@@ -4125,6 +4127,7 @@ function pollTaskStatus(taskId, msg) {
 
             // 持久化状态
             saveMessageState(msg)
+            emitPetEvent('file_ready', { type: 'export', label: msg.tool_data?.script_name || '导出文件' })
 
             // 弹出下载确认
             ElMessageBox.confirm(
@@ -4728,6 +4731,7 @@ function subscribeProfitShareSSE(taskId, msg) {
           msg._status_text = '执行完成'
           msg._download_url = `/api/download/${taskId}`
           saveMessageState(msg)
+          emitPetEvent('file_ready', { type: 'profit_share', label: msg.tool_data?.org_no ? `代理商${msg.tool_data.org_no}` : '分润文件' })
 
           // 弹出下载确认
           ElMessageBox.confirm(
@@ -4817,6 +4821,7 @@ function pollProfitShareStatus(taskId, msg) {
         msg._status_text = '执行完成'
         msg._download_url = `/api/download/${taskId}`
         saveMessageState(msg)
+        emitPetEvent('file_ready', { type: 'profit_share', label: msg.tool_data?.org_no ? `代理商${msg.tool_data.org_no}` : '分润文件' })
         ElMessageBox.confirm(
           '分润导出任务已完成，是否立即下载文件？',
           '下载确认',

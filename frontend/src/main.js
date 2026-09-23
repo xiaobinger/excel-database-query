@@ -8,6 +8,7 @@ import router from './router'
 import { useAppStore } from './stores'
 import './styles/themes.css'
 import './styles/global.css'
+import './styles/pet-moods.css'
 import 'highlight.js/styles/github-dark.css'
 
 const app = createApp(App)

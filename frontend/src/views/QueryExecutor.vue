@@ -283,6 +283,7 @@ import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import api from '../api'
 import { useAppStore } from '../stores'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { emitPetEvent } from '../utils/petBus'
 
 const store = useAppStore()
 
@@ -765,6 +766,7 @@ async function executeQuery() {
     const res = await api.query.execute(formData)
     const data = res.data || res
     taskId.value = data.task_id || data.id
+    emitPetEvent('operation', { type: 'query', label: '' })
     executing.value = true
     progress.value = 0
     logLines.value = []
@@ -806,6 +808,7 @@ function startSSE(tid) {
         eventSource = null
         if (data.status === 'completed') {
           progress.value = 100
+          emitPetEvent('file_ready', { type: 'query', label: taskStatus.value?.output_file ? '查询结果' : '' })
         }
         store.notifyTaskChanged()
         // direct模式执行完成后自动下载
@@ -842,6 +845,7 @@ async function fetchStatus(tid) {
       executing.value = false
       if (data.status === 'completed') {
         progress.value = 100
+        emitPetEvent('file_ready', { type: 'query', label: data.output_file ? '查询结果' : '' })
       }
     }
   } catch {

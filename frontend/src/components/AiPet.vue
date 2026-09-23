@@ -17,7 +17,7 @@
           <span class="star-core">★</span>
         </span>
       </transition>
-      <component :is="petComponent" :working="hasTasks" />
+      <component :is="petComponent" :working="hasTasks" :mood="petMood" />
     </div>
     <div class="pet-shadow"></div>
   </div>
@@ -28,6 +28,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import api from '../api'
+import { onPetEvent } from '../utils/petBus'
 import AiPetChatDialog from './AiPetChatDialog.vue'
 import RobotPet from './pets/RobotPet.vue'
 import CatPet from './pets/CatPet.vue'
@@ -136,14 +137,59 @@ const SPECIAL_CHATS = {
   ],
 }
 
+/** 围观话术：用户手动执行查询/导出时，凑近看两眼再跑开 */
+const PEEK_CHATS = {
+  query: [
+    '主人，在干嘛呢，这么简单的活下次直接交给我吧',
+    '让我康康……哦～是在查数据呀',
+    '这个查询我会！下次喊我就好啦',
+    '哇，屏幕上的数据在跳舞诶 👀',
+  ],
+  export: [
+    '又要导报表啦？我可比你手快哦',
+    '导出交给人家嘛，你歇会儿～',
+    '这份表我来导，保证又快又整齐！',
+    '偷偷问一句：要导哪张表呀？',
+  ],
+  common: [
+    '啥机密数据啊，我保证不偷看哦 🙈',
+    '嘿嘿，我就看一眼，马上走～',
+  ],
+}
+
+/** 文件生成提醒话术 */
+const READY_CHATS = [
+  '叮！文件出炉啦，快来下载 📥',
+  '报告主人！您的文件已打包完毕 ✨',
+  '热乎乎的结果文件出炉咯，趁热下载～',
+  '任务搞定！文件在等你带回家 📦',
+]
+
 let pollTimer = null
 let rotateTimer = null
 let idleTimer = null
 let idleHideTimer = null
+/** petBus 事件退订函数集合 */
+const eventCleanups = []
 /** 特殊大动效进行中标记（防止叠加触发） */
 let specialRunning = false
 /** 最近一次鼠标光标位置（偷袭光标动效使用） */
 const lastMouse = { x: null, y: null }
+/** 最近一次围观触发时间（冷却用） */
+let lastPeekAt = 0
+/** 宠物表情状态：normal/happy/curious/sneaky/proud/excited/dizzy/sleepy/alert */
+const petMood = ref('normal')
+let moodTimer = null
+
+/** 临时切换表情，到期自动回落 normal */
+function flashMood(mood, ms = 2600) {
+  petMood.value = mood
+  if (moodTimer) clearTimeout(moodTimer)
+  moodTimer = setTimeout(() => {
+    petMood.value = 'normal'
+    moodTimer = null
+  }, ms)
+}
 
 const idleChat = ref('')
 const idleAnim = ref('')
@@ -317,6 +363,7 @@ function triggerIdle() {
   }
   idleChat.value = pickRandom(IDLE_CHATS)
   idleAnim.value = pickRandom(IDLE_ANIMS)
+  flashMood(pickRandom(['happy', 'happy', 'curious', 'sleepy']), 3200)
   idleHideTimer = setTimeout(() => {
     idleChat.value = ''
     idleAnim.value = ''
@@ -332,9 +379,12 @@ async function runSpecial(kind) {
   idleChat.value = pickRandom(SPECIAL_CHATS[kind] || ['～'])
   try {
     if (kind === 'idle-roll') {
+      flashMood('dizzy', 5600)
       await playRoll()
     } else if (kind === 'idle-pounce') {
+      flashMood('sneaky', 2000)
       await playPounce()
+      flashMood('proud', 2200)
     }
   } catch {
     // 动画中断（WAAPI缺失/中途打开对话等）直接复位
@@ -443,6 +493,92 @@ async function playPounce() {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 
+/** 围观用户操作：慢慢凑近 → 俏皮话 → 跑开（查询/导出执行时由页面事件触发） */
+async function runPeek(op) {
+  const now = Date.now()
+  if (specialRunning || chatVisible.value || isDragging.value || document.hidden) return
+  if (now - lastPeekAt < 30000) return
+  const el = petRef.value
+  if (!el || !el.animate) return
+  lastPeekAt = now
+  specialRunning = true
+  clearIdleChat()
+  const rect = el.getBoundingClientRect()
+  const w = window.innerWidth
+  const h = window.innerHeight
+  const cur = mouseTarget()
+  // 目标：朝光标方向凑近 35%，稍微抬高视线
+  let dx = (cur.x - (rect.left + rect.width / 2)) * 0.35
+  let dy = (cur.y - (rect.top + rect.height / 2)) * 0.35 - 26
+  dx = Math.min(Math.max(dx, 8 - rect.left), w - 8 - rect.left - rect.width)
+  dy = Math.min(Math.max(dy, 8 - rect.top), h - 8 - rect.top - rect.height)
+  try {
+    // 慢慢凑近（两段探头探脑）
+    flashMood(op?.type === 'export' ? 'sneaky' : 'curious', 5400)
+    await el.animate(
+      [{ transform: 'translate(0, 0)' }, { transform: `translate(${dx * 0.7}px, ${dy * 0.7}px)` }],
+      { duration: 520, easing: 'ease-in-out', fill: 'forwards' }
+    ).finished
+    if (specialBailed()) throw new Error('bail')
+    await el.animate(
+      [{ transform: `translate(${dx * 0.7}px, ${dy * 0.7}px)` }, { transform: `translate(${dx}px, ${dy}px)` }],
+      { duration: 420, easing: 'ease-in-out', fill: 'forwards' }
+    ).finished
+    if (specialBailed()) throw new Error('bail')
+    // 俏皮话（本类型话术 + 通用话术混合）
+    idleChat.value = pickRandom([...(PEEK_CHATS[op?.type] || []), ...PEEK_CHATS.common])
+    idleAnim.value = 'idle-shimmy'
+    await sleep(3000)
+    idleChat.value = ''
+    idleAnim.value = ''
+    // 跑开（快速弹回 + 小跳）
+    await el.animate(
+      [
+        { transform: `translate(${dx}px, ${dy}px)` },
+        { transform: `translate(${dx * 0.4}px, ${dy * 0.4 - 30}px)`, offset: 0.45 },
+        { transform: 'translate(0, 0)' },
+      ],
+      { duration: 560, easing: 'ease-in', fill: 'forwards' }
+    ).finished
+  } catch {
+    // 中断即复位
+  } finally {
+    resetSpecialPose()
+    idleChat.value = ''
+    idleAnim.value = ''
+    specialRunning = false
+  }
+}
+
+/** 文件生成提醒：气泡 + 弹跳庆祝 + 惊喜表情 */
+function notifyFileReady(op) {
+  if (chatVisible.value || document.hidden) return
+  clearIdleChat()
+  flashMood('alert', 3400)
+  const label = op?.label && op.label.length <= 14 ? `（${op.label}）` : ''
+  idleChat.value = pickRandom(READY_CHATS) + label
+  idleAnim.value = 'idle-hop'
+  if (idleHideTimer) clearTimeout(idleHideTimer)
+  idleHideTimer = setTimeout(() => {
+    idleChat.value = ''
+    idleAnim.value = ''
+    idleHideTimer = null
+  }, 5200)
+  const el = petRef.value
+  if (el && el.animate) {
+    el.animate(
+      [
+        { transform: 'translateY(0)' },
+        { transform: 'translateY(-16px)', offset: 0.3 },
+        { transform: 'translateY(0)', offset: 0.55 },
+        { transform: 'translateY(-10px)', offset: 0.75 },
+        { transform: 'translateY(0)' },
+      ],
+      { duration: 760, easing: 'ease-out' }
+    )
+  }
+}
+
 function onMouseMove(e) {
   lastMouse.x = e.clientX
   lastMouse.y = e.clientY
@@ -456,6 +592,9 @@ onMounted(() => {
     if (!chatVisible.value) rotateBubble()
   }, ROTATE_INTERVAL)
   window.addEventListener('mousemove', onMouseMove, { passive: true })
+  const offOp = onPetEvent('operation', runPeek)
+  const offReady = onPetEvent('file_ready', notifyFileReady)
+  eventCleanups.push(offOp, offReady)
   scheduleIdle()
 })
 
@@ -464,7 +603,10 @@ onUnmounted(() => {
   if (rotateTimer) { clearInterval(rotateTimer); rotateTimer = null }
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null }
   if (idleHideTimer) { clearTimeout(idleHideTimer); idleHideTimer = null }
+  if (moodTimer) { clearTimeout(moodTimer); moodTimer = null }
   window.removeEventListener('mousemove', onMouseMove)
+  eventCleanups.forEach(off => { try { off() } catch {} })
+  eventCleanups.length = 0
   resetSpecialPose()
 })
 </script>
