@@ -1429,7 +1429,6 @@
 
 <script setup>
 import { ref, reactive, onMounted, onActivated, nextTick, onUnmounted, computed, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import { useAppStore } from '../stores'
@@ -5020,28 +5019,10 @@ function handleMentionKeydown(e) {
   return false
 }
 
-// AI宠物点击跳转携带 pet_new 参数（keep-alive 下页面未重建也能触发）
-const route = useRoute()
-const router = useRouter()
-
-function triggerNewChatFromPet() {
-  createNewChat()
-  // 消费后移除参数，避免返回/前进时重复触发
-  router.replace({ query: { ...route.query, pet_new: undefined } }).catch(() => {})
-}
-
-watch(() => route.query.pet_new, (val) => {
-  if (val) triggerNewChatFromPet()
-})
-
 onMounted(() => {
   fetchChats()
   fetchActiveModels()
   fetchAgents()
-  // 由AI宠物跳转进入：等agents/models基础数据加载后再开启新对话（首次进入时数据未就绪）
-  if (route.query.pet_new) {
-    setTimeout(() => triggerNewChatFromPet(), 600)
-  }
 })
 
 // 页面被keep-alive缓存，从系统配置等其他页面切回时自动刷新模型配置

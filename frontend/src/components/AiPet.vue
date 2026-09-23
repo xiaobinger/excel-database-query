@@ -1,15 +1,14 @@
 <template>
   <div
+    ref="petRef"
     class="ai-pet"
-    :class="{ working: hasTasks, hovering: isHovering }"
-    :style="{ left: sidebarCollapsed ? '76px' : '232px' }"
-    title="点击开启 AI 新对话"
-    @click="goNewChat"
-    @mouseenter="onHover(true)"
-    @mouseleave="onHover(false)"
+    :class="{ working: hasTasks, dragging: isDragging }"
+    :style="petStyle"
+    title="点击和我聊天 · 拖动调整位置"
+    @pointerdown="onPointerDown"
   >
     <transition name="bubble-fade">
-      <div v-if="bubbleText" class="pet-bubble">{{ bubbleText }}</div>
+      <div v-if="bubbleText && !chatVisible" class="pet-bubble">{{ bubbleText }}</div>
     </transition>
 
     <div class="pet-robot">
@@ -36,31 +35,103 @@
     </div>
     <div class="pet-shadow"></div>
   </div>
+
+  <AiPetChatDialog v-model="chatVisible" />
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
 import api from '../api'
+import AiPetChatDialog from './AiPetChatDialog.vue'
 
-const props = defineProps({
-  sidebarCollapsed: { type: Boolean, default: false },
-})
-
-const router = useRouter()
 const tasks = ref([])
 const bubbleText = ref('')
-const isHovering = ref(false)
 const bubbleIndex = ref(0)
+const chatVisible = ref(false)
 
 const POLL_INTERVAL = 15000
 const ROTATE_INTERVAL = 6000
+/** 位移小于该阈值视为点击而非拖动 */
+const DRAG_THRESHOLD = 6
+const PET_SIZE = { w: 84, h: 104 }
 
 let pollTimer = null
 let rotateTimer = null
 
 const hasTasks = computed(() => tasks.value.length > 0)
 
+/* ── 拖动定位（默认右下角，拖动后以 left/top 持久化） ── */
+const petRef = ref(null)
+const petPos = ref(null) // { left, top }，null 时用默认右下角
+const isDragging = ref(false)
+
+function clampPos(left, top) {
+  const w = window.innerWidth || 1280
+  const h = window.innerHeight || 800
+  return {
+    left: Math.min(Math.max(left, 4), w - PET_SIZE.w - 4),
+    top: Math.min(Math.max(top, 4), h - PET_SIZE.h - 4),
+  }
+}
+
+function loadPos() {
+  try {
+    const raw = localStorage.getItem('ai_pet_pos')
+    if (!raw) return
+    const pos = JSON.parse(raw)
+    if (typeof pos.left === 'number' && typeof pos.top === 'number') {
+      petPos.value = clampPos(pos.left, pos.top)
+    }
+  } catch {
+    // 位置数据损坏则忽略，回到默认右下角
+  }
+}
+
+const petStyle = computed(() => {
+  if (petPos.value) {
+    return { left: `${petPos.value.left}px`, top: `${petPos.value.top}px` }
+  }
+  return { right: '28px', bottom: '50px' }
+})
+
+function onPointerDown(e) {
+  // 弹窗内/鼠标右键不触发拖动
+  if (e.button !== 0) return
+  const startX = e.clientX
+  const startY = e.clientY
+  const rect = petRef.value.getBoundingClientRect()
+  const originLeft = rect.left
+  const originTop = rect.top
+  let moved = false
+
+  const onMove = (ev) => {
+    const dx = ev.clientX - startX
+    const dy = ev.clientY - startY
+    if (!moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return
+    moved = true
+    isDragging.value = true
+    petPos.value = clampPos(originLeft + dx, originTop + dy)
+  }
+
+  const onUp = () => {
+    window.removeEventListener('pointermove', onMove)
+    window.removeEventListener('pointerup', onUp)
+    if (moved) {
+      isDragging.value = false
+      if (petPos.value) {
+        localStorage.setItem('ai_pet_pos', JSON.stringify(petPos.value))
+      }
+    } else {
+      // 位移极小 → 视为点击，打开宠物对话
+      chatVisible.value = true
+    }
+  }
+
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', onUp)
+}
+
+/* ── 任务播报 ── */
 function shortTitle(t) {
   return t.title && t.title.length > 12 ? t.title.slice(0, 12) + '…' : (t.title || '')
 }
@@ -98,7 +169,6 @@ async function fetchTasks() {
     const prevActive = tasks.value.map(t => t.ticket_no + ':' + t.status).join('|')
     tasks.value = list
     const currActive = list.map(t => t.ticket_no + ':' + t.status).join('|')
-    // 任务集合或状态发生变化时立即播报最新一条
     if (prevActive !== currActive) {
       bubbleIndex.value = 0
       rotateBubble()
@@ -108,24 +178,12 @@ async function fetchTasks() {
   }
 }
 
-function goNewChat() {
-  router.push({ path: '/ai-chat', query: { pet_new: String(Date.now()) } }).catch(() => {})
-}
-
-function onHover(enter) {
-  isHovering.value = enter
-  if (enter && !hasTasks.value) {
-    bubbleText.value = '点我开启新对话吧～ (◕‿◕)'
-  } else if (!enter) {
-    rotateBubble()
-  }
-}
-
 onMounted(() => {
+  loadPos()
   fetchTasks()
   pollTimer = setInterval(fetchTasks, POLL_INTERVAL)
   rotateTimer = setInterval(() => {
-    if (!isHovering.value) rotateBubble()
+    if (!chatVisible.value) rotateBubble()
   }, ROTATE_INTERVAL)
 })
 
@@ -138,21 +196,24 @@ onUnmounted(() => {
 <style scoped>
 .ai-pet {
   position: fixed;
-  bottom: 50px;
-  z-index: 1500;
+  z-index: 2300;
   width: 84px;
   height: 104px;
-  cursor: pointer;
+  cursor: grab;
   user-select: none;
   -webkit-user-select: none;
+  touch-action: none;
+}
+
+.ai-pet.dragging {
+  cursor: grabbing;
 }
 
 /* ── 语音气泡 ── */
 .pet-bubble {
   position: absolute;
   bottom: 100px;
-  left: 50%;
-  transform: translateX(-58%);
+  right: 0;
   max-width: 250px;
   padding: 8px 12px;
   background: #fff;
@@ -171,7 +232,7 @@ onUnmounted(() => {
   content: '';
   position: absolute;
   bottom: -6px;
-  left: 26px;
+  right: 26px;
   width: 10px;
   height: 10px;
   background: #fff;
@@ -188,7 +249,7 @@ onUnmounted(() => {
 .bubble-fade-enter-from,
 .bubble-fade-leave-to {
   opacity: 0;
-  transform: translateX(-58%) translateY(6px);
+  transform: translateY(6px);
 }
 
 /* ── 机器人本体 ── */
@@ -434,5 +495,16 @@ onUnmounted(() => {
   0%, 100% { rotate: 0deg; }
   25% { rotate: 2.5deg; }
   75% { rotate: -2.5deg; }
+}
+
+/* 拖动中禁用悬浮动画，跟手更稳 */
+.ai-pet.dragging .pet-robot {
+  animation: none;
+  transform: translateX(-50%) scale(1.05);
+}
+
+.ai-pet.dragging .pet-shadow {
+  animation: none;
+  opacity: 0.5;
 }
 </style>

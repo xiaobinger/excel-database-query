@@ -109,8 +109,8 @@
       </el-footer>
     </el-container>
 
-    <!-- AI宠物助手（个人中心可开关，默认开启） -->
-    <AiPet v-if="petEnabled" :sidebar-collapsed="isCollapsed" />
+    <!-- AI宠物助手（个人中心可开关，默认开启）：点击弹出对话窗，可拖动 -->
+    <AiPet v-if="petEnabled" />
 
     <el-dialog
       v-model="passwordDialogVisible"
