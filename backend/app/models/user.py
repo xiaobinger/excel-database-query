@@ -25,6 +25,7 @@ class User(db.Model):
     system_task_ids = db.Column(db.Text, comment='available system task id list (JSON)')
 
     pet_enabled = db.Column(db.Boolean, default=True, nullable=True, comment='AI宠物助手开关')
+    pet_style = db.Column(db.String(20), default='robot', nullable=True, comment='AI宠物造型(robot/cat/bunny/panda/bear/fox/pig/frog/koala/chick)')
 
     role = db.relationship('Role', backref='users', lazy='joined')
 
@@ -164,6 +165,7 @@ class User(db.Model):
             'auto_task_ids': self.get_auto_task_ids(),
             'system_task_ids': self.get_system_task_ids(),
             'pet_enabled': self.pet_enabled is not False,
+            'pet_style': self.pet_style or 'robot',
             'created_at': beijing_isoformat(self.created_at),
         }
 

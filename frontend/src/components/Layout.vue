@@ -109,8 +109,8 @@
       </el-footer>
     </el-container>
 
-    <!-- AI宠物助手（个人中心可开关，默认开启）：点击弹出对话窗，可拖动 -->
-    <AiPet v-if="petEnabled" />
+    <!-- AI宠物助手（个人中心可开关/换造型，默认开启）：点击弹出对话窗，可拖动 -->
+    <AiPet v-if="petEnabled" :pet-style="petStyle" />
 
     <el-dialog
       v-model="passwordDialogVisible"
@@ -191,7 +191,26 @@
         <el-form-item label="AI宠物">
           <div class="pet-setting">
             <el-switch v-model="profileForm.pet_enabled" active-text="开启" inactive-text="关闭" />
-            <div class="pet-setting-tip">开启后左下角常驻可爱机器人助手：点击可快捷开启 AI 新对话，并自动播报你提交给 AI 的工单处理进度</div>
+            <div class="pet-setting-tip">开启后右下角常驻可爱宠物：点击可弹出对话窗，并自动播报你提交给 AI 的工单处理进度</div>
+            <div v-if="profileForm.pet_enabled" class="pet-style-picker">
+              <div class="pet-style-label">选择造型</div>
+              <div class="pet-style-grid">
+                <button
+                  v-for="opt in PET_OPTIONS"
+                  :key="opt.key"
+                  type="button"
+                  class="pet-style-card"
+                  :class="{ active: profileForm.pet_style === opt.key }"
+                  :title="opt.name"
+                  @click="profileForm.pet_style = opt.key"
+                >
+                  <div class="pet-style-preview">
+                    <component :is="opt.component" />
+                  </div>
+                  <span class="pet-style-name">{{ opt.name }}</span>
+                </button>
+              </div>
+            </div>
           </div>
         </el-form-item>
       </el-form>
@@ -214,6 +233,16 @@ import ThemeSwitch from './ThemeSwitch.vue'
 import TagsView from './TagsView.vue'
 import TaskBadge from './TaskBadge.vue'
 import AiPet from './AiPet.vue'
+import RobotPet from './pets/RobotPet.vue'
+import CatPet from './pets/CatPet.vue'
+import BunnyPet from './pets/BunnyPet.vue'
+import PandaPet from './pets/PandaPet.vue'
+import BearPet from './pets/BearPet.vue'
+import FoxPet from './pets/FoxPet.vue'
+import PigPet from './pets/PigPet.vue'
+import FrogPet from './pets/FrogPet.vue'
+import KoalaPet from './pets/KoalaPet.vue'
+import ChickPet from './pets/ChickPet.vue'
 import { titleMap } from '../config/menuConfig'
 
 const route = useRoute()
@@ -235,10 +264,28 @@ const profileForm = reactive({
   phone: '',
   avatarUrl: '',
   pet_enabled: true,
+  pet_style: 'robot',
 })
+
+/** AI宠物可选造型（key 与后端 PET_STYLES 白名单一致） */
+const PET_OPTIONS = [
+  { key: 'robot', name: '小机器人', component: RobotPet },
+  { key: 'cat', name: '喵喵', component: CatPet },
+  { key: 'bunny', name: '兔兔', component: BunnyPet },
+  { key: 'panda', name: '团团', component: PandaPet },
+  { key: 'bear', name: '棕熊', component: BearPet },
+  { key: 'fox', name: '狐狐', component: FoxPet },
+  { key: 'pig', name: '猪猪', component: PigPet },
+  { key: 'frog', name: '呱呱', component: FrogPet },
+  { key: 'koala', name: '考拉', component: KoalaPet },
+  { key: 'chick', name: '小鸡', component: ChickPet },
+]
 
 /** AI宠物是否展示（默认开启，个人中心可关闭） */
 const petEnabled = computed(() => store.user?.pet_enabled !== false)
+
+/** AI宠物当前造型（默认 robot） */
+const petStyle = computed(() => store.user?.pet_style || 'robot')
 
 function toggleCollapse() {
   isCollapsed.value = !isCollapsed.value
@@ -331,6 +378,7 @@ function openProfileDialog() {
     phone: u.phone || '',
     avatarUrl: u.avatar ? `/api/auth/avatar/${u.avatar}` : '',
     pet_enabled: u.pet_enabled !== false,
+    pet_style: u.pet_style || 'robot',
   })
   profileDialogVisible.value = true
 }
@@ -343,6 +391,7 @@ async function handleSaveProfile() {
       gender: profileForm.gender,
       phone: profileForm.phone,
       pet_enabled: profileForm.pet_enabled,
+      pet_style: profileForm.pet_style,
     })
     if (res.data) {
       store.user = { ...store.user, ...res.data }
@@ -685,5 +734,81 @@ onUnmounted(() => {
   font-size: 12px;
   line-height: 1.5;
   max-width: 320px;
+}
+
+.pet-style-picker {
+  margin-top: 10px;
+}
+
+.pet-style-label {
+  color: #909399;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.pet-style-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+  max-width: 360px;
+}
+
+.pet-style-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 2px 5px;
+  border: 1.5px solid var(--border-color, #e4e7ed);
+  border-radius: 10px;
+  background: var(--main-bg, #fff);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.pet-style-card:hover {
+  border-color: #a8c8f8;
+  transform: translateY(-1px);
+}
+
+.pet-style-card.active {
+  border-color: #7ea6ee;
+  background: rgba(126, 166, 238, 0.06);
+  box-shadow: 0 0 0 2px rgba(126, 166, 238, 0.18);
+}
+
+.pet-style-card.active::after {
+  content: '✓';
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #7ea6ee;
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.pet-style-preview {
+  height: 60px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.pet-style-preview :deep(.creature) {
+  transform: scale(0.6);
+  transform-origin: bottom center;
+}
+
+.pet-style-name {
+  font-size: 11px;
+  color: var(--text-primary, #606266);
+  white-space: nowrap;
 }
 </style>

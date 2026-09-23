@@ -4,15 +4,9 @@
       <div v-if="modelValue" class="pet-chat-mask" @click.self="close">
         <div class="pet-chat-dialog">
           <div class="pet-chat-header">
-            <div class="pet-chat-robot-mini">
-              <span class="mini-antenna"></span>
-              <span class="mini-head">
-                <i class="mini-eye"></i><i class="mini-eye"></i>
-                <i class="mini-mouth"></i>
-              </span>
-            </div>
+            <div class="pet-avatar-mini">{{ petMeta.emoji }}</div>
             <div class="pet-chat-title">
-              <div class="title-main">AI 宠物助手</div>
+              <div class="title-main">AI 宠物助手 · {{ petMeta.name }}</div>
               <div class="title-sub">{{ chatTitleText }}</div>
             </div>
             <button class="header-btn" title="开启新对话" @click="startNewChat">
@@ -29,14 +23,8 @@
             </div>
             <template v-else>
               <div v-if="!messages.length" class="body-empty">
-                <div class="empty-robot">
-                  <span class="mini-antenna"></span>
-                  <span class="mini-head">
-                    <i class="mini-eye"></i><i class="mini-eye"></i>
-                    <i class="mini-mouth"></i>
-                  </span>
-                </div>
-                <p>你好呀～我是你的 AI 小助手 (◕‿◕)</p>
+                <div class="empty-pet-avatar">{{ petMeta.emoji }}</div>
+                <p>你好呀～我是你的{{ petMeta.name }} (◕‿◕)</p>
                 <p class="empty-tip">有什么可以帮你的吗？</p>
               </div>
               <div
@@ -45,11 +33,7 @@
                 class="chat-row"
                 :class="msg.role"
               >
-                <div v-if="msg.role === 'assistant'" class="row-avatar">
-                  <span class="mini-head">
-                    <i class="mini-eye"></i><i class="mini-eye"></i>
-                  </span>
-                </div>
+                <div v-if="msg.role === 'assistant'" class="row-avatar">{{ petMeta.emoji }}</div>
                 <div class="bubble" :class="msg.role">
                   <div v-if="msg._thinking && !msg._thinking_done" class="thinking-tag">
                     <i class="fas fa-brain"></i> 深度思考中…
@@ -96,8 +80,25 @@ marked.setOptions({ breaks: true, gfm: true })
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
+  /** 宠物造型标识，与后端 PET_STYLES 白名单一致 */
+  petStyle: { type: String, default: 'robot' },
 })
 const emit = defineEmits(['update:modelValue'])
+
+/** 各造型对应的头像 emoji 与昵称 */
+const PET_META = {
+  robot: { emoji: '🤖', name: '小机器人' },
+  cat: { emoji: '🐱', name: '喵喵' },
+  bunny: { emoji: '🐰', name: '兔兔' },
+  panda: { emoji: '🐼', name: '团团' },
+  bear: { emoji: '🐻', name: '棕熊' },
+  fox: { emoji: '🦊', name: '狐狐' },
+  pig: { emoji: '🐷', name: '猪猪' },
+  frog: { emoji: '🐸', name: '呱呱' },
+  koala: { emoji: '🐨', name: '考拉' },
+  chick: { emoji: '🐤', name: '小鸡' },
+}
+const petMeta = computed(() => PET_META[props.petStyle] || PET_META.robot)
 
 const chats = ref([])
 const currentChatId = ref(null)
@@ -401,74 +402,22 @@ async function handleSend() {
   transform: translateY(-1px);
 }
 
-/* ── 迷你机器人 ── */
-.pet-chat-robot-mini,
-.empty-robot {
+/* ── 宠物头像（emoji 随造型切换） ── */
+.pet-avatar-mini {
   position: relative;
-  width: 38px;
+  z-index: 1;
+  width: 40px;
   height: 40px;
   flex-shrink: 0;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-
-.pet-chat-robot-mini {
-  animation: mini-float 2.8s ease-in-out infinite;
-}
-
-.mini-antenna {
-  width: 3px;
-  height: 6px;
-  background: rgba(255, 255, 255, 0.85);
-  border-radius: 2px;
-  position: relative;
-}
-
-.mini-antenna::after {
-  content: '';
-  position: absolute;
-  top: -5px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #ffe27a;
-  box-shadow: 0 0 5px #ffd34d;
-}
-
-.mini-head {
-  position: relative;
-  width: 34px;
-  height: 28px;
-  background: linear-gradient(160deg, #fff, #eaf1fd);
-  border: 2px solid rgba(255, 255, 255, 0.65);
-  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  box-shadow: 0 2px 6px rgba(59, 98, 158, 0.25);
-}
-
-.mini-eye {
-  width: 5px;
-  height: 5px;
+  font-size: 24px;
+  line-height: 1;
   border-radius: 50%;
-  background: #2c3e50;
-}
-
-.mini-mouth {
-  position: absolute;
-  bottom: 6px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 5px;
-  height: 3px;
-  border-radius: 0 0 5px 5px;
-  background: #2c3e50;
+  background: rgba(255, 255, 255, 0.28);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.5);
+  animation: mini-float 2.8s ease-in-out infinite;
 }
 
 @keyframes mini-float {
@@ -500,9 +449,19 @@ async function handleSend() {
   font-size: 13px;
 }
 
-.empty-robot {
+.empty-pet-avatar {
+  width: 64px;
+  height: 64px;
   margin: 0 auto 14px;
-  transform: scale(1.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 40px;
+  line-height: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 32%, #ffffff, #eaf1fd);
+  box-shadow: 0 4px 14px rgba(126, 166, 238, 0.28);
+  animation: mini-float 2.8s ease-in-out infinite;
 }
 
 .empty-tip {
@@ -523,19 +482,17 @@ async function handleSend() {
 
 .row-avatar {
   width: 30px;
-  height: 26px;
+  height: 30px;
   flex-shrink: 0;
   align-self: flex-end;
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.row-avatar .mini-head {
-  width: 28px;
-  height: 24px;
-  border-radius: 9px;
-  gap: 6px;
+  font-size: 19px;
+  line-height: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 32%, #ffffff, #eaf1fd);
+  box-shadow: 0 2px 6px rgba(139, 163, 201, 0.2);
 }
 
 .bubble {

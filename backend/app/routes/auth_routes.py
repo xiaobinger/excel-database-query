@@ -8,6 +8,9 @@ from app.utils.rate_limiter import login_rate_limiter
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
 
+# AI宠物可选造型白名单
+PET_STYLES = ('robot', 'cat', 'bunny', 'panda', 'bear', 'fox', 'pig', 'frog', 'koala', 'chick')
+
 
 def _get_client_ip():
     """Get real client IP considering proxy headers."""
@@ -178,6 +181,8 @@ def update_profile():
         user.gender = data['gender']
     if 'pet_enabled' in data and isinstance(data['pet_enabled'], bool):
         user.pet_enabled = data['pet_enabled']
+    if 'pet_style' in data and data['pet_style'] in PET_STYLES:
+        user.pet_style = data['pet_style']
 
     db.session.commit()
     return jsonify({'success': True, 'message': '资料已更新', 'data': user.to_dict_with_role()})
