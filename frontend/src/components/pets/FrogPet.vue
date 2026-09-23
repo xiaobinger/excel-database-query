@@ -1,10 +1,34 @@
 <template>
   <div class="creature frog" :class="[{ working }, 'mood-' + (mood || 'normal')]">
-    <div class="frog-body">
-      <span class="frog-belly"></span>
-      <span class="frog-foot foot-l"></span>
-      <span class="frog-foot foot-r"></span>
-    </div>
+    <svg class="pet-art" viewBox="0 0 64 88" aria-hidden="true">
+      <defs>
+        <radialGradient id="frogSkin" cx="32%" cy="24%" r="80%">
+          <stop offset="0%" stop-color="#b6eaa4" />
+          <stop offset="50%" stop-color="#8fd67e" />
+          <stop offset="100%" stop-color="#6fbb5d" />
+        </radialGradient>
+        <radialGradient id="frogBelly" cx="50%" cy="30%" r="80%">
+          <stop offset="0%" stop-color="#ecf7dd" />
+          <stop offset="100%" stop-color="#cfeab8" />
+        </radialGradient>
+      </defs>
+
+      <!-- 身体 + 白肚皮 + 带蹼的脚 -->
+      <ellipse cx="32" cy="74" rx="18" ry="12" fill="url(#frogSkin)" />
+      <ellipse cx="32" cy="78" rx="11" ry="8" fill="url(#frogBelly)" />
+      <ellipse cx="14.5" cy="84.5" rx="7" ry="3.4" fill="#6db85e" />
+      <ellipse cx="49.5" cy="84.5" rx="7" ry="3.4" fill="#6db85e" />
+      <circle cx="9.5" cy="83.4" r="1.6" fill="#6db85e" />
+      <circle cx="54.5" cy="83.4" r="1.6" fill="#6db85e" />
+
+      <!-- 头（宽扁，蛙形；眼睛鼓包由 DOM 保留） -->
+      <ellipse cx="32" cy="47" rx="28" ry="21" fill="url(#frogSkin)" />
+      <!-- 咽喉白区 -->
+      <ellipse cx="32" cy="62" rx="13" ry="6.5" fill="url(#frogBelly)" opacity="0.85" />
+      <!-- 釉面高光 -->
+      <ellipse cx="18" cy="35" rx="9" ry="4.5" fill="#ffffff" opacity="0.45" transform="rotate(-20 18 35)" />
+    </svg>
+
     <div class="frog-head">
       <span class="eye-bump bump-l"><i class="eye"><i class="pupil"></i></i></span>
       <span class="eye-bump bump-r"><i class="eye"><i class="pupil"></i></i></span>
@@ -26,24 +50,32 @@ defineProps({ working: Boolean, mood: { type: String, default: 'normal' } })
   height: 88px;
 }
 
+.pet-art {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
 .frog-head {
   position: absolute;
   top: 26px;
   left: 4px;
   width: 56px;
   height: 44px;
-  background: linear-gradient(170deg, #8fd67e 0%, #82cc72 100%);
-  border-radius: 50% 50% 46% 46%;
-  box-shadow: 0 3px 8px rgba(98, 168, 82, 0.35);
   z-index: 2;
 }
 
+/* 眼睛鼓包（保留 DOM：绿包 + 白眼 + 瞳孔，mood 系统直接操作 .eye/.pupil） */
 .eye-bump {
   position: absolute;
   top: -9px;
   width: 18px;
   height: 18px;
-  background: #82cc72;
+  background: radial-gradient(circle at 40% 30%, #9fdc8f, #6fb95e 75%);
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -94,42 +126,6 @@ defineProps({ working: Boolean, mood: { type: String, default: 'normal' } })
 
 .b-l { left: 5px; }
 .b-r { right: 5px; }
-
-.frog-body {
-  position: absolute;
-  top: 66px;
-  left: 12px;
-  width: 40px;
-  height: 20px;
-  background: linear-gradient(175deg, #8fd67e 0%, #74bf64 100%);
-  border-radius: 12px 12px 16px 16px;
-  box-shadow: 0 3px 8px rgba(98, 168, 82, 0.35);
-  z-index: 1;
-  overflow: visible;
-}
-
-.frog-belly {
-  position: absolute;
-  bottom: -4px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 26px;
-  height: 14px;
-  background: #d6efc8;
-  border-radius: 50%;
-}
-
-.frog-foot {
-  position: absolute;
-  bottom: -4px;
-  width: 14px;
-  height: 8px;
-  background: #6db85e;
-  border-radius: 8px;
-}
-
-.foot-l { left: 0; }
-.foot-r { right: 0; }
 
 @keyframes pet-blink {
   0%, 92%, 100% { transform: scaleY(1); }
