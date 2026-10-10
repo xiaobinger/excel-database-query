@@ -235,7 +235,7 @@
             <div v-for="(v, idx) in templateVars" :key="idx" class="var-config-item">
               <div class="var-config-header">
                 <el-tag size="small" :type="getVarTypeTag(v.type)">{{ v.type }}</el-tag>
-                <el-tag v-if="v.source === 'user'" size="small" type="danger">执行时填写</el-tag>
+                <el-tag v-if="v.source === 'param'" size="small" type="success">取自参数</el-tag>
                 <span class="var-config-name">{{ v.name || '未命名' }}</span>
                 <el-button size="small" text type="danger" @click="removeTemplateVar(idx)">
                   <i class="fas fa-trash"></i>
@@ -248,7 +248,7 @@
                 </div>
                 <el-select v-model="v.source" placeholder="变量来源" size="small" style="width: 100%; margin-bottom: 8px" @change="onVarSourceChange(v)">
                   <el-option value="auto" label="配置参数生成（按配置自动取值）" />
-                  <el-option value="user" label="用户执行时填写" />
+                  <el-option value="param" label="取自执行参数（用户执行时填写）" />
                 </el-select>
                 <el-select v-model="v.type" placeholder="变量类型" size="small" style="width: 100%; margin-bottom: 8px">
                   <el-option value="date_range" label="日期范围 (生成列表)" />
@@ -257,10 +257,17 @@
                   <el-option value="number" label="数字" />
                 </el-select>
 
-                <!-- 用户执行时填写：仅需提示与默认值 -->
-                <template v-if="v.source === 'user'">
-                  <el-input v-model="v.config.placeholder" size="small" placeholder="输入提示（可选）" style="margin-bottom: 8px" />
-                  <el-input v-model="v.config.default" size="small" placeholder="默认值（可选，不填则执行时必填）" />
+                <!-- 取自执行参数：选择参数及范围取值部分 -->
+                <template v-if="v.source === 'param'">
+                  <el-select v-model="v.param" placeholder="选择参数" size="small" style="width: 100%; margin-bottom: 8px" @change="onVarParamChange(v)">
+                    <el-option v-for="p in paramOptions" :key="p.name" :value="p.name" :label="p.label || p.name" />
+                  </el-select>
+                  <el-select v-if="isRangeParam(v.param)" v-model="v.param_part" placeholder="取值范围" size="small" style="width: 100%">
+                    <el-option value="" label="整体值" />
+                    <el-option value="start" label="起始值" />
+                    <el-option value="end" label="结束值" />
+                  </el-select>
+                  <div v-if="paramOptions.length === 0" class="var-param-empty-tip">请先在上方「参数配置」中添加参数</div>
                 </template>
 
                 <template v-else>
@@ -634,6 +641,13 @@ const defaultForm = {
 const form = reactive({ ...defaultForm })
 const templateVars = ref([])
 
+const paramOptions = computed(() => (form.params_config || []).filter(p => p && p.name))
+
+function isRangeParam(name) {
+  const p = (form.params_config || []).find(pp => pp.name === name)
+  return !!(p && p.range)
+}
+
 const sqlFields = ref([])
 let sqlFieldsTimer = null
 
@@ -771,6 +785,8 @@ function addTemplateVar() {
     name: '',
     label: '',
     source: 'auto',
+    param: '',
+    param_part: '',
     type: 'date_range',
     config: {
       period: 'month',
@@ -785,11 +801,16 @@ function addTemplateVar() {
 }
 
 function onVarSourceChange(v) {
-  if (v.source === 'user') {
-    if (!v.config) v.config = {}
+  if (v.source === 'param') {
+    if (!v.param) v.param = ''
+    if (v.param_part === undefined) v.param_part = ''
     if (v.type === 'date_range') v.type = 'text'
-    if (v.config.placeholder === undefined) v.config.placeholder = ''
-    if (v.config.default === undefined) v.config.default = ''
+  }
+}
+
+function onVarParamChange(v) {
+  if (!isRangeParam(v.param)) {
+    v.param_part = ''
   }
 }
 
@@ -856,8 +877,10 @@ function openDialog(row) {
     if (!form.params_config) form.params_config = []
     // 加载模板变量配置
     templateVars.value = (row.template_config || []).map(v => ({
-      source: 'auto',
       ...v,
+      source: v.source === 'param' ? 'param' : 'auto',
+      param: v.param || '',
+      param_part: v.param_part || '',
       config: {
         period: 'month',
         count: 12,
@@ -1198,6 +1221,12 @@ onMounted(() => {
   color: #909399;
   text-align: center;
   padding: 12px 0;
+}
+
+.var-param-empty-tip {
+  font-size: 12px;
+  color: #e6a23c;
+  margin-top: 4px;
 }
 
 .var-config-item {

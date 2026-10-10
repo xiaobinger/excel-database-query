@@ -129,19 +129,6 @@ class ExportService:
 
                     sql_text = script.sql_text
 
-                    # 如果启用了SQL模板，先渲染模板生成实际SQL
-                    if script.is_template and script.sql_template:
-                        try:
-                            template_config = script.get_template_config()
-                            rendered_sql = render_sql_template(
-                                script.sql_template, template_config,
-                                resolve_script_template_params(template_params, script))
-                            sql_text = rendered_sql
-                            task.add_log(f'导出选项 [{script.name}] SQL模板渲染完成')
-                        except Exception as e:
-                            task.add_log(f'导出选项 [{script.name}] SQL模板渲染失败: {str(e)}', 'error')
-                            continue
-
                     script_params = dict(params_values) if params_values else {}
                     params_config = script.get_params_config()
                     multi_params = {p['name'] for p in params_config if p.get('multi') and p.get('type') in ('text', 'number')}
@@ -193,6 +180,22 @@ class ExportService:
                                 task.add_log(f'导出选项 [{script.name}] 参数 {pname} 被标记为"全部"，不筛选')
                     
                     task.add_log(f'导出选项 [{script.name}] SQL处理开始, 参数: {script_params}')
+
+                    # 如果启用了SQL模板，渲染模板生成实际SQL。
+                    # 此时导出参数已完成归一化（含日期范围拆分），可注入模板变量上下文，
+                    # 使"来源=参数"的模板变量直接引用用户在执行页填写的参数值。
+                    if script.is_template and script.sql_template:
+                        try:
+                            template_config = script.get_template_config()
+                            rendered_sql = render_sql_template(
+                                script.sql_template, template_config,
+                                resolve_script_template_params(template_params, script),
+                                export_params=script_params)
+                            sql_text = rendered_sql
+                            task.add_log(f'导出选项 [{script.name}] SQL模板渲染完成')
+                        except Exception as e:
+                            task.add_log(f'导出选项 [{script.name}] SQL模板渲染失败: {str(e)}', 'error')
+                            continue
 
                     # 1. 先处理"全部"选项：智能移除WHERE条件
                     for pname in allow_all_params:

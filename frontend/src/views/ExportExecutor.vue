@@ -388,32 +388,7 @@
             </div>
           </div>
 
-          <div v-if="templateVarGroups.length > 0" class="template-vars-section">
-            <div class="params-section-title">
-              <i class="fas fa-code"></i>
-              <span>模板变量</span>
-              <el-tag size="small" type="info" effect="plain" style="margin-left: 8px">执行时填写</el-tag>
-            </div>
-            <el-form label-width="130px">
-              <div v-for="g in templateVarGroups" :key="g.scriptId" class="template-var-group">
-                <div class="template-var-group-title">{{ g.scriptName }}</div>
-                <el-form-item
-                  v-for="v in g.vars"
-                  :key="v.name"
-                  :label="v.label || v.name"
-                  :required="!hasVarDefault(v)"
-                >
-                  <el-input
-                    v-model="templateVarValues[varKey(g.scriptId, v.name)]"
-                    :placeholder="v.config && v.config.placeholder ? v.config.placeholder : ('请输入' + (v.label || v.name))"
-                    clearable
-                  />
-                </el-form-item>
-              </div>
-            </el-form>
-          </div>
-
-          <div v-if="sharedParams.length === 0 && Object.keys(uniqueParamsByScript).length === 0 && templateVarGroups.length === 0" class="no-params">
+          <div v-if="sharedParams.length === 0 && Object.keys(uniqueParamsByScript).length === 0" class="no-params">
             所有导出选项均无参数，可直接执行
           </div>
           <div class="step-actions">
@@ -561,7 +536,6 @@ const paramValues = reactive({})
 const sharedParamValues = reactive({})
 const neqAllChecked = reactive({})
 const allChecked = reactive({})
-const templateVarValues = reactive({})
 const formRefs = reactive({})
 const outputFormat = ref('sheets')
 const submitting = ref(false)
@@ -584,59 +558,6 @@ const visibleScripts = computed(() => {
 const selectedScripts = computed(() => {
   return visibleScripts.value.filter((s) => selectedScriptIds.value.includes(s.id))
 })
-
-const templateVarGroups = computed(() => {
-  const groups = []
-  selectedScripts.value.forEach((s) => {
-    if (!s.is_template) return
-    const vars = (s.template_config || []).filter((v) => v && v.source === 'user' && v.name)
-    if (vars.length) groups.push({ scriptId: s.id, scriptName: s.name, vars })
-  })
-  return groups
-})
-
-function varKey(scriptId, name) {
-  return `${scriptId}::${name}`
-}
-
-function hasVarDefault(v) {
-  return v.config && v.config.default !== undefined && v.config.default !== null && v.config.default !== ''
-}
-
-function buildTemplateParams() {
-  const payload = {}
-  templateVarGroups.value.forEach((g) => {
-    const obj = {}
-    g.vars.forEach((v) => {
-      let val = templateVarValues[varKey(g.scriptId, v.name)]
-      if (val === undefined || val === null || val === '') {
-        val = hasVarDefault(v) ? v.config.default : ''
-      }
-      if (v.type === 'number' && val !== '') {
-        const num = Number(val)
-        obj[v.name] = isNaN(num) ? val : num
-      } else {
-        obj[v.name] = val
-      }
-    })
-    payload[g.scriptId] = obj
-  })
-  return payload
-}
-
-function validateTemplateVars() {
-  for (const g of templateVarGroups.value) {
-    for (const v of g.vars) {
-      if (hasVarDefault(v)) continue
-      const val = templateVarValues[varKey(g.scriptId, v.name)]
-      if (val === undefined || val === null || val === '') {
-        ElMessage.warning(`请填写模板变量「${v.label || v.name}」`)
-        return false
-      }
-    }
-  }
-  return true
-}
 
 const selectedScriptNames = computed(() => {
   return selectedScripts.value.map((s) => s.name).join(', ')
@@ -859,9 +780,6 @@ async function goToStep2() {
       }
     }
   }
-  if (!validateTemplateVars()) {
-    return
-  }
   currentStep.value = 2
 }
 
@@ -883,9 +801,6 @@ function isParamAllChecked(p, contextKey) {
 }
 
 async function executeExport() {
-  if (!validateTemplateVars()) {
-    return
-  }
   submitting.value = true
   try {
     const params_values = {}
@@ -945,11 +860,6 @@ async function executeExport() {
       script_ids: selectedScriptIds.value,
       output_format: outputFormat.value,
       params_values
-    }
-
-    const tplParams = buildTemplateParams()
-    if (Object.keys(tplParams).length > 0) {
-      data.template_params = tplParams
     }
 
     const res = await api.export.execute(data)
@@ -1059,12 +969,7 @@ async function handleRetry() {
   if (!taskId.value) return
   retrying.value = true
   try {
-    const payload = {}
-    const tplParams = buildTemplateParams()
-    if (Object.keys(tplParams).length > 0) {
-      payload.template_params = tplParams
-    }
-    const res = await api.export.retry(taskId.value, payload)
+    const res = await api.export.retry(taskId.value)
     if (res.success) {
       ElMessage.success('任务已重新提交执行')
       executing.value = true
@@ -1150,7 +1055,6 @@ function resetAll() {
   Object.keys(sharedParamValues).forEach((k) => delete sharedParamValues[k])
   Object.keys(neqAllChecked).forEach((k) => delete neqAllChecked[k])
   Object.keys(allChecked).forEach((k) => delete allChecked[k])
-  Object.keys(templateVarValues).forEach((k) => delete templateVarValues[k])
   Object.keys(formRefs).forEach((k) => delete formRefs[k])
   activeCollapse.value = ''
   if (eventSource) {
