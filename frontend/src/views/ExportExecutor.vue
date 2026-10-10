@@ -163,6 +163,7 @@
                       v-else-if="p.range && p.date_format === 'datetime'"
                       v-model="sharedParamValues[p.name]"
                       type="datetimerange"
+                      :default-time="datetimeRangeDefaultTime"
                       :start-placeholder="'开始' + (p.label || p.name)"
                       :end-placeholder="'结束' + (p.label || p.name)"
                       value-format="YYYY-MM-DD HH:mm:ss"
@@ -329,6 +330,7 @@
                           v-else-if="p.range && p.date_format === 'datetime'"
                           v-model="paramValues[scriptId][p.name]"
                           type="datetimerange"
+                          :default-time="datetimeRangeDefaultTime"
                           :start-placeholder="'开始' + (p.label || p.name)"
                           :end-placeholder="'结束' + (p.label || p.name)"
                           value-format="YYYY-MM-DD HH:mm:ss"
@@ -536,6 +538,7 @@ const paramValues = reactive({})
 const sharedParamValues = reactive({})
 const neqAllChecked = reactive({})
 const allChecked = reactive({})
+const datetimeRangeDefaultTime = [new Date(2000, 0, 1, 0, 0, 0), new Date(2000, 0, 1, 23, 59, 59)]
 const formRefs = reactive({})
 const outputFormat = ref('sheets')
 const submitting = ref(false)
