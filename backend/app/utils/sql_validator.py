@@ -374,20 +374,26 @@ class SQLValidator:
                 if not col:
                     continue
                 
+                # 别名标识符：支持反引号、双引号、单引号包裹，或裸标识符（含中文）
+                ident = r"""(?:`([^`]+)`|"([^"]+)"|'([^']+)'|([\w$]+))"""
+                alias_keywords = ['AS', 'FROM', 'WHERE', 'AND', 'OR', 'IN', 'ON', 'JOIN',
+                                  'CASE', 'WHEN', 'THEN', 'ELSE', 'END']
+                
                 # 处理 AS 别名（优先处理，因为别名优先级最高）
-                as_match = re.search(r'\s+AS\s+(\w+)$', col, re.IGNORECASE)
+                as_match = re.search(r'\s+AS\s+' + ident + r'\s*$', col, re.IGNORECASE)
                 if as_match:
-                    result.append(as_match.group(1))
+                    name = as_match.group(1) or as_match.group(2) or as_match.group(3) or as_match.group(4)
+                    result.append(name)
                     continue
                 
-                # 处理不带 AS 的别名（如 column_name alias_name）
-                # 匹配最后一个单词，前提是前面有空格且不是关键字
-                alias_match = re.search(r'\s+(\w+)$', col)
+                # 处理不带 AS 的别名（如 column_name alias_name / column_name `alias`）
+                # 匹配结尾的标识符，前提是前面有空格且不是关键字
+                alias_match = re.search(r'\s+' + ident + r'\s*$', col)
                 if alias_match:
-                    alias = alias_match.group(1).upper()
+                    name = alias_match.group(1) or alias_match.group(2) or alias_match.group(3) or alias_match.group(4)
                     # 检查是否是 SQL 关键字
-                    if alias not in ['AS', 'FROM', 'WHERE', 'AND', 'OR', 'IN', 'ON', 'JOIN', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END']:
-                        result.append(alias_match.group(1))
+                    if name.upper() not in alias_keywords:
+                        result.append(name)
                         continue
                 
                 # 处理 CASE WHEN...THEN...END 表达式
@@ -403,9 +409,10 @@ class SQLValidator:
                     if paren_end != -1:
                         # 检查是否有别名
                         remaining = col[paren_end + 1:].strip()
-                        as_match = re.match(r'(?:AS\s+)?(\w+)', remaining, re.IGNORECASE)
+                        as_match = re.match(r'(?:AS\s+)?' + ident, remaining, re.IGNORECASE)
                         if as_match:
-                            result.append(as_match.group(1))
+                            name = as_match.group(1) or as_match.group(2) or as_match.group(3) or as_match.group(4)
+                            result.append(name)
                         else:
                             result.append('IF')
                     continue
@@ -417,9 +424,10 @@ class SQLValidator:
                     if paren_end != -1:
                         # 检查是否有别名
                         remaining = col[paren_end + 1:].strip()
-                        as_match = re.match(r'(?:AS\s+)?(\w+)', remaining, re.IGNORECASE)
+                        as_match = re.match(r'(?:AS\s+)?' + ident, remaining, re.IGNORECASE)
                         if as_match:
-                            result.append(as_match.group(1))
+                            name = as_match.group(1) or as_match.group(2) or as_match.group(3) or as_match.group(4)
+                            result.append(name)
                         else:
                             result.append('IFNULL')
                     continue
