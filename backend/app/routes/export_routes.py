@@ -31,6 +31,9 @@ def execute_export():
     params_values = data.get('params_values', {})
     all_checked = data.get('all_checked', {})
     output_format = data.get('output_format', 'sheets')
+    template_params = data.get('template_params', {})
+    if not isinstance(template_params, dict):
+        template_params = {}
 
     if not script_ids:
         return jsonify({'success': False, 'message': '请选择至少一个导出选项'}), 400
@@ -65,6 +68,7 @@ def execute_export():
             output_dir=output_dir,
             output_format=output_format,
             all_checked=all_checked,
+            template_params=template_params,
         )
 
         # 记录用户行为
@@ -355,6 +359,11 @@ def retry_export(task_id):
     script_ids = task.get_script_ids_json()
     params_values = task.get_params_values()
 
+    data = request.get_json(silent=True) or {}
+    template_params = data.get('template_params', {})
+    if not isinstance(template_params, dict):
+        template_params = {}
+
     try:
         if task.output_file and os.path.exists(task.output_file):
             try:
@@ -382,6 +391,7 @@ def retry_export(task_id):
             params_values=params_values,
             output_dir=output_dir,
             output_format=task.output_format or 'sheets',
+            template_params=template_params,
         )
 
         # 记录用户行为

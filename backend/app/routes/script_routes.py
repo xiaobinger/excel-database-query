@@ -314,7 +314,7 @@ def render_template():
     if not template:
         return jsonify({'success': False, 'message': '模板内容为空'}), 400
 
-    result = get_template_preview(template, template_config)
+    result = get_template_preview(template, template_config, params)
     if result['success']:
         return jsonify({'success': True, 'rendered_sql': result['rendered_sql']})
     else:
@@ -336,7 +336,7 @@ def render_script_template(script_id):
     params = data.get('params', {})
 
     template_config = script.get_template_config()
-    result = get_template_preview(script.sql_template or script.sql_text, template_config)
+    result = get_template_preview(script.sql_template or script.sql_text, template_config, params)
     if result['success']:
         return jsonify({'success': True, 'rendered_sql': result['rendered_sql']})
     else:

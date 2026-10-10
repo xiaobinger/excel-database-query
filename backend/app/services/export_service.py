@@ -14,7 +14,7 @@ from app.models.query_task import QueryTask
 from app.utils.db_connector import DatabaseConnector
 from app.utils.sql_validator import SQLValidator
 from app.utils.helpers import beijing_isoformat
-from app.utils.sql_template import render_sql_template
+from app.utils.sql_template import render_sql_template, resolve_script_template_params
 
 logger = logging.getLogger(__name__)
 
@@ -77,12 +77,12 @@ class ExportService:
     def execute_export_async(task_id: str, script_ids: List[int],
                              params_values: Dict[str, Any], output_dir: str,
                              output_format: str = 'sheets', all_checked: Dict[str, Any] = None,
-                             on_complete=None):
+                             on_complete=None, template_params: dict = None):
         cancel_event = threading.Event()
         _task_cancel_events[task_id] = cancel_event
         thread = threading.Thread(
             target=ExportService._execute_export_background,
-            args=(task_id, script_ids, params_values, output_dir, output_format, all_checked, on_complete, cancel_event),
+            args=(task_id, script_ids, params_values, output_dir, output_format, all_checked, on_complete, cancel_event, template_params),
             daemon=True
         )
         _task_threads[task_id] = thread
@@ -92,7 +92,8 @@ class ExportService:
     def _execute_export_background(task_id: str, script_ids: List[int],
                                    params_values: Dict[str, Any], output_dir: str,
                                    output_format: str = 'sheets', all_checked: Dict[str, Any] = None,
-                                   on_complete=None, cancel_event: threading.Event = None):
+                                   on_complete=None, cancel_event: threading.Event = None,
+                                   template_params: dict = None):
         try:
             from app import create_app
             app = create_app()
@@ -132,7 +133,9 @@ class ExportService:
                     if script.is_template and script.sql_template:
                         try:
                             template_config = script.get_template_config()
-                            rendered_sql = render_sql_template(script.sql_template, template_config)
+                            rendered_sql = render_sql_template(
+                                script.sql_template, template_config,
+                                resolve_script_template_params(template_params, script))
                             sql_text = rendered_sql
                             task.add_log(f'导出选项 [{script.name}] SQL模板渲染完成')
                         except Exception as e:
@@ -431,7 +434,9 @@ class ExportService:
                             if script.is_template and script.sql_template:
                                 try:
                                     template_config = script.get_template_config()
-                                    rendered_for_cols = render_sql_template(script.sql_template, template_config)
+                                    rendered_for_cols = render_sql_template(
+                                        script.sql_template, template_config,
+                                        resolve_script_template_params(template_params, script))
                                     column_headers = validator.extract_column_names(rendered_for_cols)
                                 except Exception:
                                     column_headers = validator.extract_column_names(sql_text)

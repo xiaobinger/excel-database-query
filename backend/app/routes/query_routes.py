@@ -29,11 +29,20 @@ def execute_query():
     column_mapping_str = request.form.get('column_mapping', '{}')
     primary_key = request.form.get('primary_key', '')
     selected_sheets_str = request.form.get('selected_sheets', '')  # JSON数组或逗号分隔的sheet名称
+    template_params_str = request.form.get('template_params', '')
 
     try:
         column_mapping = json.loads(column_mapping_str) if column_mapping_str else {}
     except (json.JSONDecodeError, TypeError):
         column_mapping = {}
+
+    # 用户执行时设置的SQL模板变量值
+    try:
+        template_params = json.loads(template_params_str) if template_params_str else {}
+        if not isinstance(template_params, dict):
+            template_params = {}
+    except (json.JSONDecodeError, TypeError):
+        template_params = {}
 
     # 解析选中的sheet列表
     selected_sheets = []
@@ -128,6 +137,7 @@ def execute_query():
             column_mapping=column_mapping,
             primary_key=primary_key,
             selected_sheets=selected_sheets,
+            template_params=template_params,
         )
 
         # 记录用户行为
@@ -428,6 +438,11 @@ def retry_task(task_id):
     if not input_file or not os.path.exists(input_file):
         return jsonify({'success': False, 'message': '输入文件不存在，文件可能已被定时清理，请重新上传文件执行'}), 400
 
+    data = request.get_json(silent=True) or {}
+    template_params = data.get('template_params', {})
+    if not isinstance(template_params, dict):
+        template_params = {}
+
     script_id = task.script_id
     script = Script.query.get(script_id) if script_id else None
     if not script:
@@ -459,6 +474,7 @@ def retry_task(task_id):
             output_dir=output_dir,
             param_column=None,
             merge_strategy=task.merge_strategy,
+            template_params=template_params,
         )
 
         # 记录用户行为

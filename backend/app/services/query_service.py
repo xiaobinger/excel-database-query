@@ -13,7 +13,7 @@ from app.utils.db_connector import DatabaseConnector
 from app.utils.sql_validator import SQLValidator
 from app.services.excel_service import ExcelService
 from app.utils.helpers import beijing_isoformat
-from app.utils.sql_template import render_sql_template
+from app.utils.sql_template import render_sql_template, resolve_script_template_params
 
 logger = logging.getLogger(__name__)
 
@@ -63,14 +63,14 @@ class QueryService:
                             param_column: str = None, merge_strategy: str = 'concat',
                             new_sheet: bool = True, column_mapping: dict = None,
                             primary_key: str = '', selected_sheets: List[str] = None,
-                            on_complete=None):
+                            on_complete=None, template_params: dict = None):
         cancel_event = threading.Event()
         _task_cancel_events[task_id] = cancel_event
         thread = threading.Thread(
             target=QueryService._execute_query_background,
             args=(task_id, script_id, script_ids, db_connection_ids, input_file, output_dir,
                   param_column, merge_strategy, new_sheet, column_mapping, primary_key,
-                  cancel_event, selected_sheets, on_complete),
+                  cancel_event, selected_sheets, on_complete, template_params),
             daemon=True
         )
         _task_threads[task_id] = thread
@@ -82,7 +82,8 @@ class QueryService:
                                   param_column: str = None, merge_strategy: str = 'concat',
                                   new_sheet: bool = True, column_mapping: dict = None,
                                   primary_key: str = '', cancel_event: threading.Event = None,
-                                  selected_sheets: List[str] = None, on_complete=None):
+                                  selected_sheets: List[str] = None, on_complete=None,
+                                  template_params: dict = None):
         try:
             from app import create_app
             app = create_app()
@@ -181,7 +182,9 @@ class QueryService:
                         if script.is_template and script.sql_template:
                             try:
                                 template_config = script.get_template_config()
-                                sql_to_execute = render_sql_template(script.sql_template, template_config)
+                                sql_to_execute = render_sql_template(
+                                    script.sql_template, template_config,
+                                    resolve_script_template_params(template_params, script))
                                 task.add_log(f'查询选项 [{script.name}] SQL模板渲染完成')
                             except Exception as e:
                                 task.add_log(f'查询选项 [{script.name}] SQL模板渲染失败: {str(e)}', 'error')
@@ -277,7 +280,9 @@ class QueryService:
                     if first_script.is_template and first_script.sql_template:
                         try:
                             template_config = first_script.get_template_config()
-                            rendered_sql = render_sql_template(first_script.sql_template, template_config)
+                            rendered_sql = render_sql_template(
+                                first_script.sql_template, template_config,
+                                resolve_script_template_params(template_params, first_script))
                             column_headers = SQLValidator().extract_column_names(rendered_sql)
                         except Exception:
                             column_headers = SQLValidator().extract_column_names(first_script.sql_text)

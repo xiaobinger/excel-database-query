@@ -133,7 +133,7 @@ const query = {
   dashboard: () => http.get('/query/dashboard'),
   smartMatch: (filename) => http.post('/query/smart-match', { filename }),
   fuzzyMatchColumns: (data) => http.post('/query/fuzzy-match-columns', data),
-  retry: (taskId) => http.post(`/query/retry/${taskId}`),
+  retry: (taskId, data) => http.post(`/query/retry/${taskId}`, data || {}),
   config: () => http.get('/query/config')
 }
 
@@ -146,7 +146,7 @@ const exportApi = {
     return `/api/export/stream/${taskId}${sep}`
   },
   cancel: (taskId) => http.post(`/export/cancel/${taskId}`),
-  retry: (taskId) => http.post(`/export/retry/${taskId}`),
+  retry: (taskId, data) => http.post(`/export/retry/${taskId}`, data || {}),
   deleteTask: (id) => http.delete(`/export/tasks/${id}`),
   batchDeleteTasks: (ids) => http.post('/export/tasks/batch-delete', { ids }),
   deleteAllTasks: () => http.delete('/export/tasks/all'),

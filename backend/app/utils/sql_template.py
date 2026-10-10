@@ -144,10 +144,10 @@ def render_sql_template(template: str, template_config: list, params: dict = Non
         raise ValueError(f'模板渲染失败: {str(e)}')
 
 
-def get_template_preview(template: str, template_config: list) -> dict:
+def get_template_preview(template: str, template_config: list, params: dict = None) -> dict:
     """预览模板渲染结果"""
     try:
-        rendered = render_sql_template(template, template_config)
+        rendered = render_sql_template(template, template_config, params)
         return {
             'success': True,
             'rendered_sql': rendered,
@@ -157,3 +157,22 @@ def get_template_preview(template: str, template_config: list) -> dict:
             'success': False,
             'error': str(e),
         }
+
+
+def resolve_script_template_params(template_params, script):
+    """从整体 template_params 中解析出指定脚本对应的模板变量值。
+
+    支持按脚本分组的结构：{'12': {'var': 'x'}, '脚本名': {...}}；
+    也兼容所有脚本共用的扁平结构：{'var': 'x'}。
+    """
+    if not template_params or not isinstance(template_params, dict) or script is None:
+        return None
+    for key in (str(getattr(script, 'id', '')), getattr(script, 'name', None)):
+        if key is None:
+            continue
+        val = template_params.get(key)
+        if isinstance(val, dict):
+            return val
+    if all(not isinstance(v, dict) for v in template_params.values()):
+        return template_params
+    return None

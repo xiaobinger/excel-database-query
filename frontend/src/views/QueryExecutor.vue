@@ -155,6 +155,25 @@
                 </div>
               </div>
             </template>
+
+            <template v-if="templateVarGroups.length > 0">
+              <el-divider content-position="left">模板变量（执行时填写）</el-divider>
+              <div v-for="g in templateVarGroups" :key="g.scriptId" class="template-var-group">
+                <div class="template-var-group-title">{{ g.scriptName }}</div>
+                <el-form-item
+                  v-for="v in g.vars"
+                  :key="v.name"
+                  :label="v.label || v.name"
+                  :required="!hasVarDefault(v)"
+                >
+                  <el-input
+                    v-model="templateVarValues[varKey(g.scriptId, v.name)]"
+                    :placeholder="v.config && v.config.placeholder ? v.config.placeholder : ('请输入' + (v.label || v.name))"
+                    clearable
+                  />
+                </el-form-item>
+              </div>
+            </template>
           </el-form>
           <div class="step-actions">
             <el-button @click="currentStep = 1">上一步</el-button>
@@ -328,6 +347,65 @@ const sqlFields = ref([])
 const columnMapping = reactive({})
 const hiddenFields = reactive({})
 const primaryKey = ref('')
+
+const templateVarValues = reactive({})
+
+const selectedScripts = computed(() =>
+  visibleScripts.value.filter((s) => selectedScriptIds.value.includes(s.id))
+)
+
+const templateVarGroups = computed(() => {
+  const groups = []
+  selectedScripts.value.forEach((s) => {
+    if (!s.is_template) return
+    const vars = (s.template_config || []).filter((v) => v && v.source === 'user' && v.name)
+    if (vars.length) groups.push({ scriptId: s.id, scriptName: s.name, vars })
+  })
+  return groups
+})
+
+function varKey(scriptId, name) {
+  return `${scriptId}::${name}`
+}
+
+function hasVarDefault(v) {
+  return v.config && v.config.default !== undefined && v.config.default !== null && v.config.default !== ''
+}
+
+function buildTemplateParams() {
+  const payload = {}
+  templateVarGroups.value.forEach((g) => {
+    const obj = {}
+    g.vars.forEach((v) => {
+      let val = templateVarValues[varKey(g.scriptId, v.name)]
+      if (val === undefined || val === null || val === '') {
+        val = hasVarDefault(v) ? v.config.default : ''
+      }
+      if (v.type === 'number' && val !== '') {
+        const num = Number(val)
+        obj[v.name] = isNaN(num) ? val : num
+      } else {
+        obj[v.name] = val
+      }
+    })
+    payload[g.scriptId] = obj
+  })
+  return payload
+}
+
+function validateTemplateVars() {
+  for (const g of templateVarGroups.value) {
+    for (const v of g.vars) {
+      if (hasVarDefault(v)) continue
+      const val = templateVarValues[varKey(g.scriptId, v.name)]
+      if (val === undefined || val === null || val === '') {
+        ElMessage.warning(`请填写模板变量「${v.label || v.name}」`)
+        return false
+      }
+    }
+  }
+  return true
+}
 
 
 const selectedScriptNames = computed(() => {
@@ -616,6 +694,9 @@ function goToStep3() {
     ElMessage.warning('请选择参数列')
     return
   }
+  if (!validateTemplateVars()) {
+    return
+  }
   currentStep.value = 3
 }
 
@@ -741,6 +822,9 @@ function buildColumnMappingPayload() {
 }
 
 async function executeQuery() {
+  if (!validateTemplateVars()) {
+    return
+  }
   submitting.value = true
   try {
     const formData = new FormData()
@@ -748,6 +832,11 @@ async function executeQuery() {
     formData.append('file', uploadedFile.value)
     formData.append('param_column', options.param_column)
     formData.append('new_sheet', options.new_sheet)
+
+    const tplParams = buildTemplateParams()
+    if (Object.keys(tplParams).length > 0) {
+      formData.append('template_params', JSON.stringify(tplParams))
+    }
 
     // 传入选中的sheet列表
     if (selectedSheets.value.length > 0) {
@@ -870,7 +959,12 @@ async function handleRetry() {
   if (!taskId.value) return
   retrying.value = true
   try {
-    const res = await api.query.retry(taskId.value)
+    const payload = {}
+    const tplParams = buildTemplateParams()
+    if (Object.keys(tplParams).length > 0) {
+      payload.template_params = tplParams
+    }
+    const res = await api.query.retry(taskId.value, payload)
     if (res.success) {
       ElMessage.success('任务已重新提交执行')
       executing.value = true
@@ -960,6 +1054,7 @@ function resetAll() {
   Object.keys(columnMapping).forEach((k) => delete columnMapping[k])
   Object.keys(hiddenFields).forEach((k) => delete hiddenFields[k])
   primaryKey.value = ''
+  Object.keys(templateVarValues).forEach((k) => delete templateVarValues[k])
   matchedScripts.value = []
   matchedDefaultParamColumn.value = []
   if (eventSource) {
@@ -1020,6 +1115,17 @@ onUnmounted(() => {
   justify-content: center;
   gap: 12px;
   margin-top: 24px;
+}
+
+.template-var-group {
+  margin-bottom: 12px;
+}
+
+.template-var-group-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #409eff;
+  margin-bottom: 8px;
 }
 
 .upload-area {

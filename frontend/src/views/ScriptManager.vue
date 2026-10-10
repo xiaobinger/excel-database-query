@@ -235,6 +235,7 @@
             <div v-for="(v, idx) in templateVars" :key="idx" class="var-config-item">
               <div class="var-config-header">
                 <el-tag size="small" :type="getVarTypeTag(v.type)">{{ v.type }}</el-tag>
+                <el-tag v-if="v.source === 'user'" size="small" type="danger">执行时填写</el-tag>
                 <span class="var-config-name">{{ v.name || '未命名' }}</span>
                 <el-button size="small" text type="danger" @click="removeTemplateVar(idx)">
                   <i class="fas fa-trash"></i>
@@ -245,6 +246,10 @@
                   <el-input v-model="v.name" placeholder="变量名" size="small" class="form-row-item" />
                   <el-input v-model="v.label" placeholder="显示名称" size="small" class="form-row-item" />
                 </div>
+                <el-select v-model="v.source" placeholder="变量来源" size="small" style="width: 100%; margin-bottom: 8px" @change="onVarSourceChange(v)">
+                  <el-option value="auto" label="配置参数生成（按配置自动取值）" />
+                  <el-option value="user" label="用户执行时填写" />
+                </el-select>
                 <el-select v-model="v.type" placeholder="变量类型" size="small" style="width: 100%; margin-bottom: 8px">
                   <el-option value="date_range" label="日期范围 (生成列表)" />
                   <el-option value="date" label="日期" />
@@ -252,48 +257,56 @@
                   <el-option value="number" label="数字" />
                 </el-select>
 
-                <!-- date_range 配置 -->
-                <template v-if="v.type === 'date_range'">
-                  <div class="form-row">
-                    <el-select v-model="v.config.period" size="small" class="form-row-item" placeholder="周期">
-                      <el-option value="month" label="按月" />
-                      <el-option value="year" label="按年" />
-                      <el-option value="day" label="按天" />
-                    </el-select>
-                    <el-input-number v-model="v.config.count" :min="1" :max="120" size="small" class="form-row-item" controls-position="right" placeholder="数量" />
-                  </div>
-                  <div class="form-row">
-                    <el-select v-model="v.config.direction" size="small" class="form-row-item" placeholder="方向">
-                      <el-option value="past" label="过去" />
-                      <el-option value="future" label="未来" />
-                    </el-select>
-                    <el-input v-model="v.config.format" size="small" class="form-row-item" placeholder="格式 如 %Y%m" />
-                  </div>
-                  <el-input-number v-model="v.config.offset" :min="0" :max="12" size="small" style="width: 100%" controls-position="right" placeholder="偏移(0=含当月,1=从上月)" />
+                <!-- 用户执行时填写：仅需提示与默认值 -->
+                <template v-if="v.source === 'user'">
+                  <el-input v-model="v.config.placeholder" size="small" placeholder="输入提示（可选）" style="margin-bottom: 8px" />
+                  <el-input v-model="v.config.default" size="small" placeholder="默认值（可选，不填则执行时必填）" />
                 </template>
 
-                <!-- date 配置 -->
-                <template v-if="v.type === 'date'">
-                  <div class="form-row">
-                    <el-select v-model="v.config.default" size="small" class="form-row-item" placeholder="默认值">
-                      <el-option value="today" label="今天" />
-                      <el-option value="now" label="现在" />
-                      <el-option value="yesterday" label="昨天" />
-                      <el-option value="first_day_of_month" label="月初" />
-                      <el-option value="last_day_of_month" label="月末" />
-                    </el-select>
-                    <el-input v-model="v.config.format" size="small" class="form-row-item" placeholder="格式 如 %Y-%m-%d" />
-                  </div>
-                </template>
+                <template v-else>
+                  <!-- date_range 配置 -->
+                  <template v-if="v.type === 'date_range'">
+                    <div class="form-row">
+                      <el-select v-model="v.config.period" size="small" class="form-row-item" placeholder="周期">
+                        <el-option value="month" label="按月" />
+                        <el-option value="year" label="按年" />
+                        <el-option value="day" label="按天" />
+                      </el-select>
+                      <el-input-number v-model="v.config.count" :min="1" :max="120" size="small" class="form-row-item" controls-position="right" placeholder="数量" />
+                    </div>
+                    <div class="form-row">
+                      <el-select v-model="v.config.direction" size="small" class="form-row-item" placeholder="方向">
+                        <el-option value="past" label="过去" />
+                        <el-option value="future" label="未来" />
+                      </el-select>
+                      <el-input v-model="v.config.format" size="small" class="form-row-item" placeholder="格式 如 %Y%m" />
+                    </div>
+                    <el-input-number v-model="v.config.offset" :min="0" :max="12" size="small" style="width: 100%" controls-position="right" placeholder="偏移(0=含当月,1=从上月)" />
+                  </template>
 
-                <!-- text 配置 -->
-                <template v-if="v.type === 'text'">
-                  <el-input v-model="v.config.default" size="small" placeholder="默认值" />
-                </template>
+                  <!-- date 配置 -->
+                  <template v-if="v.type === 'date'">
+                    <div class="form-row">
+                      <el-select v-model="v.config.default" size="small" class="form-row-item" placeholder="默认值">
+                        <el-option value="today" label="今天" />
+                        <el-option value="now" label="现在" />
+                        <el-option value="yesterday" label="昨天" />
+                        <el-option value="first_day_of_month" label="月初" />
+                        <el-option value="last_day_of_month" label="月末" />
+                      </el-select>
+                      <el-input v-model="v.config.format" size="small" class="form-row-item" placeholder="格式 如 %Y-%m-%d" />
+                    </div>
+                  </template>
 
-                <!-- number 配置 -->
-                <template v-if="v.type === 'number'">
-                  <el-input-number v-model="v.config.default" size="small" style="width: 100%" controls-position="right" />
+                  <!-- text 配置 -->
+                  <template v-if="v.type === 'text'">
+                    <el-input v-model="v.config.default" size="small" placeholder="默认值" />
+                  </template>
+
+                  <!-- number 配置 -->
+                  <template v-if="v.type === 'number'">
+                    <el-input-number v-model="v.config.default" size="small" style="width: 100%" controls-position="right" />
+                  </template>
                 </template>
               </div>
             </div>
@@ -757,6 +770,7 @@ function addTemplateVar() {
   templateVars.value.push({
     name: '',
     label: '',
+    source: 'auto',
     type: 'date_range',
     config: {
       period: 'month',
@@ -765,8 +779,18 @@ function addTemplateVar() {
       format: '%Y%m',
       offset: 0,
       default: 'today',
+      placeholder: '',
     }
   })
+}
+
+function onVarSourceChange(v) {
+  if (v.source === 'user') {
+    if (!v.config) v.config = {}
+    if (v.type === 'date_range') v.type = 'text'
+    if (v.config.placeholder === undefined) v.config.placeholder = ''
+    if (v.config.default === undefined) v.config.default = ''
+  }
 }
 
 function removeTemplateVar(idx) {
@@ -832,6 +856,7 @@ function openDialog(row) {
     if (!form.params_config) form.params_config = []
     // 加载模板变量配置
     templateVars.value = (row.template_config || []).map(v => ({
+      source: 'auto',
       ...v,
       config: {
         period: 'month',
@@ -840,6 +865,7 @@ function openDialog(row) {
         format: '%Y%m',
         offset: 0,
         default: 'today',
+        placeholder: '',
         ...v.config
       }
     }))
