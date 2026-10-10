@@ -456,6 +456,40 @@
           </div>
           <el-empty v-if="selectedScripts.length === 0" description="未选择导出选项" />
 
+          <template v-if="selectedScripts.length > 0">
+            <el-divider content-position="left">列名预览（供检阅）</el-divider>
+            <div v-loading="previewingColumns" class="column-preview-area" element-loading-text="正在解析 SQL 列名...">
+              <div v-for="pv in columnPreviews" :key="pv.script_id" class="column-preview-item">
+                <div class="column-preview-header">
+                  <i class="fas fa-table-columns" style="margin-right: 6px"></i>
+                  <span class="column-preview-name">{{ pv.script_name || ('导出选项 #' + pv.script_id) }}</span>
+                  <el-tag size="small" type="info" effect="plain" style="margin-left: 8px">
+                    {{ (pv.columns && pv.columns.length) || 0 }} 列
+                  </el-tag>
+                </div>
+                <div v-if="pv.error" class="column-preview-error">
+                  <i class="fas fa-exclamation-triangle"></i> {{ pv.error }}
+                </div>
+                <div v-else-if="pv.columns && pv.columns.length" class="column-preview-tags">
+                  <el-tag
+                    v-for="(col, idx) in pv.columns"
+                    :key="idx"
+                    size="small"
+                    effect="plain"
+                    style="margin: 2px 4px 2px 0"
+                  >{{ idx + 1 }}. {{ col }}</el-tag>
+                </div>
+                <div v-else class="column-preview-empty">未解析到列名</div>
+              </div>
+              <div v-if="!previewingColumns && columnPreviews.length === 0" class="column-preview-empty">
+                暂无预览数据
+              </div>
+            </div>
+            <div class="column-preview-tip">
+              <i class="fas fa-info-circle"></i> 列名由 SQL 自动解析得出，复杂语句（子查询 / UNION / 别名）可能存在偏差，请核对后再执行导出。
+            </div>
+          </template>
+
           <div class="execute-area">
             <el-button
               v-if="!executing && !taskId && store.hasButtonPermission('export:execute')"
@@ -550,6 +584,8 @@ const logLines = ref([])
 const logContentRef = ref(null)
 const retrying = ref(false)
 const fileRetentionHours = ref(24)
+const columnPreviews = ref([])
+const previewingColumns = ref(false)
 let eventSource = null
 
 const visibleScripts = computed(() => {
@@ -784,6 +820,7 @@ async function goToStep2() {
     }
   }
   currentStep.value = 2
+  loadColumnPreview()
 }
 
 function isNeqParam(p) {
@@ -803,61 +840,91 @@ function isParamAllChecked(p, contextKey) {
   return false
 }
 
+function buildExportParamsValues() {
+  const params_values = {}
+  // 从公共参数构建，跳过选中"全部"的参数
+  Object.keys(sharedParamValues).forEach((k) => {
+    if (neqAllChecked[k]) return
+    if (allChecked[k]) return
+    const sv = sharedParamValues[k]
+    if (sv === '' || sv === undefined) {
+      const sp = sharedParams.value.find(p => p.name === k)
+      if (sp && sp.allow_all) return
+    }
+    params_values[k] = sv
+  })
+  selectedScripts.value.forEach((s) => {
+    const scriptParams = s.params_config || []
+    scriptParams.forEach((p) => {
+      // 跳过选中"全部"的参数（所有类型）
+      if (p.allow_all && allChecked[`${s.id}_${p.name}`]) {
+        return
+      }
+      if (p.enum_enabled && p.enum_mode === 'neq' && neqAllChecked[`${s.id}_${p.name}`]) {
+        return
+      }
+      const val = paramValues[s.id]?.[p.name]
+      if (val !== undefined && val !== '') {
+        params_values[p.name] = val
+      }
+    })
+  })
+
+  const allParamsConfig = []
+  selectedScripts.value.forEach((s) => {
+    const pc = s.params_config || []
+    pc.forEach((p) => {
+      if (!allParamsConfig.find((ap) => ap.name === p.name)) {
+        allParamsConfig.push(p)
+      }
+    })
+  })
+
+  Object.keys(params_values).forEach((k) => {
+    const val = params_values[k]
+    if (val === undefined || val === '' || val === null) {
+      delete params_values[k]
+      return
+    }
+    const paramConfig = allParamsConfig.find((p) => p.name === k)
+    if (paramConfig && paramConfig.range && Array.isArray(val) && val.length === 2) {
+      params_values[`${k}_start`] = val[0]
+      params_values[`${k}_end`] = val[1]
+      delete params_values[k]
+    }
+  })
+
+  return params_values
+}
+
+async function loadColumnPreview() {
+  if (selectedScriptIds.value.length === 0) {
+    columnPreviews.value = []
+    return
+  }
+  previewingColumns.value = true
+  try {
+    const res = await api.export.previewColumns({
+      script_ids: selectedScriptIds.value,
+      params_values: buildExportParamsValues()
+    })
+    const result = res.data || res
+    if (result.success !== false && Array.isArray(result.previews)) {
+      columnPreviews.value = result.previews
+    } else {
+      columnPreviews.value = []
+    }
+  } catch {
+    columnPreviews.value = []
+  } finally {
+    previewingColumns.value = false
+  }
+}
+
 async function executeExport() {
   submitting.value = true
   try {
-    const params_values = {}
-    // 从公共参数构建，跳过选中"全部"的参数
-    Object.keys(sharedParamValues).forEach((k) => {
-      if (neqAllChecked[k]) return
-      if (allChecked[k]) return
-      const sv = sharedParamValues[k]
-      if (sv === '' || sv === undefined) {
-        const sp = sharedParams.value.find(p => p.name === k)
-        if (sp && sp.allow_all) return
-      }
-      params_values[k] = sv
-    })
-    selectedScripts.value.forEach((s) => {
-      const scriptParams = s.params_config || []
-      scriptParams.forEach((p) => {
-        // 跳过选中"全部"的参数（所有类型）
-        if (p.allow_all && allChecked[`${s.id}_${p.name}`]) {
-          return
-        }
-        if (p.enum_enabled && p.enum_mode === 'neq' && neqAllChecked[`${s.id}_${p.name}`]) {
-          return
-        }
-        const val = paramValues[s.id]?.[p.name]
-        if (val !== undefined && val !== '') {
-          params_values[p.name] = val
-        }
-      })
-    })
-
-    const allParamsConfig = []
-    selectedScripts.value.forEach((s) => {
-      const pc = s.params_config || []
-      pc.forEach((p) => {
-        if (!allParamsConfig.find((ap) => ap.name === p.name)) {
-          allParamsConfig.push(p)
-        }
-      })
-    })
-
-    Object.keys(params_values).forEach((k) => {
-      const val = params_values[k]
-      if (val === undefined || val === '' || val === null) {
-        delete params_values[k]
-        return
-      }
-      const paramConfig = allParamsConfig.find((p) => p.name === k)
-      if (paramConfig && paramConfig.range && Array.isArray(val) && val.length === 2) {
-        params_values[`${k}_start`] = val[0]
-        params_values[`${k}_end`] = val[1]
-        delete params_values[k]
-      }
-    })
+    const params_values = buildExportParamsValues()
 
     const data = {
       script_ids: selectedScriptIds.value,
@@ -1054,6 +1121,8 @@ function resetAll() {
   progress.value = 0
   taskStatus.value = {}
   logLines.value = []
+  columnPreviews.value = []
+  previewingColumns.value = false
   Object.keys(paramValues).forEach((k) => delete paramValues[k])
   Object.keys(sharedParamValues).forEach((k) => delete sharedParamValues[k])
   Object.keys(neqAllChecked).forEach((k) => delete neqAllChecked[k])
@@ -1439,6 +1508,58 @@ onUnmounted(() => {
   display: flex;
   justify-content: center;
   margin-top: 30px;
+}
+
+.column-preview-area {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 60px;
+}
+
+.column-preview-item {
+  background: #f8fafc;
+  border: 1px solid #eef2f7;
+  border-radius: 10px;
+  padding: 14px 18px;
+}
+
+.column-preview-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #ebeef5;
+  font-size: 14px;
+  color: var(--text-primary, #303133);
+}
+
+.column-preview-name {
+  font-weight: 600;
+}
+
+.column-preview-tags {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.column-preview-error {
+  color: #f56c6c;
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.column-preview-empty {
+  color: #909399;
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.column-preview-tip {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #909399;
+  line-height: 20px;
 }
 
 .progress-area {

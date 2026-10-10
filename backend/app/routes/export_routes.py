@@ -88,6 +88,49 @@ def execute_export():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
+@export_bp.route('/preview-columns', methods=['POST'])
+@login_required
+def preview_export_columns():
+    """导出前预览：返回各导出选项从 SQL 解析出的列名，供用户检阅。"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': '请求数据为空'}), 400
+
+    script_ids = data.get('script_ids', [])
+    params_values = data.get('params_values', {})
+    all_checked = data.get('all_checked', {})
+    template_params = data.get('template_params', {})
+    if not isinstance(template_params, dict):
+        template_params = {}
+
+    if not script_ids:
+        return jsonify({'success': False, 'message': '请选择至少一个导出选项'}), 400
+
+    current_user = get_current_user()
+    if current_user and not current_user.is_admin():
+        allowed_ids = current_user.get_script_ids()
+        script_ids = [sid for sid in script_ids if sid in allowed_ids]
+        if not script_ids:
+            return jsonify({'success': False, 'message': '没有权限使用所选导出选项'}), 403
+
+    for sid in script_ids:
+        script = Script.query.get(sid)
+        if not script or script.type != 'export':
+            return jsonify({'success': False, 'message': f'导出选项不存在或类型不正确: {sid}'}), 400
+
+    try:
+        previews = ExportService.preview_columns(
+            script_ids=script_ids,
+            params_values=params_values,
+            all_checked=all_checked,
+            template_params=template_params,
+        )
+        return jsonify({'success': True, 'previews': previews})
+    except Exception as e:
+        logger.error(f'预览导出列名失败: {str(e)}')
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
 @export_bp.route('/status/<task_id>', methods=['GET'])
 @login_required
 def get_export_status(task_id):

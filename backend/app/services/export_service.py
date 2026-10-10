@@ -89,6 +89,310 @@ class ExportService:
         thread.start()
 
     @staticmethod
+    def _prepare_script_sql(script, params_values, all_checked=None, template_params=None, log=None):
+        """归一化导出参数并渲染最终 SQL（不访问数据库）。
+        返回 (sql_text, script_params)；模板渲染失败时 sql_text 为 None。"""
+        if log is None:
+            def log(*args, **kwargs):
+                pass
+
+        sql_text = script.sql_text
+
+        script_params = dict(params_values) if params_values else {}
+        params_config = script.get_params_config()
+        multi_params = {p['name'] for p in params_config if p.get('multi') and p.get('type') in ('text', 'number')}
+        number_params = {p['name'] for p in params_config if p.get('type') == 'number'}
+        neq_params = {p['name']: p for p in params_config if p.get('enum_enabled') and p.get('enum_mode') == 'neq' and p.get('neq_value')}
+        allow_all_params = {p['name'] for p in params_config if p.get('allow_all')}
+
+        # 0. 日期范围参数归一化：兼容三种传参形式
+        #    a) date_start / date_end 已拆分（前端执行页、自动导出均为此形式）
+        #    b) date 参数值为数组 ["2024-01-01", "2024-01-31"]
+        #    c) date 参数值为字符串 "2024-01-01,2024-01-31"（AI工具调用等场景）
+        date_range_params = {p['name']: p for p in params_config
+                             if p.get('type') in ('date', 'datetime') and p.get('range')}
+        for pname, pconf in date_range_params.items():
+            start_key = f'{pname}_start'
+            end_key = f'{pname}_end'
+            # 已拆分形式：直接使用，仅清理原始date键
+            if start_key in script_params or end_key in script_params:
+                script_params.pop(pname, None)
+                continue
+            if pname not in script_params:
+                continue
+            raw = script_params[pname]
+            if isinstance(raw, list):
+                parts = [str(v).strip() for v in raw if str(v).strip()]
+            else:
+                parts = [v.strip() for v in str(raw).split(',') if v.strip()]
+            if not parts:
+                del script_params[pname]
+                continue
+            start_val = parts[0]
+            end_val = parts[1] if len(parts) > 1 else parts[0]
+            # datetime格式：为纯日期值补全时分秒（起始00:00:00，截止23:59:59）
+            if pconf.get('date_format') == 'datetime':
+                if len(start_val) <= 10:
+                    start_val = f'{start_val[:10]} 00:00:00'
+                if len(end_val) <= 10:
+                    end_val = f'{end_val[:10]} 23:59:59'
+            script_params[start_key] = start_val
+            script_params[end_key] = end_val
+            del script_params[pname]
+            log(f'导出选项 [{script.name}] 日期范围参数 {pname} 已拆分为 {start_key}/{end_key}: {start_val} ~ {end_val}')
+
+        # 如果 all_checked 中有参数，将其从 script_params 中移除（视为未提供，触发 allow_all 逻辑）
+        if all_checked:
+            for pname in list(script_params.keys()):
+                if pname in all_checked:
+                    del script_params[pname]
+                    log(f'导出选项 [{script.name}] 参数 {pname} 被标记为"全部"，不筛选')
+
+        log(f'导出选项 [{script.name}] SQL处理开始, 参数: {script_params}')
+
+        # 如果启用了SQL模板，渲染模板生成实际SQL。
+        # 此时导出参数已完成归一化（含日期范围拆分），可注入模板变量上下文，
+        # 使"来源=参数"的模板变量直接引用用户在执行页填写的参数值。
+        if script.is_template and script.sql_template:
+            try:
+                template_config = script.get_template_config()
+                rendered_sql = render_sql_template(
+                    script.sql_template, template_config,
+                    resolve_script_template_params(template_params, script),
+                    export_params=script_params)
+                sql_text = rendered_sql
+                log(f'导出选项 [{script.name}] SQL模板渲染完成')
+            except Exception as e:
+                log(f'导出选项 [{script.name}] SQL模板渲染失败: {str(e)}', 'error')
+                return None, script_params
+
+        # 1. 先处理"全部"选项：智能移除WHERE条件
+        for pname in allow_all_params:
+            if pname not in script_params or script_params.get(pname) == '':
+                log(f'导出选项 [{script.name}] 参数 {pname} 满足全部条件，开始移除')
+
+                col_ref = r'[a-zA-Z0-9_.`\u4e00-\u9fff]+'
+                placeholder = rf'\{{\{{\s*{re.escape(pname)}\s*\}}\}}'
+                bind_param = rf':{re.escape(pname)}\b'
+                REMOVE = '__REMOVE_COND__'
+
+                changed = True
+                while changed:
+                    changed = False
+                    for op in ['!=', '=']:
+                        for ph in [placeholder, bind_param]:
+                            op_esc = re.escape(op)
+                            # 匹配: AND col op ph → 替换为 REMOVE
+                            new_sql = re.sub(
+                                rf'(\s+)AND\s+({col_ref})\s*{op_esc}\s*{ph}',
+                                rf'\1{REMOVE}',
+                                sql_text,
+                                flags=re.IGNORECASE
+                            )
+                            if new_sql != sql_text:
+                                changed = True
+                            sql_text = new_sql
+
+                            # 匹配: WHERE col op ph AND → 替换为 WHERE
+                            new_sql = re.sub(
+                                rf'\bWHERE\s+({col_ref})\s*{op_esc}\s*{ph}(\s+)AND\b',
+                                rf'WHERE\2',
+                                sql_text,
+                                flags=re.IGNORECASE
+                            )
+                            if new_sql != sql_text:
+                                changed = True
+                            sql_text = new_sql
+
+                            # 匹配: WHERE col op ph (UNION/;/)  → 替换为空
+                            new_sql = re.sub(
+                                rf'\bWHERE\s+({col_ref})\s*{op_esc}\s*{ph}\s*(?=\bUNION\b|;|$|\)|GROUP|ORDER|LIMIT)',
+                                '',
+                                sql_text,
+                                flags=re.IGNORECASE
+                            )
+                            if new_sql != sql_text:
+                                changed = True
+                            sql_text = new_sql
+
+                    # 处理 IN 条件：AND col IN (ph) → 替换为 REMOVE
+                    new_sql = re.sub(
+                        rf'(\s+)AND\s+({col_ref})\s+IN\s*\(\s*{placeholder}\s*\)',
+                        rf'\1{REMOVE}',
+                        sql_text,
+                        flags=re.IGNORECASE
+                    )
+                    if new_sql != sql_text:
+                        changed = True
+                    sql_text = new_sql
+
+                    new_sql = re.sub(
+                        rf'(\s+)AND\s+({col_ref})\s+IN\s*\(\s*{bind_param}\s*\)',
+                        rf'\1{REMOVE}',
+                        sql_text,
+                        flags=re.IGNORECASE
+                    )
+                    if new_sql != sql_text:
+                        changed = True
+                    sql_text = new_sql
+
+                    # 处理 WHERE col IN (ph) AND → 替换为 WHERE
+                    new_sql = re.sub(
+                        rf'\bWHERE\s+({col_ref})\s+IN\s*\(\s*{placeholder}\s*\)(\s+)AND\b',
+                        rf'WHERE\2',
+                        sql_text,
+                        flags=re.IGNORECASE
+                    )
+                    if new_sql != sql_text:
+                        changed = True
+                    sql_text = new_sql
+
+                    new_sql = re.sub(
+                        rf'\bWHERE\s+({col_ref})\s+IN\s*\(\s*{bind_param}\s*\)(\s+)AND\b',
+                        rf'WHERE\2',
+                        sql_text,
+                        flags=re.IGNORECASE
+                    )
+                    if new_sql != sql_text:
+                        changed = True
+                    sql_text = new_sql
+
+                    # 处理 WHERE col IN (ph) (UNION/;/) → 替换为空
+                    new_sql = re.sub(
+                        rf'\bWHERE\s+({col_ref})\s+IN\s*\(\s*{placeholder}\s*\)\s*(?=\bUNION\b|;|$|\)|GROUP|ORDER|LIMIT)',
+                        '',
+                        sql_text,
+                        flags=re.IGNORECASE
+                    )
+                    if new_sql != sql_text:
+                        changed = True
+                    sql_text = new_sql
+
+                    new_sql = re.sub(
+                        rf'\bWHERE\s+({col_ref})\s+IN\s*\(\s*{bind_param}\s*\)\s*(?=\bUNION\b|;|$|\)|GROUP|ORDER|LIMIT)',
+                        '',
+                        sql_text,
+                        flags=re.IGNORECASE
+                    )
+                    if new_sql != sql_text:
+                        changed = True
+                    sql_text = new_sql
+
+                # 清理残留标记
+                sql_text = sql_text.replace(REMOVE, '')
+
+        # 2. 处理非即不等于参数（选是/否时替换=为!=）
+        for pname, pconf in neq_params.items():
+            if pname in script_params:
+                is_checked = script_params[pname]
+                neq_val = pconf.get('neq_value', '')
+                if is_checked:
+                    script_params[pname] = neq_val
+                else:
+                    # 勾选否：将 '= {{param}}' 整体替换为 '!= neq_val'
+                    neq_val_fmt = f"!= {neq_val}" if pname in number_params else f"!= '{neq_val}'"
+                    sql_text = re.sub(
+                        rf'=\s*\{{\{{\s*{re.escape(pname)}\s*\}}\}}',
+                        neq_val_fmt,
+                        sql_text
+                    )
+                    del script_params[pname]
+
+        if script_params:
+            for param_name in multi_params:
+                if param_name not in script_params:
+                    continue
+                val = script_params[param_name]
+                # 处理数组类型值（前端多选枚举传递）
+                if isinstance(val, list):
+                    parts = [str(v).strip() for v in val if str(v).strip()]
+                else:
+                    parts = [v.strip() for v in str(val).split(',') if v.strip()]
+                if not parts:
+                    continue
+                if len(parts) == 1:
+                    fmt = f"'{parts[0]}'" if param_name not in number_params else parts[0]
+                    sql_text = sql_text.replace(f'{{{{{param_name}}}}}', fmt)
+                    if f':{param_name}' in sql_text:
+                        script_params[param_name] = parts[0]
+                else:
+                    quoted = ','.join(f"'{p}'" for p in parts) if param_name not in number_params else ','.join(parts)
+                    sql_text = sql_text.replace(f'{{{{{param_name}}}}}', quoted)
+                    if f':{param_name}' in sql_text:
+                        bind_keys = [f':{param_name}_{i}' for i in range(len(parts))]
+                        sql_text = re.sub(
+                            rf':{param_name}\b',
+                            ', '.join(bind_keys),
+                            sql_text
+                        )
+                        for i, part in enumerate(parts):
+                            script_params[f'{param_name}_{i}'] = part
+                        del script_params[param_name]
+
+            placeholders = re.findall(r'\{\{(\w+)\}\}', sql_text)
+            for ph in placeholders:
+                if ph in script_params:
+                    val = script_params[ph]
+                    val_str = str(val)
+                    if ph in number_params:
+                        sql_text = sql_text.replace(f'{{{{{ph}}}}}', val_str)
+                    elif val_str and not val_str.startswith("'"):
+                        sql_text = sql_text.replace(f'{{{{{ph}}}}}', f"'{val_str}'")
+                    else:
+                        sql_text = sql_text.replace(f'{{{{{ph}}}}}', val_str)
+            placeholders_remaining = re.findall(r'\{\{(\w+)\}\}', sql_text)
+            for ph in placeholders_remaining:
+                sql_text = sql_text.replace(f'{{{{{ph}}}}}', '')
+
+
+        return sql_text, script_params
+
+    @staticmethod
+    def preview_columns(script_ids: List[int], params_values: Dict[str, Any],
+                        all_checked: Dict[str, Any] = None,
+                        template_params: dict = None) -> List[Dict[str, Any]]:
+        """在真正执行导出前，预览各导出选项从 SQL 解析出的列名（不访问数据库）。
+
+        复用与真实执行完全一致的参数归一化 / 模板渲染逻辑，
+        使预览结果与最终导出的表头保持一致。
+        """
+        results = []
+        for sid in script_ids:
+            item = {'script_id': sid, 'script_name': None, 'columns': [], 'error': None}
+            script = Script.query.get(sid)
+            if not script:
+                item['error'] = '导出选项不存在'
+                results.append(item)
+                continue
+            item['script_name'] = script.name
+
+            sql_text, script_params = ExportService._prepare_script_sql(
+                script, params_values, all_checked, template_params)
+            if sql_text is None:
+                item['error'] = 'SQL模板渲染失败，请检查模板变量配置'
+                results.append(item)
+                continue
+
+            try:
+                validator = SQLValidator()
+                if script.is_template and script.sql_template:
+                    try:
+                        template_config = script.get_template_config()
+                        rendered_for_cols = render_sql_template(
+                            script.sql_template, template_config,
+                            resolve_script_template_params(template_params, script))
+                        column_headers = validator.extract_column_names(rendered_for_cols)
+                    except Exception:
+                        column_headers = validator.extract_column_names(sql_text)
+                else:
+                    column_headers = validator.extract_column_names(sql_text)
+                item['columns'] = column_headers or []
+            except Exception as e:
+                item['error'] = f'列名解析失败: {str(e)}'
+            results.append(item)
+        return results
+
+    @staticmethod
     def _execute_export_background(task_id: str, script_ids: List[int],
                                    params_values: Dict[str, Any], output_dir: str,
                                    output_format: str = 'sheets', all_checked: Dict[str, Any] = None,
@@ -127,254 +431,10 @@ class ExportService:
                         task.add_log(f'导出选项不存在: {sid}', 'warning')
                         continue
 
-                    sql_text = script.sql_text
-
-                    script_params = dict(params_values) if params_values else {}
-                    params_config = script.get_params_config()
-                    multi_params = {p['name'] for p in params_config if p.get('multi') and p.get('type') in ('text', 'number')}
-                    number_params = {p['name'] for p in params_config if p.get('type') == 'number'}
-                    neq_params = {p['name']: p for p in params_config if p.get('enum_enabled') and p.get('enum_mode') == 'neq' and p.get('neq_value')}
-                    allow_all_params = {p['name'] for p in params_config if p.get('allow_all')}
-
-                    # 0. 日期范围参数归一化：兼容三种传参形式
-                    #    a) date_start / date_end 已拆分（前端执行页、自动导出均为此形式）
-                    #    b) date 参数值为数组 ["2024-01-01", "2024-01-31"]
-                    #    c) date 参数值为字符串 "2024-01-01,2024-01-31"（AI工具调用等场景）
-                    date_range_params = {p['name']: p for p in params_config
-                                         if p.get('type') in ('date', 'datetime') and p.get('range')}
-                    for pname, pconf in date_range_params.items():
-                        start_key = f'{pname}_start'
-                        end_key = f'{pname}_end'
-                        # 已拆分形式：直接使用，仅清理原始date键
-                        if start_key in script_params or end_key in script_params:
-                            script_params.pop(pname, None)
-                            continue
-                        if pname not in script_params:
-                            continue
-                        raw = script_params[pname]
-                        if isinstance(raw, list):
-                            parts = [str(v).strip() for v in raw if str(v).strip()]
-                        else:
-                            parts = [v.strip() for v in str(raw).split(',') if v.strip()]
-                        if not parts:
-                            del script_params[pname]
-                            continue
-                        start_val = parts[0]
-                        end_val = parts[1] if len(parts) > 1 else parts[0]
-                        # datetime格式：为纯日期值补全时分秒（起始00:00:00，截止23:59:59）
-                        if pconf.get('date_format') == 'datetime':
-                            if len(start_val) <= 10:
-                                start_val = f'{start_val[:10]} 00:00:00'
-                            if len(end_val) <= 10:
-                                end_val = f'{end_val[:10]} 23:59:59'
-                        script_params[start_key] = start_val
-                        script_params[end_key] = end_val
-                        del script_params[pname]
-                        task.add_log(f'导出选项 [{script.name}] 日期范围参数 {pname} 已拆分为 {start_key}/{end_key}: {start_val} ~ {end_val}')
-                    
-                    # 如果 all_checked 中有参数，将其从 script_params 中移除（视为未提供，触发 allow_all 逻辑）
-                    if all_checked:
-                        for pname in list(script_params.keys()):
-                            if pname in all_checked:
-                                del script_params[pname]
-                                task.add_log(f'导出选项 [{script.name}] 参数 {pname} 被标记为"全部"，不筛选')
-                    
-                    task.add_log(f'导出选项 [{script.name}] SQL处理开始, 参数: {script_params}')
-
-                    # 如果启用了SQL模板，渲染模板生成实际SQL。
-                    # 此时导出参数已完成归一化（含日期范围拆分），可注入模板变量上下文，
-                    # 使"来源=参数"的模板变量直接引用用户在执行页填写的参数值。
-                    if script.is_template and script.sql_template:
-                        try:
-                            template_config = script.get_template_config()
-                            rendered_sql = render_sql_template(
-                                script.sql_template, template_config,
-                                resolve_script_template_params(template_params, script),
-                                export_params=script_params)
-                            sql_text = rendered_sql
-                            task.add_log(f'导出选项 [{script.name}] SQL模板渲染完成')
-                        except Exception as e:
-                            task.add_log(f'导出选项 [{script.name}] SQL模板渲染失败: {str(e)}', 'error')
-                            continue
-
-                    # 1. 先处理"全部"选项：智能移除WHERE条件
-                    for pname in allow_all_params:
-                        if pname not in script_params or script_params.get(pname) == '':
-                            task.add_log(f'导出选项 [{script.name}] 参数 {pname} 满足全部条件，开始移除')
-                            
-                            col_ref = r'[a-zA-Z0-9_.`\u4e00-\u9fff]+'
-                            placeholder = rf'\{{\{{\s*{re.escape(pname)}\s*\}}\}}'
-                            bind_param = rf':{re.escape(pname)}\b'
-                            REMOVE = '__REMOVE_COND__'
-                            
-                            changed = True
-                            while changed:
-                                changed = False
-                                for op in ['!=', '=']:
-                                    for ph in [placeholder, bind_param]:
-                                        op_esc = re.escape(op)
-                                        # 匹配: AND col op ph → 替换为 REMOVE
-                                        new_sql = re.sub(
-                                            rf'(\s+)AND\s+({col_ref})\s*{op_esc}\s*{ph}',
-                                            rf'\1{REMOVE}',
-                                            sql_text,
-                                            flags=re.IGNORECASE
-                                        )
-                                        if new_sql != sql_text:
-                                            changed = True
-                                        sql_text = new_sql
-                                        
-                                        # 匹配: WHERE col op ph AND → 替换为 WHERE
-                                        new_sql = re.sub(
-                                            rf'\bWHERE\s+({col_ref})\s*{op_esc}\s*{ph}(\s+)AND\b',
-                                            rf'WHERE\2',
-                                            sql_text,
-                                            flags=re.IGNORECASE
-                                        )
-                                        if new_sql != sql_text:
-                                            changed = True
-                                        sql_text = new_sql
-                                        
-                                        # 匹配: WHERE col op ph (UNION/;/)  → 替换为空
-                                        new_sql = re.sub(
-                                            rf'\bWHERE\s+({col_ref})\s*{op_esc}\s*{ph}\s*(?=\bUNION\b|;|$|\)|GROUP|ORDER|LIMIT)',
-                                            '',
-                                            sql_text,
-                                            flags=re.IGNORECASE
-                                        )
-                                        if new_sql != sql_text:
-                                            changed = True
-                                        sql_text = new_sql
-                                
-                                # 处理 IN 条件：AND col IN (ph) → 替换为 REMOVE
-                                new_sql = re.sub(
-                                    rf'(\s+)AND\s+({col_ref})\s+IN\s*\(\s*{placeholder}\s*\)',
-                                    rf'\1{REMOVE}',
-                                    sql_text,
-                                    flags=re.IGNORECASE
-                                )
-                                if new_sql != sql_text:
-                                    changed = True
-                                sql_text = new_sql
-                                
-                                new_sql = re.sub(
-                                    rf'(\s+)AND\s+({col_ref})\s+IN\s*\(\s*{bind_param}\s*\)',
-                                    rf'\1{REMOVE}',
-                                    sql_text,
-                                    flags=re.IGNORECASE
-                                )
-                                if new_sql != sql_text:
-                                    changed = True
-                                sql_text = new_sql
-                                
-                                # 处理 WHERE col IN (ph) AND → 替换为 WHERE
-                                new_sql = re.sub(
-                                    rf'\bWHERE\s+({col_ref})\s+IN\s*\(\s*{placeholder}\s*\)(\s+)AND\b',
-                                    rf'WHERE\2',
-                                    sql_text,
-                                    flags=re.IGNORECASE
-                                )
-                                if new_sql != sql_text:
-                                    changed = True
-                                sql_text = new_sql
-                                
-                                new_sql = re.sub(
-                                    rf'\bWHERE\s+({col_ref})\s+IN\s*\(\s*{bind_param}\s*\)(\s+)AND\b',
-                                    rf'WHERE\2',
-                                    sql_text,
-                                    flags=re.IGNORECASE
-                                )
-                                if new_sql != sql_text:
-                                    changed = True
-                                sql_text = new_sql
-                                
-                                # 处理 WHERE col IN (ph) (UNION/;/) → 替换为空
-                                new_sql = re.sub(
-                                    rf'\bWHERE\s+({col_ref})\s+IN\s*\(\s*{placeholder}\s*\)\s*(?=\bUNION\b|;|$|\)|GROUP|ORDER|LIMIT)',
-                                    '',
-                                    sql_text,
-                                    flags=re.IGNORECASE
-                                )
-                                if new_sql != sql_text:
-                                    changed = True
-                                sql_text = new_sql
-                                
-                                new_sql = re.sub(
-                                    rf'\bWHERE\s+({col_ref})\s+IN\s*\(\s*{bind_param}\s*\)\s*(?=\bUNION\b|;|$|\)|GROUP|ORDER|LIMIT)',
-                                    '',
-                                    sql_text,
-                                    flags=re.IGNORECASE
-                                )
-                                if new_sql != sql_text:
-                                    changed = True
-                                sql_text = new_sql
-                            
-                            # 清理残留标记
-                            sql_text = sql_text.replace(REMOVE, '')
-
-                    # 2. 处理非即不等于参数（选是/否时替换=为!=）
-                    for pname, pconf in neq_params.items():
-                        if pname in script_params:
-                            is_checked = script_params[pname]
-                            neq_val = pconf.get('neq_value', '')
-                            if is_checked:
-                                script_params[pname] = neq_val
-                            else:
-                                # 勾选否：将 '= {{param}}' 整体替换为 '!= neq_val'
-                                neq_val_fmt = f"!= {neq_val}" if pname in number_params else f"!= '{neq_val}'"
-                                sql_text = re.sub(
-                                    rf'=\s*\{{\{{\s*{re.escape(pname)}\s*\}}\}}',
-                                    neq_val_fmt,
-                                    sql_text
-                                )
-                                del script_params[pname]
-
-                    if script_params:
-                        for param_name in multi_params:
-                            if param_name not in script_params:
-                                continue
-                            val = script_params[param_name]
-                            # 处理数组类型值（前端多选枚举传递）
-                            if isinstance(val, list):
-                                parts = [str(v).strip() for v in val if str(v).strip()]
-                            else:
-                                parts = [v.strip() for v in str(val).split(',') if v.strip()]
-                            if not parts:
-                                continue
-                            if len(parts) == 1:
-                                fmt = f"'{parts[0]}'" if param_name not in number_params else parts[0]
-                                sql_text = sql_text.replace(f'{{{{{param_name}}}}}', fmt)
-                                if f':{param_name}' in sql_text:
-                                    script_params[param_name] = parts[0]
-                            else:
-                                quoted = ','.join(f"'{p}'" for p in parts) if param_name not in number_params else ','.join(parts)
-                                sql_text = sql_text.replace(f'{{{{{param_name}}}}}', quoted)
-                                if f':{param_name}' in sql_text:
-                                    bind_keys = [f':{param_name}_{i}' for i in range(len(parts))]
-                                    sql_text = re.sub(
-                                        rf':{param_name}\b',
-                                        ', '.join(bind_keys),
-                                        sql_text
-                                    )
-                                    for i, part in enumerate(parts):
-                                        script_params[f'{param_name}_{i}'] = part
-                                    del script_params[param_name]
-
-                        placeholders = re.findall(r'\{\{(\w+)\}\}', sql_text)
-                        for ph in placeholders:
-                            if ph in script_params:
-                                val = script_params[ph]
-                                val_str = str(val)
-                                if ph in number_params:
-                                    sql_text = sql_text.replace(f'{{{{{ph}}}}}', val_str)
-                                elif val_str and not val_str.startswith("'"):
-                                    sql_text = sql_text.replace(f'{{{{{ph}}}}}', f"'{val_str}'")
-                                else:
-                                    sql_text = sql_text.replace(f'{{{{{ph}}}}}', val_str)
-                        placeholders_remaining = re.findall(r'\{\{(\w+)\}\}', sql_text)
-                        for ph in placeholders_remaining:
-                            sql_text = sql_text.replace(f'{{{{{ph}}}}}', '')
-
+                    sql_text, script_params = ExportService._prepare_script_sql(
+                        script, params_values, all_checked, template_params, log=task.add_log)
+                    if sql_text is None:
+                        continue
                     task.add_log(f'执行导出选项 [{script.name}]')
 
                     script_db_ids = script.get_database_ids()

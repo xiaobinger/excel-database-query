@@ -139,6 +139,7 @@ const query = {
 
 const exportApi = {
   execute: (data) => http.post('/export/execute', data),
+  previewColumns: (data) => http.post('/export/preview-columns', data),
   status: (taskId) => http.get(`/export/status/${taskId}`),
   streamStatus: (taskId) => {
     const token = localStorage.getItem('token')
