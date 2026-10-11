@@ -375,18 +375,7 @@ class ExportService:
 
             try:
                 validator = SQLValidator()
-                if script.is_template and script.sql_template:
-                    try:
-                        template_config = script.get_template_config()
-                        rendered_for_cols = render_sql_template(
-                            script.sql_template, template_config,
-                            resolve_script_template_params(template_params, script))
-                        column_headers = validator.extract_column_names(rendered_for_cols)
-                    except Exception:
-                        column_headers = validator.extract_column_names(sql_text)
-                else:
-                    column_headers = validator.extract_column_names(sql_text)
-                item['columns'] = column_headers or []
+                item['columns'] = validator.extract_column_names(sql_text) or []
             except Exception as e:
                 item['error'] = f'列名解析失败: {str(e)}'
             results.append(item)
@@ -493,18 +482,9 @@ class ExportService:
                                 )
 
                             validator = SQLValidator()
-                            # 模板模式下从渲染后的SQL提取列名
-                            if script.is_template and script.sql_template:
-                                try:
-                                    template_config = script.get_template_config()
-                                    rendered_for_cols = render_sql_template(
-                                        script.sql_template, template_config,
-                                        resolve_script_template_params(template_params, script))
-                                    column_headers = validator.extract_column_names(rendered_for_cols)
-                                except Exception:
-                                    column_headers = validator.extract_column_names(sql_text)
-                            else:
-                                column_headers = validator.extract_column_names(sql_text)
+                            # 从最终执行的 SQL（已按导出参数完成模板渲染与占位替换）提取列名，
+                            # 保证表头随用户填写的参数动态变化，且与预览一致
+                            column_headers = validator.extract_column_names(sql_text)
 
                             rows_data = []
                             for row in result_rows:
