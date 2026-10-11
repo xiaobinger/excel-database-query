@@ -1,5 +1,6 @@
 import os
 import json
+import logging
 from datetime import datetime
 from flask import Blueprint, request, jsonify, current_app
 from app import db
@@ -8,6 +9,8 @@ from app.models.script import Script
 from app.models.query_task import QueryTask
 from app.utils.auth import login_required, get_current_user
 from app.utils.operation_logger import log_operation
+
+logger = logging.getLogger(__name__)
 
 auto_export_bp = Blueprint('auto_export', __name__, url_prefix='/api/auto-export')
 
@@ -292,7 +295,9 @@ def resend_email(task_id):
     try:
         from app.services.auto_export_scheduler import send_auto_export_notification
         status = 'completed' if query_task.status == 'completed' else 'failed'
-        send_auto_export_notification(current_app._get_current_object(), task, query_task, status)
+        ok, message = send_auto_export_notification(current_app._get_current_object(), task, query_task, status)
+        if not ok:
+            return jsonify({'success': False, 'message': message}), 500
         log_operation('send_email', 'auto_export', task.id, f'重发自动导出结果邮件：{task.name}')
         return jsonify({'success': True, 'message': '邮件重发成功'})
     except Exception as e:

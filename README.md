@@ -23,7 +23,7 @@
 
 <!-- 徽章 -->
 <p>
-  <img src="https://img.shields.io/badge/version-2.6.11-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-2.6.34-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/python-3.10+-yellow?style=flat-square&logo=python&logoColor=white" alt="python" />
   <img src="https://img.shields.io/badge/vue-3-green?style=flat-square&logo=vuedotjs&logoColor=white" alt="vue" />
   <img src="https://img.shields.io/badge/flask-black?style=flat-square&logo=flask&logoColor=white" alt="flask" />
@@ -420,6 +420,7 @@ WHERE merchant_id = :value
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-10-11 | v2.6.34 | 修复自动导出任务邮件通知漏发且无任何反馈（可观测性缺陷）：① `send_auto_export_notification` 原实现将「任务未启用通知/SMTP 主机/账号/密码未配置/通知邮箱为空」等前置条件不满足以及整段发送逻辑的所有异常**全部静默 return/吞掉**，导致「已开启邮件通知和附件发送却未收到邮件」时系统无任何日志与提示可查；现改为统一返回 `(success, message)`，前置条件不满足返回明确的失败原因文案，发送过程异常以 `exc_info=True` 记录完整堆栈；② 修改本地导出完成的回调 `_on_export_complete`——原先裸调用通知函数、异常同样被上层静默丢弃，现包裹 try/except 并消费返回值，未完成/失败时写入 warning/error 日志（含自动导出任务名与失败原因）；③ 修复 `/api/auto-export/<id>/resend-email`「重发邮件」接口两处缺陷——接口内引用了**未定义的 `logger`**（一进入错误分支即 `NameError`）、且无论发送结果如何都无条件返回成功；现补 `import logging` 与模块级 `logger`，并按通知函数真实返回值返回（失败时 HTTP 500 + 具体原因，成功时记录操作日志），彻底消除「操作了却如石沉大海」的迷惑 |
 | 2026-10-11 | v2.6.33 | 自动导出任务时间范围参数自动补全时分秒：① 后端 `resolve_auto_params` 的全部 8 个 `range_*` 动态表达式（本月/上月/本年/去年/本季/上季/近7天/近30天）解析时，除日期外补齐时分秒——`{参数}_start` 补 `00:00:00`、`{参数}_end` 补 `23:59:59`，确保按整段时间查询时结尾当天数据不被漏掉；② 前端自动导出任务配置页「自定义固定值」范围选择器由 `daterange`（`YYYY-MM-DD`）升级为 `datetimerange`（`YYYY-MM-DD HH:mm:ss`，配 `default-time` 起始 `00:00:00`/结束 `23:59:59`），与手动导出页（v2.6.29）保持一致；③ 范围动态表达式预览文案同步显示补全后的时分秒；④ 修复编辑任务时「自定义固定值」范围无法回填的问题（保存时拆分为 `{参数}_start`/`{参数}_end`，回填时重新组装为数组，并对历史仅日期数据自动补时分秒） |
 | 2026-10-10 | v2.6.32 | 修复导出列名预览不随用户参数动态变化（动态 SQL 别名未生效）：导出预览列名与最终表头在模板脚本（动态 SQL）场景下**重新渲染了一次模板却未传入导出参数**，导致「变量来源=`param`」（取自执行参数）的模板变量取不到用户在导出页填写的值，别名保持静态（如 `` `{{ period }}新增商户数` `` 恒显示为 `新增商户数`）。现改为直接复用 `_prepare_script_sql` 返回的**已按导出参数完成渲染与占位替换**的最终 SQL 提取列名——`preview_columns`（预览）与 `_execute_export_background`（实际导出表头）均不再二次渲染，使表头随用户填写的参数动态变化，并保证预览与实际导出一致 |
 | 2026-10-10 | v2.6.31 | 修复导出列名解析无法识别反引号/引号包裹的别名：`SQLValidator.extract_column_names` 提取别名时原正则 `\s+AS\s+(\w+)$` 与 `\s+(\w+)$` 仅支持裸标识符，遇到 MySQL 反引号引用的别名（如 `` AS `2026年的10-10月新增商户数` ``、`` `...交易金额(单位: 元)` ``）匹配失败，导致该列退化为 `CASE`/`SUM` 等函数关键字名；现统一引入标识符模式，兼容反引号 `` `name` ``、双引号 `"name"`、单引号 `'name'` 及裸 `name` 四种别名形式（同时覆盖 AS 别名、无 AS 别名、`IF()`/`IFNULL()` 剩余别名），使含中文、括号、空格、连字符的复杂别名均能正确解析 |
