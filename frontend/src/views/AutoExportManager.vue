@@ -289,13 +289,14 @@
                       <template v-else-if="getParamMode(sp.scriptId, param.name) === 'custom' && param.range">
                         <el-date-picker
                           :model-value="getParamValue(sp.scriptId, param.name)"
-                          type="daterange"
+                          type="datetimerange"
                           range-separator="至"
-                          start-placeholder="开始日期"
-                          end-placeholder="结束日期"
+                          start-placeholder="开始时间"
+                          end-placeholder="结束时间"
                           size="small"
                           style="flex: 1"
-                          value-format="YYYY-MM-DD"
+                          :default-time="datetimeRangeDefaultTime"
+                          value-format="YYYY-MM-DD HH:mm:ss"
                           @change="(val) => setParamValue(sp.scriptId, param.name, val || '')"
                         />
                       </template>
@@ -382,6 +383,8 @@ const rules = {
   cron_expression: [{ required: true, message: '请输入Cron表达式', trigger: 'blur' }]
 }
 
+const datetimeRangeDefaultTime = [new Date(2000, 0, 1, 0, 0, 0), new Date(2000, 0, 1, 23, 59, 59)]
+
 const timeDynamicOptions = computed(() => paramOptionsData.value.time || [])
 const rangeDynamicOptions = computed(() => paramOptionsData.value.range || [])
 const fixedParamOptions = computed(() => paramOptionsData.value.fixed || [])
@@ -453,30 +456,30 @@ function getRangePreview(expr) {
   const lastDay = (year, month) => new Date(year, month, 0).getDate()
 
   const previews = {
-    range_current_month: `${y}-${pad(m)}-01 ~ ${y}-${pad(m)}-${lastDay(y, m)}`,
+    range_current_month: `${y}-${pad(m)}-01 00:00:00 ~ ${y}-${pad(m)}-${lastDay(y, m)} 23:59:59`,
     range_last_month: m === 1
-      ? `${y - 1}-12-01 ~ ${y - 1}-12-31`
-      : `${y}-${pad(m - 1)}-01 ~ ${y}-${pad(m - 1)}-${lastDay(y, m - 1)}`,
-    range_current_year: `${y}-01-01 ~ ${y}-12-31`,
-    range_last_year: `${y - 1}-01-01 ~ ${y - 1}-12-31`,
+      ? `${y - 1}-12-01 00:00:00 ~ ${y - 1}-12-31 23:59:59`
+      : `${y}-${pad(m - 1)}-01 00:00:00 ~ ${y}-${pad(m - 1)}-${lastDay(y, m - 1)} 23:59:59`,
+    range_current_year: `${y}-01-01 00:00:00 ~ ${y}-12-31 23:59:59`,
+    range_last_year: `${y - 1}-01-01 00:00:00 ~ ${y - 1}-12-31 23:59:59`,
     range_current_quarter: (() => {
       const q = Math.floor((m - 1) / 3)
       const qs = q * 3 + 1, qe = qs + 2
-      return `${y}-${pad(qs)}-01 ~ ${y}-${pad(qe)}-${lastDay(y, qe)}`
+      return `${y}-${pad(qs)}-01 00:00:00 ~ ${y}-${pad(qe)}-${lastDay(y, qe)} 23:59:59`
     })(),
     range_last_quarter: (() => {
       const q = Math.floor((m - 1) / 3)
-      if (q === 0) return `${y - 1}-10-01 ~ ${y - 1}-12-31`
+      if (q === 0) return `${y - 1}-10-01 00:00:00 ~ ${y - 1}-12-31 23:59:59`
       const qs = (q - 1) * 3 + 1, qe = qs + 2
-      return `${y}-${pad(qs)}-01 ~ ${y}-${pad(qe)}-${lastDay(y, qe)}`
+      return `${y}-${pad(qs)}-01 00:00:00 ~ ${y}-${pad(qe)}-${lastDay(y, qe)} 23:59:59`
     })(),
     range_last_7_days: (() => {
       const d = new Date(now); d.setDate(d.getDate() - 7)
-      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ~ ${y}-${pad(m)}-${pad(now.getDate())}`
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} 00:00:00 ~ ${y}-${pad(m)}-${pad(now.getDate())} 23:59:59`
     })(),
     range_last_30_days: (() => {
       const d = new Date(now); d.setDate(d.getDate() - 30)
-      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ~ ${y}-${pad(m)}-${pad(now.getDate())}`
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} 00:00:00 ~ ${y}-${pad(m)}-${pad(now.getDate())} 23:59:59`
     })(),
   }
   return previews[expr] || ''
@@ -598,6 +601,11 @@ async function fetchParamOptions() {
   }
 }
 
+function normalizeDateTime(val, defaultTime) {
+  if (typeof val !== 'string' || !val) return val
+  return val.includes(' ') ? val : `${val} ${defaultTime}`
+}
+
 function openDialog(row) {
   if (row) {
     isEdit.value = true
@@ -627,7 +635,15 @@ function openDialog(row) {
         }
         for (const p of paramsConfig) {
           const key = getParamKey(sid, p.name)
-          if (cleanedAutoParams[p.name] !== undefined) {
+          const startVal = cleanedAutoParams[`${p.name}_start`]
+          const endVal = cleanedAutoParams[`${p.name}_end`]
+          if (p.range && startVal !== undefined && endVal !== undefined) {
+            restoredParams[key] = [
+              normalizeDateTime(startVal, '00:00:00'),
+              normalizeDateTime(endVal, '23:59:59')
+            ]
+            restoredModes[key] = 'custom'
+          } else if (cleanedAutoParams[p.name] !== undefined) {
             restoredParams[key] = cleanedAutoParams[p.name]
             const allDynamicValues = [
               ...paramOptionsData.value.time.map(o => o.value),

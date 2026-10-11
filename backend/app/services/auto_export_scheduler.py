@@ -63,29 +63,29 @@ def resolve_auto_params(auto_params: dict) -> dict:
                 resolved[param_name] = f'{now.year}-{now.month - 1:02d}-{last_day}'
         elif expr == 'range_current_month':
             last_day = calendar.monthrange(now.year, now.month)[1]
-            resolved[f'{param_name}_start'] = now.strftime('%Y-%m-01')
-            resolved[f'{param_name}_end'] = f'{now.strftime("%Y-%m")}-{last_day}'
+            resolved[f'{param_name}_start'] = now.strftime('%Y-%m-01 00:00:00')
+            resolved[f'{param_name}_end'] = f'{now.strftime("%Y-%m")}-{last_day} 23:59:59'
         elif expr == 'range_last_month':
             if now.month == 1:
                 ly, lm = now.year - 1, 12
             else:
                 ly, lm = now.year, now.month - 1
             last_day = calendar.monthrange(ly, lm)[1]
-            resolved[f'{param_name}_start'] = f'{ly}-{lm:02d}-01'
-            resolved[f'{param_name}_end'] = f'{ly}-{lm:02d}-{last_day}'
+            resolved[f'{param_name}_start'] = f'{ly}-{lm:02d}-01 00:00:00'
+            resolved[f'{param_name}_end'] = f'{ly}-{lm:02d}-{last_day} 23:59:59'
         elif expr == 'range_current_year':
-            resolved[f'{param_name}_start'] = f'{now.year}-01-01'
-            resolved[f'{param_name}_end'] = f'{now.year}-12-31'
+            resolved[f'{param_name}_start'] = f'{now.year}-01-01 00:00:00'
+            resolved[f'{param_name}_end'] = f'{now.year}-12-31 23:59:59'
         elif expr == 'range_last_year':
-            resolved[f'{param_name}_start'] = f'{now.year - 1}-01-01'
-            resolved[f'{param_name}_end'] = f'{now.year - 1}-12-31'
+            resolved[f'{param_name}_start'] = f'{now.year - 1}-01-01 00:00:00'
+            resolved[f'{param_name}_end'] = f'{now.year - 1}-12-31 23:59:59'
         elif expr == 'range_current_quarter':
             q = (now.month - 1) // 3
             q_start_month = q * 3 + 1
             q_end_month = q_start_month + 2
             last_day = calendar.monthrange(now.year, q_end_month)[1]
-            resolved[f'{param_name}_start'] = f'{now.year}-{q_start_month:02d}-01'
-            resolved[f'{param_name}_end'] = f'{now.year}-{q_end_month:02d}-{last_day}'
+            resolved[f'{param_name}_start'] = f'{now.year}-{q_start_month:02d}-01 00:00:00'
+            resolved[f'{param_name}_end'] = f'{now.year}-{q_end_month:02d}-{last_day} 23:59:59'
         elif expr == 'range_last_quarter':
             q = (now.month - 1) // 3
             if q == 0:
@@ -94,16 +94,16 @@ def resolve_auto_params(auto_params: dict) -> dict:
                 ly, lq_start = now.year, (q - 1) * 3 + 1
             lq_end = lq_start + 2
             last_day = calendar.monthrange(ly, lq_end)[1]
-            resolved[f'{param_name}_start'] = f'{ly}-{lq_start:02d}-01'
-            resolved[f'{param_name}_end'] = f'{ly}-{lq_end:02d}-{last_day}'
+            resolved[f'{param_name}_start'] = f'{ly}-{lq_start:02d}-01 00:00:00'
+            resolved[f'{param_name}_end'] = f'{ly}-{lq_end:02d}-{last_day} 23:59:59'
         elif expr == 'range_last_7_days':
             start = now - timedelta(days=7)
-            resolved[f'{param_name}_start'] = start.strftime('%Y-%m-%d')
-            resolved[f'{param_name}_end'] = now.strftime('%Y-%m-%d')
+            resolved[f'{param_name}_start'] = start.strftime('%Y-%m-%d 00:00:00')
+            resolved[f'{param_name}_end'] = now.strftime('%Y-%m-%d 23:59:59')
         elif expr == 'range_last_30_days':
             start = now - timedelta(days=30)
-            resolved[f'{param_name}_start'] = start.strftime('%Y-%m-%d')
-            resolved[f'{param_name}_end'] = now.strftime('%Y-%m-%d')
+            resolved[f'{param_name}_start'] = start.strftime('%Y-%m-%d 00:00:00')
+            resolved[f'{param_name}_end'] = now.strftime('%Y-%m-%d 23:59:59')
         else:
             resolved[param_name] = expression
     return resolved
