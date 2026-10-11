@@ -133,10 +133,30 @@
               <el-input v-model="form.description" type="textarea" :rows="3" placeholder="简要描述此任务" />
             </el-form-item>
             <el-form-item label="Cron表达式" prop="cron_expression">
+              <div class="cron-preset-row">
+                <el-select
+                  v-model="cronPresetValue"
+                  placeholder="快捷设置（选择后自动填入）"
+                  clearable
+                  style="width: 100%"
+                  @change="applyCronPreset"
+                >
+                  <el-option
+                    v-for="p in cronPresets"
+                    :key="p.value"
+                    :label="p.label"
+                    :value="p.value"
+                  />
+                </el-select>
+              </div>
               <el-input v-model="form.cron_expression" placeholder="如: 0 8 1 * *" />
               <div class="cron-helper">
-                常用示例：0 8 * * * = 每天8点 ｜ 0 8 1 * * = 每月1日8点 ｜ 0 8 * * 1 = 每周一8点 ｜ 0 0 1 1 * = 每月1日0点
+                常用示例：0 8 * * * = 每天8点 ｜ 0 8 1 * * = 每月1日8点 ｜ 0 8 * * 1 = 每周一8点 ｜ 0 10 7 1,4,7,10 * = 每季度首月7日10点
               </div>
+            </el-form-item>
+            <el-form-item label="遇非工作日顺移">
+              <el-switch v-model="form.shift_to_next_workday" />
+              <span class="switch-hint">开启后，若计划时间落在周六/周日，将顺移到下一个工作日执行</span>
             </el-form-item>
             <el-form-item label="输出格式">
               <el-radio-group v-model="form.output_format">
@@ -371,7 +391,23 @@ const defaultForm = {
   auto_params: {},
   notify_enabled: false,
   notify_emails: '',
-  notify_attach_file: false
+  notify_attach_file: false,
+  shift_to_next_workday: false
+}
+
+const cronPresets = [
+  { label: '每天 08:00', value: '0 8 * * *' },
+  { label: '每天 00:00', value: '0 0 * * *' },
+  { label: '每周一 08:00', value: '0 8 * * 1' },
+  { label: '每月 1 日 08:00', value: '0 8 1 * *' },
+  { label: '每季度首月 7 日 10:00', value: '0 10 7 1,4,7,10 *' },
+  { label: '每年 1 月 1 日 00:00', value: '0 0 1 1 *' }
+]
+
+const cronPresetValue = ref('')
+
+function applyCronPreset(val) {
+  if (val) form.cron_expression = val
 }
 
 const form = reactive({ ...defaultForm, script_ids: [], auto_params: {} })
@@ -670,8 +706,10 @@ function openDialog(row) {
       auto_params: restoredParams,
       notify_enabled: row.notify_enabled || false,
       notify_emails: Array.isArray(row.notify_emails) ? row.notify_emails.join(', ') : (row.notify_emails || ''),
-      notify_attach_file: row.notify_attach_file || false
+      notify_attach_file: row.notify_attach_file || false,
+      shift_to_next_workday: row.shift_to_next_workday || false
     })
+    cronPresetValue.value = cronPresets.some(p => p.value === row.cron_expression) ? row.cron_expression : ''
   } else {
     isEdit.value = false
     editId.value = null
@@ -682,6 +720,7 @@ function openDialog(row) {
       script_ids: [],
       auto_params: {}
     })
+    cronPresetValue.value = ''
   }
   dialogVisible.value = true
 }
@@ -701,7 +740,8 @@ async function handleSubmit() {
       auto_params: buildAutoParamsPayload(),
       notify_enabled: form.notify_enabled,
       notify_emails: form.notify_emails ? form.notify_emails.split(',').map(e => e.trim()).filter(e => e) : [],
-      notify_attach_file: form.notify_attach_file
+      notify_attach_file: form.notify_attach_file,
+      shift_to_next_workday: form.shift_to_next_workday
     }
     if (isEdit.value) {
       await api.autoExport.update(editId.value, payload)
@@ -899,6 +939,18 @@ onActivated(() => {
   color: var(--text-muted, #909399);
   line-height: 1.6;
   margin-top: 4px;
+}
+
+.cron-preset-row {
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.switch-hint {
+  margin-left: 10px;
+  font-size: 12px;
+  color: var(--text-muted, #909399);
+  line-height: 1.6;
 }
 
 .script-checkbox-list {

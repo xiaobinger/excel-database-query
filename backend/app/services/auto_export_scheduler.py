@@ -139,6 +139,21 @@ def _scheduler_loop(app):
         time.sleep(30)
 
 
+def shift_to_next_workday(dt):
+    """若给定时间落在周六/周日，则向后顺移到下一个周一（保持时分不变）。
+
+    dt 为 datetime（支持带时区或朴素），返回顺移后的 datetime；dt 为 None 时原样返回。
+    """
+    if dt is None:
+        return None
+    weekday = dt.weekday()  # 周一=0 ... 周日=6
+    if weekday == 5:  # 周六
+        return dt + timedelta(days=2)
+    if weekday == 6:  # 周日
+        return dt + timedelta(days=1)
+    return dt
+
+
 def _check_and_execute(app):
     with app.app_context():
         from app.models.auto_export_task import AutoExportTask
@@ -149,9 +164,12 @@ def _check_and_execute(app):
         tasks = AutoExportTask.query.filter_by(is_enabled=True).all()
 
         for auto_task in tasks:
+            shift = bool(getattr(auto_task, 'shift_to_next_workday', False))
             try:
                 cron = croniter(auto_task.cron_expression, now)
                 prev_run = cron.get_prev(datetime)
+                if shift:
+                    prev_run = shift_to_next_workday(prev_run)
                 last_run_bj = utc_to_beijing(auto_task.last_run_at) if auto_task.last_run_at else datetime(2000, 1, 1, tzinfo=timezone(timedelta(hours=8)))
                 if prev_run > last_run_bj:
                     if abs((now - prev_run).total_seconds()) <= 60:
@@ -162,6 +180,8 @@ def _check_and_execute(app):
             try:
                 cron = croniter(auto_task.cron_expression, now)
                 next_run_bj = cron.get_next(datetime)
+                if shift:
+                    next_run_bj = shift_to_next_workday(next_run_bj)
                 auto_task.next_run_at = next_run_bj.astimezone(timezone.utc).replace(tzinfo=None) if hasattr(next_run_bj, 'astimezone') else next_run_bj
             except Exception:
                 auto_task.next_run_at = None

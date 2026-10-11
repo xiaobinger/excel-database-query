@@ -25,6 +25,7 @@ class AutoExportTask(db.Model):
     notify_enabled = db.Column(db.Boolean, default=False, comment='是否启用通知')
     notify_emails = db.Column(db.Text, comment='通知邮箱列表(JSON数组)')
     notify_attach_file = db.Column(db.Boolean, default=False, comment='是否附件发送结果文件')
+    shift_to_next_workday = db.Column(db.Boolean, default=False, comment='遇非工作日(周末)顺移到下一工作日')
 
     def get_script_ids(self) -> list:
         if self.script_ids:
@@ -79,4 +80,5 @@ class AutoExportTask(db.Model):
             'notify_enabled': self.notify_enabled,
             'notify_emails': self.get_notify_emails(),
             'notify_attach_file': self.notify_attach_file,
+            'shift_to_next_workday': self.shift_to_next_workday,
         }

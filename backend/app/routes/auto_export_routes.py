@@ -9,6 +9,7 @@ from app.models.script import Script
 from app.models.query_task import QueryTask
 from app.utils.auth import login_required, get_current_user
 from app.utils.operation_logger import log_operation
+from app.services.auto_export_scheduler import shift_to_next_workday
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,8 @@ def create_auto_task():
     try:
         from croniter import croniter
         next_run = croniter(cron_expr).get_next(datetime)
+        if data.get('shift_to_next_workday'):
+            next_run = shift_to_next_workday(next_run)
     except Exception:
         next_run = None
 
@@ -116,6 +119,7 @@ def create_auto_task():
         next_run_at=next_run,
         notify_enabled=data.get('notify_enabled', False),
         notify_attach_file=data.get('notify_attach_file', False),
+        shift_to_next_workday=data.get('shift_to_next_workday', False),
     )
     task.set_script_ids(script_ids)
     task.set_auto_params(data.get('auto_params', {}))
@@ -140,7 +144,7 @@ def update_auto_task(task_id):
     if not data:
         return jsonify({'success': False, 'message': '请求数据为空'}), 400
 
-    simple_fields = ['name', 'description', 'output_format', 'cron_expression', 'is_enabled', 'notify_enabled', 'notify_attach_file']
+    simple_fields = ['name', 'description', 'output_format', 'cron_expression', 'is_enabled', 'notify_enabled', 'notify_attach_file', 'shift_to_next_workday']
     for key in simple_fields:
         if key in data:
             setattr(task, key, data[key])
@@ -154,11 +158,14 @@ def update_auto_task(task_id):
     if 'notify_emails' in data:
         task.set_notify_emails(data['notify_emails'])
 
-    if 'cron_expression' in data:
+    if 'cron_expression' in data or 'shift_to_next_workday' in data:
         try:
             from croniter import croniter
-            croniter(data['cron_expression'])
-            task.next_run_at = croniter(data['cron_expression']).get_next(datetime)
+            croniter(task.cron_expression)
+            next_run = croniter(task.cron_expression).get_next(datetime)
+            if task.shift_to_next_workday:
+                next_run = shift_to_next_workday(next_run)
+            task.next_run_at = next_run
         except Exception as e:
             return jsonify({'success': False, 'message': f'Cron表达式无效: {str(e)}'}), 400
 

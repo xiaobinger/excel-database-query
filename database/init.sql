@@ -188,6 +188,7 @@ CREATE TABLE IF NOT EXISTS auto_export_tasks (
     notify_enabled BOOLEAN DEFAULT FALSE COMMENT '是否启用通知',
     notify_emails TEXT COMMENT '通知邮箱列表(JSON数组)',
     notify_attach_file BOOLEAN DEFAULT FALSE COMMENT '是否附件发送结果文件',
+    shift_to_next_workday BOOLEAN DEFAULT FALSE COMMENT '遇非工作日(周末)顺移到下一工作日',
     INDEX idx_is_enabled (is_enabled),
     INDEX idx_created_by (created_by),
     FOREIGN KEY (created_by) REFERENCES users(id)
