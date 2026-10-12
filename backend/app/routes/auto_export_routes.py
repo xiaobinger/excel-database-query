@@ -1,7 +1,6 @@
 import os
 import json
 import logging
-from datetime import datetime
 from flask import Blueprint, request, jsonify, current_app
 from app import db
 from app.models.auto_export_task import AutoExportTask
@@ -9,7 +8,7 @@ from app.models.script import Script
 from app.models.query_task import QueryTask
 from app.utils.auth import login_required, get_current_user
 from app.utils.operation_logger import log_operation
-from app.services.auto_export_scheduler import shift_to_next_workday
+from app.services.auto_export_scheduler import compute_next_run_at
 
 logger = logging.getLogger(__name__)
 
@@ -103,10 +102,7 @@ def create_auto_task():
             return jsonify({'success': False, 'message': f'导出选项不存在或类型不正确: {sid}'}), 400
 
     try:
-        from croniter import croniter
-        next_run = croniter(cron_expr).get_next(datetime)
-        if data.get('shift_to_next_workday'):
-            next_run = shift_to_next_workday(next_run)
+        next_run = compute_next_run_at(cron_expr, bool(data.get('shift_to_next_workday')))
     except Exception:
         next_run = None
 
@@ -162,10 +158,7 @@ def update_auto_task(task_id):
         try:
             from croniter import croniter
             croniter(task.cron_expression)
-            next_run = croniter(task.cron_expression).get_next(datetime)
-            if task.shift_to_next_workday:
-                next_run = shift_to_next_workday(next_run)
-            task.next_run_at = next_run
+            task.next_run_at = compute_next_run_at(task.cron_expression, bool(task.shift_to_next_workday))
         except Exception as e:
             return jsonify({'success': False, 'message': f'Cron表达式无效: {str(e)}'}), 400
 

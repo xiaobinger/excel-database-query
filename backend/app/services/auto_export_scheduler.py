@@ -154,6 +154,23 @@ def shift_to_next_workday(dt):
     return dt
 
 
+def compute_next_run_at(cron_expr, shift=False):
+    """按北京时间计算下一次触发时间，返回 naive UTC。
+
+    存储口径与 last_run_at 等字段保持一致（均为 naive UTC），前端统一经
+    beijing_isoformat 转回北京时间展示。创建/更新路由与调度器必须共用此函数，
+    否则会出现「路由存北京墙钟、调度器存 UTC」的口径错位（列表显示多出 8 小时）。
+    """
+    from app.utils.helpers import beijing_now
+    now = beijing_now()
+    next_run_bj = croniter(cron_expr, now).get_next(datetime)
+    if shift:
+        next_run_bj = shift_to_next_workday(next_run_bj)
+    if hasattr(next_run_bj, 'astimezone'):
+        return next_run_bj.astimezone(timezone.utc).replace(tzinfo=None)
+    return next_run_bj
+
+
 def _check_and_execute(app):
     with app.app_context():
         from app.models.auto_export_task import AutoExportTask
@@ -178,11 +195,7 @@ def _check_and_execute(app):
                 logger.error(f'自动导出任务 [{auto_task.name}] 检查失败: {e}')
 
             try:
-                cron = croniter(auto_task.cron_expression, now)
-                next_run_bj = cron.get_next(datetime)
-                if shift:
-                    next_run_bj = shift_to_next_workday(next_run_bj)
-                auto_task.next_run_at = next_run_bj.astimezone(timezone.utc).replace(tzinfo=None) if hasattr(next_run_bj, 'astimezone') else next_run_bj
+                auto_task.next_run_at = compute_next_run_at(auto_task.cron_expression, shift)
             except Exception:
                 auto_task.next_run_at = None
 
