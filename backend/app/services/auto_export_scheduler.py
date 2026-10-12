@@ -196,6 +196,11 @@ def _execute_auto_task(app, auto_task):
     from app.models.script import Script
     from app.services.export_service import ExportService
 
+    # 提前取出主键：后台导出线程完成回调时，当前 app 上下文已退出、session 已被
+    # remove 且实例已 expire，若在 lambda 中延迟读取 auto_task.id 会触发
+    # DetachedInstanceError，导致回调静默失败（邮件不发送、执行日志无记录）。
+    auto_task_id = auto_task.id
+
     script_ids = auto_task.get_script_ids()
     if not script_ids:
         logger.warning(f'自动导出任务 [{auto_task.name}] 没有关联导出选项')
@@ -237,7 +242,7 @@ def _execute_auto_task(app, auto_task):
             params_values=params_values,
             output_dir=output_dir,
             output_format=auto_task.output_format or 'sheets',
-            on_complete=lambda tid, tstatus: _on_export_complete(app, auto_task.id, tid, tstatus),
+            on_complete=lambda tid, tstatus: _on_export_complete(app, auto_task_id, tid, tstatus),
         )
     except Exception as e:
         auto_task.last_run_at = datetime.utcnow()
@@ -251,6 +256,7 @@ def _on_export_complete(app, auto_task_id, task_id, task_status):
     with app.app_context():
         from app import db
         query_task = None
+        logger.info(f'导出完成回调触发: auto_task_id={auto_task_id}, task_id={task_id}, status={task_status}')
         try:
             from app.models.auto_export_task import AutoExportTask
             from app.models.query_task import QueryTask
@@ -268,8 +274,9 @@ def _on_export_complete(app, auto_task_id, task_id, task_status):
                 try:
                     query_task.add_log(f'邮件通知: 回调处理失败: {e}', 'error')
                     db.session.commit()
-                except Exception:
-                    pass
+                except Exception as inner_err:
+                    db.session.rollback()
+                    logger.error(f'导出完成回调: 写执行日志失败: {inner_err}', exc_info=True)
 
 
 def send_auto_export_notification(app, auto_task, query_task, status):
@@ -288,8 +295,9 @@ def send_auto_export_notification(app, auto_task, query_task, status):
             try:
                 query_task.add_log(message, level)
                 db.session.commit()
-            except Exception:
-                pass
+            except Exception as commit_err:
+                db.session.rollback()
+                logger.error(f'邮件通知日志写入执行日志失败: {commit_err}', exc_info=True)
 
     if not auto_task.notify_enabled:
         _notify_log('邮件通知: 任务未启用邮件通知，跳过通知', 'info')

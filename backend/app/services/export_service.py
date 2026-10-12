@@ -39,6 +39,19 @@ def get_export_progress(task_id: str) -> dict:
         return _task_progress.get(task_id, {'progress': 0})
 
 
+def _invoke_on_complete(on_complete, task_id: str, status: str):
+    """统一调用导出完成回调。
+
+    回调异常不再静默吞掉——记录到应用日志，避免通知链路中断后无迹可查。
+    """
+    if not on_complete:
+        return
+    try:
+        on_complete(task_id, status)
+    except Exception as e:
+        logger.error(f'导出完成回调执行失败 (task_id={task_id}, status={status}): {e}', exc_info=True)
+
+
 class ExportService:
 
     @staticmethod
@@ -557,11 +570,7 @@ class ExportService:
                     task.add_log(f'导出失败: {task.error_message}', 'error')
                     db.session.commit()
                     update_export_progress(task_id, 100, f'导出失败: {task.error_message}', 'error')
-                    if on_complete:
-                        try:
-                            on_complete(task_id, 'failed')
-                        except Exception:
-                            pass
+                    _invoke_on_complete(on_complete, task_id, 'failed')
                     return
 
                 # 查询成功但未查询到数据，不生成结果文件
@@ -577,11 +586,7 @@ class ExportService:
                     task.add_log('导出完成，但未查询到任何数据，未生成结果文件', 'warning')
                     db.session.commit()
                     update_export_progress(task_id, 100, '导出完成（无数据）')
-                    if on_complete:
-                        try:
-                            on_complete(task_id, 'completed')
-                        except Exception:
-                            pass
+                    _invoke_on_complete(on_complete, task_id, 'completed')
                     return
 
                 task.add_log('开始生成导出文件')
@@ -607,11 +612,7 @@ class ExportService:
                     task.add_log(f'生成文件失败: {str(file_err)}', 'error')
                     db.session.commit()
                     update_export_progress(task_id, 100, f'生成文件失败: {str(file_err)}', 'error')
-                    if on_complete:
-                        try:
-                            on_complete(task_id, 'failed')
-                        except Exception:
-                            pass
+                    _invoke_on_complete(on_complete, task_id, 'failed')
                     return
 
                 task.status = 'completed'
@@ -624,11 +625,7 @@ class ExportService:
                 task.add_log(f'导出完成，结果已写入: {os.path.basename(output_path)}')
                 db.session.commit()
                 update_export_progress(task_id, 100, '导出完成')
-                if on_complete:
-                    try:
-                        on_complete(task_id, 'completed')
-                    except Exception:
-                        pass
+                _invoke_on_complete(on_complete, task_id, 'completed')
 
             except Exception as e:
                 logger.error(f"导出执行失败: {str(e)}", exc_info=True)
@@ -639,11 +636,7 @@ class ExportService:
                 task.add_log(f'导出执行失败: {str(e)}', 'error')
                 db.session.commit()
                 update_export_progress(task_id, 100, f'导出执行失败: {str(e)}', 'error')
-                if on_complete:
-                    try:
-                        on_complete(task_id, 'failed')
-                    except Exception:
-                        pass
+                _invoke_on_complete(on_complete, task_id, 'failed')
 
     @staticmethod
     def _write_sheets_output(output_dir: str, timestamp: str,
