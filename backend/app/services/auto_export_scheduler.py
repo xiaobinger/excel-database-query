@@ -249,6 +249,8 @@ def _execute_auto_task(app, auto_task):
 
 def _on_export_complete(app, auto_task_id, task_id, task_status):
     with app.app_context():
+        from app import db
+        query_task = None
         try:
             from app.models.auto_export_task import AutoExportTask
             from app.models.query_task import QueryTask
@@ -262,14 +264,35 @@ def _on_export_complete(app, auto_task_id, task_id, task_status):
                 logger.warning(f'导出完成回调: 任务 [{auto_task.name}] {message}')
         except Exception as e:
             logger.error(f'导出完成回调处理失败 (auto_task_id={auto_task_id}, task_id={task_id}): {e}', exc_info=True)
+            if query_task is not None:
+                try:
+                    query_task.add_log(f'邮件通知: 回调处理失败: {e}', 'error')
+                    db.session.commit()
+                except Exception:
+                    pass
 
 
 def send_auto_export_notification(app, auto_task, query_task, status):
     """发送自动导出结果通知邮件。
 
     返回 (success: bool, message: str)，调用方可据此判断真实发送结果。
+    所有关键步骤同时写入应用日志和导出任务执行日志（query_task.logs），
+    便于在前端执行日志中直接排查邮件通知漏发原因。
     """
+    from app import db
+
+    def _notify_log(message: str, level: str = 'info'):
+        """同步写入应用日志与导出任务执行日志"""
+        getattr(logger, level, logger.info)(message)
+        if query_task is not None:
+            try:
+                query_task.add_log(message, level)
+                db.session.commit()
+            except Exception:
+                pass
+
     if not auto_task.notify_enabled:
+        _notify_log('邮件通知: 任务未启用邮件通知，跳过通知', 'info')
         return False, '任务未启用邮件通知'
 
     try:
@@ -286,13 +309,13 @@ def send_auto_export_notification(app, auto_task, query_task, status):
         from_address_config = SystemConfig.query.filter_by(config_key=SystemConfig.EMAIL_FROM_ADDRESS).first()
 
         if not smtp_host_config or not smtp_host_config.config_value:
-            logger.warning('邮件通知: SMTP主机未配置，跳过通知')
+            _notify_log('邮件通知: SMTP主机未配置，跳过通知', 'warning')
             return False, 'SMTP主机未配置'
         if not smtp_user_config or not smtp_user_config.config_value:
-            logger.warning('邮件通知: SMTP用户未配置，跳过通知')
+            _notify_log('邮件通知: SMTP用户未配置，跳过通知', 'warning')
             return False, 'SMTP用户未配置'
         if not smtp_password_config or not smtp_password_config.get_encrypted_value():
-            logger.warning('邮件通知: SMTP密码未配置，跳过通知')
+            _notify_log('邮件通知: SMTP密码未配置，跳过通知', 'warning')
             return False, 'SMTP密码未配置'
 
         host = smtp_host_config.config_value
@@ -305,7 +328,7 @@ def send_auto_export_notification(app, auto_task, query_task, status):
 
         emails = auto_task.get_notify_emails()
         if not emails:
-            logger.warning(f'自动导出任务 [{auto_task.name}] 未配置通知邮箱，跳过通知')
+            _notify_log(f'自动导出任务 [{auto_task.name}] 未配置通知邮箱，跳过通知', 'warning')
             return False, '未配置通知邮箱'
 
         status_text = '执行成功' if status in ('triggered', 'completed') else '执行失败'
@@ -410,7 +433,7 @@ def send_auto_export_notification(app, auto_task, query_task, status):
         if auto_task.notify_attach_file and query_task and query_task.output_file:
             file_path = query_task.output_file
             if os.path.exists(file_path):
-                logger.info(f'邮件通知: 准备附加文件 {file_path} (大小: {os.path.getsize(file_path)} bytes)')
+                _notify_log(f'邮件通知: 准备附加文件 {file_path} (大小: {os.path.getsize(file_path)} bytes)')
                 with open(file_path, 'rb') as f:
                     attachment = MIMEBase('application', 'octet-stream')
                     attachment.set_payload(f.read())
@@ -418,9 +441,9 @@ def send_auto_export_notification(app, auto_task, query_task, status):
                 attachment.add_header('Content-Disposition', 'attachment', filename=os.path.basename(file_path))
                 msg.attach(attachment)
             else:
-                logger.warning(f'邮件通知: 附件文件不存在 {file_path}')
+                _notify_log(f'邮件通知: 附件文件不存在 {file_path}', 'warning')
 
-        logger.info(f'邮件通知: 连接SMTP {host}:{port} (SSL={use_ssl}), 发件人={sender_address}, 收件人={emails}')
+        _notify_log(f'邮件通知: 连接SMTP {host}:{port} (SSL={use_ssl}), 发件人={sender_address}, 收件人={emails}')
 
         if use_ssl:
             server = smtplib.SMTP_SSL(host, port, timeout=30)
@@ -435,11 +458,12 @@ def send_auto_export_notification(app, auto_task, query_task, status):
         server.quit()
 
         if refused:
-            logger.warning(f'邮件通知: 部分收件人被拒绝: {refused}')
+            _notify_log(f'邮件通知: 部分收件人被拒绝: {refused}', 'warning')
             return False, f'部分收件人被拒绝: {refused}'
 
-        logger.info(f'自动导出任务 [{auto_task.name}] 邮件通知已发送至 {", ".join(emails)}')
+        _notify_log(f'自动导出任务 [{auto_task.name}] 邮件通知已发送至 {", ".join(emails)}')
         return True, f'邮件已发送至 {", ".join(emails)}'
     except Exception as e:
         logger.error(f'自动导出任务 [{auto_task.name}] 邮件通知发送失败: {e}', exc_info=True)
+        _notify_log(f'自动导出任务 [{auto_task.name}] 邮件通知发送失败: {e}', 'error')
         return False, f'邮件通知发送失败: {e}'
