@@ -2188,6 +2188,7 @@ def send_message_stream(chat_id):
                 _orig_messages = list(messages)  # 快照：切换模型时恢复原始上下文
                 _failover_last_error = None
                 tool_results_list = []  # 提前初始化，供except块判断是否已产生工具副作用
+                any_side_effect = False  # 本轮是否已产生不可回滚的工具副作用（自动执行系统任务/建工单等），用于阻止监督者retry导致重复执行
                 for _cfg_idx, _stream_cfg in enumerate(stream_ordered_configs):
                     if _active_streams.get(chat_id, {}).get('aborted'):
                         break
@@ -2570,7 +2571,9 @@ def send_message_stream(chat_id):
                                     # 导出/查询/系统任务确认卡片（跳过：同一轮已有对应的 select_options 卡片，避免重复）
                                     elif result and not result.get('error') and result.get('action_type') in ('export', 'query', 'system_task', 'profit_share'):
                                         if result.get('auto_executed'):
-                                            # API自动执行的系统任务，不创建确认卡片
+                                            # API/脚本自动执行的系统任务，不创建确认卡片
+                                            # 关键：执行已产生真实副作用，置位以防监督者retry重跑
+                                            any_side_effect = True
                                             saved_tool_messages.append(tr)
                                         elif result.get('action_type') in _select_action_types:
                                             # 同一轮已有选择卡片，跳过重复的确认卡片
@@ -2607,6 +2610,8 @@ def send_message_stream(chat_id):
                                             
                                             if _supervisor_auto_exec:
                                                 # 监督者已确认执行，不创建确认卡片，直接标记为已完成
+                                                # 关键：该分支表示动作已被监督者批准执行（如导出/查询已触发副作用），置位以防retry重跑
+                                                any_side_effect = True
                                                 saved_tool_messages.append(tr)
                                             else:
                                                 # 需要用户确认，创建确认卡片
@@ -2657,6 +2662,10 @@ def send_message_stream(chat_id):
                                         })
                                         any_card_created = True
                                     else:
+                                        # 其他工具直接落库（如 create_ticket 已在工具层立即建单）
+                                        # 关键：建工单为不可回滚副作用，置位以防监督者retry重跑
+                                        if result and result.get('action_type') == 'create_ticket' and result.get('ticket_id'):
+                                            any_side_effect = True
                                         saved_tool_messages.append(tr)
                             except Exception as db_err:
                                 logger.error(f'流式响应保存工具消息失败: {db_err}', exc_info=True)
@@ -3047,7 +3056,9 @@ def send_message_stream(chat_id):
                     break
 
                 # ── 监督者复核 ──
-                if (not _sup_agent or _sup_round >= _sup_max_rounds or any_card_created or request_failed
+                # 熔断：本轮已出现用户交互卡片（any_card_created）或已产生不可回滚副作用（any_side_effect，如自动执行系统任务/建工单）
+                # 时禁止 retry，否则会重跑工具阶段导致副作用重复执行
+                if (not _sup_agent or _sup_round >= _sup_max_rounds or any_card_created or any_side_effect or request_failed
                         or _active_streams.get(chat_id, {}).get('aborted')):
                     break
                 try:

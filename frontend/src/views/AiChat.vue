@@ -1460,6 +1460,8 @@ function toggleChatSidebar() {
   localStorage.setItem('ai_chat_sidebar_collapsed', String(chatSidebarCollapsed.value))
 }
 const messages = ref([])
+// 已处理的工具调用ID集合：用于对 tool_results 事件做去重，避免同一 tool_call 被重复处理（如自动执行系统任务重复触发）
+const processedToolCallIds = new Set()
 const inputText = ref('')
 const loading = ref(false)
 const abortController = ref(null)  // 用于终止流式请求
@@ -2815,6 +2817,19 @@ function quickAsk(text) {
 // 处理工具调用结果（普通和流式共用）
 async function handleToolResults(toolResults) {
   if (!toolResults || toolResults.length === 0) return
+  // 幂等守卫：按 tool_call_id 去重，避免同一工具调用被重复处理（如系统任务自动执行被重复触发）
+  toolResults = toolResults.filter(tr => {
+    const tid = tr && tr.tool_call_id
+    if (!tid) return true
+    if (processedToolCallIds.has(tid)) {
+      console.warn(`跳过已处理的工具调用: ${tr.name}(${tid})`)
+      return false
+    }
+    processedToolCallIds.add(tid)
+    if (processedToolCallIds.size > 500) processedToolCallIds.clear()
+    return true
+  })
+  if (toolResults.length === 0) return
   // 预检：同一轮中如果存在 select_options 卡片（list_*工具），则跳过对应的 request_* 确认卡片
   // 避免重复出现「选项选择」和「任务确认」两个卡片
   const selectActionTypes = new Set()
@@ -4398,6 +4413,8 @@ async function confirmSystemTask(msg) {
 
 // 实际执行系统任务
 async function doExecuteSystemTask(msg) {
+  // 防重复执行（与 confirmExport 保持一致：执行中或已完成则直接忽略，允许失败后重试）
+  if (!msg || msg._executing || msg._done) return
   msg._executing = true
   msg._progress = 5
   msg._status_text = '正在初始化系统任务...'

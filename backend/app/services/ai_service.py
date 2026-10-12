@@ -1679,6 +1679,28 @@ class AiService:
 
         logger.info(f'系统任务自动执行判断: task_type={task.task_type}, is_api_task={is_api_task}, is_script_task={is_script_task}, all_params_filled={all_params_filled}, needs_dbSelection={needs_dbSelection}, task_params={len(task_params)}, params={params}')
 
+        # ── 幂等守卫（请求级去重）──
+        # 同一次 AI 请求内（含监督者 retry / 故障转移重入 / 链式循环重复调用），
+        # 若对「同一任务 + 同一类型 + 同一参数」已执行过自动执行，则直接复用上次结果，避免副作用重复产生。
+        # 缓存挂在 Flask 请求上下文 g 上：stream_with_context 保证同一请求（含 retry）共享同一 g。
+        _idem_cache = None
+        _idem_key = None
+        try:
+            from flask import g, has_request_context
+            if has_request_context():
+                _idem_cache = getattr(g, '_ai_tool_exec_cache', None)
+                if _idem_cache is None:
+                    _idem_cache = {}
+                    g._ai_tool_exec_cache = _idem_cache
+                _idem_key = f'systask:{task.id}:{task.task_type or "sql"}:{json.dumps(params, sort_keys=True, ensure_ascii=False)}'
+                if _idem_key in _idem_cache:
+                    logger.warning(f'幂等守卫命中：系统任务「{task.name}」在本请求内已用相同参数执行过，跳过重复执行')
+                    return _idem_cache[_idem_key]
+        except Exception as _idem_err:
+            logger.warning(f'幂等守卫初始化失败（不影响正常执行）: {_idem_err}')
+            _idem_cache = None
+            _idem_key = None
+
         if is_api_task and all_params_filled and not needs_dbSelection:
             try:
                 exec_result = SystemTaskService.execute_api_sync(task, params, user_id=user_id)
@@ -1705,6 +1727,8 @@ class AiService:
                 }
                 if exec_result.get('error'):
                     result['error'] = exec_result['error']
+                if _idem_cache is not None and _idem_key is not None:
+                    _idem_cache[_idem_key] = result
                 return result
             except Exception as e:
                 logger.warning(f'API系统任务同步执行失败: {e}')
@@ -1733,6 +1757,8 @@ class AiService:
                 }
                 if exec_result.get('error'):
                     result['error'] = exec_result['error']
+                if _idem_cache is not None and _idem_key is not None:
+                    _idem_cache[_idem_key] = result
                 return result
             except Exception as e:
                 logger.warning(f'本地脚本任务同步执行失败: {e}')
