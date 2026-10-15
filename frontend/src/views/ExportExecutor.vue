@@ -529,7 +529,16 @@
               </div>
             </div>
 
-            <div v-if="taskStatus.status === 'completed' && store.hasButtonPermission('export:download')" class="download-area">
+            <div v-if="taskStatus.status === 'completed' && !taskStatus.output_file" class="download-area">
+              <el-alert
+                type="warning"
+                :closable="false"
+                show-icon
+                title="本次未查询到匹配的数据，未生成结果文件"
+                description="可调整查询条件或参数后重新执行。"
+              />
+            </div>
+            <div v-else-if="taskStatus.status === 'completed' && store.hasButtonPermission('export:download')" class="download-area">
               <el-button type="primary" size="large" @click="downloadResult">
                 <i class="fas fa-download"></i> 下载结果文件
               </el-button>
@@ -1065,8 +1074,14 @@ async function downloadResult() {
   try {
     const check = await fetch(url, { method: 'HEAD' })
     if (!check.ok) {
-      const data = await check.json().catch(() => ({}))
-      ElMessageBox.alert(data.message || '结果文件不存在或已被清理', '提示', { type: 'warning' })
+      // HEAD 请求无响应体，需改用 GET 读取后端返回的具体失败原因（如「未查询到数据」「文件已被清理」）
+      let message = '结果文件不存在或已被清理'
+      try {
+        const resp = await fetch(url)
+        const data = await resp.json()
+        if (data && data.message) message = data.message
+      } catch (_) { /* 解析失败则回退默认提示 */ }
+      ElMessageBox.alert(message, '提示', { type: 'warning' })
       return
     }
     if (window.showSaveFilePicker) {

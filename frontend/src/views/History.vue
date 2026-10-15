@@ -305,7 +305,7 @@
               <i class="fas fa-redo"></i> 重新执行
             </el-button>
             <el-button
-              v-if="detailData.status === 'completed' && (detailData.type === 'export' ? store.hasButtonPermission('export:download') : store.hasButtonPermission('query:download'))"
+              v-if="detailData.status === 'completed' && detailData.output_file && (detailData.type === 'export' ? store.hasButtonPermission('export:download') : store.hasButtonPermission('query:download'))"
               type="primary"
               @click="downloadResult(detailData)"
             >
@@ -620,8 +620,14 @@ async function downloadResult(row) {
   try {
     const check = await fetch(url, { method: 'HEAD' })
     if (!check.ok) {
-      const data = await check.json().catch(() => ({}))
-      ElMessageBox.alert(data.message || '结果文件不存在或已被清理', '提示', { type: 'warning' })
+      // HEAD 请求无响应体，需改用 GET 读取后端返回的具体失败原因（如「未查询到数据」「文件已被清理」）
+      let message = '结果文件不存在或已被清理'
+      try {
+        const resp = await fetch(url)
+        const data = await resp.json()
+        if (data && data.message) message = data.message
+      } catch (_) { /* 解析失败则回退默认提示 */ }
+      ElMessageBox.alert(message, '提示', { type: 'warning' })
       return
     }
     if (window.showSaveFilePicker) {
