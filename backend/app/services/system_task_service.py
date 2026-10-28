@@ -591,6 +591,15 @@ class SystemTaskService:
             request_body = request_params
             request_params = {}  # 避免参数重复
 
+        # 记录实际请求信息（占位符替换与加签后的最终请求），完整返回给调用方（含AI）
+        request_info = {
+            'method': method,
+            'url': url,
+            'headers': dict(headers),
+            'request_params': request_params,
+            'request_body': request_body,
+        }
+
         # Make request
         try:
             if method == 'GET':
@@ -656,6 +665,7 @@ class SystemTaskService:
 
             execution.set_result_data({
                 'status_code': resp.status_code,
+                'request': request_info,
                 'response': resp_data_mapped if isinstance(resp_data_mapped, (dict, list)) else resp_text,
                 'response_raw': resp_data if isinstance(resp_data, (dict, list)) else resp_text,
                 'mapping_applied': bool(mapping_info),
@@ -1021,6 +1031,15 @@ class SystemTaskService:
             request_body = request_params
             request_params = {}  # 避免参数重复
 
+        # 记录实际请求信息（占位符替换与加签后的最终请求），完整返回给调用方（含AI）
+        request_info = {
+            'method': method,
+            'url': url,
+            'headers': dict(headers),
+            'request_params': request_params,
+            'request_body': request_body,
+        }
+
         # Make request
         try:
             if method == 'GET':
@@ -1087,7 +1106,9 @@ class SystemTaskService:
                 execution.error_message = mapping_info
             execution.set_result_data({
                 'status_code': resp.status_code,
+                'request': request_info,
                 'response': resp_data_mapped if isinstance(resp_data_mapped, (dict, list)) else resp_text,
+                'response_raw': resp_data if isinstance(resp_data, (dict, list)) else resp_text,
                 'mapping_applied': bool(mapping_info),
                 'mapping_summary': mapping_summary,
             })
@@ -1096,6 +1117,7 @@ class SystemTaskService:
 
             return {
                 'status_code': resp.status_code,
+                'request': request_info,
                 'response': resp_data_mapped if isinstance(resp_data_mapped, (dict, list)) else resp_text,
                 'response_raw': resp_data if isinstance(resp_data, (dict, list)) else resp_text,
                 'mapping_applied': bool(mapping_info),

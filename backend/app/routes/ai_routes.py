@@ -1134,7 +1134,7 @@ def send_message(chat_id):
                     '- 调用 request_export 时，务必从用户描述中提取所有参数值（如商户号、日期、渠道等）填入 params 对象\n' \
                     '- 调用 request_system_task 时，务必从用户描述中提取所有参数值填入 params 对象，params的键名必须使用list_system_tasks返回的参数配置中的name字段值\n' \
                     '- 重要：系统任务可能配置了执行要点（ai_notes字段），是任务管理员设定的执行注意点和要求，执行和反馈结果时务必严格遵守其中的要求\n' \
-                    '- 重要：API类型的系统任务参数齐全时会自动执行并返回结果（包含mapping_summary映射摘要），请直接根据映射摘要用自然语言告诉用户执行结果\n' \
+                    '- 重要：API类型的系统任务参数齐全时会自动执行并返回结果，工具结果中包含完整的请求信息（request字段：方法/URL/请求头/请求参数/请求体）和完整响应body（response/response_raw字段）以及mapping_summary映射摘要，反馈时请基于这些完整信息用自然语言告诉用户执行结果\n' \
                     '- 重要：如果用户同时要求对多个对象执行同样的API系统任务（如"解绑SN001、SN002、SN003"），请在同一次回复中同时调用多个 request_system_task，每个调用对应一个对象，系统会自动并行执行，你只需汇总所有结果用列表形式反馈给用户\n' \
                     '- 调用 request_lookup 时，务必从用户描述中提取所有参数值填入 params 对象，params的键名必须使用list_lookup_options返回的参数配置中的name字段值\n' \
                     '- 重要：调用 list_lookup_options 时，如果用户提供了具体的参数值（如SN号、商户号等），务必同时传入 params 参数，这样当匹配到唯一查询时系统可以自动执行，大幅加快响应速度\n' \
@@ -1310,12 +1310,14 @@ def send_message(chat_id):
                         'ai_notes': result.get('ai_notes', ''),
                         'mapping_summary': result.get('mapping_summary', ''),
                         'mapping_info': result.get('mapping_info', ''),
+                        # 完整请求信息（方法/URL/请求头/请求参数/请求体，占位符替换与加签后的最终请求）
+                        'request': result.get('request'),
+                        # 完整响应body（映射后与原始）
+                        'response': result.get('response'),
+                        'response_raw': result.get('response_raw'),
                     }
                     if result.get('error'):
                         concise_result['error'] = result['error']
-                    # 如果mapping_summary为空，附上简化的response
-                    if not result.get('mapping_summary') and isinstance(result.get('response'), dict):
-                        concise_result['response'] = result['response']
                     tool_messages.append({
                         'role': 'tool',
                         'tool_call_id': tr['tool_call_id'],
@@ -1380,7 +1382,7 @@ def send_message(chat_id):
                     if has_lookup_needs_reply:
                         reply_hints.append('上面的信息查询已经执行完成并返回了结果。请根据查询结果回答用户问题。如果用户意图是条件性的（如满足条件则执行系统任务），请根据查询结果判断是否需要调用request_system_task等工具。不要重复调用request_lookup。')
                     if has_auto_exec_system_task:
-                        reply_hints.append('上面的API系统任务已经自动执行完成并返回了结果。请根据mapping_summary（映射摘要）直接用自然语言告诉用户执行结果，如果多个任务请用列表汇总。不要重复调用request_system_task。如果结果中包含ai_notes（执行要点），请严格遵守其中的要求来反馈结果。')
+                        reply_hints.append('上面的API系统任务已经自动执行完成并返回了结果。工具结果中包含完整的请求信息（request字段）和完整响应body（response/response_raw字段）以及mapping_summary（映射摘要），请基于这些完整信息直接用自然语言告诉用户执行结果，如果多个任务请用列表汇总。不要重复调用request_system_task。如果结果中包含ai_notes（执行要点），请严格遵守其中的要求来反馈结果。')
                     if reply_hints:
                         messages.append({
                             'role': 'system',
@@ -1920,7 +1922,7 @@ def send_message_stream(chat_id):
                     '- 重要：当用户的查询涉及多个不同维度的信息时（如"查一下SN123的绑定状态和交易信息"），应在同一次回复中同时调用多个 request_lookup 工具，分别查询不同维度的信息，然后将所有查询结果归总后统一回答用户\n' \
                     '- 重要：当用户的意图是条件性的（如"查一下这个SN的绑定状态，如果已绑定就解绑"、"查商户是否激活，未激活则激活"），必须先调用 request_lookup 查询状态，拿到结果后根据条件判断是否需要调用 request_system_task，在二次回复中完成条件判断和后续操作\n' \
                     '- 重要：系统任务可能配置了执行要点（ai_notes字段），是任务管理员设定的执行注意点和要求，执行和反馈结果时务必严格遵守其中的要求\n' \
-                    '- 重要：API类型的系统任务参数齐全时会自动执行并返回结果（包含mapping_summary映射摘要），请直接根据映射摘要用自然语言告诉用户执行结果\n' \
+                    '- 重要：API类型的系统任务参数齐全时会自动执行并返回结果，工具结果中包含完整的请求信息（request字段：方法/URL/请求头/请求参数/请求体）和完整响应body（response/response_raw字段）以及mapping_summary映射摘要，反馈时请基于这些完整信息用自然语言告诉用户执行结果\n' \
                     '- 重要：如果用户同时要求对多个对象执行同样的API系统任务（如"解绑SN001、SN002、SN003"），请在同一次回复中同时调用多个 request_system_task，每个调用对应一个对象，系统会自动并行执行，你只需汇总所有结果用列表形式反馈给用户\n' \
                     '- 重要：调用 list_lookup_options 时，如果用户提供了具体的参数值（如SN号、商户号等），务必同时传入 params 参数，这样当匹配到唯一查询时系统可以自动执行，大幅加快响应速度\n' \
                     + TICKET_FALLBACK_RULE + '\n\n' + SKILLS_SAVE_RULE
@@ -2697,12 +2699,14 @@ def send_message_stream(chat_id):
                                         'ai_notes': result.get('ai_notes', ''),
                                         'mapping_summary': result.get('mapping_summary', ''),
                                         'mapping_info': result.get('mapping_info', ''),
+                                        # 完整请求信息（方法/URL/请求头/请求参数/请求体，占位符替换与加签后的最终请求）
+                                        'request': result.get('request'),
+                                        # 完整响应body（映射后与原始）
+                                        'response': result.get('response'),
+                                        'response_raw': result.get('response_raw'),
                                     }
                                     if result.get('error'):
                                         concise_result['error'] = result['error']
-                                    # 如果mapping_summary为空，附上简化的response
-                                    if not result.get('mapping_summary') and isinstance(result.get('response'), dict):
-                                        concise_result['response'] = result['response']
                                     tool_messages.append({
                                         'role': 'tool',
                                         'tool_call_id': tr['tool_call_id'],
@@ -2737,7 +2741,7 @@ def send_message_stream(chat_id):
                             if has_lookup_needs_reply:
                                 reply_hints.append('上面的信息查询已经执行完成并返回了结果。请根据查询结果回答用户问题。如果用户意图是条件性的（如满足条件则执行系统任务），请根据查询结果判断是否需要调用request_system_task等工具。不要重复调用request_lookup。')
                             if has_auto_exec_system_task:
-                                reply_hints.append('上面的API系统任务已经自动执行完成并返回了结果。请根据mapping_summary（映射摘要）直接用自然语言告诉用户执行结果，如果多个任务请用列表汇总。不要重复调用request_system_task。如果结果中包含ai_notes（执行要点），请严格遵守其中的要求来反馈结果。')
+                                reply_hints.append('上面的API系统任务已经自动执行完成并返回了结果。工具结果中包含完整的请求信息（request字段）和完整响应body（response/response_raw字段）以及mapping_summary（映射摘要），请基于这些完整信息直接用自然语言告诉用户执行结果，如果多个任务请用列表汇总。不要重复调用request_system_task。如果结果中包含ai_notes（执行要点），请严格遵守其中的要求来反馈结果。')
                             if reply_hints:
                                 messages.append({
                                     'role': 'system',

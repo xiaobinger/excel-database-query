@@ -205,7 +205,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "request_system_task",
-            "description": "当用户明确要执行系统任务（运维类任务）时调用此工具。系统任务与导出任务、查询任务完全不同，只有运维类操作才属于系统任务。需要指定系统任务名称和参数值。注意：1、必须从用户的自然语言描述中提取所有可能的参数值填入params对象；2、params的键名必须使用list_system_tasks返回的参数配置中的name字段值，不要自己编造参数名；3、如果之前没有调用list_system_tasks，请先调用以获取正确的参数名；4、如果任务关联了多个数据库连接，请从用户描述中提取数据库名称填入database_name；5、API类型任务参数齐全时会自动执行，结果中包含mapping_summary（映射摘要）字段，请直接根据映射摘要用自然语言告诉用户执行结果；6、多参数处理：如果用户通过换行给出了多个值（如多个SN号），且参数支持列表(IN查询)，则将多个值用逗号分隔填入同一个参数；如果参数不支持列表或用户要求分别执行，则需要多次调用本工具分别执行，系统会自动并行执行；7、对于type=enum的枚举参数（常用于环境切换），params中传入options里的label或value均可，若用户未明确指定环境，必须主动询问用户选择哪个环境后再调用。",
+            "description": "当用户明确要执行系统任务（运维类任务）时调用此工具。系统任务与导出任务、查询任务完全不同，只有运维类操作才属于系统任务。需要指定系统任务名称和参数值。注意：1、必须从用户的自然语言描述中提取所有可能的参数值填入params对象；2、params的键名必须使用list_system_tasks返回的参数配置中的name字段值，不要自己编造参数名；3、如果之前没有调用list_system_tasks，请先调用以获取正确的参数名；4、如果任务关联了多个数据库连接，请从用户描述中提取数据库名称填入database_name；5、API类型任务参数齐全时会自动执行，结果中包含完整的请求信息（request字段：方法/URL/请求头/请求参数/请求体）、完整响应body（response/response_raw字段）和mapping_summary（映射摘要）字段，请基于这些完整信息用自然语言告诉用户执行结果；6、多参数处理：如果用户通过换行给出了多个值（如多个SN号），且参数支持列表(IN查询)，则将多个值用逗号分隔填入同一个参数；如果参数不支持列表或用户要求分别执行，则需要多次调用本工具分别执行，系统会自动并行执行；7、对于type=enum的枚举参数（常用于环境切换），params中传入options里的label或value均可，若用户未明确指定环境，必须主动询问用户选择哪个环境后再调用。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1717,6 +1717,7 @@ class AiService:
                     'ai_notes': ai_notes,
                     'success': exec_result.get('success', False),
                     'status_code': exec_result.get('status_code'),
+                    'request': exec_result.get('request'),
                     'response': exec_result.get('response'),
                     'response_raw': exec_result.get('response_raw'),
                     'mapping_applied': exec_result.get('mapping_applied', False),

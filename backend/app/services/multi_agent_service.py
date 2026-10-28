@@ -267,6 +267,19 @@ class MultiAgentService:
                             result_summary = f"系统任务已自动执行: {result.get('mapping_summary', '完成')}"
                             if ai_notes:
                                 result_summary = f"{result_summary}\n\n⚠️ 任务执行要点(务必遵守)：{ai_notes}"
+                            # 完整请求/响应body，供调用方（含AI）查看
+                            req_info = result.get('request') or {}
+                            resp_body = result.get('response')
+                            detail_lines = []
+                            if req_info:
+                                detail_lines.append(f"请求: {req_info.get('method', '')} {req_info.get('url', '')}")
+                                req_body = req_info.get('request_body')
+                                if req_body:
+                                    detail_lines.append(f"请求体: {req_body if isinstance(req_body, str) else json.dumps(req_body, ensure_ascii=False)}")
+                            if resp_body is not None:
+                                detail_lines.append(f"响应体: {resp_body if isinstance(resp_body, str) else json.dumps(resp_body, ensure_ascii=False)}")
+                            if detail_lines:
+                                result_summary = f"{result_summary}\n\n" + "\n".join(detail_lines)
                             tool_executed = True
                         else:
                             task_type = result.get('task_type', 'sql')

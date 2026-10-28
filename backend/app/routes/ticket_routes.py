@@ -576,6 +576,19 @@ def _process_ticket_with_ai_async(ticket_id, app):
                                 result_summary = f"系统任务已自动执行: {result.get('mapping_summary', '完成')}"
                                 if ai_notes:
                                     result_summary = f"{result_summary}\n\n⚠️ 任务执行要点(务必遵守)：{ai_notes}"
+                                # 完整请求/响应body，供调用方（含AI）查看
+                                req_info = result.get('request') or {}
+                                resp_body = result.get('response')
+                                detail_lines = []
+                                if req_info:
+                                    detail_lines.append(f"请求: {req_info.get('method', '')} {req_info.get('url', '')}")
+                                    req_body = req_info.get('request_body')
+                                    if req_body:
+                                        detail_lines.append(f"请求体: {req_body if isinstance(req_body, str) else json.dumps(req_body, ensure_ascii=False)}")
+                                if resp_body is not None:
+                                    detail_lines.append(f"响应体: {resp_body if isinstance(resp_body, str) else json.dumps(resp_body, ensure_ascii=False)}")
+                                if detail_lines:
+                                    result_summary = f"{result_summary}\n\n" + "\n".join(detail_lines)
                                 tool_executed = True
                             else:
                                 # SQL类型系统任务，未自动执行，需要用户确认
@@ -875,7 +888,7 @@ def _build_ticket_ai_prompt(agent, system_name):
         '- 如果工单内容包含明确的参数（如商户号、订单号、SN号、日期等），直接调用 request_* 工具执行\n'
         '- 如果不确定具体任务名称，先调用 list_* 工具查找匹配项\n'
         '- 重要：查询任务（query）以工单附件中的Excel文件为输入（按主键列批量查询）。如工单附件中有Excel文件且工单需求是批量查询匹配信息，请调用 request_query 并由系统自动执行；如工单没有Excel附件却需要执行查询任务，请直接说明需要提交人补充Excel附件，不要调用 request_query\n'
-        '- API类型的系统任务参数齐全时会自动执行并返回结果，请根据mapping_summary（映射摘要）用自然语言说明执行结果\n'
+        '- API类型的系统任务参数齐全时会自动执行并返回结果，工具结果中包含完整的请求信息（request字段）和完整响应body（response/response_raw字段）以及mapping_summary（映射摘要），请基于这些完整信息用自然语言说明执行结果\n'
         '- 如果用户的意图是条件性的（如"查一下这个SN的绑定状态，如果已绑定就解绑"），先调用 request_lookup 查询状态，再根据结果决定是否调用 request_system_task\n'
         '- 如果同时需要对多个对象执行同样的操作（如"解绑SN001、SN002"），请同时调用多个 request_system_task\n'
         '- 务必从工单内容中提取所有参数值填入 params 对象，params的键名必须使用list_*工具返回的参数配置中的name字段值\n'
