@@ -1,8 +1,82 @@
 import logging
+import re
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
 logger = logging.getLogger(__name__)
+
+
+def has_jinja_syntax(sql: str) -> bool:
+    """检测 SQL 是否包含 Jinja2 控制语法（{% ... %} 语句块 / {# ... #} 注释块）"""
+    return bool(re.search(r'\{%|\{#', sql or ''))
+
+
+def _sql_finalize(value):
+    """SQL 值安全化（Jinja2 finalize 钩子）：
+
+    - None -> ''（未提供的参数按空值处理，支持 {% if param %} 可选条件）
+    - bool -> 1 / 0
+    - int/float -> 原样字符串
+    - list/tuple -> 逗号拼接（各元素同样安全化）
+    - 其他 -> str 后单引号加倍转义（' -> ''）
+
+    注意：不自动加单引号（标准 Jinja2 语义），需要引号时由 SQL 作者
+    手写（如 WHERE id_card = '{{ id_card }}'）。
+    """
+    if value is None:
+        return ''
+    if isinstance(value, bool):
+        return '1' if value else '0'
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return ','.join(_sql_finalize(v) for v in value)
+    return str(value).replace("'", "''")
+
+
+def _clean_blank_lines(rendered: str) -> str:
+    """清理 Jinja 控制标签残留的空白行"""
+    lines = [line.rstrip() for line in rendered.split('\n')]
+    return '\n'.join(line for line in lines if line.strip())
+
+
+def render_jinja_structure(template: str) -> str:
+    """Jinja2 结构渲染：为模板中所有外部变量注入占位值 '1'，渲染出
+    "参数齐全"形态的 SQL。仅用于 SQL 校验/预览——避免参数值中的
+    ; -- union select 等字符触发 SQL 注入模式误报。
+
+    Raises:
+        Exception: Jinja2 模板语法错误时向上抛（由调用方转为校验失败）
+    """
+    from jinja2 import Environment, meta
+
+    env = Environment(autoescape=False)
+    ast = env.parse(template)
+    # 模板中引用但未在模板内定义的变量（即需要外部注入的变量）
+    var_names = meta.find_undeclared_variables(ast)
+    rendered = env.from_string(template).render(**{name: '1' for name in var_names})
+    return _clean_blank_lines(rendered)
+
+
+def render_jinja_with_params(template: str, params: dict = None) -> str:
+    """Jinja2 真实渲染：用实际参数值渲染 lookup SQL 模板。
+
+    - {{ param }} 输出经 _sql_finalize 安全化的原始值（单引号转义、不自动加引号）
+    - 未提供的参数按空值处理（falsy），{% if param %} 走 false 分支
+    - 辅助变量：now / today / current_month / current_year（用户可通过
+      {% set %} 自行覆盖，故用 setdefault 注入）
+    """
+    from jinja2 import Environment
+
+    env = Environment(autoescape=False, finalize=_sql_finalize)
+    context = dict(params or {})
+    now = datetime.now()
+    context.setdefault('now', now)
+    context.setdefault('today', now.strftime('%Y-%m-%d'))
+    context.setdefault('current_month', now.strftime('%Y%m'))
+    context.setdefault('current_year', now.strftime('%Y'))
+    rendered = env.from_string(template).render(**context)
+    return _clean_blank_lines(rendered)
 
 
 def _resolve_param_value(var_config: dict, export_params: dict):

@@ -10,6 +10,7 @@ from app.models.script import Script
 from app.models.database import DatabaseConnection
 from app.utils.db_connector import DatabaseConnector
 from app.utils.sql_validator import SQLValidator
+from app.utils.sql_template import has_jinja_syntax, render_jinja_structure, render_jinja_with_params
 from app.utils.error_sanitizer import sanitize_error_for_user
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,14 @@ class LookupService:
                 row_count: int,
                 error_message: str | None
             }
+
+        说明：
+            SQL 支持两种书写模式，按内容自动判别：
+            - Jinja2 模板模式（含 {% %} / {# #} 控制语法）：完整 Jinja2 语义，
+              {% if %} 可选条件、{% set %} 变量、过滤器、辅助变量 now/today 等；
+              {{ param }} 输出经单引号转义的原始值，不自动加引号（引号由 SQL 作者手写）。
+            - 传统模式：{{param}} 占位符由引擎替换（字符串自动加引号并转义），
+              或使用 :param / %(param)s SQLAlchemy bind 参数。
         """
         if params_values is None:
             params_values = {}
@@ -63,24 +72,17 @@ class LookupService:
                     'error_message': '脚本配置错误，请联系管理员'
                 }
 
-            # 3. 验证 SQL 为 SELECT 语句（不允许 DML）
+            # 3. 判断 SQL 书写模式：含 Jinja2 控制语法（{% %}/{# #}）走模板渲染，否则沿用 {{param}} 文本替换
             sql = script.sql_text
             validator = SQLValidator()
-            validation = validator.validate(sql, check_tables=False, allow_dml=False)
-            if not validation.is_valid:
-                return {
-                    'success': False,
-                    'results': [],
-                    'columns': [],
-                    'row_count': 0,
-                    'error_message': 'SQL配置验证失败，请联系管理员'
-                }
+            is_jinja = has_jinja_syntax(sql)
 
             # 4. 智能参数映射：确保传入的参数名和SQL中的参数名一致
+            #    （映射先于渲染：Jinja 渲染需要用映射后的参数名作为模板 context）
             script_params = script.get_params_config() or []
             all_sql_params = set(LookupService._extract_bind_params(sql))
-            # 也加入 {{param}} 占位符
-            all_sql_params.update(re.findall(r'\{\{(\w+)\}\}', sql))
+            # 也加入 {{param}} 占位符（容忍空格与过滤器，如 {{ id_card | trim }}）
+            all_sql_params.update(re.findall(r'\{\{\s*(\w+)', sql))
 
             if params_values and all_sql_params:
                 # 构建映射表：各种可能的键名 -> SQL中的参数名
@@ -155,8 +157,58 @@ class LookupService:
                 params_values = mapped
                 logger.info(f'Lookup参数映射: 映射后={params_values}, SQL参数={all_sql_params}')
 
-            # 5. 替换 {{param}} 占位符
-            sql = LookupService._replace_placeholders(sql, params_values)
+            # 5. 校验与渲染（按书写模式分流）
+            if is_jinja:
+                # Jinja2 模板模式：
+                # 1) 先用占位值结构渲染并校验——校验的是模板结构，
+                #    避免参数值中的 ; -- union select 等字符触发注入模式误报
+                # 2) 再用真实参数值渲染执行；{{ param }} 输出经单引号转义的
+                #    原始值，不自动加引号（需要引号时由 SQL 作者手写）
+                try:
+                    structure_sql = render_jinja_structure(sql)
+                except Exception as e:
+                    logger.error(f'Lookup Jinja模板解析失败: script_id={script_id}, error={e}')
+                    return {
+                        'success': False,
+                        'results': [],
+                        'columns': [],
+                        'row_count': 0,
+                        'error_message': 'SQL配置验证失败，请联系管理员'
+                    }
+                validation = validator.validate(structure_sql, check_tables=False,
+                                                allow_dml=False, allow_inline_params=True)
+                if not validation.is_valid:
+                    logger.error(f'Lookup Jinja SQL校验失败: script_id={script_id}, message={validation.message}')
+                    return {
+                        'success': False,
+                        'results': [],
+                        'columns': [],
+                        'row_count': 0,
+                        'error_message': 'SQL配置验证失败，请联系管理员'
+                    }
+                try:
+                    sql = render_jinja_with_params(sql, params_values)
+                except Exception as e:
+                    logger.error(f'Lookup Jinja渲染失败: script_id={script_id}, error={e}')
+                    return {
+                        'success': False,
+                        'results': [],
+                        'columns': [],
+                        'row_count': 0,
+                        'error_message': 'SQL配置验证失败，请联系管理员'
+                    }
+            else:
+                # 传统模式：直接校验原始 SQL，再替换 {{param}} 占位符（自动加引号）
+                validation = validator.validate(sql, check_tables=False, allow_dml=False)
+                if not validation.is_valid:
+                    return {
+                        'success': False,
+                        'results': [],
+                        'columns': [],
+                        'row_count': 0,
+                        'error_message': 'SQL配置验证失败，请联系管理员'
+                    }
+                sql = LookupService._replace_placeholders(sql, params_values)
 
             # 6. 提取 SQLAlchemy bind 参数 (%(name)s 格式) 并构建 filtered_params
             bind_params = LookupService._extract_bind_params(sql)
@@ -276,10 +328,13 @@ class LookupService:
     @staticmethod
     def _replace_placeholders(sql: str, params_values: Dict[str, Any]) -> str:
         """
-        替换 SQL 中的 {{param}} 占位符为参数值。
+        替换 SQL 中的 {{param}} 占位符为参数值（传统模式）。
         未提供的参数按空字符串 '' 处理，以支持
         ('{{param}}' = '' OR col = '{{param}}') 这类可选过滤条件写法
         （前端/AI 链路只传非空参数）。
+
+        注意：字符串值会自动包单引号并转义，因此 SQL 模板里 {{param}}
+        不要手动包引号（'{{param}}' 会渲染成 ''value'' 双引号字面量）。
 
         Args:
             sql: SQL 语句
@@ -304,17 +359,21 @@ class LookupService:
                 escaped = str(value).replace("'", "''")
                 return f"'{escaped}'"
 
-        return re.sub(r'\{\{(\w+)\}\}', replacer, sql)
+        return re.sub(r'\{\{\s*(\w+)\s*\}\}', replacer, sql)
 
     @staticmethod
     def _extract_bind_params(sql: str) -> List[str]:
         """
         提取 SQL 中的 SQLAlchemy bind 参数名。
         支持 %(name)s 和 :name 两种格式。
+        先剔除单引号字符串字面量，避免内联值中的冒号
+        （如时间 '12:30'、URL 'http://...'）被误识别为 bind 参数。
         """
-        params = re.findall(r'%\((\w+)\)s', sql)
+        # 剔除单引号字符串字面量（'' 为转义引号），仅保留结构部分用于参数提取
+        sql_masked = re.sub(r"'(?:[^']|'')*'", "''", sql)
+        params = re.findall(r'%\((\w+)\)s', sql_masked)
         # 匹配 :name 格式，但排除 :: （PostgreSQL类型转换）和数字(:1 :2)
-        colon_params = re.findall(r'(?<!:):(\w+)', sql)
+        colon_params = re.findall(r'(?<!:):(\w+)', sql_masked)
         # 过滤掉 SQL 关键字
         sql_keywords = {'select', 'from', 'where', 'and', 'or', 'not', 'in', 'is', 'null',
                         'as', 'on', 'join', 'left', 'right', 'inner', 'outer', 'group', 'by',

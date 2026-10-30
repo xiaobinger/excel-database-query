@@ -5,7 +5,7 @@ from app.models.script import Script
 from app.utils.sql_validator import SQLValidator
 from app.utils.auth import login_required, get_current_user
 from app.utils.behavior_tracker import track_behavior
-from app.utils.sql_template import render_sql_template, get_template_preview
+from app.utils.sql_template import render_sql_template, get_template_preview, has_jinja_syntax, render_jinja_structure
 
 script_bp = Blueprint('script', __name__, url_prefix='/api/scripts')
 
@@ -211,8 +211,23 @@ def validate_script(script_id):
 
     validator = SQLValidator()
     allow_dml = script.type == 'system'
-    result = validator.validate(script.sql_text, allow_dml=allow_dml)
-    suggestions = validator.suggest_improvements(script.sql_text)
+    sql_to_validate = script.sql_text
+    is_jinja = has_jinja_syntax(sql_to_validate)
+    if is_jinja:
+        # Jinja2 脚本（lookup 等）：先结构渲染再校验，避免模板标签/参数值误报
+        try:
+            sql_to_validate = render_jinja_structure(sql_to_validate)
+        except Exception as e:
+            return jsonify({
+                'success': True,
+                'is_valid': False,
+                'message': f'Jinja2模板解析失败: {e}',
+                'warnings': [],
+                'suggestions': [],
+            })
+    result = validator.validate(sql_to_validate, allow_dml=allow_dml,
+                                allow_inline_params=is_jinja)
+    suggestions = validator.suggest_improvements(sql_to_validate)
     return jsonify({
         'success': True,
         'is_valid': result.is_valid,
@@ -230,8 +245,23 @@ def validate_sql():
 
     validator = SQLValidator()
     allow_dml = data.get('allow_dml', False)
-    result = validator.validate(data['sql'], allow_dml=allow_dml)
-    suggestions = validator.suggest_improvements(data['sql'])
+    sql_to_validate = data['sql']
+    is_jinja = has_jinja_syntax(sql_to_validate)
+    if is_jinja:
+        # Jinja2 脚本（lookup 等）：先结构渲染再校验，避免模板标签/参数值误报
+        try:
+            sql_to_validate = render_jinja_structure(sql_to_validate)
+        except Exception as e:
+            return jsonify({
+                'success': True,
+                'is_valid': False,
+                'message': f'Jinja2模板解析失败: {e}',
+                'warnings': [],
+                'suggestions': [],
+            })
+    result = validator.validate(sql_to_validate, allow_dml=allow_dml,
+                                allow_inline_params=is_jinja)
+    suggestions = validator.suggest_improvements(sql_to_validate)
     return jsonify({
         'success': True,
         'is_valid': result.is_valid,

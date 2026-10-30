@@ -44,7 +44,8 @@ class SQLValidator:
         self.max_result_rows: int = 10000
         self.max_query_length: int = 10000
     
-    def validate(self, sql: str, check_tables: bool = True, allow_dml: bool = False) -> ValidationResult:
+    def validate(self, sql: str, check_tables: bool = True, allow_dml: bool = False,
+                 allow_inline_params: bool = False) -> ValidationResult:
         """
         验证 SQL 查询
 
@@ -52,6 +53,10 @@ class SQLValidator:
             sql: SQL 查询语句
             check_tables: 是否检查表存在性
             allow_dml: 是否允许 DML/DDL 语句（如 UPDATE, INSERT, DELETE 等）
+            allow_inline_params: 是否允许内联参数。为 True 时表示 SQL 已经过
+                Jinja2 渲染、参数值已内联进 SQL（如 lookup 的 Jinja 模板脚本），
+                此时跳过"未检测到查询参数"警告与"WHERE 子句中缺少参数占位符"检查；
+                其余检查（危险关键字/注入模式/括号引号匹配/FROM 子句）照常执行。
 
         Returns:
             ValidationResult: 验证结果
@@ -66,8 +71,8 @@ class SQLValidator:
         if len(sql) > self.max_query_length:
             warnings.append(f"SQL 查询过长 ({len(sql)} > {self.max_query_length} 字符)")
 
-        # 3. 参数检查（仅对非 DML 模式提示）
-        if not allow_dml:
+        # 3. 参数检查（仅对非 DML 模式提示；内联参数模式跳过）
+        if not allow_dml and not allow_inline_params:
             params = self._extract_parameters(sql)
             if not params:
                 warnings.append("未检测到查询参数（建议使用 :value 等占位符）")
@@ -113,7 +118,8 @@ class SQLValidator:
             )
 
         # 6. 语法检查（基础）
-        syntax_errors = self._check_basic_syntax(sql, allow_dml=allow_dml)
+        syntax_errors = self._check_basic_syntax(sql, allow_dml=allow_dml,
+                                                 allow_inline_params=allow_inline_params)
         if syntax_errors:
             return ValidationResult(
                 False,
@@ -173,7 +179,8 @@ class SQLValidator:
         
         return risks
     
-    def _check_basic_syntax(self, sql: str, allow_dml: bool = False) -> List[str]:
+    def _check_basic_syntax(self, sql: str, allow_dml: bool = False,
+                            allow_inline_params: bool = False) -> List[str]:
         """基础语法检查"""
         errors = []
 
@@ -198,7 +205,7 @@ class SQLValidator:
                 if not re.search(r'SELECT\s+.+\s+FROM', sql, re.IGNORECASE | re.DOTALL):
                     errors.append("SELECT 语句缺少 FROM 子句")
 
-            if 'WHERE' in sql.upper():
+            if 'WHERE' in sql.upper() and not allow_inline_params:
                 # 兼容 :param 与 {{param}} 两种占位符（lookup 引擎支持 {{param}} 替换）
                 if not re.search(r':\w+|\{\{\s*\w+\s*\}\}', sql):
                     errors.append("WHERE 子句中缺少参数占位符")
