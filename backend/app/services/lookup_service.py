@@ -77,6 +77,21 @@ class LookupService:
             validator = SQLValidator()
             is_jinja = has_jinja_syntax(sql)
 
+            # 3.5 检测未替换的预览占位符（如 <参数:id_card>）：
+            #     脚本 SQL 中混入了模板预览用的占位文本（多因从预览结果复制保存），
+            #     直接执行会永远查不出数据——快速失败并给出明确原因
+            placeholder_leak = re.findall(r'<参数:[^>]*>', sql)
+            if placeholder_leak:
+                logger.error(f'Lookup SQL包含未替换占位符: script_id={script_id}, {placeholder_leak}')
+                return {
+                    'success': False,
+                    'results': [],
+                    'columns': [],
+                    'row_count': 0,
+                    'error_message': ('SQL 配置错误：包含未替换的占位符 ' + ', '.join(placeholder_leak) +
+                                      '（疑似从模板预览复制），请在脚本中改用真实参数引用（{{ param }} 或 :param）')
+                }
+
             # 4. 智能参数映射：确保传入的参数名和SQL中的参数名一致
             #    （映射先于渲染：Jinja 渲染需要用映射后的参数名作为模板 context）
             script_params = script.get_params_config() or []
