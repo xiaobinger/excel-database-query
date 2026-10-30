@@ -145,8 +145,8 @@ class SQLValidator:
         return ValidationResult(True, "SQL 验证通过")
     
     def _extract_parameters(self, sql: str) -> List[str]:
-        """提取 SQL 参数"""
-        pattern = r':\w+'
+        """提取 SQL 参数（支持 :param 与 {{param}} 两种占位符）"""
+        pattern = r':\w+|\{\{\s*\w+\s*\}\}'
         parameters = re.findall(pattern, sql)
         return list(set(parameters))
     
@@ -194,11 +194,13 @@ class SQLValidator:
         # 非 DML 模式下检查 SELECT 语句和参数占位符
         if not allow_dml:
             if 'SELECT' in sql.upper():
-                if not re.search(r'SELECT\s+.+\s+FROM', sql, re.IGNORECASE):
+                # 加 re.DOTALL：多行 SELECT（列名换行书写）时 . 需能跨越换行匹配到 FROM
+                if not re.search(r'SELECT\s+.+\s+FROM', sql, re.IGNORECASE | re.DOTALL):
                     errors.append("SELECT 语句缺少 FROM 子句")
 
             if 'WHERE' in sql.upper():
-                if not re.search(r':\w+', sql):
+                # 兼容 :param 与 {{param}} 两种占位符（lookup 引擎支持 {{param}} 替换）
+                if not re.search(r':\w+|\{\{\s*\w+\s*\}\}', sql):
                     errors.append("WHERE 子句中缺少参数占位符")
 
         return errors

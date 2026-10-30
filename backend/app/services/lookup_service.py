@@ -277,6 +277,9 @@ class LookupService:
     def _replace_placeholders(sql: str, params_values: Dict[str, Any]) -> str:
         """
         替换 SQL 中的 {{param}} 占位符为参数值。
+        未提供的参数按空字符串 '' 处理，以支持
+        ('{{param}}' = '' OR col = '{{param}}') 这类可选过滤条件写法
+        （前端/AI 链路只传非空参数）。
 
         Args:
             sql: SQL 语句
@@ -289,7 +292,7 @@ class LookupService:
             param_name = match.group(1)
             value = params_values.get(param_name)
             if value is None:
-                return match.group(0)
+                return "''"
             if isinstance(value, str):
                 escaped = value.replace("'", "''")
                 return f"'{escaped}'"
