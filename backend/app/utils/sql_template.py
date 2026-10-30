@@ -198,6 +198,12 @@ def render_sql_template(template: str, template_config: list, params: dict = Non
             if resolved is not None:
                 context[var_name] = resolved
                 continue
+            # 参数未填写时，text/number 变量不再回退到 config.default：
+            # default 多为配置示例值（如 'XXXXX'），回退会让空参数变成固定过滤条件
+            # （如 mi.id_card = 'XXXXX'），导致永远查不出数据；
+            # 交由模板自身的 {% if %} 或 default 过滤器处理
+            if var_type in ('text', 'number'):
+                continue
 
         if var_type == 'date_range':
             period = config.get('period', 'month')

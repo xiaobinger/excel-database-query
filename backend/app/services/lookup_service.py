@@ -10,7 +10,10 @@ from app.models.script import Script
 from app.models.database import DatabaseConnection
 from app.utils.db_connector import DatabaseConnector
 from app.utils.sql_validator import SQLValidator
-from app.utils.sql_template import has_jinja_syntax, render_jinja_structure, render_jinja_with_params
+from app.utils.sql_template import (
+    has_jinja_syntax, render_jinja_structure, render_jinja_with_params,
+    render_sql_template, resolve_script_template_params
+)
 from app.utils.error_sanitizer import sanitize_error_for_user
 
 logger = logging.getLogger(__name__)
@@ -72,10 +75,16 @@ class LookupService:
                     'error_message': '脚本配置错误，请联系管理员'
                 }
 
-            # 3. 判断 SQL 书写模式：含 Jinja2 控制语法（{% %}/{# #}）走模板渲染，否则沿用 {{param}} 文本替换
-            sql = script.sql_text
+            # 3. SQL 来源判定：
+            #    动态模板脚本（is_template=True 且配置了 sql_template）优先取 sql_template，
+            #    与查询/导出脚本（ExportService._prepare_script_sql）保持一致；
+            #    否则沿用 sql_text（兼容 Jinja 语法 / {{param}} / :param 三种写法）
+            is_dynamic_template = bool(script.is_template and script.sql_template)
+            sql = (script.sql_template if is_dynamic_template else script.sql_text) or ''
             validator = SQLValidator()
             is_jinja = has_jinja_syntax(sql)
+            logger.info(f'Lookup SQL来源: script_id={script_id}, '
+                        f'{"动态模板(sql_template)" if is_dynamic_template else "普通SQL(sql_text)"}')
 
             # 3.5 检测未替换的预览占位符（如 <参数:id_card>）：
             #     脚本 SQL 中混入了模板预览用的占位文本（多因从预览结果复制保存），
@@ -98,6 +107,11 @@ class LookupService:
             all_sql_params = set(LookupService._extract_bind_params(sql))
             # 也加入 {{param}} 占位符（容忍空格与过滤器，如 {{ id_card | trim }}）
             all_sql_params.update(re.findall(r'\{\{\s*(\w+)', sql))
+            # 动态模板：模板变量名（来源=参数）同样是可接收的参数名
+            if is_dynamic_template:
+                for var_cfg in (script.get_template_config() or []):
+                    if isinstance(var_cfg, dict) and var_cfg.get('name'):
+                        all_sql_params.add(var_cfg['name'])
 
             if params_values and all_sql_params:
                 # 构建映射表：各种可能的键名 -> SQL中的参数名
@@ -173,7 +187,40 @@ class LookupService:
                 logger.info(f'Lookup参数映射: 映射后={params_values}, SQL参数={all_sql_params}')
 
             # 5. 校验与渲染（按书写模式分流）
-            if is_jinja:
+            if is_dynamic_template:
+                # 动态模板模式：复用查询/导出的模板渲染入口，
+                # "来源=参数"的模板变量直接取本次执行传入的参数值，
+                # 未传值时由模板内的 {% if %} / default 自行处理
+                try:
+                    sql = render_sql_template(
+                        script.sql_template,
+                        script.get_template_config() or [],
+                        resolve_script_template_params(None, script),
+                        export_params=dict(params_values or {})
+                    )
+                except Exception as e:
+                    logger.error(f'Lookup 动态模板渲染失败: script_id={script_id}, error={e}')
+                    return {
+                        'success': False,
+                        'results': [],
+                        'columns': [],
+                        'row_count': 0,
+                        'error_message': 'SQL模板渲染失败，请联系管理员'
+                    }
+                # 渲染后的 SQL 参数值已内联为字面量（如 m.code = 'xxx'），
+                # 不再含占位符，故用 allow_inline_params=True 跳过占位符检查
+                validation = validator.validate(sql, check_tables=False, allow_dml=False,
+                                                allow_inline_params=True)
+                if not validation.is_valid:
+                    logger.error(f'Lookup 模板SQL校验失败: script_id={script_id}, message={validation.message}')
+                    return {
+                        'success': False,
+                        'results': [],
+                        'columns': [],
+                        'row_count': 0,
+                        'error_message': 'SQL配置验证失败，请联系管理员'
+                    }
+            elif is_jinja:
                 # Jinja2 模板模式：
                 # 1) 先用占位值结构渲染并校验——校验的是模板结构，
                 #    避免参数值中的 ; -- union select 等字符触发注入模式误报
