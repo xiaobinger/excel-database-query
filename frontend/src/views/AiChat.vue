@@ -4572,6 +4572,62 @@ async function doExecuteLookup(msg) {
   saveMessageState(cardMsg)
   await nextTick()
   scrollToBottom()
+
+  // 执行结果回传AI：把查询结果（失败时为错误信息）作为续轮输入触发AI回复，
+  // 让AI基于实际结果向用户汇总回答，而不是对话到此中断
+  if (!cardMsg._feedback_sent) {
+    cardMsg._feedback_sent = true
+    const feedbackContent = buildLookupFeedbackContent(script, params_values, cardMsg)
+    if (feedbackContent) {
+      try {
+        await sendStreamMessage(
+          feedbackContent,
+          selectedModel.value?.id || null,
+          selectedAgent.value?.id || null
+        )
+      } catch {}
+    }
+  }
+}
+
+// 构造信息查询执行结果的回传文本（供AI续轮使用）
+// 数据量大时只带前 N 行预览，完整数据已在结果卡片中展示给用户
+function buildLookupFeedbackContent(script, params_values, cardMsg) {
+  const paramText = params_values && Object.keys(params_values).length > 0
+    ? Object.entries(params_values).map(([k, v]) => `${k}=${v}`).join('，')
+    : '无'
+
+  if (cardMsg._failed) {
+    return `【信息查询结果】脚本「${script.name}」（参数：${paramText}）执行失败：${cardMsg._error_msg || '未知错误'}\n\n请向用户说明失败原因，并给出可行的建议（如检查参数、稍后重试或转人工）。`
+  }
+
+  const columns = cardMsg.tool_data.columns || []
+  const results = cardMsg.tool_data.results || []
+  const rowCount = cardMsg.tool_data.row_count || results.length
+  const MAX_PREVIEW_ROWS = 20
+  const previewRows = results.slice(0, MAX_PREVIEW_ROWS)
+
+  let text = `【信息查询结果】脚本「${script.name}」（参数：${paramText}）执行成功，共 ${rowCount} 行数据`
+  if (columns.length > 0) text += `，字段：${columns.join('、')}`
+  text += '。\n\n请基于以下数据向用户汇总回答（完整数据已在上方结果卡片中展示，请提炼关键信息，不要逐行罗列）：\n\n'
+
+  if (previewRows.length === 0) {
+    text += '（无数据行）'
+    return text
+  }
+
+  // 生成 Markdown 表格预览（转义竖线与换行，防止破坏表格结构）
+  const escapeCell = (v) => String(v ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ').slice(0, 200)
+  const headers = columns.length > 0 ? columns : Object.keys(previewRows[0])
+  text += '| ' + headers.map(escapeCell).join(' | ') + ' |\n'
+  text += '| ' + headers.map(() => '---').join(' | ') + ' |\n'
+  for (const row of previewRows) {
+    text += '| ' + headers.map(h => escapeCell(row[h])).join(' | ') + ' |\n'
+  }
+  if (rowCount > previewRows.length) {
+    text += `\n（仅展示前 ${previewRows.length} 行，共 ${rowCount} 行）`
+  }
+  return text
 }
 
 // 轮询系统任务状态
