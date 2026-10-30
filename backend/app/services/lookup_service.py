@@ -210,9 +210,17 @@ class LookupService:
                     }
                 sql = LookupService._replace_placeholders(sql, params_values)
 
-            # 6. 提取 SQLAlchemy bind 参数 (%(name)s 格式) 并构建 filtered_params
+            # 6. 打印最终渲染出的执行 SQL（动态 SQL 排查用）：
+            #    确认参数是否正确内联、引号是否缺失（如 m.code = {{ param }}
+            #    未手写引号时，VARCHAR 列会被 MySQL 隐式转数字比较导致匹配不到数据）
+            sql_log = sql if len(sql) <= 4000 else sql[:4000] + f'...(共{len(sql)}字符，已截断)'
+            logger.info(f'Lookup 最终执行SQL: {sql_log}')
+
+            # 7. 提取 SQLAlchemy bind 参数 (%(name)s 格式) 并构建 filtered_params
             bind_params = LookupService._extract_bind_params(sql)
-            logger.info(f'Lookup SQL bind参数: {bind_params}, 传入参数: {list(params_values.keys())}')
+            # bind 为空属正常：Jinja / {{param}} 模式下参数已内联进 SQL 文本，
+            # 只有 :param / %(param)s 写法才会留下 bind 参数
+            logger.info(f'Lookup SQL bind参数: {bind_params}（为空=参数已内联，属正常）, 传入参数: {list(params_values.keys())}')
             filtered_params = {}
             missing_bind_params = []
             for param_name in bind_params:
@@ -230,10 +238,10 @@ class LookupService:
                     'error_message': f'缺少查询参数：{", ".join(missing_bind_params)}'
                 }
 
-            # 6. 获取超时时间
+            # 8. 获取超时时间
             timeout = script.timeout or 30
 
-            # 7. 获取关联的数据库连接
+            # 9. 获取关联的数据库连接
             db_ids = script.get_database_ids()
             if not db_ids:
                 return {
@@ -244,7 +252,7 @@ class LookupService:
                     'error_message': '脚本未配置数据库连接'
                 }
 
-            # 8. 在所有关联数据库上执行查询，合并结果
+            # 10. 在所有关联数据库上执行查询，合并结果
             all_rows = []
             columns = []
             last_error = None
@@ -272,6 +280,7 @@ class LookupService:
 
                         # 获取所有行
                         rows = result.fetchall()
+                        logger.info(f'Lookup 查询执行完成 [数据库: {conn_model.name}]: {len(rows)} 行')
 
                         for row in rows:
                             row_dict = {}
@@ -306,6 +315,7 @@ class LookupService:
             elif not columns:
                 columns = SQLValidator().extract_column_names(sql)
 
+            logger.info(f'Lookup 执行汇总: script_id={script_id}, 共 {len(all_rows)} 行')
             return {
                 'success': True,
                 'results': all_rows,
