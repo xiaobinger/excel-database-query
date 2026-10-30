@@ -176,6 +176,9 @@ def stream_export_status(task_id):
                     'success_count': status.get('success_count', 0),
                     'failure_count': status.get('failure_count', 0),
                     'total_rows': status.get('total_rows', 0),
+                    # 中间事件必须携带 output_file：终态时该事件已带 status=completed，
+                    # 前端收到后会立即关闭 SSE，收不到紧随其后的 final 事件
+                    'output_file': status.get('output_file'),
                     'error_message': status.get('error_message'),
                     'new_logs': new_logs,
                 }
