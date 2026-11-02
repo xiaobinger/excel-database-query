@@ -187,6 +187,15 @@ class MultiAgentService:
         system_name = ticket.business_system.name if ticket.business_system else '未指定'
         ticket_system_prompt = _build_ticket_ai_prompt(agent, system_name)
 
+        # 注入提交人的SKILLS/规则记忆/工具调用记忆，保证工单执行与AI对话遵循同一套规则
+        try:
+            memory_context = AiService.build_chat_context(
+                ticket.created_by, agent_id=agent.id if agent else None)
+            if memory_context:
+                ticket_system_prompt = memory_context + '\n\n' + ticket_system_prompt
+        except Exception as ctx_err:
+            logger.warning(f'注入SKILLS/规则记忆上下文失败（不影响工单处理）: {ctx_err}')
+
         # 附件清单
         att_lines = ''
         if ticket.attachments:
@@ -487,7 +496,7 @@ class MultiAgentService:
     # ── 监督者审查 ───────────────────────────────────────────
 
     @staticmethod
-    def _build_supervisor_prompt(supervisor):
+    def _build_supervisor_prompt(supervisor, user_id=None):
         """构建监督者系统提示词"""
         base = (
             '你是一个工单质量监督者（Supervisor），负责审查执行者（Executor）处理工单的结果。\n\n'
@@ -508,6 +517,16 @@ class MultiAgentService:
         )
         if supervisor and supervisor.system_prompt:
             base = base + '\n## 监督者专属要求\n' + supervisor.system_prompt
+        # 注入提交人的SKILLS/规则记忆，保证监督者验收与执行者遵循同一套规则
+        if user_id:
+            try:
+                from app.services.ai_service import AiService
+                memory_context = AiService.build_chat_context(
+                    user_id, agent_id=supervisor.id if supervisor else None)
+                if memory_context:
+                    base = memory_context + '\n\n' + base
+            except Exception as ctx_err:
+                logger.warning(f'注入监督者SKILLS/规则记忆上下文失败（不影响验收）: {ctx_err}')
         return base
 
     @staticmethod
@@ -550,7 +569,7 @@ class MultiAgentService:
         from app.services.ai_service import AiService
 
         system_name = ticket.business_system.name if ticket.business_system else '未指定'
-        supervisor_prompt = MultiAgentService._build_supervisor_prompt(supervisor)
+        supervisor_prompt = MultiAgentService._build_supervisor_prompt(supervisor, user_id=ticket.created_by)
 
         review_messages = [
             {'role': 'system', 'content': supervisor_prompt},
@@ -660,6 +679,15 @@ class MultiAgentService:
         )
         if supervisor and supervisor.system_prompt:
             base_prompt = base_prompt + '\n## 监督者专属要求\n' + supervisor.system_prompt
+
+        # 注入提交人的SKILLS/规则记忆，保证监督者决策与执行者遵循同一套规则
+        try:
+            memory_context = AiService.build_chat_context(
+                ticket.created_by, agent_id=supervisor.id if supervisor else None)
+            if memory_context:
+                base_prompt = memory_context + '\n\n' + base_prompt
+        except Exception as ctx_err:
+            logger.warning(f'注入监督者SKILLS/规则记忆上下文失败（不影响决策）: {ctx_err}')
 
         messages = [
             {'role': 'system', 'content': base_prompt},

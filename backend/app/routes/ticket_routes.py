@@ -494,6 +494,16 @@ def _process_ticket_with_ai_async(ticket_id, app):
             # 构建工单处理专用系统提示词（含工具说明）
             ticket_system_prompt = _build_ticket_ai_prompt(agent, system_name)
 
+            # 注入提交人的SKILLS/规则记忆/工具调用记忆，保证工单执行与AI对话遵循同一套规则
+            try:
+                from app.services.ai_service import AiService as _CtxAiService
+                _memory_context = _CtxAiService.build_chat_context(
+                    ticket.created_by, agent_id=agent.id if agent else None)
+                if _memory_context:
+                    ticket_system_prompt = _memory_context + '\n\n' + ticket_system_prompt
+            except Exception as ctx_err:
+                logger.warning(f'注入SKILLS/规则记忆上下文失败（不影响工单处理）: {ctx_err}')
+
             # 附件清单（告知AI工单携带的数据文件，处理人可在工单详情下载）
             att_lines = ''
             if ticket.attachments:

@@ -456,7 +456,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "save_skill",
-            "description": "当用户要求提炼SKILLS、记住某规则、保存某知识、记住某偏好时调用此工具。将用户的要求保存为可复用的技能/规则，下次对话时会自动注入上下文。重要：1、必须从用户描述中提取技能名称、分类、内容；2、如果用户说的是规则/偏好，category填'规则'；3、content应包含完整的规则/知识内容，不要遗漏关键信息；4、同名技能会自动更新而非重复创建",
+            "description": "当用户要求提炼SKILLS、记住某规则、保存某知识、记住某偏好时调用此工具。将用户的要求保存为可复用的技能/规则，下次对话时会自动注入上下文。重要：1、必须从用户描述中提取技能名称、分类、内容；2、如果用户说的是规则/偏好，category填'规则'；3、content应包含完整的规则/知识内容，不要遗漏关键信息；4、技能保存到当前Agent作用域（无Agent时为通用技能），同一作用域内同名技能会自动更新而非重复创建",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -485,7 +485,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "send_email",
-            "description": "发送邮件通知。当用户要求发送邮件、邮件通知、发送报告、发送结果时调用此工具。支持纯文本邮件和HTML格式邮件，可附加文件附件。重要：1、必须提供收件人邮箱；2、主题和正文至少填一项；3、如需附件，附件路径来自之前导出任务的输出文件",
+            "description": "发送邮件通知。当用户要求发送邮件、邮件通知、发送报告、发送结果时调用此工具。支持纯文本邮件和HTML格式邮件，可附加文件附件。重要：1、必须提供收件人邮箱；2、主题和正文至少填一项；3、如需附件，附件路径必须来自之前导出/查询任务的输出文件（仅支持输出目录内的文件）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1293,7 +1293,7 @@ class AiService:
         elif tool_name == 'request_pay_withdraw':
             return AiService._tool_request_pay_withdraw(args, user_id)
         elif tool_name == 'save_skill':
-            return AiService._tool_save_skill(args, user_id)
+            return AiService._tool_save_skill(args, user_id, agent_id=agent_id)
         elif tool_name == 'send_email':
             return AiService._tool_send_email(args, user_id)
         else:
@@ -2743,8 +2743,8 @@ AI回复：{ai_response[:500] if ai_response else ''}
         return result
 
     @staticmethod
-    def _tool_save_skill(args: dict, user_id: int = None) -> dict:
-        """保存用户要求的SKILLS/规则"""
+    def _tool_save_skill(args: dict, user_id: int = None, agent_id: int = None) -> dict:
+        """保存用户要求的SKILLS/规则（带Agent作用域归属）"""
         from app.models.ai_skill import AiSkill
         from app import db
         
@@ -2760,11 +2760,12 @@ AI回复：{ai_response[:500] if ai_response else ''}
             return {'error': '未登录用户无法保存技能'}
         
         try:
-            # 检查是否已存在同名技能（同一用户）
+            # 检查是否已存在同名技能（同一用户、同一Agent作用域）
             existing = AiSkill.query.filter_by(
                 user_id=user_id,
                 name=name,
-                skill_type='user'
+                skill_type='user',
+                agent_id=agent_id
             ).first()
             
             if existing:
@@ -2783,6 +2784,7 @@ AI回复：{ai_response[:500] if ai_response else ''}
                     description=description,
                     content=content,
                     user_id=user_id,
+                    agent_id=agent_id,
                     source='chat',
                     is_active=True,
                 )
@@ -2878,6 +2880,12 @@ AI回复：{ai_response[:500] if ai_response else ''}
             
             # 添加附件
             if attachment_path:
+                # 安全限制：仅允许挂载输出目录内的文件，防止服务器任意文件被邮件外发
+                from flask import current_app
+                allowed_root = os.path.realpath(current_app.config.get('OUTPUT_FOLDER') or './outputs')
+                real_path = os.path.realpath(attachment_path)
+                if real_path != allowed_root and not real_path.startswith(allowed_root + os.sep):
+                    return {'error': '附件文件不在允许的输出目录内，仅支持挂载导出/查询输出目录中的文件'}
                 if not os.path.exists(attachment_path):
                     return {'error': f'附件文件不存在: {attachment_path}'}
                 

@@ -1890,7 +1890,7 @@ def send_message_stream(chat_id):
         messages = []
         
         # 获取系统提示词：优先使用Agent的提示词，其次使用AI配置的system_prompt，最后使用默认提示词
-        agent_id = data.get('agent_id')
+        # agent_id 已在上方按“请求体 → 会话保存 → 默认Agent”解析完成，此处不再重复取值（否则会丢失会话Agent兜底）
         agent = None
         if agent_id:
             agent = AiAgent.query.filter_by(id=int(agent_id), is_active=True).first()
@@ -2413,34 +2413,22 @@ def send_message_stream(chat_id):
                         round_num = 0
                         round_content = full_content  # 最近一轮AI回复文本（与工具调用一起回传API）
 
-                        # ── 在工具调用前检查是否有插话消息 ──
-                        _interrupt_msgs_pre = _active_streams.get(chat_id, {}).get('interrupt_messages', [])
-                        if _interrupt_msgs_pre:
-                            for interrupt_msg in _interrupt_msgs_pre:
-                                messages.append({
-                                    'role': 'user',
-                                    'content': interrupt_msg['content'],
-                                })
-                                yield f"data: {json.dumps({'type': 'content', 'content': f'\n\n[用户插话] {interrupt_msg["content"]}\n\n'}, ensure_ascii=False)}\n\n"
-                                logger.info(f'工具调用前注入插话消息: chat_id={chat_id}, content={interrupt_msg["content"][:50]}')
-                            # 保存已处理的插话消息，供监督者复核时检查
-                            _active_streams[chat_id].setdefault('processed_interrupt_messages', []).extend(_interrupt_msgs_pre)
-                            _active_streams[chat_id]['interrupt_messages'] = []
-                            # 有插话消息，重新请求AI
-                            accumulated_tool_calls = {}  # 清空工具调用，让AI重新决策
+                        # ── 插话预标记：有插话待处理时，即使本轮没有工具调用也要进入工具循环，
+                        # 由循环顶部的插话处理统一注入上下文并重新请求AI采纳 ──
+                        _interrupt_requery = bool(_active_streams.get(chat_id, {}).get('interrupt_messages'))
 
                         if _active_streams.get(chat_id, {}).get('aborted'):
                             # 用户已终止请求，跳过工具调用
                             logger.info(f'工具调用前检测到终止: chat_id={chat_id}')
                             yield f"data: {json.dumps({'type': 'aborted', 'content': '任务已被用户手动终止'}, ensure_ascii=False)}\n\n"
-                        while (accumulated_tool_calls and round_num < MAX_TOOL_ROUNDS
+                        while ((accumulated_tool_calls or _interrupt_requery) and round_num < MAX_TOOL_ROUNDS
                                and not _active_streams.get(chat_id, {}).get('aborted')):
                             from app.services.ai_service import AiService
                             round_num += 1
                             _active_streams[chat_id]['status'] = 'tool_calling'
                             current_tool_results = []
                             
-                            # ── 检查是否有插话消息 ──
+                            # ── 检查是否有插话消息：注入上下文，取消本轮待执行的工具调用，重新请求AI决策 ──
                             _interrupt_msgs = _active_streams.get(chat_id, {}).get('interrupt_messages', [])
                             if _interrupt_msgs:
                                 # 有插话消息，注入到上下文
@@ -2455,8 +2443,22 @@ def send_message_stream(chat_id):
                                 _active_streams[chat_id].setdefault('processed_interrupt_messages', []).extend(_interrupt_msgs)
                                 # 清空已处理的插话消息
                                 _active_streams[chat_id]['interrupt_messages'] = []
-                                # 让AI基于新的上下文重新决策
-                                break
+                                # 取消本轮待执行的工具调用（不执行），以系统提示告知AI计划已取消，让其结合插话重新决策
+                                if accumulated_tool_calls:
+                                    _cancelled_names = '、'.join(
+                                        ((accumulated_tool_calls[k].get('function') or {}).get('name') or '未知工具')
+                                        for k in sorted(accumulated_tool_calls.keys())
+                                    )
+                                    messages.append({
+                                        'role': 'system',
+                                        'content': (
+                                            f'（系统提示：你上一轮计划调用工具[{_cancelled_names}]，因用户插话，该计划已取消且未执行。'
+                                            '请结合用户的插话重新决策：如仍需要，请重新调用相应工具；如不再需要，请直接回应用户。）'
+                                        ),
+                                    })
+                                    yield f"data: {json.dumps({'type': 'content', 'content': '\n\n（已根据插话取消本轮待执行的工具调用，AI重新决策中…）\n\n'}, ensure_ascii=False)}\n\n"
+                                accumulated_tool_calls = {}
+                            _interrupt_requery = False
                             
                             # ── 1. 执行本轮工具调用 ──
                             for idx in sorted(accumulated_tool_calls.keys()):
@@ -2719,11 +2721,16 @@ def send_message_stream(chat_id):
                                         'content': json.dumps(result, ensure_ascii=False),
                                     })
 
-                            messages.append({
-                                'role': 'assistant',
-                                'content': round_content,
-                                'tool_calls': [accumulated_tool_calls[idx] for idx in sorted(accumulated_tool_calls.keys())],
-                            })
+                            if accumulated_tool_calls:
+                                messages.append({
+                                    'role': 'assistant',
+                                    'content': round_content,
+                                    'tool_calls': [accumulated_tool_calls[idx] for idx in sorted(accumulated_tool_calls.keys())],
+                                })
+                            elif round_content:
+                                # 插话重决策路径：本轮未执行工具，仅回传上一轮文本，
+                                # 避免出现没有工具结果配对的 tool_calls
+                                messages.append({'role': 'assistant', 'content': round_content})
                             messages.extend(tool_messages)
 
                             # 回复引导提示
