@@ -1049,17 +1049,11 @@ def send_message(chat_id):
     elif ordered_configs:
         ai_config = ordered_configs[0]  # Primary config for system prompt
     else:
-        assistant_message = AiChatMessage(
-            chat_id=chat_id,
-            agent_id=agent_id,
-            role='assistant',
-            content='AI服务未配置，请先在系统配置中添加AI模型配置。',
-        )
-        db.session.add(assistant_message)
-        db.session.commit()
+        # 错误信息不落库为消息气泡（影响体验、临时气泡删除/重试会报资源不存在），改由error字段返回、前端Toast提示
         return jsonify({'success': True, 'data': {
             'user_message': user_message.to_dict(),
-            'assistant_message': assistant_message.to_dict(),
+            'assistant_message': None,
+            'error': 'AI服务未配置，请先在系统配置中添加AI模型配置。',
         }})
 
     # ── 大小模型协作模式：简单请求小模型一步搞定；复杂请求大模型推理+小模型整理输出 ──
@@ -1168,6 +1162,7 @@ def send_message(chat_id):
             tools=nonstream_filtered_tools, scope='system_chat')
         response_text = ai_response['content']
         model_used = ai_response.get('model') or ''
+        _send_error = None  # 错误占位文本不落库为消息气泡，改由error字段返回、前端Toast提示
 
         # 空响应检测：模型只输出了思考、无正文无工具调用，自动重试一次（引导模型直接行动）
         if not response_text.strip() and not ai_response.get('tool_calls'):
@@ -1184,7 +1179,8 @@ def send_message(chat_id):
                 tools=nonstream_filtered_tools, scope='system_chat')
             response_text = ai_response['content']
             if not response_text.strip() and not ai_response.get('tool_calls'):
-                response_text = '抱歉，本次请求未产生有效输出，请重试或换个模型。'
+                response_text = ''
+                _send_error = '抱歉，本次请求未产生有效输出，请重试或换个模型。'
                 logger.error(f'AI重试后仍为空响应: chat_id={chat_id}')
         tool_calls = ai_response['tool_calls']
         tokens = ai_response['tokens']
@@ -1501,7 +1497,8 @@ def send_message(chat_id):
                             cache_read_tokens += _cr
                 except Exception as e:
                     logger.error(f'AI二次回复失败: {e}', exc_info=True)
-                    response_text = '处理失败，请稍后重试'
+                    response_text = ''
+                    _send_error = '处理失败，请稍后重试'
 
         # ── 协作模式-复杂请求：小模型整理大模型的分析结果作为最终回复 ──
         if collab_mode == 'complex' and collab_small_configs and response_text.strip():
@@ -1532,10 +1529,12 @@ def send_message(chat_id):
             'user_message': user_message.to_dict(),
             'assistant_message': None,
             'tool_results': None,
+            'error': _send_error,
         }
 
         # Save assistant message (skip if empty content AND there are tool results)
-        if response_text.strip() or not tool_results:
+        # 错误占位文本不落库为消息气泡（由error字段返回，前端Toast提示）
+        if not _send_error and (response_text.strip() or not tool_results):
             elapsed = round(time.time() - start_time, 2)
             if elapsed < 0.01:
                 elapsed = 0.01

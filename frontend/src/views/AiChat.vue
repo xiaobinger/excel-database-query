@@ -92,7 +92,7 @@
                 >
                   <i v-if="!msg._resending" class="fas fa-redo"></i>
                 </el-button>
-                <el-dropdown v-if="isAdmin" trigger="click" @command="(cmd) => handleMsgDelete(cmd, msg)">
+                <el-dropdown v-if="isAdmin && !msg._temp" trigger="click" @command="(cmd) => handleMsgDelete(cmd, msg)">
                   <el-button text size="small" class="msg-action-btn delete-btn" @click.stop>
                     <i class="fas fa-trash"></i>
                   </el-button>
@@ -105,7 +105,7 @@
                     </el-dropdown-menu>
                   </template>
                 </el-dropdown>
-                <el-button v-else text size="small" class="msg-action-btn delete-btn" @click="softDeleteMessage(msg)">
+                <el-button v-else-if="!msg._temp" text size="small" class="msg-action-btn delete-btn" @click="softDeleteMessage(msg)">
                   <i class="fas fa-trash"></i>
                 </el-button>
               </div>
@@ -391,7 +391,7 @@
                   </div>
                 </div>
                 <!-- 重试按钮：仅AI文本消息且非流式中、非卡片类型、非临时错误消息 -->
-                <div v-if="msg.role === 'assistant' && !msg._streaming && !msg._type && msg.content.trim() && !msg._no_retry" class="message-retry">
+                <div v-if="msg.role === 'assistant' && !msg._streaming && !msg._type && msg.content.trim() && !msg._no_retry && !msg._temp" class="message-retry">
                   <el-button text size="small" class="retry-btn" @click="retryAiMessage(msg)" :loading="msg._retrying">
                     <i class="fas fa-redo"></i> 重新回答
                   </el-button>
@@ -1653,11 +1653,22 @@ async function promptCompressContext(trigger = 'auto') {
   }
 }
 
+// 错误占位文本不作为消息气泡展示（影响体验，且临时气泡删除/重试会报"资源不存在"）：历史加载时过滤，错误统一用Toast提示
+const ERROR_PLACEHOLDER_TEXTS = ['处理失败，请稍后重试', '抱歉，本次请求未产生有效输出，请重试或换个模型。']
+function isErrorPlaceholderMsg(m) {
+  if (!m || m.role !== 'assistant') return false
+  const c = (m.content || '').trim()
+  return ERROR_PLACEHOLDER_TEXTS.includes(c)
+    || c.startsWith('AI服务调用失败')
+    || c.startsWith('AI服务未配置')
+    || c.startsWith('构建上下文失败')
+}
+
 async function reloadCurrentMessages() {
   if (!currentChatId.value) return
   try {
     const res = await api.ai.getMessages(currentChatId.value)
-    const msgs = res.data || []
+    const msgs = (res.data || []).filter(m => !isErrorPlaceholderMsg(m))
     messages.value = msgs.map(m => {
       const base = { ...m, _dismissed: false, _tokens: m.tokens_used || 0, _prompt_tokens: m.prompt_tokens || 0, _completion_tokens: m.completion_tokens || 0, _elapsed: m.elapsed || 0 }
       if (m._metadata) {
@@ -1929,7 +1940,7 @@ async function selectChat(chatId) {
   }
   try {
     const res = await api.ai.getMessages(chatId)
-    const msgs = res.data || []
+    const msgs = (res.data || []).filter(m => !isErrorPlaceholderMsg(m))
     messages.value = msgs.map(m => {
       const base = { ...m, _dismissed: false, _tokens: m.tokens_used || 0, _prompt_tokens: m.prompt_tokens || 0, _completion_tokens: m.completion_tokens || 0, _elapsed: m.elapsed || 0, cache_creation_tokens: m.cache_creation_tokens || 0, cache_read_tokens: m.cache_read_tokens || 0 }
       // 恢复工具卡片状态
@@ -2020,6 +2031,7 @@ async function checkAndResumeStream(chatId) {
     // 创建流式消息占位，预填已有内容
     const streamMsg = reactive({
       id: Date.now(),
+      _temp: true,
       role: 'assistant',
       content: status.content || '',
       _streaming: true,
@@ -2102,15 +2114,24 @@ async function checkAndResumeStream(chatId) {
             streamMsg._thinking_done = true
             if (event.message_id) {
               streamMsg.id = event.message_id
+              streamMsg._temp = false
             }
             streamMsg._model = event.model || streamMsg._model
           } else if (event.type === 'truncated') {
             // 输出因max_tokens上限被截断，追加提示
             streamMsg.content += (streamMsg.content ? '\n\n' : '') + `*${event.content || 'AI输出因token上限被截断'}*`
           } else if (event.type === 'error') {
+            // 错误不以消息气泡展示（影响体验，临时气泡删除/重试会报"资源不存在"）：
+            // 保留已流式输出的有效内容；无内容则移除占位气泡；错误统一用Toast提示
             streamMsg._streaming = false
-            streamMsg.content = event.content || 'AI服务调用失败'
-            streamMsg._no_retry = true
+            const errText = event.content || 'AI服务调用失败'
+            if (!streamMsg.content.trim()) {
+              const idx = messages.value.findIndex(m => m.id === streamMsg.id)
+              if (idx > -1) messages.value.splice(idx, 1)
+            } else {
+              streamMsg._no_retry = true
+            }
+            ElMessage.error(errText)
           } else if (event.type === 'idle') {
             // 无活跃流，移除占位消息
             const idx = messages.value.findIndex(m => m.id === streamMsg.id)
@@ -2137,6 +2158,7 @@ async function checkAndResumeStream(chatId) {
             streamMsg._streaming = false
             if (event.message_id) {
               streamMsg.id = event.message_id
+              streamMsg._temp = false
             }
             streamMsg._model = event.model || streamMsg._model
           }
@@ -2156,7 +2178,7 @@ async function checkAndResumeStream(chatId) {
 async function refreshMessages(chatId) {
   try {
     const res = await api.ai.getMessages(chatId)
-    const msgs = res.data || []
+    const msgs = (res.data || []).filter(m => !isErrorPlaceholderMsg(m))
     messages.value = msgs.map(m => {
       const base = { ...m, _dismissed: false, _tokens: m.tokens_used || 0, _prompt_tokens: m.prompt_tokens || 0, _completion_tokens: m.completion_tokens || 0, _elapsed: m.elapsed || 0, cache_creation_tokens: m.cache_creation_tokens || 0, cache_read_tokens: m.cache_read_tokens || 0 }
       if (m._metadata) {
@@ -2728,7 +2750,7 @@ async function sendMessage() {
   console.log('[Chat] 发送消息, useStreaming:', useStreaming, 'chatId:', currentChatId.value, 'modelConfig:', modelConfig?.name)
 
   // Optimistic add user message
-  const userMsg = { id: Date.now(), role: 'user', content: content }
+  const userMsg = { id: Date.now(), role: 'user', content: content, _temp: true }
   messages.value.push(userMsg)
 
   // Show file as separate bubble
@@ -2768,14 +2790,15 @@ async function sendMessage() {
     if (useStreaming) {
       // 流式响应
       await sendStreamMessage(content, currentModelId, currentAgentId, {
-        onUserMessageId: (id) => { if (id) userMsg.id = id }
+        onUserMessageId: (id) => { if (id) { userMsg.id = id; userMsg._temp = false } }
       })
     } else {
       // 普通响应
       const res = await api.ai.sendMessage(currentChatId.value, { content: content, ai_config_id: currentModelId, agent_id: currentAgentId })
+      if (res.data?.error) ElMessage.error(res.data.error)
 
       // 同步真实用户消息ID（用于重新发送时复用原消息）
-      if (res.data?.user_message?.id) userMsg.id = res.data.user_message.id
+      if (res.data?.user_message?.id) { userMsg.id = res.data.user_message.id; userMsg._temp = false }
 
       // Add AI text reply
       if (res.data?.assistant_message) {
@@ -3036,6 +3059,7 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
   // 创建AI助手消息占位
   const streamMsg = reactive({
     id: Date.now(),
+    _temp: true,
     role: 'assistant',
     content: '',
     _streaming: true,
@@ -3084,6 +3108,7 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
       if (idx > -1) messages.value.splice(idx, 1)
       try {
         const res = await api.ai.sendMessage(currentChatId.value, { content, ai_config_id: modelId, agent_id: agentId, resend_message_id: resendMessageId })
+        if (res.data?.error) ElMessage.error(res.data.error)
         if (res.data?.assistant_message) {
           messages.value.push(res.data.assistant_message)
         }
@@ -3092,7 +3117,7 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
           await handleToolResults(res.data.tool_results)
         }
       } catch {
-        messages.value.push({ id: Date.now(), role: 'assistant', content: '请求失败，请稍后重试', _no_retry: true })
+        ElMessage.error('请求失败，请稍后重试')
       }
       return
     }
@@ -3105,6 +3130,7 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
       if (idx > -1) messages.value.splice(idx, 1)
       try {
         const res = await api.ai.sendMessage(currentChatId.value, { content, ai_config_id: modelId, agent_id: agentId, resend_message_id: resendMessageId })
+        if (res.data?.error) ElMessage.error(res.data.error)
         if (res.data?.assistant_message) {
           messages.value.push(res.data.assistant_message)
         }
@@ -3113,7 +3139,7 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
           await handleToolResults(res.data.tool_results)
         }
       } catch {
-        messages.value.push({ id: Date.now(), role: 'assistant', content: '请求失败，请稍后重试', _no_retry: true })
+        ElMessage.error('请求失败，请稍后重试')
       }
       return
     }
@@ -3201,6 +3227,7 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
  streamMsg._streaming = false
  streamMsg._thinking_done = true
  streamMsg.id = event.message_id || streamMsg.id
+ if (event.message_id) streamMsg._temp = false
  streamMsg._tokens = event.tokens || 0
  streamMsg._prompt_tokens = event.prompt_tokens || 0
  streamMsg._completion_tokens = event.completion_tokens || 0
@@ -3254,6 +3281,7 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
  streamMsg._streaming = false
  streamMsg._thinking_done = true
  streamMsg.id = event.message_id || streamMsg.id
+ if (event.message_id) streamMsg._temp = false
  streamMsg._tokens = event.tokens || 0
  streamMsg._prompt_tokens = event.prompt_tokens || 0
  streamMsg._completion_tokens = event.completion_tokens || 0
