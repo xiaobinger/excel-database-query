@@ -33,6 +33,7 @@ from app.routes.ticket_routes import (
     STATUS_PENDING_CONFIRMATION,
     _add_comment,
     _build_ticket_ai_prompt,
+    _build_ticket_history_context,
 )
 
 
@@ -204,9 +205,19 @@ class MultiAgentService:
                          + '\n'.join(att_items)
                          + '\n如工单需求依赖附件中的数据（如按Excel主键批量查询），请在结果中说明需使用对应附件执行查询任务。')
 
+        # 监督者反馈轮：追加强制约束，防止执行者口头应付、忽视质检官要求
+        if feedback:
+            ticket_system_prompt += (
+                '\n\n## 监督者（质检官）反馈处理要求（最高优先级，必须严格遵守）\n'
+                '- 监督者反馈是本次返工的任务清单：必须逐项落实每一项要求，不允许跳过、敷衍或只口头承诺\n'
+                '- 凡是需要工具执行的事项（导出/查询/系统任务/信息查询等），必须实际调用相应工具执行，禁止只用文字描述或承诺将要执行\n'
+                '- 如果某项要求确实无法通过工具完成，必须在回复中逐项单独说明原因，不得默默忽略\n'
+                '- 最终回复必须逐条对应监督者反馈的每一项要求，说明落实情况（做了什么、结果如何）'
+            )
+
         messages = [
             {'role': 'system', 'content': ticket_system_prompt},
-            {'role': 'user', 'content': f'## 工单编号: {ticket.ticket_no}\n## 标题: {ticket.title}\n## 涉及系统: {system_name}\n\n## 工单内容:\n{ticket.content}{att_lines}'},
+            {'role': 'user', 'content': f'## 工单编号: {ticket.ticket_no}\n## 标题: {ticket.title}\n## 涉及系统: {system_name}\n\n## 工单内容:\n{ticket.content}{att_lines}{_build_ticket_history_context(ticket)}'},
         ]
 
         # 监督者反馈（第二轮及以后）
@@ -214,8 +225,8 @@ class MultiAgentService:
             messages.append({
                 'role': 'user',
                 'content': (
-                    f'## 监督者反馈（请务必根据以下反馈重新处理，不要重复之前的无效操作）\n{feedback}\n\n'
-                    f'请重新分析工单需求，调整处理方案，确保最终结果满足提交人的要求。'
+                    f'## 监督者反馈（请务必逐项落实以下反馈，不要重复之前的无效操作）\n{feedback}\n\n'
+                    f'请重新分析工单需求，逐项落实以上反馈，确保最终结果满足提交人的要求。'
                 ),
             })
 
@@ -236,6 +247,18 @@ class MultiAgentService:
             ticket.accumulate_ai_token_usage(ai_response)
 
             if not tool_calls:
+                if feedback and round_idx == 0:
+                    # 反馈轮不允许零工具口头应付：追加强制引导，重试一次
+                    logger.info(f'工单 {ticket.ticket_no} 反馈轮执行者首轮未调用任何工具，追加引导重试')
+                    messages.append({'role': 'assistant', 'content': content or '（未执行任何操作）'})
+                    messages.append({
+                        'role': 'user',
+                        'content': (
+                            '（系统强制要求：你尚未调用任何工具落实监督者反馈。请立即根据反馈逐项调用相应工具实际执行；'
+                            '仅当反馈中确实存在无需工具的事项时，才可只用文字逐项说明。）'
+                        ),
+                    })
+                    continue
                 final_content = content
                 break
 
@@ -571,6 +594,13 @@ class MultiAgentService:
         system_name = ticket.business_system.name if ticket.business_system else '未指定'
         supervisor_prompt = MultiAgentService._build_supervisor_prompt(supervisor, user_id=ticket.created_by)
 
+        # 提取质检官上一轮返工要求（如有），供逐项核对执行者是否落实
+        last_feedback = ''
+        for e in reversed(ticket.get_collaboration_log() or []):
+            if isinstance(e, dict) and e.get('role') == 'supervisor' and e.get('approved') is False:
+                last_feedback = (e.get('summary') or '').strip()
+                break
+
         review_messages = [
             {'role': 'system', 'content': supervisor_prompt},
             {'role': 'user', 'content': (
@@ -581,7 +611,8 @@ class MultiAgentService:
                 f'## 工单内容\n{ticket.content or ""}\n\n'
                 f'## 执行者的处理结果\n{executor_result.get("final_content", "")}\n\n'
                 f'## 执行者是否调用过工具\n{"是" if executor_result.get("tool_executed") else "否"}\n\n'
-                f'请审查执行者是否真正完成了工单要求，并给出验收结论。'
+                + (f'## 你上一轮的返工要求（请逐项核对执行者是否已逐项落实）\n{last_feedback}\n\n' if last_feedback else '')
+                + f'请审查执行者是否真正完成了工单要求，并给出验收结论。'
             )},
         ]
 

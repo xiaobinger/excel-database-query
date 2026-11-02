@@ -514,7 +514,7 @@ def _process_ticket_with_ai_async(ticket_id, app):
 
             messages = [
                 {'role': 'system', 'content': ticket_system_prompt},
-                {'role': 'user', 'content': f'## 工单编号: {ticket.ticket_no}\n## 标题: {ticket.title}\n## 涉及系统: {system_name}\n\n## 工单内容:\n{ticket.content}{att_lines}'},
+                {'role': 'user', 'content': f'## 工单编号: {ticket.ticket_no}\n## 标题: {ticket.title}\n## 涉及系统: {system_name}\n\n## 工单内容:\n{ticket.content}{att_lines}{_build_ticket_history_context(ticket)}'},
             ]
 
             from app.services.ai_service import AiService, filter_tools
@@ -876,6 +876,39 @@ def _process_ticket_with_ai_async(ticket_id, app):
                             db.session.rollback()
             except:
                 pass
+
+
+def _build_ticket_history_context(ticket, max_comments=5):
+    """构建工单历史处理记录（上次处理结果 + 协作记录 + 最近评论），
+    供重启/重新发起/返工补充处理时恢复上下文，避免执行者丢弃历史、忽视监督者反馈。"""
+    parts = []
+    if ticket.ai_result and ticket.ai_result.strip():
+        parts.append(f'### 上次处理结果\n{ticket.ai_result[:1500]}')
+    # 多Agent协作记录（执行者做了什么、质检官要求什么）
+    collab_entries = (ticket.get_collaboration_log() if hasattr(ticket, 'get_collaboration_log') else [])[-6:]
+    collab_lines = []
+    for e in collab_entries:
+        if not isinstance(e, dict):
+            continue
+        role = '执行者' if e.get('role') == 'executor' else '质检官'
+        summary = (e.get('summary') or '').strip()
+        if summary:
+            collab_lines.append(f'- [{role}] {summary[:400]}')
+    if collab_lines:
+        parts.append('### 历史协作记录（执行者处理与质检官意见）\n' + '\n'.join(collab_lines))
+    comments = ticket.comments or []
+    lines = []
+    for c in comments[-max_comments:]:
+        role = 'AI' if c.is_ai else '用户'
+        content = (c.content or '').strip()
+        if content:
+            lines.append(f'- [{c.action}] {role}: {content[:300]}')
+    if lines:
+        parts.append('### 最近沟通/操作记录\n' + '\n'.join(lines))
+    if not parts:
+        return ''
+    return ('\n\n## 历史处理记录（本次为重新处理，请结合以下历史上下文继续，'
+            '不要重复已成功的操作，重点落实监督者/提交人提出的新要求）\n' + '\n\n'.join(parts))
 
 
 def _build_ticket_ai_prompt(agent, system_name):
@@ -1736,7 +1769,9 @@ def update_status(ticket_id):
         ticket.closed_at = None
         ticket.reject_reason = None
         ticket.appeal_reason = None
-        # 清空上次AI处理结果和待确认任务信息
+        # 清空上次AI处理结果和待确认任务信息（先存档到评论，供重新处理时恢复上下文）
+        if ticket.ai_result and ticket.ai_result.strip():
+            _add_comment(ticket, None, f'🗂 上次AI处理结果（重启前存档，供后续处理参考）：\n\n{ticket.ai_result[:1500]}', 'ai_process', is_ai=True)
         ticket.ai_result = None
         ticket.clear_pending_action()
         # 重置多agent协作状态
@@ -1863,7 +1898,9 @@ def update_status(ticket_id):
         ticket.closed_at = None
         ticket.reject_reason = None
         ticket.appeal_reason = None
-        # 清空上次AI处理结果和待确认任务信息
+        # 清空上次AI处理结果和待确认任务信息（先存档到评论，供重新处理时恢复上下文）
+        if ticket.ai_result and ticket.ai_result.strip():
+            _add_comment(ticket, None, f'🗂 上次AI处理结果（重新发起前存档，供后续处理参考）：\n\n{ticket.ai_result[:1500]}', 'ai_process', is_ai=True)
         ticket.ai_result = None
         ticket.clear_pending_action()
         # 重置多agent协作状态
