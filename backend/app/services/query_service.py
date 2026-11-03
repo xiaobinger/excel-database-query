@@ -111,6 +111,7 @@ class QueryService:
                 all_results = {}
                 total_scripts = len(script_ids)
                 param_name = param_column
+                query_exec_error = False  # 是否存在连接/执行层面的错误（用于区分「无数据」与「执行失败」）
 
                 # 如果指定了sheet列表，按sheet分批执行；否则只读默认sheet
                 sheets_to_process = selected_sheets if selected_sheets else [None]
@@ -219,6 +220,7 @@ class QueryService:
 
                         if not connectors:
                             task.add_log(f'查询选项 [{script.name}] 没有可用的数据库连接', 'error')
+                            query_exec_error = True
                             continue
 
                         # 进度计算：基于已处理的参数数
@@ -295,6 +297,7 @@ class QueryService:
 
                 total_success = 0
                 total_failure = 0
+                total_written_rows = 0
 
                 # 按sheet逐个处理+写入（原子操作）
                 for sheet_idx, current_sheet in enumerate(sheets_to_process):
@@ -342,24 +345,34 @@ class QueryService:
                         )
 
                     task.add_log(f'工作表 [{sheet_label}] 结果已写入: {len(processed_results)}行数据')
+                    total_written_rows += len(processed_results)
 
-                # 最终状态更新
+                # 最终状态更新（以实际写入文件的数据行数为准，避免"查询成功但0行"时误报生成了文件）
                 task.total_rows = total_params
-                if total_success == 0:
-                    task.status = 'completed'
+                if total_written_rows == 0:
                     task.completed_at = datetime.utcnow()
                     task.total_rows = 0
                     task.output_file = None
                     task.success_count = total_success
                     task.failure_count = total_failure
                     task.progress = 100
-                    task.error_message = None
-                    task.add_log('查询执行完成，但未查询到任何数据，未生成结果文件', 'warning')
-                    db.session.commit()
-                    update_task_progress(task_id, 100, '查询执行完成（无数据）')
+                    if total_success == 0 and (total_failure > 0 or query_exec_error):
+                        # 所有查询均执行失败，按失败处理
+                        task.status = 'failed'
+                        task.error_message = '所有查询均执行失败，未生成结果文件'
+                        task.add_log(task.error_message, 'error')
+                        db.session.commit()
+                        update_task_progress(task_id, 100, '查询执行失败（所有查询均失败）', 'error')
+                    else:
+                        # 查询执行正常但未查询到任何数据，不生成结果文件
+                        task.status = 'completed'
+                        task.error_message = None
+                        task.add_log('查询执行完成，但未查询到任何数据，未生成结果文件', 'warning')
+                        db.session.commit()
+                        update_task_progress(task_id, 100, '查询执行完成（无数据）')
                     if on_complete:
                         try:
-                            on_complete(task_id, 'completed')
+                            on_complete(task_id, task.status)
                         except Exception as cb_err:
                             logger.error(f'查询任务完成回调异常: {cb_err}', exc_info=True)
                     return

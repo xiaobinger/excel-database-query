@@ -824,12 +824,16 @@ function startSSE(tid) {
           emitPetEvent('file_ready', { type: 'query', label: taskStatus.value?.output_file ? '查询结果' : '' })
         }
         store.notifyTaskChanged()
-        // direct模式执行完成后自动下载
+        // direct模式执行完成后自动下载（仅在有结果文件时；无数据时给出提示，避免误触发下载）
         if (data.status === 'completed' && directMode.value) {
           directMode.value = false
-          nextTick(() => {
-            downloadResult()
-          })
+          if (data.output_file) {
+            nextTick(() => {
+              downloadResult()
+            })
+          } else {
+            ElMessage.warning('本次未查询到匹配的数据，未生成结果文件')
+          }
         }
       }
     } catch {
