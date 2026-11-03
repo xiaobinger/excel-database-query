@@ -109,6 +109,23 @@ def _save_review_record(msg_id: int, review_record: dict, supervisor_agent_id: i
     db.session.commit()
 
 
+def _build_chat_supervisor_prompt(sup_agent, user_id, executor_agent_id):
+    """构建对话级监督者系统提示词：在监督者自身system_prompt基础上，
+    注入与执行者同一套的SKILLS/规则记忆（通用 + 执行者Agent专属），
+    保证监督者按执行者遵循的规则复核回复（与工单链路 _build_supervisor_prompt 对齐）。"""
+    prompt = (sup_agent.system_prompt or '') if sup_agent else ''
+    if not user_id:
+        return prompt
+    try:
+        from app.services.ai_service import AiService
+        memory_context = AiService.build_chat_context(user_id, agent_id=executor_agent_id)
+        if memory_context:
+            prompt = memory_context + '\n\n' + prompt
+    except Exception as ctx_err:
+        logger.warning(f'注入对话监督者SKILLS/规则记忆失败（不影响复核）: {ctx_err}')
+    return prompt
+
+
 def _summarize_tool_card(meta):
     """将工具卡片消息的metadata还原成模型可读的摘要文本，保持多轮对话的工具上下文"""
     td = meta.get('tool_data', {}) or {}
@@ -1620,7 +1637,8 @@ def send_message(chat_id):
                             from app.services.chat_supervisor import resolve_supervisor_agent, evaluate_tool_action
                             _sup_agent_nc = resolve_supervisor_agent(agent_id)
                             if _sup_agent_nc and _sup_agent_nc.can_confirm_execution:
-                                _sup_prompt_nc = _sup_agent_nc.system_prompt or ''
+                                # 注入执行者同一套SKILLS/规则记忆，保证工具评估与执行者遵循同一套规则
+                                _sup_prompt_nc = _build_chat_supervisor_prompt(_sup_agent_nc, current_user.id, agent_id)
                                 _nc_configs = ordered_configs[:3] if ordered_configs else []
                                 _nc_cfg_dicts = [{
                                     'api_key': c.get_api_key(),
@@ -2142,7 +2160,8 @@ def send_message_stream(chat_id):
                     _sup_max_rounds = (_sup_agent.max_supervisor_rounds or 3) if _sup_agent else 0
                     if _sup_agent:
                         logger.info(f'对话级监督者已启用: {_sup_agent.name}, 执行者Agent: {_current_agent.name}, 最大复核轮次={_sup_max_rounds}')
-                        _sup_prompt = _sup_agent.system_prompt or ''  # 提前快照，避免生成器执行时ORM过期
+                        # 提前快照（避免生成器执行时ORM过期），并注入执行者同一套SKILLS/规则记忆
+                        _sup_prompt = _build_chat_supervisor_prompt(_sup_agent, user_id, stream_agent_id)
                         _sup_id = _sup_agent.id
                     else:
                         _sup_prompt = None
