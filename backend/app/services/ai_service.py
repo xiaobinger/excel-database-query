@@ -102,7 +102,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "parse_uploaded_file",
-            "description": "解析Excel文件，返回工作表列表、列名、行数和数据预览。当用户上传了文件、提到附件，或需要查看某个Excel文件的内容时调用此工具。可传 file_path（推荐，来自上传接口返回值）或 filename（按上传文件名自动查找最新文件）；可通过 sheet_name 指定工作表、columns 指定预览列、preview_rows 指定预览行数。",
+            "description": "解析Excel文件，返回工作表列表、列名、行数和数据预览。当用户上传了文件、提到附件，或需要查看某个Excel文件的内容时调用此工具。可传 file_path（推荐，来自上传接口返回值）或 filename（按上传文件名自动查找最新文件）；可通过 sheet_name 指定工作表、columns 指定预览列、preview_rows 指定预览行数；如需某列的全部非空值（例如用于 IN 查询、核对清单），传 values_column 指定列名。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -126,6 +126,14 @@ AI_TOOLS = [
                     "preview_rows": {
                         "type": "integer",
                         "description": "可选，数据预览行数，默认5，最多20"
+                    },
+                    "values_column": {
+                        "type": "string",
+                        "description": "可选，要提取「所有非空值」的列名（表头名，大小写不敏感，也支持列字母如 A）。需要拿到某列完整数据（如用于 IN 查询、去重核对）时传入"
+                    },
+                    "max_values": {
+                        "type": "integer",
+                        "description": "可选，values_column 最多返回多少个非空值，默认200，最多1000"
                     }
                 },
                 "required": []
@@ -1381,9 +1389,17 @@ class AiService:
             preview_rows = 5
         preview_rows = max(1, min(preview_rows, 20))
 
+        values_column = (args.get('values_column') or '').strip() or None
+        try:
+            max_values = int(args.get('max_values') or 200)
+        except (TypeError, ValueError):
+            max_values = 200
+        max_values = max(1, min(max_values, 1000))
+
         try:
             data = ExcelService.parse_file(
-                resolved, sheet_name=sheet_name, preview_rows=preview_rows, columns=columns
+                resolved, sheet_name=sheet_name, preview_rows=preview_rows, columns=columns,
+                values_column=values_column, max_values=max_values
             )
         except Exception as e:
             logger.error(f'解析Excel文件失败: {resolved}, 错误: {e}', exc_info=True)
@@ -1397,7 +1413,7 @@ class AiService:
         preview = data.get('preview', {})
         preview['rows'] = [[_truncate(cell) for cell in row] for row in preview.get('rows', [])]
         file_info = data.get('file_info', {})
-        return {
+        result = {
             'file_path': resolved,
             'filename': os.path.basename(resolved),
             'active_sheet': data.get('active_sheet'),
@@ -1406,6 +1422,9 @@ class AiService:
             'sheets': data.get('sheets', []),
             'preview': preview,
         }
+        if data.get('column_values') is not None:
+            result['column_values'] = data['column_values']
+        return result
 
     @staticmethod
     def _tool_list_export_options(args: dict, user_id: int = None) -> dict:

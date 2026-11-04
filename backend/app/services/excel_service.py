@@ -131,8 +131,14 @@ class ExcelService:
 
     @staticmethod
     def parse_file(file_path: str, sheet_name: str = None, preview_rows: int = 5,
-                   columns: List[str] = None) -> Dict[str, Any]:
-        """解析Excel文件：返回工作表列表、当前工作表列名/行数及数据预览"""
+                   columns: List[str] = None, values_column: str = None,
+                   max_values: int = 200) -> Dict[str, Any]:
+        """解析Excel文件：返回工作表列表、当前工作表列名/行数及数据预览
+
+        Args:
+            values_column: 可选，需要提取「所有非空值」的列（表头名或列字母）
+            max_values: values_column 最多返回的值个数
+        """
         reader = ExcelReader(file_path)
         if not reader.load():
             raise ValueError(f"无法加载Excel文件: {file_path}")
@@ -143,11 +149,14 @@ class ExcelService:
                 reader.set_worksheet(sheet_name)
             file_info = reader.get_file_info()
             preview = reader.get_preview_rows(limit=preview_rows, columns=columns)
-            return {
+            result = {
                 'file_info': file_info,
                 'sheets': sheets,
                 'active_sheet': file_info.get('sheet_name'),
                 'preview': preview,
             }
+            if values_column:
+                result['column_values'] = reader.get_column_values(values_column, limit=max_values)
+            return result
         finally:
             reader.close()

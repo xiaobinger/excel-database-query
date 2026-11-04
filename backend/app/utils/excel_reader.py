@@ -370,6 +370,71 @@ class ExcelReader:
             logger.error(f"读取数据预览失败: {str(e)}")
             return {'headers': [], 'rows': [], 'total_rows': 0, 'missing_columns': []}
 
+    def get_column_values(self, column: str, limit: int = 200) -> Dict[str, Any]:
+        """读取指定列的所有非空值（按表头名或列字母定位）
+
+        Args:
+            column: 列名（表头名，大小写不敏感）或列字母（如 A）
+            limit: 最多返回的值个数，避免超长列返回过大
+
+        Returns:
+            dict: {column, values, total_non_empty, truncated, error?}
+        """
+        if not self.worksheet:
+            return {'column': column, 'values': [], 'total_non_empty': 0, 'truncated': False}
+
+        try:
+            from openpyxl.utils import column_index_from_string
+
+            header_row = next(
+                self.worksheet.iter_rows(min_row=1, max_row=1, values_only=True), ()
+            )
+            headers = [str(v).strip() if v is not None else '' for v in header_row]
+
+            index = next((i for i, h in enumerate(headers) if h == column), None)
+            if index is None:
+                index = next((i for i, h in enumerate(headers) if h.lower() == column.lower()), None)
+            if index is None:
+                try:
+                    index = column_index_from_string(column.strip().upper()) - 1
+                except Exception:
+                    index = None
+
+            if index is None:
+                return {
+                    'column': column,
+                    'values': [],
+                    'total_non_empty': 0,
+                    'truncated': False,
+                    'error': f'未找到列: {column}',
+                }
+
+            matched_name = headers[index] if index < len(headers) else column
+            limit = max(1, limit)
+            values = []
+            total = 0
+            for row in self.worksheet.iter_rows(min_row=2, values_only=True):
+                raw = row[index] if index < len(row) else None
+                if raw is None or (isinstance(raw, str) and not raw.strip()):
+                    continue
+                total += 1
+                if len(values) < limit:
+                    value = self._normalize_cell(raw)
+                    if isinstance(value, str):
+                        value = value.strip()
+                    values.append(value)
+
+            return {
+                'column': matched_name,
+                'values': values,
+                'total_non_empty': total,
+                'truncated': total > len(values),
+            }
+        except Exception as e:
+            logger.error(f"读取列非空值失败: {str(e)}")
+            return {'column': column, 'values': [], 'total_non_empty': 0,
+                    'truncated': False, 'error': str(e)}
+
     def close(self):
         """关闭工作簿"""
         if self.workbook:
