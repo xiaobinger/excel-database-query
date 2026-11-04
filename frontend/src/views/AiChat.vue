@@ -2733,7 +2733,7 @@ async function sendMessage() {
   let content = text
   if (uploadedFile.value) {
     const fileInfo = uploadedFile.value
-    const fileDesc = `用户上传了文件 "${fileInfo.filename}"（${fileInfo.row_count} 行，${fileInfo.columns.length} 列），列名：${fileInfo.columns.join(', ')}`
+    const fileDesc = `用户上传了文件 "${fileInfo.filename}"（${fileInfo.row_count} 行，${fileInfo.columns.length} 列），文件路径：${fileInfo.file_path || '无'}，列名：${fileInfo.columns.join(', ')}`
     content = text ? `${content}\n\n[${fileDesc}]` : fileDesc
   }
 

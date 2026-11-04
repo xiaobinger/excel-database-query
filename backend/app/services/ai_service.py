@@ -102,16 +102,33 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "parse_uploaded_file",
-            "description": "解析用户上传的Excel/CSV文件，获取列名、行数、数据预览等信息。当用户提到上传了文件或附件时调用此工具。",
+            "description": "解析Excel文件，返回工作表列表、列名、行数和数据预览。当用户上传了文件、提到附件，或需要查看某个Excel文件的内容时调用此工具。可传 file_path（推荐，来自上传接口返回值）或 filename（按上传文件名自动查找最新文件）；可通过 sheet_name 指定工作表、columns 指定预览列、preview_rows 指定预览行数。",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Excel文件的服务器路径（优先使用，通常来自上传接口返回的 file_path）"
+                    },
                     "filename": {
                         "type": "string",
-                        "description": "上传的文件名"
+                        "description": "已上传的文件名（用户原始文件名即可），未提供 file_path 时按此查找最新上传的文件"
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "可选，要解析的工作表名称，默认第一个工作表"
+                    },
+                    "columns": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "可选，只预览这些列（按列名），不传则预览前若干列"
+                    },
+                    "preview_rows": {
+                        "type": "integer",
+                        "description": "可选，数据预览行数，默认5，最多20"
                     }
                 },
-                "required": ["filename"]
+                "required": []
             }
         }
     },
@@ -1313,16 +1330,81 @@ class AiService:
 
     @staticmethod
     def _tool_parse_file(args: dict, user_id: int = None) -> dict:
-        """解析上传的文件信息"""
-        filename = args.get('filename', '')
-        if not filename:
-            return {'error': '未提供文件名'}
-        # 文件实际由前端上传后通过upload-file接口解析
-        # 这里只返回提示信息，让AI知道文件已上传
+        """解析Excel文件：工作表列表、列名、行数与数据预览"""
+        import os
+        from flask import current_app
+        from app.services.excel_service import ExcelService
+
+        file_path = (args.get('file_path') or '').strip()
+        filename = (args.get('filename') or '').strip()
+        if not file_path and not filename:
+            return {'error': '请提供 file_path（文件路径）或 filename（已上传的文件名）'}
+
+        upload_root = os.path.realpath(current_app.config.get('UPLOAD_FOLDER') or './uploads')
+        output_root = os.path.realpath(current_app.config.get('OUTPUT_FOLDER') or './outputs')
+        allowed_roots = [upload_root, output_root]
+
+        def _within_allowed(path: str) -> bool:
+            return any(path == root or path.startswith(root + os.sep) for root in allowed_roots)
+
+        if file_path:
+            resolved = os.path.realpath(file_path)
+            if not _within_allowed(resolved):
+                return {'error': '仅支持解析上传目录或输出目录中的文件'}
+            if not os.path.exists(resolved):
+                return {'error': f'文件不存在: {file_path}'}
+        else:
+            # 按原始文件名在uploads目录中查找最新上传的同名文件
+            candidates = []
+            if os.path.isdir(upload_root):
+                for dirpath, _, files in os.walk(upload_root):
+                    for name in files:
+                        if name == filename or name.endswith('_' + filename):
+                            full_path = os.path.realpath(os.path.join(dirpath, name))
+                            if os.path.isfile(full_path):
+                                candidates.append(full_path)
+            if not candidates:
+                return {'error': f'未找到已上传的文件 "{filename}"，请先上传文件或提供 file_path'}
+            resolved = max(candidates, key=os.path.getmtime)
+
+        ext = os.path.splitext(resolved)[1].lower()
+        if ext not in ('.xlsx', '.xlsm'):
+            return {'error': f'暂不支持 {ext or "未知"} 格式的文件解析，请使用 .xlsx 格式'}
+
+        sheet_name = (args.get('sheet_name') or '').strip() or None
+        columns = args.get('columns') or None
+        if isinstance(columns, str):
+            columns = [c.strip() for c in columns.split(',') if c.strip()]
+        try:
+            preview_rows = int(args.get('preview_rows') or 5)
+        except (TypeError, ValueError):
+            preview_rows = 5
+        preview_rows = max(1, min(preview_rows, 20))
+
+        try:
+            data = ExcelService.parse_file(
+                resolved, sheet_name=sheet_name, preview_rows=preview_rows, columns=columns
+            )
+        except Exception as e:
+            logger.error(f'解析Excel文件失败: {resolved}, 错误: {e}', exc_info=True)
+            return {'error': f'解析文件失败: {str(e)}'}
+
+        def _truncate(value):
+            if isinstance(value, str) and len(value) > 200:
+                return value[:200] + '…'
+            return value
+
+        preview = data.get('preview', {})
+        preview['rows'] = [[_truncate(cell) for cell in row] for row in preview.get('rows', [])]
+        file_info = data.get('file_info', {})
         return {
-            'filename': filename,
-            'status': 'uploaded',
-            'message': f'文件"{filename}"已上传，请根据文件列名分析并执行相应操作'
+            'file_path': resolved,
+            'filename': os.path.basename(resolved),
+            'active_sheet': data.get('active_sheet'),
+            'row_count': file_info.get('data_rows', 0),
+            'columns': file_info.get('column_names', []),
+            'sheets': data.get('sheets', []),
+            'preview': preview,
         }
 
     @staticmethod

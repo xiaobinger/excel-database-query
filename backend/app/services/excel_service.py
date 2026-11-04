@@ -128,3 +128,26 @@ class ExcelService:
             return reader.get_all_sheets_info()
         finally:
             reader.close()
+
+    @staticmethod
+    def parse_file(file_path: str, sheet_name: str = None, preview_rows: int = 5,
+                   columns: List[str] = None) -> Dict[str, Any]:
+        """解析Excel文件：返回工作表列表、当前工作表列名/行数及数据预览"""
+        reader = ExcelReader(file_path)
+        if not reader.load():
+            raise ValueError(f"无法加载Excel文件: {file_path}")
+
+        try:
+            sheets = reader.get_all_sheets_info()
+            if sheet_name:
+                reader.set_worksheet(sheet_name)
+            file_info = reader.get_file_info()
+            preview = reader.get_preview_rows(limit=preview_rows, columns=columns)
+            return {
+                'file_info': file_info,
+                'sheets': sheets,
+                'active_sheet': file_info.get('sheet_name'),
+                'preview': preview,
+            }
+        finally:
+            reader.close()

@@ -301,6 +301,75 @@ class ExcelReader:
             logger.error(f"获取所有工作表信息失败: {e}")
             return []
     
+    @staticmethod
+    def _normalize_cell(value: Any) -> Any:
+        """将单元格值转换为可 JSON 序列化的形式"""
+        from datetime import date, time
+        from decimal import Decimal
+
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.isoformat(sep=' ')
+        if isinstance(value, (date, time)):
+            return value.isoformat()
+        if isinstance(value, Decimal):
+            return float(value)
+        if isinstance(value, (int, float, bool, str)):
+            return value
+        return str(value)
+
+    def get_preview_rows(self, limit: int = 5,
+                         columns: Optional[List[str]] = None,
+                         max_cols: int = 50) -> Dict[str, Any]:
+        """读取表头与指定行数的数据预览
+
+        Args:
+            limit: 预览的数据行数（不含表头）
+            columns: 需要预览的列名列表，为空时按表头顺序取前 max_cols 列
+            max_cols: 未指定列时最多预览的列数，避免超宽表格返回过大
+        """
+        if not self.worksheet:
+            return {'headers': [], 'rows': [], 'total_rows': 0, 'missing_columns': []}
+
+        try:
+            total_rows = max(0, (self.worksheet.max_row or 0) - 1)
+            header_row = next(
+                self.worksheet.iter_rows(min_row=1, max_row=1, values_only=True), ()
+            )
+            headers = [str(v).strip() if v is not None else '' for v in header_row]
+
+            indices = []
+            missing_columns = []
+            if columns:
+                for name in columns:
+                    index = next((i for i, h in enumerate(headers) if h == name), None)
+                    if index is None:
+                        index = next((i for i, h in enumerate(headers) if h.lower() == name.lower()), None)
+                    if index is None:
+                        missing_columns.append(name)
+                    else:
+                        indices.append(index)
+            else:
+                indices = list(range(min(len(headers), max_cols)))
+
+            preview_headers = [headers[i] if i < len(headers) else f'列{i + 1}' for i in indices]
+            preview_rows = []
+            for row in self.worksheet.iter_rows(min_row=2, max_row=limit + 1, values_only=True):
+                preview_rows.append([
+                    self._normalize_cell(row[i]) if i < len(row) else None for i in indices
+                ])
+
+            return {
+                'headers': preview_headers,
+                'rows': preview_rows,
+                'total_rows': total_rows,
+                'missing_columns': missing_columns,
+            }
+        except Exception as e:
+            logger.error(f"读取数据预览失败: {str(e)}")
+            return {'headers': [], 'rows': [], 'total_rows': 0, 'missing_columns': []}
+
     def close(self):
         """关闭工作簿"""
         if self.workbook:
