@@ -8,6 +8,7 @@
 - 总消耗 = AI对话消耗 + 工单消耗
 - 时间维度按 created_at（UTC存储）聚合，与缓存统计口径保持一致
 """
+import json
 from datetime import datetime, timedelta
 
 from flask import Blueprint, jsonify, request
@@ -15,6 +16,7 @@ from sqlalchemy import func
 
 from app import db
 from app.models.ai_chat import AiChat, AiChatMessage
+from app.models.ai_config import AiConfig
 from app.models.ticket import Ticket
 from app.models.user import User
 from app.utils.auth import login_required, permission_required, get_current_user
@@ -248,6 +250,89 @@ def token_trend():
     } for k in keys]
 
     return jsonify({'success': True, 'data': {'trend': trend, 'granularity': granularity}})
+
+
+@token_stats_bp.route('/models', methods=['GET'])
+@permission_required('token_stats')
+def token_models():
+    """模型使用统计（支持时间范围）
+
+    - 对话Token/消息数：取 assistant 消息的 msg_metadata.model（协作模式下可能为
+      "大模型 + 小模型"），缺失时回退到 ai_chats.model_id 关联的配置模型名
+    - 工单使用次数：解析 tickets.ai_models_used（JSON数组），一条工单内同模型只计一次
+    - 排名按对话Token降序；「最受欢迎」取使用次数（消息数+工单次数）最高的模型
+    """
+    start = _parse_start_time()
+
+    q = db.session.query(
+        AiChatMessage.msg_metadata,
+        AiChatMessage.tokens_used,
+        AiChatMessage.prompt_tokens,
+        AiChatMessage.completion_tokens,
+        AiConfig.model_name,
+    ).join(AiChat, AiChatMessage.chat_id == AiChat.id).outerjoin(
+        AiConfig, AiChat.model_id == AiConfig.id,
+    ).filter(AiChatMessage.role == 'assistant')
+    if start is not None:
+        q = q.filter(AiChatMessage.created_at >= start)
+
+    models = {}
+
+    def entry(name):
+        return models.setdefault(name, {
+            'model': name, 'tokens': 0, 'prompt_tokens': 0,
+            'completion_tokens': 0, 'message_count': 0, 'ticket_count': 0,
+        })
+
+    for meta, tokens, prompt_tokens, completion_tokens, cfg_model in q.all():
+        name = None
+        if meta:
+            try:
+                name = (json.loads(meta) or {}).get('model')
+            except Exception:
+                name = None
+        if not name:
+            name = cfg_model or '(未知模型)'
+        item = entry(name)
+        item['tokens'] += int(tokens or 0)
+        item['prompt_tokens'] += int(prompt_tokens or 0)
+        item['completion_tokens'] += int(completion_tokens or 0)
+        item['message_count'] += 1
+
+    tk_q = db.session.query(Ticket.ai_models_used).filter(Ticket.ai_total_tokens > 0)
+    if start is not None:
+        tk_q = tk_q.filter(Ticket.created_at >= start)
+    for (raw,) in tk_q.all():
+        try:
+            used = json.loads(raw) if raw else []
+        except Exception:
+            used = []
+        if not isinstance(used, list) or not used:
+            used = ['(未知模型)']
+        for name in set(str(m) for m in used if m):
+            entry(name)['ticket_count'] += 1
+
+    ranking = list(models.values())
+    grand_total = sum(r['tokens'] for r in ranking)
+    for r in ranking:
+        r['usage_count'] = r['message_count'] + r['ticket_count']
+        r['share'] = round(r['tokens'] / grand_total * 100, 2) if grand_total > 0 else 0
+    ranking.sort(key=lambda x: (x['tokens'], x['usage_count']), reverse=True)
+    for i, r in enumerate(ranking):
+        r['rank'] = i + 1
+
+    top_model = None
+    if ranking:
+        top_model = max(ranking, key=lambda x: (x['usage_count'], x['tokens']))['model']
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'models': ranking,
+            'grand_total': grand_total,
+            'top_model': top_model,
+        }
+    })
 
 
 @token_stats_bp.route('/my', methods=['GET'])

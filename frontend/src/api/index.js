@@ -424,6 +424,7 @@ const tokenStats = {
   overview: (params) => http.get('/token-stats/overview', { params }),
   ranking: (params) => http.get('/token-stats/ranking', { params }),
   trend: (params) => http.get('/token-stats/trend', { params }),
+  models: (params) => http.get('/token-stats/models', { params }),
   my: () => http.get('/token-stats/my'),
 }
 

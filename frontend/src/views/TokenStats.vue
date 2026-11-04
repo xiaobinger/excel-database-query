@@ -89,6 +89,59 @@
       </el-col>
     </el-row>
 
+    <!-- 模型使用 -->
+    <el-row :gutter="16" class="chart-row">
+      <el-col :xs="24" :md="8">
+        <el-card shadow="never" class="chart-card">
+          <template #header><span class="card-title"><i class="fas fa-microchip"></i> 模型占比（AI对话Token）</span></template>
+          <div v-show="hasModelUsage" ref="modelChartRef" class="chart-body"></div>
+          <el-empty v-if="!hasModelUsage" description="暂无模型使用数据" :image-size="80" />
+        </el-card>
+      </el-col>
+      <el-col :xs="24" :md="16">
+        <el-card shadow="never" class="ranking-card">
+          <template #header>
+            <div class="ranking-header">
+              <span class="card-title"><i class="fas fa-trophy"></i> 模型使用排名</span>
+              <span class="ranking-tip">
+                <template v-if="topModel">
+                  <i class="fas fa-crown crown"></i> 最受欢迎：<b>{{ topModel }}</b>
+                </template>
+                <template v-else>按AI对话Token降序</template>
+              </span>
+            </div>
+          </template>
+          <el-table :data="models" v-loading="loading" size="default" max-height="320">
+            <el-table-column label="排名" width="70" align="center">
+              <template #default="{ row }">
+                <span class="rank-badge" :class="'rank-' + row.rank">{{ row.rank }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="模型" min-width="200">
+              <template #default="{ row }">
+                <span class="model-name">{{ row.model }}</span>
+                <el-tag v-if="row.model === topModel" size="small" type="warning" effect="light" class="top-tag">
+                  <i class="fas fa-crown"></i> 最受欢迎
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="tokens" label="对话Token" min-width="120" sortable align="right">
+              <template #default="{ row }">{{ fmtNum(row.tokens) }}</template>
+            </el-table-column>
+            <el-table-column prop="message_count" label="消息数" width="100" sortable align="right">
+              <template #default="{ row }">{{ fmtNum(row.message_count) }}</template>
+            </el-table-column>
+            <el-table-column prop="ticket_count" label="工单次数" width="100" sortable align="right">
+              <template #default="{ row }">{{ fmtNum(row.ticket_count) }}</template>
+            </el-table-column>
+            <el-table-column label="占比" width="90" align="right">
+              <template #default="{ row }">{{ row.share }}%</template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+      </el-col>
+    </el-row>
+
     <!-- 用户排名 -->
     <el-card shadow="never" class="ranking-card">
       <template #header>
@@ -151,19 +204,27 @@ const loading = ref(false)
 const overview = ref({ total_tokens: 0, ai_chat_tokens: 0, ticket_tokens: 0, prompt_tokens: 0, completion_tokens: 0, chat_message_count: 0, ticket_count: 0 })
 const ranking = ref([])
 const trend = ref([])
+const models = ref([])
+const topModel = ref('')
 
 const hasUsage = computed(() => overview.value.total_tokens > 0)
+const hasModelUsage = computed(() => models.value.some(m => m.tokens > 0))
 
 const fmtNum = (n) => (n ?? 0).toLocaleString('zh-CN')
 
 // ── 图表 ──────────────────────────────────────────────
 const pieChartRef = ref(null)
 const trendChartRef = ref(null)
+const modelChartRef = ref(null)
 let pieChart = null
 let trendChart = null
+let modelChart = null
 
 const SCENE_COLORS = { ai_chat: '#409eff', ticket: '#67c23a', total: '#e6a23c' }
 const SCENE_NAMES = { ai_chat: 'AI对话', ticket: '工单', total: '总量' }
+
+const MODEL_COLORS = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#9b59b6',
+  '#00b8a9', '#ff8c42', '#5470c6', '#91cc75', '#909399']
 
 function renderPieChart() {
   if (!pieChartRef.value) return
@@ -236,9 +297,53 @@ function renderTrendChart() {
   }, true)
 }
 
+function renderModelChart() {
+  if (!modelChartRef.value) return
+  if (!modelChart) modelChart = echarts.init(modelChartRef.value)
+  const rows = models.value.filter(m => m.tokens > 0)
+  const top = rows.slice(0, 8)
+  const rest = rows.slice(8)
+  const data = top.map((r, i) => ({
+    name: r.model, value: r.tokens,
+    itemStyle: { color: r.model === topModel.value ? '#f7ba2a' : MODEL_COLORS[i % MODEL_COLORS.length] },
+  }))
+  if (rest.length) {
+    data.push({
+      name: '其他', value: rest.reduce((s, r) => s + r.tokens, 0),
+      itemStyle: { color: '#c0c4cc' },
+    })
+  }
+  const topName = topModel.value && topModel.value.length > 16
+    ? topModel.value.slice(0, 16) + '…'
+    : (topModel.value || '-')
+  modelChart.setOption({
+    tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+    legend: { bottom: 0, type: 'scroll', itemWidth: 12, itemHeight: 12 },
+    series: [{
+      type: 'pie',
+      radius: ['45%', '70%'],
+      center: ['50%', '44%'],
+      itemStyle: { borderRadius: 6, borderColor: 'rgba(255,255,255,0.6)', borderWidth: 2 },
+      label: { show: false },
+      data,
+    }],
+    graphic: [
+      {
+        type: 'text', left: 'center', top: '39%',
+        style: { text: topName, textAlign: 'center', fill: '#303133', fontSize: 13, fontWeight: 600 },
+      },
+      {
+        type: 'text', left: 'center', top: '46%',
+        style: { text: '最受欢迎模型', textAlign: 'center', fill: '#909399', fontSize: 11 },
+      },
+    ],
+  }, true)
+}
+
 function resizeCharts() {
   pieChart?.resize()
   trendChart?.resize()
+  modelChart?.resize()
 }
 
 // ── 数据加载 ──────────────────────────────────────────
@@ -257,20 +362,32 @@ async function loadTrend() {
   trend.value = res.data?.trend || []
 }
 
+async function loadModels() {
+  const res = await api.tokenStats.models({ days: filters.days })
+  models.value = res.data?.models || []
+  topModel.value = res.data?.top_model || ''
+}
+
 async function reload() {
   loading.value = true
   try {
-    await Promise.all([loadOverview(), loadRanking(), loadTrend()])
+    await Promise.all([loadOverview(), loadRanking(), loadTrend(), loadModels()])
     await nextTick()
     renderPieChart()
     renderTrendChart()
+    renderModelChart()
+    resizeCharts()
   } finally {
     loading.value = false
   }
 }
 
 watch(() => filters.scene, () => renderTrendChart())
-watch(() => filters.granularity, loadTrend)
+watch(() => filters.granularity, async () => {
+  await loadTrend()
+  await nextTick()
+  renderTrendChart()
+})
 
 onMounted(() => {
   reload()
@@ -283,8 +400,10 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', resizeCharts)
   pieChart?.dispose()
   trendChart?.dispose()
+  modelChart?.dispose()
   pieChart = null
   trendChart = null
+  modelChart = null
 })
 </script>
 
@@ -428,6 +547,25 @@ onBeforeUnmount(() => {
 
 .rank-user {
   font-weight: 500;
+}
+
+.model-name {
+  font-weight: 500;
+  margin-right: 8px;
+  word-break: break-all;
+}
+
+.top-tag {
+  flex-shrink: 0;
+}
+
+.top-tag i {
+  margin-right: 3px;
+}
+
+.crown {
+  color: #f7ba2a;
+  margin-right: 2px;
 }
 
 .total-cell {
