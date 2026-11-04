@@ -1392,7 +1392,19 @@
                 <el-tag v-if="p.required" size="small" type="danger" effect="plain">必填</el-tag>
               </div>
               <div class="param-item-control">
-                <template v-if="p.type === 'date'">
+                <template v-if="p.type === 'list'">
+                  <el-select
+                    v-model="lookupParamDialogValues[p.name]"
+                    multiple
+                    filterable
+                    allow-create
+                    default-first-option
+                    :reserve-keyword="false"
+                    :placeholder="'请输入' + (p.label || p.name) + '，回车添加多个值'"
+                    style="width: 100%"
+                  />
+                </template>
+                <template v-else-if="p.type === 'date'">
                   <el-date-picker
                     v-model="lookupParamDialogValues[p.name]"
                     type="date"
@@ -1848,6 +1860,10 @@ const lookupParamCanConfirm = computed(() => {
   for (const p of script.params) {
     if (!p.required) continue
     const val = lookupParamDialogValues.value[p.name]
+    if (Array.isArray(val)) {
+      if (val.length === 0) return false
+      continue
+    }
     if (val === undefined || val === null || val === '') return false
   }
   return true
@@ -4500,8 +4516,17 @@ function openLookupParamDialog(msg) {
   const values = {}
   if (script.params) {
     for (const p of script.params) {
-      if (existingValues[p.name] !== undefined && existingValues[p.name] !== '') {
-        values[p.name] = existingValues[p.name]
+      const existing = existingValues[p.name]
+      if (p.type === 'list') {
+        if (Array.isArray(existing)) {
+          values[p.name] = existing
+        } else if (existing !== undefined && existing !== null && existing !== '') {
+          values[p.name] = String(existing).split(/[,，]/).map(v => v.trim()).filter(Boolean)
+        } else {
+          values[p.name] = []
+        }
+      } else if (existing !== undefined && existing !== '') {
+        values[p.name] = existing
       } else {
         values[p.name] = ''
       }

@@ -450,6 +450,7 @@
                   <el-option value="text" label="文本" />
                   <el-option value="number" label="数字" />
                   <el-option value="date" label="日期" />
+                  <el-option value="list" label="列表" />
                 </el-select>
                 <el-checkbox v-model="param.required" size="small" label="必填" style="margin-left: 4px" />
                 <el-button size="small" text type="danger" @click="removeParam(idx)">

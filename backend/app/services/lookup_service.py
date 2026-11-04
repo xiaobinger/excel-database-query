@@ -452,7 +452,7 @@ class LookupService:
     @staticmethod
     def _normalize_multi_params(params_values: Dict[str, Any],
                                 script_params: List[dict]) -> Dict[str, Any]:
-        """把 params_config 中 multi=true 的参数值规范化为列表。
+        """把 params_config 中多值参数（multi=true 或 type='list'）的值规范化为列表。
 
         - list/tuple：过滤空值
         - 字符串：按 , / ， 拆分并 strip（兼容自由文本多值输入）
@@ -463,7 +463,8 @@ class LookupService:
 
         multi_names = {
             p.get('name') for p in (script_params or [])
-            if isinstance(p, dict) and p.get('multi') and p.get('name')
+            if isinstance(p, dict) and p.get('name')
+            and (p.get('multi') or p.get('type') == 'list')
         }
         if not multi_names:
             return params_values
