@@ -420,4 +420,11 @@ const dataDashboard = {
   clearCache: () => http.post('/dashboard/cache/clear'),
 }
 
-export default { auth, users, logs, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, mcp, openApi, business, systemTask, lookup, profitShare, tickets, pay, payFlow, dataDashboard }
+const tokenStats = {
+  overview: (params) => http.get('/token-stats/overview', { params }),
+  ranking: (params) => http.get('/token-stats/ranking', { params }),
+  trend: (params) => http.get('/token-stats/trend', { params }),
+  my: () => http.get('/token-stats/my'),
+}
+
+export default { auth, users, logs, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, mcp, openApi, business, systemTask, lookup, profitShare, tickets, pay, payFlow, dataDashboard, tokenStats }

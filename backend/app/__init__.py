@@ -62,6 +62,8 @@ def create_app(config_name='default'):
         _migrate_api_call_log_columns(app)
         _migrate_api_call_log_session(app)
         _init_default_admin(app)
+        from app.routes.system_routes import merge_new_menu_items
+        merge_new_menu_items(app)
         _migrate_dashboard_scripts_to_scripts(app)
         _init_connection_pool(app)
         _recover_stale_ai_tickets(app)
@@ -198,6 +200,7 @@ def _register_blueprints(app):
     from app.routes.profit_share_routes import profit_share_bp
     from app.routes.task_routes import task_bp
     from app.routes.ticket_routes import ticket_bp
+    from app.routes.token_stats_routes import token_stats_bp
     from app.routes.pay_routes import pay_bp
     from app.routes.pay_flow_routes import pay_flow_bp
     from app.routes.dashboard_routes import dashboard_bp
@@ -227,6 +230,7 @@ def _register_blueprints(app):
     app.register_blueprint(profit_share_bp)
     app.register_blueprint(task_bp)
     app.register_blueprint(ticket_bp)
+    app.register_blueprint(token_stats_bp)
     app.register_blueprint(pay_bp)
     app.register_blueprint(pay_flow_bp)
     app.register_blueprint(dashboard_bp)
@@ -575,7 +579,7 @@ def _init_default_admin(app):
         # 确保管理员角色包含新菜单权限
         try:
             menus = json.loads(admin_role.menu_permissions) if admin_role.menu_permissions else []
-            new_menus = ['ai_chat', 'ai_sessions', 'skills', 'agent_manager', 'mcp_servers', 'open_api', 'cache_stats', 'business_systems', 'system_tasks', 'profit_share', 'tickets', 'system_map', 'pay_withdraw', 'pay_flow', 'pay_flow_executions', 'data_dashboard']
+            new_menus = ['ai_chat', 'ai_sessions', 'skills', 'agent_manager', 'mcp_servers', 'open_api', 'cache_stats', 'business_systems', 'system_tasks', 'profit_share', 'tickets', 'system_map', 'pay_withdraw', 'pay_flow', 'pay_flow_executions', 'data_dashboard', 'ticket_analytics', 'token_stats']
             updated = False
             for m in new_menus:
                 if m not in menus:

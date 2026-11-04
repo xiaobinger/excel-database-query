@@ -68,6 +68,29 @@
             <i class="fas fa-circle" style="font-size: 8px; margin-right: 4px"></i>
             {{ serverOnline ? '服务正常' : '服务异常' }}
           </el-tag>
+          <el-tooltip v-if="myTokens" effect="dark" placement="bottom">
+            <template #content>
+              <div class="token-tip">
+                <div class="token-tip-title">我的Token消耗</div>
+                <div>总消耗：{{ fmtNum(myTokens.total_tokens) }}</div>
+                <div>AI对话：{{ fmtNum(myTokens.ai_chat_tokens) }}</div>
+                <div>工单：{{ fmtNum(myTokens.ticket_tokens) }}</div>
+                <div>今日：{{ fmtNum(myTokens.today_tokens) }}</div>
+                <div>近30天：{{ fmtNum(myTokens.last_30d_tokens) }}</div>
+              </div>
+            </template>
+            <el-tag
+              :type="myTokens.total_tokens > 0 ? 'warning' : 'info'"
+              effect="plain"
+              size="small"
+              class="token-tag"
+              title="我的Token消耗"
+              @click="goTokenStats"
+            >
+              <i class="fas fa-coins" style="font-size: 10px; margin-right: 4px"></i>
+              {{ fmtCompact(myTokens.total_tokens) }}
+            </el-tag>
+          </el-tooltip>
           <ThemeSwitch />
           <TaskBadge />
           <el-dropdown trigger="click" @command="handleUserCommand">
@@ -150,6 +173,30 @@
       :close-on-click-modal="false"
     >
       <el-form :model="profileForm" label-width="80px" label-position="right">
+        <div v-if="myTokens" class="token-summary">
+          <div class="token-summary-title"><i class="fas fa-coins"></i> Token消耗统计</div>
+          <div class="token-summary-grid">
+            <div class="token-summary-item">
+              <div class="ts-label">总消耗</div>
+              <div class="ts-value">{{ fmtCompact(myTokens.total_tokens) }}</div>
+            </div>
+            <div class="token-summary-item">
+              <div class="ts-label">AI对话</div>
+              <div class="ts-value chat">{{ fmtCompact(myTokens.ai_chat_tokens) }}</div>
+            </div>
+            <div class="token-summary-item">
+              <div class="ts-label">工单</div>
+              <div class="ts-value ticket">{{ fmtCompact(myTokens.ticket_tokens) }}</div>
+            </div>
+            <div class="token-summary-item">
+              <div class="ts-label">近30天</div>
+              <div class="ts-value recent">{{ fmtCompact(myTokens.last_30d_tokens) }}</div>
+            </div>
+          </div>
+          <div class="token-summary-sub">
+            今日 {{ fmtNum(myTokens.today_tokens) }} · 对话消息 {{ fmtNum(myTokens.chat_message_count) }} 条 · AI工单 {{ fmtNum(myTokens.ticket_count) }} 个
+          </div>
+        </div>
         <el-form-item label="头像">
           <div class="avatar-uploader">
             <el-avatar :size="80" :src="profileForm.avatarUrl" :fit="cover" class="profile-avatar">
@@ -224,7 +271,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
 import { useAppStore } from '../stores'
 import { useTaskMonitorStore } from '../stores/taskMonitor'
@@ -246,6 +293,7 @@ import ChickPet from './pets/ChickPet.vue'
 import { titleMap } from '../config/menuConfig'
 
 const route = useRoute()
+const router = useRouter()
 const store = useAppStore()
 const monitor = useTaskMonitorStore()
 const isCollapsed = ref(localStorage.getItem('sidebar_collapsed') === 'true')
@@ -286,6 +334,34 @@ const petEnabled = computed(() => store.user?.pet_enabled !== false)
 
 /** AI宠物当前造型（默认 robot） */
 const petStyle = computed(() => store.user?.pet_style || 'robot')
+
+/** 我的Token消耗指标（顶栏与个人中心展示） */
+const myTokens = ref(null)
+
+async function loadMyTokens() {
+  try {
+    const res = await api.tokenStats.my()
+    myTokens.value = res.data || res
+  } catch {
+  }
+}
+
+function fmtNum(n) {
+  return (n ?? 0).toLocaleString('zh-CN')
+}
+
+function fmtCompact(n) {
+  n = n || 0
+  if (n >= 100000000) return (n / 100000000).toFixed(2) + '亿'
+  if (n >= 10000) return (n / 10000).toFixed(1) + '万'
+  return n.toLocaleString('zh-CN')
+}
+
+function goTokenStats() {
+  if (store.hasMenuPermission('token_stats')) {
+    router.push('/token-stats')
+  }
+}
 
 function toggleCollapse() {
   isCollapsed.value = !isCollapsed.value
@@ -370,6 +446,7 @@ function handleUserCommand(command) {
 }
 
 function openProfileDialog() {
+  loadMyTokens()
   const u = store.user || {}
   Object.assign(profileForm, {
     username: u.username || '',
@@ -481,6 +558,8 @@ onMounted(() => {
   updateSidebarColors()
   checkServer()
   serverTimer = setInterval(checkServer, 30000)
+  // 加载我的Token消耗指标
+  loadMyTokens()
   // 启动任务监控轮询
   monitor.start()
 })
@@ -636,6 +715,82 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 16px;
+}
+
+.token-tag {
+  cursor: pointer;
+}
+
+.token-tag:hover {
+  opacity: 0.85;
+}
+
+.token-tip {
+  line-height: 1.8;
+  font-size: 12px;
+}
+
+.token-tip-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+  padding-bottom: 4px;
+}
+
+.token-summary {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: var(--main-bg, #f5f7fa);
+  border: 1px dashed var(--border-color, #e4e7ed);
+}
+
+.token-summary-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #303133);
+  margin-bottom: 10px;
+}
+
+.token-summary-title i {
+  color: #e6a23c;
+  margin-right: 4px;
+}
+
+.token-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.token-summary-item {
+  background: var(--card-bg, #fff);
+  border-radius: 8px;
+  padding: 10px 8px;
+  text-align: center;
+}
+
+.ts-label {
+  font-size: 12px;
+  color: var(--text-secondary, #909399);
+}
+
+.ts-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary, #303133);
+  margin-top: 2px;
+}
+
+.ts-value.chat { color: #409eff; }
+.ts-value.ticket { color: #67c23a; }
+.ts-value.recent { color: #e6a23c; }
+
+.token-summary-sub {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-muted, #c0c4cc);
+  text-align: center;
 }
 
 .user-info {

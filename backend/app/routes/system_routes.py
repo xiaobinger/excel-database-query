@@ -41,6 +41,7 @@ ALL_MENU_ITEMS = [
     {"path": "/pay-flow", "title": "代付流程编排", "icon": "fa-route", "permission": "pay_flow"},
     {"path": "/pay-flow-executions", "title": "代付流程执行记录", "icon": "fa-list-check", "permission": "pay_flow_executions"},
     {"path": "/ticket-analytics", "title": "工单统计", "icon": "fa-chart-pie", "permission": "ticket_analytics"},
+    {"path": "/token-stats", "title": "Token统计", "icon": "fa-coins", "permission": "token_stats"},
     {"path": "/system-map", "title": "系统地图", "icon": "fa-sitemap", "permission": "system_map"},
     {"path": "/data-dashboard", "title": "运营数据看板", "icon": "fa-chart-line", "permission": "data_dashboard"},
     {"path": "/login-logs", "title": "登录日志", "icon": "fa-sign-in-alt", "permission": "login_logs"},
@@ -78,6 +79,7 @@ DEFAULT_MENU_CONFIG = [
         {"path": "/business", "title": "业务系统", "icon": "fa-building", "permission": "business_systems", "visible": True},
         {"path": "/system-tasks", "title": "系统任务", "icon": "fa-cogs", "permission": "system_tasks", "visible": True},
         {"path": "/tickets", "title": "工单管理", "icon": "fa-tasks", "permission": "tickets", "visible": True},
+        {"path": "/token-stats", "title": "Token统计", "icon": "fa-coins", "permission": "token_stats", "visible": True},
         {"path": "/system-map", "title": "系统地图", "icon": "fa-sitemap", "permission": "system_map", "visible": True},
         {"path": "/login-logs", "title": "登录日志", "icon": "fa-sign-in-alt", "permission": "login_logs", "visible": True},
         {"path": "/operation-logs", "title": "操作日志", "icon": "fa-clipboard-list", "permission": "operation_logs", "visible": True},
@@ -252,6 +254,88 @@ def test_dingtalk():
 
 
 # ── 菜单配置 API ──────────────────────────────────────────
+
+# 新增菜单项自动合并跟踪：已保存过菜单配置的系统不会自动出现后续版本新增的菜单，
+# 这里维护一份"需合并进已有配置的新菜单项"清单，启动时一次性合并并记录，
+# 之后完全交由系统地图（管理员）管理，不会再次强制添加。
+MERGE_TRACK_KEY = 'menu_config_merged_items'
+
+MERGE_NEW_ITEMS = [
+    {"path": "/token-stats", "title": "Token统计", "icon": "fa-coins", "permission": "token_stats", "group": "系统管理"},
+]
+
+
+def merge_new_menu_items(app):
+    """启动时将新增菜单项合并进数据库中已保存的菜单配置（每个新项仅合并一次）"""
+    from app import db as _db
+    with app.app_context():
+        try:
+            config = SystemConfig.query.filter_by(config_key=MENU_CONFIG_KEY).first()
+            if not config or not config.config_value:
+                return
+            try:
+                menu_config = json.loads(config.config_value)
+            except json.JSONDecodeError:
+                return
+            if not isinstance(menu_config, list):
+                return
+
+            track = SystemConfig.query.filter_by(config_key=MERGE_TRACK_KEY).first()
+            merged = []
+            if track and track.config_value:
+                try:
+                    merged = json.loads(track.config_value)
+                except json.JSONDecodeError:
+                    merged = []
+
+            # 收集已配置中存在的所有菜单path
+            existing_paths = set()
+
+            def _collect(items):
+                for it in items:
+                    if not isinstance(it, dict):
+                        continue
+                    if it.get('type') == 'group':
+                        _collect(it.get('children') or [])
+                    elif it.get('path'):
+                        existing_paths.add(it['path'])
+
+            _collect(menu_config)
+
+            changed = False
+            added_titles = []
+            for menu in MERGE_NEW_ITEMS:
+                if menu['permission'] in merged or menu['path'] in existing_paths:
+                    continue
+                item = {"path": menu['path'], "title": menu['title'], "icon": menu['icon'],
+                        "permission": menu['permission'], "visible": True}
+                group_title = menu.get('group')
+                group = next((g for g in menu_config if isinstance(g, dict)
+                              and g.get('type') == 'group' and g.get('title') == group_title), None)
+                if group is None:
+                    group = {"type": "group", "title": group_title, "icon": "fa-cog",
+                             "visible": True, "children": []}
+                    menu_config.append(group)
+                group.setdefault('children', []).append(item)
+                merged.append(menu['permission'])
+                added_titles.append(menu['title'])
+                changed = True
+
+            if changed:
+                config.config_value = json.dumps(menu_config, ensure_ascii=False)
+                if track is None:
+                    track = SystemConfig(config_key=MERGE_TRACK_KEY, description='已自动合并进菜单配置的新增菜单项')
+                    _db.session.add(track)
+                track.config_value = json.dumps(merged, ensure_ascii=False)
+                _db.session.commit()
+                app.logger.info(f'菜单配置已自动合并新增菜单项: {added_titles}')
+        except Exception as e:
+            try:
+                _db.session.rollback()
+            except Exception:
+                pass
+            app.logger.warning(f'合并新增菜单项失败: {e}')
+
 
 @system_bp.route('/menu-config', methods=['GET'])
 @login_required
