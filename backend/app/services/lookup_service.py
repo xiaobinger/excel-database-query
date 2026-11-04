@@ -12,7 +12,8 @@ from app.utils.db_connector import DatabaseConnector
 from app.utils.sql_validator import SQLValidator
 from app.utils.sql_template import (
     has_jinja_syntax, render_jinja_structure, render_jinja_with_params,
-    render_sql_template, resolve_script_template_params
+    render_sql_template, resolve_script_template_params, format_sql_list,
+    render_list_placeholders
 )
 from app.utils.error_sanitizer import sanitize_error_for_user
 
@@ -186,6 +187,10 @@ class LookupService:
                 params_values = mapped
                 logger.info(f'Lookup参数映射: 映射后={params_values}, SQL参数={all_sql_params}')
 
+            # 4.5 多值参数规范化（params_config 中 multi=true 的参数）：
+            #     字符串按逗号拆分为列表，统一交给后续渲染层格式化为 IN 字面量列表
+            params_values = LookupService._normalize_multi_params(params_values, script_params)
+
             # 5. 校验与渲染（按书写模式分流）
             if is_dynamic_template:
                 # 动态模板模式：复用查询/导出的模板渲染入口，
@@ -272,7 +277,11 @@ class LookupService:
                     }
                 sql = LookupService._replace_placeholders(sql, params_values)
 
-            # 6. 打印最终渲染出的执行 SQL（动态 SQL 排查用）：
+            # 6. 列表型 bind 参数展开（IN (:ids) / IN (%(ids)s)）：
+            #    把列表参数展开成 :ids_0, :ids_1 ...，并生成对应的绑定值
+            sql, params_values = LookupService._expand_list_bind_params(sql, params_values)
+
+            # 6.5 打印最终渲染出的执行 SQL（动态 SQL 排查用）：
             #    确认参数是否正确内联、引号是否缺失（如 m.code = {{ param }}
             #    未手写引号时，VARCHAR 列会被 MySQL 隐式转数字比较导致匹配不到数据）
             sql_log = sql if len(sql) <= 4000 else sql[:4000] + f'...(共{len(sql)}字符，已截断)'
@@ -415,11 +424,18 @@ class LookupService:
         Returns:
             替换后的 SQL 语句
         """
+        # 多值参数优先整体替换（兼容 IN ('{{ids}}') 与 IN ({{ids}}) 两种写法），
+        # 其余普通参数走下方逐值替换
+        sql = render_list_placeholders(sql, params_values or {})
+
         def replacer(match):
             param_name = match.group(1)
             value = params_values.get(param_name)
             if value is None:
                 return "''"
+            if isinstance(value, (list, tuple)):
+                # 多值参数（IN 列表）：渲染为 'a', 'b', 'c'；空列表渲染为 NULL
+                return format_sql_list(value)
             if isinstance(value, str):
                 escaped = value.replace("'", "''")
                 return f"'{escaped}'"
@@ -432,6 +448,107 @@ class LookupService:
                 return f"'{escaped}'"
 
         return re.sub(r'\{\{\s*(\w+)\s*\}\}', replacer, sql)
+
+    @staticmethod
+    def _normalize_multi_params(params_values: Dict[str, Any],
+                                script_params: List[dict]) -> Dict[str, Any]:
+        """把 params_config 中 multi=true 的参数值规范化为列表。
+
+        - list/tuple：过滤空值
+        - 字符串：按 , / ， 拆分并 strip（兼容自由文本多值输入）
+        - 空值：转为 []（渲染为 IN (NULL)，不会命中任何数据）
+        """
+        if not params_values:
+            return params_values or {}
+
+        multi_names = {
+            p.get('name') for p in (script_params or [])
+            if isinstance(p, dict) and p.get('multi') and p.get('name')
+        }
+        if not multi_names:
+            return params_values
+
+        normalized = dict(params_values)
+        for name in multi_names:
+            if name not in normalized:
+                continue
+            raw = normalized[name]
+            if raw is None:
+                normalized[name] = []
+            elif isinstance(raw, (list, tuple)):
+                normalized[name] = [str(v).strip() for v in raw
+                                    if v is not None and str(v).strip() != '']
+            else:
+                text_val = str(raw).strip()
+                normalized[name] = [p.strip() for p in re.split(r'[,，]', text_val) if p.strip()]
+        return normalized
+
+    @staticmethod
+    def _expand_list_bind_params(sql: str, params_values: Dict[str, Any]):
+        """展开列表型 bind 参数，返回 (sql, params)。
+
+        支持 IN (:ids) / NOT IN (:ids) / IN (%(ids)s) 写法：
+        列表值展开为 :ids_0, :ids_1 ... 并补齐对应绑定值；
+        空列表渲染为 IN (NULL)（不会命中数据）。
+        非 IN 场景下：单值绑定标量，多值按逗号展开。
+        """
+        if not sql or not params_values:
+            return sql, params_values
+
+        list_params = {k: v for k, v in params_values.items() if isinstance(v, (list, tuple))}
+        if not list_params:
+            return sql, params_values
+
+        params = dict(params_values)
+        for name, raw in list_params.items():
+            items = [str(v).strip() for v in raw if v is not None and str(v).strip() != '']
+            escaped = re.escape(name)
+            keys = [f'{name}_{i}' for i in range(len(items))]
+            colon_bind = rf'(?<!:):{escaped}\b'
+            pyformat_bind = f'%({name})s'
+
+            def _in_replacer(match, items=items, keys=keys):
+                if not items:
+                    return f'{match.group(1)}NULL{match.group(2)}'
+                return f'{match.group(1)}{", ".join(":" + k for k in keys)}{match.group(2)}'
+
+            # 1) IN / NOT IN 子句内直接展开为多个 bind 参数
+            sql = re.sub(
+                rf'(\b(?:not\s+)?in\s*\()\s*(?::{escaped}\b|%\({escaped}\)s)\s*(\))',
+                _in_replacer, sql, flags=re.IGNORECASE
+            )
+            # 兼容不带括号的写法 IN :ids / IN %(ids)s
+            sql = re.sub(
+                rf'(\b(?:not\s+)?in)\s+(?::{escaped}\b|%\({escaped}\)s)',
+                lambda m, items=items, keys=keys: (
+                    f'{m.group(1)} (NULL)' if not items
+                    else f'{m.group(1)} ({", ".join(":" + k for k in keys)})'
+                ),
+                sql, flags=re.IGNORECASE
+            )
+
+            if not items:
+                # 空列表：剩余裸引用替换为 NULL（= NULL / IN (NULL) 均不命中）
+                sql = re.sub(colon_bind, 'NULL', sql)
+                sql = sql.replace(pyformat_bind, 'NULL')
+                params.pop(name, None)
+                continue
+
+            # 2) IN 之外的裸引用：单值绑定标量，多值逗号展开
+            has_bare = bool(re.search(colon_bind, sql) or pyformat_bind in sql)
+            if has_bare and len(items) == 1:
+                params[name] = items[0]
+            elif has_bare:
+                sql = re.sub(colon_bind, ', '.join(':' + k for k in keys), sql)
+                sql = sql.replace(pyformat_bind, ', '.join(f'%({k})s' for k in keys))
+
+            # IN 展开所需的逐项绑定值
+            for i, item in enumerate(items):
+                params[f'{name}_{i}'] = item
+            if not (has_bare and len(items) == 1):
+                params.pop(name, None)
+
+        return sql, params
 
     @staticmethod
     def _extract_bind_params(sql: str) -> List[str]:

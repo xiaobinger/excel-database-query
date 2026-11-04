@@ -34,6 +34,53 @@ def _sql_finalize(value):
     return str(value).replace("'", "''")
 
 
+def format_sql_literal(value) -> str:
+    """将单个值格式化为 SQL 字面量（带引号与转义）"""
+    if value is None:
+        return 'NULL'
+    if isinstance(value, bool):
+        return '1' if value else '0'
+    if isinstance(value, (int, float)):
+        return str(value)
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def format_sql_list(values) -> str:
+    """将列表格式化为 IN 子句可用的 SQL 字面量列表：'a', 'b', 'c'
+
+    空列表返回 NULL（即 IN (NULL)，不会命中任何数据）。
+    """
+    if not values:
+        return 'NULL'
+    items = [v for v in values if v is not None and str(v).strip() != '']
+    if not items:
+        return 'NULL'
+    return ', '.join(format_sql_literal(v) for v in items)
+
+
+_LIST_PLACEHOLDER_PATTERN = re.compile(r"""(['"]?)\s*\{\{\s*(\w+)\s*\}\}\s*\1""")
+
+
+def render_list_placeholders(template: str, values: dict) -> str:
+    """渲染前将列表参数的 {{ name }} 占位符替换为 SQL 字面量列表
+
+    同时兼容 '{{ name }}' / "{{ name }}" 的写法（整体替换，引号一并去掉），
+    例如 IN ('{{ ids }}') 与 IN ({{ ids }}) 都会渲染为 IN ('a', 'b')。
+    非列表参数保持原样，交给 Jinja2 正常渲染。
+    """
+    if not template or not values:
+        return template
+
+    def _replace(match):
+        name = match.group(2)
+        value = values.get(name)
+        if isinstance(value, (list, tuple)):
+            return format_sql_list(value)
+        return match.group(0)
+
+    return _LIST_PLACEHOLDER_PATTERN.sub(_replace, template)
+
+
 def _clean_blank_lines(rendered: str) -> str:
     """清理 Jinja 控制标签残留的空白行"""
     lines = [line.rstrip() for line in rendered.split('\n')]
@@ -75,6 +122,7 @@ def render_jinja_with_params(template: str, params: dict = None) -> str:
     context.setdefault('today', now.strftime('%Y-%m-%d'))
     context.setdefault('current_month', now.strftime('%Y%m'))
     context.setdefault('current_year', now.strftime('%Y'))
+    template = render_list_placeholders(template, context)
     rendered = env.from_string(template).render(**context)
     return _clean_blank_lines(rendered)
 
@@ -103,13 +151,13 @@ def _resolve_param_value(var_config: dict, export_params: dict):
         return None
     if isinstance(raw, (list, tuple)):
         parts = [str(x).strip() for x in raw if str(x).strip()]
-        if not parts:
-            return None
         if part == 'start':
-            return parts[0]
+            return parts[0] if parts else None
         if part == 'end':
-            return parts[-1]
-        return ','.join(parts)
+            return parts[-1] if parts else None
+        # 多值参数：即使为空列表也返回 []，让 {% if ids %} 正常走 false 分支，
+        # 避免 StrictUndefined 下 {{ ids }} 直接报错
+        return parts
     if part in ('start', 'end'):
         parts = [p.strip() for p in str(raw).split(',') if p.strip()]
         if not parts:
@@ -267,6 +315,7 @@ def render_sql_template(template: str, template_config: list, params: dict = Non
     context['current_year'] = now.strftime('%Y')
 
     try:
+        template = render_list_placeholders(template, context)
         tmpl = Template(template, undefined=StrictUndefined)
         result = tmpl.render(**context)
         # 清理多余空行
