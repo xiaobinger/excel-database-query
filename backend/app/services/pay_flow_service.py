@@ -159,7 +159,10 @@ def start_flow(template_id, rows, params, created_by=None):
             summary_notify_template_id=summary_notify_template_id,
         )
         execution.set_row_data(row)
-        execution.set_context({})
+        # 将发起参数（channel/environment/interface_type/real_time/execute_type 等）
+        # 存入上下文，供 _execute_pay_node 优先于模板节点配置使用——
+        # 否则用户发起流程时选择的环境会被节点配置默认值(test)覆盖
+        execution.set_context({'_start_params': dict(params or {})})
         db.session.add(execution)
         execution_ids.append(execution_id)
 
@@ -620,11 +623,22 @@ def _send_email(to_addresses, subject, content):
 def _execute_pay_node(execution, node, node_exec):
     """执行代付动作节点"""
     action = node.get('action', {})
-    channel = action.get('channel')
-    environment = action.get('environment', 'test')
-    interface_type = action.get('interface_type', '代付')
-    real_time = action.get('real_time', '是')
-    execute_type = action.get('execute_type', '创建代付')
+    # 发起流程时的运行时参数优先于模板节点配置：
+    # 用户发起时明确选择的环境/渠道等，应覆盖节点编辑器里的默认配置
+    start_params = {}
+    try:
+        ctx = execution.get_context() or {}
+        sp = ctx.get('_start_params')
+        if isinstance(sp, dict):
+            start_params = sp
+    except Exception:
+        start_params = {}
+
+    channel = start_params.get('channel') or action.get('channel')
+    environment = start_params.get('environment') or action.get('environment', 'test')
+    interface_type = start_params.get('interface_type') or action.get('interface_type', '代付')
+    real_time = start_params.get('real_time') or action.get('real_time', '是')
+    execute_type = start_params.get('execute_type') or action.get('execute_type', '创建代付')
 
     if not channel:
         return {'success': False, 'message': '未配置渠道', 'fields': {}}
@@ -650,7 +664,8 @@ def _execute_pay_node(execution, node, node_exec):
         'channel_code': cfg_db.channel_code or ('kls' if channel == 'kls' else 'lepass'),
     }
 
-    node_exec.add_log(f'执行代付: 渠道={channel} 环境={environment} 接口={interface_type}')
+    node_exec.add_log(f'执行代付: 渠道={channel} 环境={environment} 接口={interface_type}'
+                      f'（环境来源: {"发起参数" if start_params.get("environment") else "节点配置"}）')
 
     from app.services.pay_service import execute_single_row
     result = execute_single_row(channel, cfg, row, params, log=node_exec.add_log)
