@@ -864,7 +864,8 @@ def upload_file():
         return jsonify({'success': False, 'message': '文件名为空'}), 400
 
     ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
-    allowed_ext = current_app.config.get('ALLOWED_UPLOAD_EXTENSIONS', {'xlsx', 'xls', 'csv'})
+    from app.utils.upload_config import get_ai_upload_extensions
+    allowed_ext = set(get_ai_upload_extensions())
     if ext not in allowed_ext:
         return jsonify({'success': False, 'message': f'仅支持 {", ".join(sorted(allowed_ext))} 格式的文件'}), 400
 
@@ -878,6 +879,16 @@ def upload_file():
         file.save(input_path)
 
         info = ExcelService.get_file_info(input_path)
+        if not info:
+            # 已配置但无法按表格解析的格式（如 PDF/Word）给出明确提示，避免返回空行空列
+            try:
+                os.remove(input_path)
+            except OSError:
+                pass
+            return jsonify({
+                'success': False,
+                'message': f'文件解析失败：AI 聊天附件需为可解析的表格文件（{", ".join(sorted(allowed_ext))}）',
+            }), 400
         columns = info.get('column_names', [])
 
         return jsonify({

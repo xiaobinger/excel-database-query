@@ -138,6 +138,27 @@ def update_config():
     })
 
 
+@system_bp.route('/upload-formats', methods=['GET'])
+@login_required
+def get_upload_formats():
+    """获取上传允许的文件格式（登录用户可用，供上传控件动态设置 accept）"""
+    from app.utils.upload_config import (
+        get_ai_upload_extensions,
+        get_ticket_attachment_extensions,
+        DEFAULT_AI_UPLOAD_EXTENSIONS,
+        DEFAULT_TICKET_ATTACHMENT_EXTENSIONS,
+    )
+    return jsonify({
+        'success': True,
+        'data': {
+            'ai': get_ai_upload_extensions(),
+            'ticket': get_ticket_attachment_extensions(),
+            'ai_default': DEFAULT_AI_UPLOAD_EXTENSIONS,
+            'ticket_default': DEFAULT_TICKET_ATTACHMENT_EXTENSIONS,
+        },
+    })
+
+
 @system_bp.route('/config/batch-delete', methods=['POST'])
 @permission_required('system')
 def batch_delete_configs():

@@ -88,6 +88,53 @@
           </el-form>
         </el-tab-pane>
 
+        <el-tab-pane label="文件上传" name="upload">
+          <el-form label-width="150px" style="max-width: 760px; margin-top: 16px">
+            <el-form-item label="AI 聊天附件格式">
+              <el-select
+                v-model="uploadForm.ai"
+                multiple
+                filterable
+                allow-create
+                default-first-option
+                :reserve-keyword="false"
+                placeholder="输入扩展名后回车添加，如 xlsx"
+                style="width: 100%"
+              >
+                <el-option v-for="ext in aiExtOptions" :key="ext" :label="'.' + ext" :value="ext" />
+              </el-select>
+              <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                扩展名无需带点；AI 聊天附件会按表格文件解析，建议仅保留 xlsx / xls / csv
+              </div>
+            </el-form-item>
+            <el-form-item label="工单附件格式">
+              <el-select
+                v-model="uploadForm.ticket"
+                multiple
+                filterable
+                allow-create
+                default-first-option
+                :reserve-keyword="false"
+                placeholder="输入扩展名后回车添加，如 pdf"
+                style="width: 100%"
+              >
+                <el-option v-for="ext in ticketExtOptions" :key="ext" :label="'.' + ext" :value="ext" />
+              </el-select>
+              <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                控制工单「上传附件」允许的文件类型，支持数据文件、文档、图片、压缩包等；单个文件上限仍为 50MB
+              </div>
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="savingUpload" @click="handleSaveUpload">
+                <i class="fas fa-save"></i> 保存配置
+              </el-button>
+              <el-button @click="handleResetUpload">
+                <i class="fas fa-undo"></i> 恢复默认
+              </el-button>
+            </el-form-item>
+          </el-form>
+        </el-tab-pane>
+
         <el-tab-pane label="列名同义词" name="synonym">
           <div class="synonym-section">
             <div class="synonym-header">
@@ -747,6 +794,70 @@ const dingtalkForm = reactive({
 const savingDingtalk = ref(false)
 const testingDingtalk = ref(false)
 
+// 文件上传格式配置
+const DEFAULT_AI_UPLOAD_EXTS = ['xlsx', 'xls', 'csv']
+const DEFAULT_TICKET_ATTACHMENT_EXTS = [
+  'xlsx', 'xls', 'csv', 'txt', 'json', 'xml',
+  'zip', 'rar', '7z', 'gz', 'tar',
+  'pdf', 'doc', 'docx', 'md',
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp',
+]
+const aiExtOptions = [...new Set([...DEFAULT_AI_UPLOAD_EXTS, 'xlsm'])]
+const ticketExtOptions = DEFAULT_TICKET_ATTACHMENT_EXTS
+const uploadForm = reactive({
+  ai: [...DEFAULT_AI_UPLOAD_EXTS],
+  ticket: [...DEFAULT_TICKET_ATTACHMENT_EXTS],
+})
+const savingUpload = ref(false)
+
+function normalizeExtensions(values) {
+  const result = []
+  for (const value of values || []) {
+    const ext = String(value).trim().toLowerCase().replace(/^\.+/, '')
+    if (ext && !result.includes(ext)) result.push(ext)
+  }
+  return result
+}
+
+function splitExtensions(value, defaults) {
+  const exts = normalizeExtensions(String(value || '').split(/[,，;；、\s]+/))
+  return exts.length ? exts : [...defaults]
+}
+
+async function handleSaveUpload() {
+  const ai = normalizeExtensions(uploadForm.ai)
+  const ticket = normalizeExtensions(uploadForm.ticket)
+  if (!ai.length) {
+    ElMessage.warning('AI 聊天附件格式至少保留一个')
+    return
+  }
+  if (!ticket.length) {
+    ElMessage.warning('工单附件格式至少保留一个')
+    return
+  }
+  savingUpload.value = true
+  try {
+    await api.system.updateConfig({
+      items: [
+        { key: 'ai_upload_allowed_extensions', value: ai.join(',') },
+        { key: 'ticket_attachment_allowed_extensions', value: ticket.join(',') },
+      ]
+    })
+    uploadForm.ai = ai
+    uploadForm.ticket = ticket
+    ElMessage.success('文件上传格式配置保存成功')
+  } catch {
+  } finally {
+    savingUpload.value = false
+  }
+}
+
+function handleResetUpload() {
+  uploadForm.ai = [...DEFAULT_AI_UPLOAD_EXTS]
+  uploadForm.ticket = [...DEFAULT_TICKET_ATTACHMENT_EXTS]
+  ElMessage.info('已恢复默认格式，请点击保存生效')
+}
+
 const synonymGroups = ref([])
 const savingSynonym = ref(false)
 const addingWordIndex = ref(-1)
@@ -775,6 +886,12 @@ async function fetchConfig() {
         } else {
           dingtalkForm[key] = value ?? ''
         }
+      }
+      if (key === 'ai_upload_allowed_extensions') {
+        uploadForm.ai = splitExtensions(value, DEFAULT_AI_UPLOAD_EXTS)
+      }
+      if (key === 'ticket_attachment_allowed_extensions') {
+        uploadForm.ticket = splitExtensions(value, DEFAULT_TICKET_ATTACHMENT_EXTS)
       }
       if (key === 'column_synonym_groups' && value) {
         try {

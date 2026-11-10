@@ -34,6 +34,10 @@ class SystemConfig(db.Model):
 
     COLUMN_SYNONYM_GROUPS = 'column_synonym_groups'
 
+    # 上传文件格式配置
+    AI_UPLOAD_ALLOWED_EXTENSIONS = 'ai_upload_allowed_extensions'              # AI聊天附件允许的格式
+    TICKET_ATTACHMENT_ALLOWED_EXTENSIONS = 'ticket_attachment_allowed_extensions'  # 工单附件允许的格式
+
     def set_encrypted_value(self, val: str):
         if not val:
             self.encrypted_value = None

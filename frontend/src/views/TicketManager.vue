@@ -180,6 +180,7 @@
                 :auto-upload="true"
                 :http-request="customAttUpload"
                 :on-remove="handleAttRemove"
+                :accept="ticketAttachmentAccept"
                 :show-file-list="true"
                 multiple
               >
@@ -187,7 +188,7 @@
                   <i class="fas fa-paperclip"></i> 上传附件
                 </el-button>
               </el-upload>
-              <div class="el-upload__tip">支持 Excel/CSV/文档/图片/压缩包，单个不超过50MB（查询任务需上传Excel数据文件）</div>
+              <div class="el-upload__tip">{{ ticketAttachmentTip }}</div>
             </div>
           </el-form-item>
         </div>
@@ -752,6 +753,18 @@ const createForm = ref({ title: '', content: '', assignee_type: 'user', assignee
 // 工单附件：fileList供el-upload展示，ids为已上传的附件ID（提交时关联）
 const attachmentFileList = ref([])
 const attachmentIds = ref([])
+// 工单附件允许的格式（由系统配置「文件上传」维护）
+const DEFAULT_TICKET_ATTACHMENT_EXTS = [
+  'xlsx', 'xls', 'csv', 'txt', 'json', 'xml',
+  'zip', 'rar', '7z', 'gz', 'tar',
+  'pdf', 'doc', 'docx', 'md',
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp',
+]
+const ticketAttachmentExts = ref([...DEFAULT_TICKET_ATTACHMENT_EXTS])
+const ticketAttachmentAccept = computed(() => ticketAttachmentExts.value.map(e => `.${e}`).join(','))
+const ticketAttachmentTip = computed(
+  () => `支持 ${ticketAttachmentExts.value.join(' / ')}，单个不超过50MB（查询任务需上传Excel数据文件）`
+)
 const createRules = {
   title: [{ required: true, message: '请输入标题', trigger: 'blur' }],
   // content 不强制必填：暂存草稿时允许为空，提交时再单独校验
@@ -907,6 +920,16 @@ function formatFileSize(size) {
   if (size < 1024) return `${size}B`
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)}KB`
   return `${(size / 1024 / 1024).toFixed(1)}MB`
+}
+
+async function fetchUploadFormats() {
+  try {
+    const res = await api.system.getUploadFormats()
+    const exts = res?.data?.ticket
+    if (Array.isArray(exts) && exts.length) {
+      ticketAttachmentExts.value = exts
+    }
+  } catch {}
 }
 
 async function fetchAssignees() {
@@ -1610,6 +1633,7 @@ async function downloadCommentAttachment(ticketId, commentId, fileName) {
 
 onMounted(() => {
   fetchTickets()
+  fetchUploadFormats()
 })
 
 onUnmounted(() => {

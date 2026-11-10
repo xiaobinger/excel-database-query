@@ -170,6 +170,7 @@ const autoExport = {
 const system = {
   getConfig: () => http.get('/system/config'),
   updateConfig: (data) => http.put('/system/config', data),
+  getUploadFormats: () => http.get('/system/upload-formats'),
   testEmail: (data) => http.post('/system/test-email', data),
   testDingtalk: () => http.post('/system/test-dingtalk'),
   batchDelete: (ids) => http.post('/system/config/batch-delete', { ids }),

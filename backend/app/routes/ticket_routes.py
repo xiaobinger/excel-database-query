@@ -2303,13 +2303,7 @@ def serve_file(filename):
     return send_from_directory(upload_dir, filename)
 
 
-# 工单附件允许的文件类型：数据文件 + 压缩包 + 文档 + 图片（排除可执行文件等危险类型）
-TICKET_ATTACHMENT_EXTS = {
-    '.xlsx', '.xls', '.csv', '.txt', '.json', '.xml',
-    '.zip', '.rar', '.7z', '.gz', '.tar',
-    '.pdf', '.doc', '.docx', '.md',
-    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp',
-}
+# 工单附件允许的文件类型由系统配置维护（默认：数据文件 + 压缩包 + 文档 + 图片）
 # 附件大小上限：50MB
 TICKET_ATTACHMENT_MAX_SIZE = 50 * 1024 * 1024
 
@@ -2329,8 +2323,11 @@ def upload_ticket_attachment():
         return jsonify({'success': False, 'message': '文件名为空'}), 400
 
     ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in TICKET_ATTACHMENT_EXTS:
-        return jsonify({'success': False, 'message': f'不支持的文件类型: {ext or "无扩展名"}，支持: Excel/CSV/文本/压缩包/文档/图片'}), 400
+    from app.utils.upload_config import get_ticket_attachment_extensions
+    allowed_exts = get_ticket_attachment_extensions()
+    if ext.lstrip('.') not in allowed_exts:
+        allowed_text = '、'.join(f'.{e}' for e in allowed_exts)
+        return jsonify({'success': False, 'message': f'不支持的文件类型: {ext or "无扩展名"}，支持: {allowed_text}'}), 400
 
     upload_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'tickets', 'attachments')
     os.makedirs(upload_dir, exist_ok=True)

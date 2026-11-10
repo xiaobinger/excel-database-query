@@ -804,9 +804,9 @@
                 <el-upload
                   :show-file-list="false"
                   :before-upload="handleFileUpload"
-                  accept=".xlsx,.xls,.csv"
+                  :accept="aiUploadAccept"
                 >
-                  <el-button size="small" :disabled="loading" title="上传附件">
+                  <el-button size="small" :disabled="loading" :title="`上传附件（${aiUploadExts.join('/')}）`">
                     <i class="fas fa-paperclip"></i>
                   </el-button>
                 </el-upload>
@@ -1483,6 +1483,9 @@ const queueEditText = ref('')
 const queueEditInput = ref(null)
 const messagesRef = ref(null)
 const uploadedFile = ref(null)
+// AI聊天附件允许的格式（由系统配置「文件上传」维护）
+const aiUploadExts = ref(['xlsx', 'xls', 'csv'])
+const aiUploadAccept = computed(() => aiUploadExts.value.map(e => `.${e}`).join(','))
 const store = useAppStore()
 
 const isAdmin = computed(() => store.isAdmin)
@@ -2425,6 +2428,16 @@ async function retryAiMessage(msg) {
   } finally {
     msg._retrying = false
   }
+}
+
+async function fetchUploadFormats() {
+  try {
+    const res = await api.system.getUploadFormats()
+    const exts = res?.data?.ai
+    if (Array.isArray(exts) && exts.length) {
+      aiUploadExts.value = exts
+    }
+  } catch {}
 }
 
 async function handleFileUpload(file) {
@@ -5161,6 +5174,7 @@ onMounted(() => {
   fetchChats()
   fetchActiveModels()
   fetchAgents()
+  fetchUploadFormats()
 })
 
 // 页面被keep-alive缓存，从系统配置等其他页面切回时自动刷新模型配置
