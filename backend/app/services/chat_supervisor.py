@@ -20,6 +20,8 @@ REVIEW_TEMPLATE = (
     '## 复核任务\n'
     '你是AI对话质量的监督者。下面是一次AI对话的完整记录：用户问题、主Agent的回复、'
     '以及主Agent调用工具的执行结果。\n'
+    '注意：工具执行记录是本次用户请求内的累计记录，可能包含监督者要求重新生成之前的工具调用；'
+    '工具结果仅节选关键信息（可能被截断），请勿仅因结果未完整展示就判定工具未执行或数据编造。\n'
     '请对主Agent的回复进行严格复核，重点检查：\n'
     '1. 是否完整、准确地回答了用户的问题（有无遗漏、答非所问）\n'
     '2. 工具调用是否成功；若工具报错，回复是否如实告知用户并给出下一步建议\n'
@@ -84,7 +86,7 @@ def _summarize_tools(tool_results: list) -> str:
         name = tr.get('name', '')
         result = tr.get('result', {})
         if isinstance(result, dict):
-            result_str = json.dumps(result, ensure_ascii=False)
+            result_str = json.dumps(result, ensure_ascii=False, default=str)
         else:
             result_str = str(result)
         if len(result_str) > MAX_TOOL_CHARS:

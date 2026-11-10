@@ -60,7 +60,7 @@ _finished_streams = {}
 def _summarize_tools_for_review(tool_results: list) -> str:
     """将工具执行记录压缩成简要文本，供复核记录保存"""
     if not tool_results:
-        return '（本次回复未调用工具）'
+        return '（本次请求未调用任何工具）'
     lines = []
     for tr in tool_results[:5]:  # 最多5条
         name = tr.get('name', '')
@@ -78,6 +78,29 @@ def _summarize_tools_for_review(tool_results: list) -> str:
         else:
             lines.append(f'- {name}: {str(result)[:100]}')
     return '\n'.join(lines)
+
+
+def _merge_tool_results(target: list, new_results: list):
+    """把新一轮执行的工具结果合并到累计列表（按 tool_call_id 去重）
+
+    监督者要求重新生成时，执行者可能复用上一轮的工具结果而不再调用工具；
+    累计保存可避免监督者误判「本次未调用工具」。
+    """
+    if not new_results:
+        return
+    existing_ids = {
+        tr.get('tool_call_id') for tr in target
+        if isinstance(tr, dict) and tr.get('tool_call_id')
+    }
+    for tr in new_results:
+        if not isinstance(tr, dict):
+            continue
+        tool_call_id = tr.get('tool_call_id')
+        if tool_call_id and tool_call_id in existing_ids:
+            continue
+        target.append(tr)
+        if tool_call_id:
+            existing_ids.add(tool_call_id)
 
 
 def _save_review_record(msg_id: int, review_record: dict, supervisor_agent_id: int = None):
@@ -2175,6 +2198,8 @@ def send_message_stream(chat_id):
             _sup_round = 0
             _sup_feedback = None
             _prev_msg_id = None
+            # 累计工具执行记录：跨监督者重新生成保留，保证监督者始终能看到执行者调用过的工具
+            _all_tool_results = []
             while True:
                 if _active_streams.get(chat_id, {}).get('aborted'):
                     break
@@ -3091,13 +3116,16 @@ def send_message_stream(chat_id):
                 try:
                     yield f"data: {json.dumps({'type': 'supervision', 'status': 'reviewing', 'content': '监督者正在复核回复质量…'}, ensure_ascii=False)}\n\n"
                     from app.services.chat_supervisor import review_response, mark_message
+                    # 合并本轮工具记录到累计列表：监督者重试后执行者可能不再调用工具，
+                    # 但仍需让监督者看到此前已经执行过的工具，避免误判「未调用工具」
+                    _merge_tool_results(_all_tool_results, tool_results_list)
                     # 获取自定义复核规则
                     _custom_rules = _current_agent.review_rules if _current_agent else ''
                     # 获取本次对话中已处理的插话消息（用于监督者检查AI是否正确采纳）
                     _processed_interrupts = _active_streams.get(chat_id, {}).get('processed_interrupt_messages', [])
-                    _verdict = review_response(_sup_prompt, user_message_content, full_content, tool_results_list, stream_ordered_configs, custom_rules=_custom_rules, interrupt_messages=_processed_interrupts or None)
+                    _verdict = review_response(_sup_prompt, user_message_content, full_content, _all_tool_results, stream_ordered_configs, custom_rules=_custom_rules, interrupt_messages=_processed_interrupts or None)
                     _sup_round += 1
-                    logger.info(f'监督者复核结果: chat_id={chat_id}, 第{_sup_round}轮, verdict={_verdict["verdict"]}')
+                    logger.info(f'监督者复核结果: chat_id={chat_id}, 第{_sup_round}轮, verdict={_verdict["verdict"]}, 累计工具调用={len(_all_tool_results)}')
                     # 构建复核记录（保存到metadata供前端查看）
                     _review_record = {
                         'round': _sup_round,
@@ -3105,7 +3133,8 @@ def send_message_stream(chat_id):
                         'feedback': _verdict.get('feedback', ''),
                         'user_content': user_message_content[:500],
                         'assistant_content': full_content[:1000],
-                        'tool_summary': _summarize_tools_for_review(tool_results_list),
+                        'tool_summary': _summarize_tools_for_review(_all_tool_results),
+                        'tool_count': len(_all_tool_results),
                         'interrupt_messages': [m.get('content', '')[:100] for m in _processed_interrupts] if _processed_interrupts else [],
                         'custom_rules': _custom_rules,
                         'rules_created_by': _current_agent.created_by if _current_agent else None,

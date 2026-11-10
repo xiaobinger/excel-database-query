@@ -175,7 +175,7 @@ class MultiAgentService:
         """执行者Agent执行一轮工具调用循环
 
         返回结果字典：
-          {'mode': 'done', 'final_content', 'tool_log', 'tool_executed', 'action_triggered', 'is_handled'}
+          {'mode': 'done', 'final_content', 'tool_log', 'tool_executed', 'tool_call_count', 'action_triggered', 'is_handled'}
           {'mode': 'async', 'action_type', 'tool_log_text'}
           {'mode': 'pending', 'pending_type', ...}
         """
@@ -235,6 +235,7 @@ class MultiAgentService:
         max_rounds = 3
         tool_executed = False
         action_triggered = False
+        tool_call_count = 0
         final_content = ''
         tool_log = []
 
@@ -269,6 +270,7 @@ class MultiAgentService:
             for tc in tool_calls:
                 func_name = tc.get('function', {}).get('name', '')
                 func_args = tc.get('function', {}).get('arguments', '')
+                tool_call_count += 1
                 logger.info(f'工单{ticket.ticket_no} 执行者调用工具(轮次{round_idx+1}): {func_name}({func_args})')
 
                 result = AiService.execute_tool_call(func_name, func_args, ticket.created_by, agent_id=agent.id if agent else None)
@@ -512,6 +514,7 @@ class MultiAgentService:
             'final_content': ai_result,
             'tool_log': tool_log,
             'tool_executed': tool_executed,
+            'tool_call_count': tool_call_count,
             'action_triggered': action_triggered,
             'is_handled': is_handled,
         }
@@ -601,6 +604,27 @@ class MultiAgentService:
                 last_feedback = (e.get('summary') or '').strip()
                 break
 
+        # 汇总执行者的工具调用记录（不能只看 tool_executed 布尔值：
+        # 执行者可能调用了非操作型工具，或工具执行失败，旧逻辑会显示「未调用工具」）
+        tool_log = executor_result.get('tool_log') or []
+        tool_call_count = executor_result.get('tool_call_count')
+        if tool_call_count is None:
+            tool_call_count = len(tool_log) if tool_log else (1 if executor_result.get('tool_executed') else 0)
+        tool_log_lines = []
+        for line in tool_log[:10]:
+            text = str(line).replace('\r', ' ').replace('\n', ' ')
+            if len(text) > 500:
+                text = text[:500] + '…'
+            tool_log_lines.append(text)
+        tool_record = (
+            f'## 执行者工具调用\n'
+            f'- 是否调用过工具：{"是" if tool_call_count else "否"}\n'
+            f'- 工具调用次数：{tool_call_count}\n'
+        )
+        if tool_log_lines:
+            tool_record += '- 调用记录：\n' + '\n'.join(tool_log_lines) + '\n'
+        tool_record += '\n'
+
         review_messages = [
             {'role': 'system', 'content': supervisor_prompt},
             {'role': 'user', 'content': (
@@ -610,7 +634,7 @@ class MultiAgentService:
                 f'- 涉及系统: {system_name}\n\n'
                 f'## 工单内容\n{ticket.content or ""}\n\n'
                 f'## 执行者的处理结果\n{executor_result.get("final_content", "")}\n\n'
-                f'## 执行者是否调用过工具\n{"是" if executor_result.get("tool_executed") else "否"}\n\n'
+                + tool_record
                 + (f'## 你上一轮的返工要求（请逐项核对执行者是否已逐项落实）\n{last_feedback}\n\n' if last_feedback else '')
                 + f'请审查执行者是否真正完成了工单要求，并给出验收结论。'
             )},
@@ -986,6 +1010,7 @@ class MultiAgentService:
                 entry['mode'] = result.get('mode')
                 entry['summary'] = (result.get('final_content') or '')[:500]
                 entry['tool_executed'] = bool(result.get('tool_executed'))
+                entry['tool_call_count'] = int(result.get('tool_call_count') or 0)
         else:
             if isinstance(result, dict):
                 if result.get('decision') is not None:
