@@ -103,6 +103,35 @@ def _merge_tool_results(target: list, new_results: list):
             existing_ids.add(tool_call_id)
 
 
+def _build_auto_exec_card_meta(result: dict) -> dict:
+    """构建只读任务自动执行的卡片metadata（前端会直接执行，不等待用户确认）"""
+    if result.get('action_type') == 'query':
+        script_info = {
+            'id': result.get('script_id'),
+            'name': result.get('script_name') or '查询任务',
+            'params': [],
+            'primary_key': result.get('primary_key') or '',
+            'param_column': result.get('param_column') or '',
+            'new_sheet': result.get('new_sheet', True),
+            'query_fields': result.get('query_fields') or [],
+        }
+        file_info = {
+            'file_path': result.get('file_path') or '',
+            'filename': result.get('file_name') or '查询数据.xlsx',
+            'columns': result.get('file_columns') or [],
+            'row_count': result.get('file_row_count') or 0,
+        }
+        return {
+            '_type': 'smart_query',
+            '_action_type': 'query',
+            'scripts': [script_info],
+            'selected': [result.get('script_id')],
+            'file_info': file_info,
+            '_executing': True,
+        }
+    return {'_type': 'tool', 'tool_data': result, '_executing': True}
+
+
 def _save_review_record(msg_id: int, review_record: dict, supervisor_agent_id: int = None):
     """保存复核记录到消息metadata的supervision_records列表中"""
     from app import db
@@ -1170,6 +1199,9 @@ def send_message(chat_id):
                     '- 重要：如果用户同时要求对多个对象执行同样的API系统任务（如"解绑SN001、SN002、SN003"），请在同一次回复中同时调用多个 request_system_task，每个调用对应一个对象，系统会自动并行执行，你只需汇总所有结果用列表形式反馈给用户\n' \
                     '- 调用 request_lookup 时，务必从用户描述中提取所有参数值填入 params 对象，params的键名必须使用list_lookup_options返回的参数配置中的name字段值\n' \
                     '- 重要：调用 list_lookup_options 时，如果用户提供了具体的参数值（如SN号、商户号等），务必同时传入 params 参数，这样当匹配到唯一查询时系统可以自动执行，大幅加快响应速度\n' \
+                    '- 重要：如果已经能从用户表述或上下文确定唯一任务，直接调用 request_export/request_query/request_system_task/request_lookup，不要先调用 list_* 让用户重复选择；只有存在多个候选且无法确定时才调用 list_*。\n' \
+                    '- 重要：导出、查询、信息查询属于只读任务，任务确定且参数/文件齐全时系统会自动执行，无需再次确认；系统任务等可能修改数据的操作仍需用户确认。\n' \
+                    '- 重要：用户上传Excel后执行查询任务时，必须把上传接口返回的文件路径填入 request_query 的 file_path 参数，系统会直接执行查询。\n' \
                     '- 如果用户没有指定具体的导出选项名称，先调用 list_export_options 列出相关选项让用户选择\n' \
                     '- 如果用户没有指定具体的查询选项名称，先调用 list_query_options 列出相关选项让用户选择\n' \
                     '- 如果用户没有指定具体的系统任务名称，先调用 list_system_tasks 列出相关任务让用户选择\n' \
@@ -1599,20 +1631,15 @@ def send_message(chat_id):
 
         # If there are tool results, save each as a message and return IDs
         if tool_results:
-            # 预检：同一轮中如果存在 select_options 卡片（list_*工具），则跳过对应的 request_* 确认卡片
-            # 避免重复出现「选项选择」和「任务确认」两个卡片
-            _select_action_types = set()
+            # 预检：如果同一轮 AI 已经明确调用 request_* 确定了具体任务，
+            # 则跳过对应的 select_options 卡片，避免任务已确定还让用户重复选择
+            _request_action_types = set()
             for tr in tool_results:
                 r = tr['result']
-                if r and r.get('_select_mode'):
-                    if tr['name'] == 'list_export_options':
-                        _select_action_types.add('export')
-                    elif tr['name'] == 'list_query_options':
-                        _select_action_types.add('query')
-                    elif tr['name'] == 'list_system_tasks':
-                        _select_action_types.add('system_task')
-                    elif tr['name'] == 'list_lookup_options':
-                        _select_action_types.add('lookup')
+                if not r:
+                    continue
+                if r.get('action_type') in ('export', 'query', 'system_task', 'profit_share', 'lookup') and not r.get('error'):
+                    _request_action_types.add(r['action_type'])
             saved_tool_messages = []
             for tr in tool_results:
                 result = tr['result']
@@ -1641,14 +1668,10 @@ def send_message(chat_id):
                         'result': result,
                         'message_id': tool_msg.id,
                     })
-                # 导出/查询/系统任务确认卡片（跳过：同一轮已有对应的 select_options 卡片，避免重复）
+                # 导出/查询/系统任务确认卡片（任务已由 AI 确定时优先保留本卡片，跳过选择卡片）
                 elif result and not result.get('error') and result.get('action_type') in ('export', 'query', 'system_task', 'profit_share'):
                     if result.get('auto_executed'):
                         # API自动执行的系统任务，不创建确认卡片，结果由AI二次回复直接反馈
-                        saved_tool_messages.append(tr)
-                    elif result.get('action_type') in _select_action_types:
-                        # 同一轮已有选择卡片，跳过重复的确认卡片
-                        logger.info(f'跳过重复确认卡片: {tr["name"]}({result.get("action_type")})，同轮已有select_options卡片')
                         saved_tool_messages.append(tr)
                     else:
                         # ── 监督者自动评估确认卡片 ──
@@ -1657,7 +1680,7 @@ def send_message(chat_id):
                         try:
                             from app.services.chat_supervisor import resolve_supervisor_agent, evaluate_tool_action
                             _sup_agent_nc = resolve_supervisor_agent(agent_id)
-                            if _sup_agent_nc and _sup_agent_nc.can_confirm_execution:
+                            if _sup_agent_nc and _sup_agent_nc.can_confirm_execution and not result.get('_auto_execute'):
                                 # 注入执行者同一套SKILLS/规则记忆，保证工具评估与执行者遵循同一套规则
                                 _sup_prompt_nc = _build_chat_supervisor_prompt(_sup_agent_nc, current_user.id, agent_id)
                                 _nc_configs = ordered_configs[:3] if ordered_configs else []
@@ -1691,6 +1714,24 @@ def send_message(chat_id):
                         if _supervisor_auto_exec:
                             # 监督者已确认执行，不创建确认卡片，直接标记为已完成
                             saved_tool_messages.append(tr)
+                        elif result.get('_auto_execute'):
+                            # 只读任务（导出/查询）已确定且参数齐全：保存自动执行卡片，前端直接执行
+                            auto_meta = _build_auto_exec_card_meta(result)
+                            tool_msg = AiChatMessage(
+                                chat_id=chat_id,
+                                agent_id=agent_id,
+                                role='assistant',
+                                content='',
+                                msg_metadata=json.dumps(auto_meta, ensure_ascii=False),
+                            )
+                            db.session.add(tool_msg)
+                            db.session.flush()
+                            saved_tool_messages.append({
+                                'tool_call_id': tr['tool_call_id'],
+                                'name': tr['name'],
+                                'result': result,
+                                'message_id': tool_msg.id,
+                            })
                         else:
                             # 需要用户确认，创建确认卡片
                             tool_msg = AiChatMessage(
@@ -1724,6 +1765,17 @@ def send_message(chat_id):
                         action_type = 'lookup'
                     else:
                         action_type = 'export'
+                    if action_type in _request_action_types:
+                        # AI 已明确调用 request_* 确定了具体任务，不再创建选择卡片
+                        logger.info(f'跳过选择卡片: {tr["name"]}，同轮已确定{action_type}任务')
+                        saved_tool_messages.append(tr)
+                        continue
+                    select_items = result.get('scripts', result.get('tasks', []))
+                    if len(select_items) <= 1:
+                        # 安全兜底：唯一候选无需用户选择
+                        logger.info(f'跳过选择卡片: {tr["name"]}，候选数量为{len(select_items)}')
+                        saved_tool_messages.append(tr)
+                        continue
                     tool_msg = AiChatMessage(
                         chat_id=chat_id,
                         agent_id=agent_id,
@@ -1963,6 +2015,9 @@ def send_message_stream(chat_id):
                     '- 重要：API类型的系统任务参数齐全时会自动执行并返回结果，工具结果中包含完整的请求信息（request字段：方法/URL/请求头/请求参数/请求体）和完整响应body（response/response_raw字段）以及mapping_summary映射摘要，反馈时请基于这些完整信息用自然语言告诉用户执行结果\n' \
                     '- 重要：如果用户同时要求对多个对象执行同样的API系统任务（如"解绑SN001、SN002、SN003"），请在同一次回复中同时调用多个 request_system_task，每个调用对应一个对象，系统会自动并行执行，你只需汇总所有结果用列表形式反馈给用户\n' \
                     '- 重要：调用 list_lookup_options 时，如果用户提供了具体的参数值（如SN号、商户号等），务必同时传入 params 参数，这样当匹配到唯一查询时系统可以自动执行，大幅加快响应速度\n' \
+                    '- 重要：如果已经能从用户表述或上下文确定唯一任务，直接调用 request_export/request_query/request_system_task/request_lookup，不要先调用 list_* 让用户重复选择；只有存在多个候选且无法确定时才调用 list_*。\n' \
+                    '- 重要：导出、查询、信息查询属于只读任务，任务确定且参数/文件齐全时系统会自动执行，无需再次确认；系统任务等可能修改数据的操作仍需用户确认。\n' \
+                    '- 重要：用户上传Excel后执行查询任务时，必须把上传接口返回的文件路径填入 request_query 的 file_path 参数，系统会直接执行查询。\n' \
                     + TICKET_FALLBACK_RULE + '\n\n' + SKILLS_SAVE_RULE
                 messages.append({'role': 'system', 'content': sys_prompt})
 
@@ -2574,20 +2629,15 @@ def send_message_stream(chat_id):
                             tool_results_list.extend(current_tool_results)
 
                             # ── 2. 保存卡片消息（信息查询结果卡/任务确认卡/选项选择卡）──
-                            # 预检：同一轮中如果存在 select_options 卡片（list_*工具），则跳过对应的 request_* 确认卡片
-                            # 避免重复出现「选项选择」和「任务确认」两个卡片
-                            _select_action_types = set()
+                            # 预检：如果同一轮 AI 已明确调用 request_* 确定了具体任务，
+                            # 则跳过对应的 select_options 卡片，避免任务已确定还让用户重复选择
+                            _request_action_types = set()
                             for tr in current_tool_results:
                                 r = tr['result']
-                                if r and r.get('_select_mode'):
-                                    if tr['name'] == 'list_export_options':
-                                        _select_action_types.add('export')
-                                    elif tr['name'] == 'list_query_options':
-                                        _select_action_types.add('query')
-                                    elif tr['name'] == 'list_system_tasks':
-                                        _select_action_types.add('system_task')
-                                    elif tr['name'] == 'list_lookup_options':
-                                        _select_action_types.add('lookup')
+                                if not r:
+                                    continue
+                                if r.get('action_type') in ('export', 'query', 'system_task', 'profit_share', 'lookup') and not r.get('error'):
+                                    _request_action_types.add(r['action_type'])
                             saved_tool_messages = []
                             try:
                                 for tr in current_tool_results:
@@ -2613,21 +2663,17 @@ def send_message_stream(chat_id):
                                             'message_id': tool_msg.id,
                                         })
                                         any_card_created = True
-                                    # 导出/查询/系统任务确认卡片（跳过：同一轮已有对应的 select_options 卡片，避免重复）
+                                    # 导出/查询/系统任务确认卡片（任务已由 AI 确定时优先保留本卡片，跳过选择卡片）
                                     elif result and not result.get('error') and result.get('action_type') in ('export', 'query', 'system_task', 'profit_share'):
                                         if result.get('auto_executed'):
                                             # API/脚本自动执行的系统任务，不创建确认卡片
                                             # 关键：执行已产生真实副作用，置位以防监督者retry重跑
                                             any_side_effect = True
                                             saved_tool_messages.append(tr)
-                                        elif result.get('action_type') in _select_action_types:
-                                            # 同一轮已有选择卡片，跳过重复的确认卡片
-                                            logger.info(f'跳过重复确认卡片: {tr["name"]}({result.get("action_type")})，同轮已有select_options卡片')
-                                            saved_tool_messages.append(tr)
                                         else:
                                             # ── 监督者自动评估确认卡片 ──
                                             _supervisor_auto_exec = False
-                                            if _sup_agent and _sup_agent.can_confirm_execution:
+                                            if _sup_agent and _sup_agent.can_confirm_execution and not result.get('_auto_execute'):
                                                 try:
                                                     from app.services.chat_supervisor import evaluate_tool_action
                                                     _eval = evaluate_tool_action(
@@ -2658,6 +2704,22 @@ def send_message_stream(chat_id):
                                                 # 关键：该分支表示动作已被监督者批准执行（如导出/查询已触发副作用），置位以防retry重跑
                                                 any_side_effect = True
                                                 saved_tool_messages.append(tr)
+                                            elif result.get('_auto_execute'):
+                                                # 只读任务（导出/查询）已确定且参数齐全：保存自动执行卡片，前端直接执行
+                                                auto_meta = _build_auto_exec_card_meta(result)
+                                                tool_msg = AiChatMessage(
+                                                    chat_id=chat_id, agent_id=stream_agent_id, role='assistant', content='',
+                                                    msg_metadata=json.dumps(auto_meta, ensure_ascii=False),
+                                                )
+                                                db.session.add(tool_msg)
+                                                db.session.flush()
+                                                saved_tool_messages.append({
+                                                    'tool_call_id': tr['tool_call_id'],
+                                                    'name': tr['name'],
+                                                    'result': result,
+                                                    'message_id': tool_msg.id,
+                                                })
+                                                any_card_created = True
                                             else:
                                                 # 需要用户确认，创建确认卡片
                                                 tool_msg = AiChatMessage(
@@ -2687,6 +2749,17 @@ def send_message_stream(chat_id):
                                             action_type = 'lookup'
                                         else:
                                             action_type = 'export'
+                                        if action_type in _request_action_types:
+                                            # AI 已明确调用 request_* 确定了具体任务，不再创建选择卡片
+                                            logger.info(f'跳过选择卡片: {tr["name"]}，同轮已确定{action_type}任务')
+                                            saved_tool_messages.append(tr)
+                                            continue
+                                        select_items = result.get('scripts', result.get('tasks', []))
+                                        if len(select_items) <= 1:
+                                            # 安全兜底：唯一候选无需用户选择
+                                            logger.info(f'跳过选择卡片: {tr["name"]}，候选数量为{len(select_items)}')
+                                            saved_tool_messages.append(tr)
+                                            continue
                                         tool_msg = AiChatMessage(
                                             chat_id=chat_id, agent_id=stream_agent_id, role='assistant',
                                             content=result.get('message', ''),

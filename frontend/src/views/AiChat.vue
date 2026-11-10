@@ -2803,7 +2803,7 @@ async function sendMessage() {
     const baseDesc = `用户上传了文件 "${fileInfo.filename}"（${fileInfo.file_type_label || '文件'}，${formatFileSize(fileInfo.file_size) || '大小未知'}），文件路径：${fileInfo.file_path || '无'}`
     let fileDesc
     if (isTableFile(fileInfo)) {
-      fileDesc = `${baseDesc}，${fileInfo.row_count} 行，${(fileInfo.columns || []).length} 列，列名：${(fileInfo.columns || []).join(', ')}`
+      fileDesc = `${baseDesc}，${fileInfo.row_count} 行，${(fileInfo.columns || []).length} 列，列名：${(fileInfo.columns || []).join(', ')}。如需执行查询任务，请把该 file_path 传给 request_query 的 file_path 参数`
     } else {
       fileDesc = `${baseDesc}。该文件不是表格，请调用 parse_uploaded_file 工具读取文件内容，再按用户需求处理`
     }
@@ -2926,16 +2926,13 @@ async function handleToolResults(toolResults) {
     return true
   })
   if (toolResults.length === 0) return
-  // 预检：同一轮中如果存在 select_options 卡片（list_*工具），则跳过对应的 request_* 确认卡片
-  // 避免重复出现「选项选择」和「任务确认」两个卡片
-  const selectActionTypes = new Set()
+  // 预检：如果同一轮 AI 已明确调用 request_* 确定了具体任务，
+  // 则跳过对应的 select_options 卡片，避免任务已确定还让用户重复选择
+  const requestActionTypes = new Set()
   for (const tr of toolResults) {
     const r = tr.result
-    if (r && r._select_mode) {
-      if (tr.name === 'list_export_options') selectActionTypes.add('export')
-      else if (tr.name === 'list_query_options') selectActionTypes.add('query')
-      else if (tr.name === 'list_system_tasks') selectActionTypes.add('system_task')
-      else if (tr.name === 'list_lookup_options') selectActionTypes.add('lookup')
+    if (r && r.action_type && !r.error && ['export', 'query', 'system_task', 'lookup', 'profit_share'].includes(r.action_type)) {
+      requestActionTypes.add(r.action_type)
     }
   }
   for (const tr of toolResults) {
@@ -2964,7 +2961,8 @@ async function handleToolResults(toolResults) {
       if (result.action_type === 'system_task' && result.auto_executed) {
         continue
       }
-      // 系统任务：如果AI已解析到所有参数，直接执行而无需确认
+      // 系统任务：缺少参数或需要选择数据库时弹出参数对话框；
+      // 参数齐全时保留一次确认卡片，不自动执行（写操作确认策略）
       if (result.action_type === 'system_task' && !result.error) {
         const params = result.params || []
         const paramsValues = result.params_values || {}
@@ -2975,30 +2973,7 @@ async function handleToolResults(toolResults) {
           return val !== undefined && val !== null && val !== ''
         })
         const needsDbSelection = databases.length > 1 && !databaseId
-        if (allParamsFilled && !needsDbSelection) {
-          const autoMsg = {
-            id: tr.message_id || Date.now() + Math.random(),
-            role: 'assistant',
-            content: result.confirm_message || `正在执行系统任务：${result.task_name}`,
-            _type: 'tool',
-            _dismissed: false,
-            tool_data: result,
-            _selected: [result.task_id],
-            _selectedScripts: [{
-              id: result.task_id,
-              name: result.task_name || '系统任务',
-              task_type: result.task_type || 'sql',
-              params: params,
-            }],
-            _action_type: 'system_task',
-            _param_values: paramsValues,
-            _params_checked: true,
-            _database_id: databaseId,
-          }
-          messages.value.push(autoMsg)
-          doExecuteSystemTask(autoMsg)
-          continue
-        } else if (!allParamsFilled || needsDbSelection) {
+        if (!allParamsFilled || needsDbSelection) {
           const paramMsg = {
             id: tr.message_id || Date.now() + Math.random(),
             role: 'assistant',
@@ -3048,10 +3023,67 @@ async function handleToolResults(toolResults) {
         continue
       }
       // 导出/查询/system_task：成功才显示工具卡片，失败显示错误消息
-      // 同一轮已有选择卡片时，跳过重复的确认卡片
-      if (selectActionTypes.has(result.action_type)) {
-        console.log(`跳过重复确认卡片: ${tr.name}(${result.action_type})，同轮已有select_options卡片`)
-        continue
+      // 只读任务（导出/查询）已确定且参数/文件齐全：直接执行，不再要求确认
+      if (result._auto_execute && !result.error) {
+        if (result.action_type === 'export') {
+          const autoMsg = {
+            id: tr.message_id || Date.now() + Math.random(),
+            role: 'assistant',
+            content: '',
+            _type: 'tool',
+            _dismissed: false,
+            tool_data: result,
+            _executing: false,
+          }
+          messages.value.push(autoMsg)
+          await nextTick()
+          confirmExport(autoMsg)
+          // confirmExport 内部会同步置为执行中，这里保存执行状态，刷新后不会再次变成待确认
+          saveMessageState(autoMsg)
+          continue
+        }
+        if (result.action_type === 'query' && result.file_path && (result.file_columns || []).length > 0) {
+          const scriptInfo = {
+            id: result.script_id,
+            name: result.script_name || '查询任务',
+            params: [],
+            primary_key: result.primary_key || '',
+            param_column: result.param_column || '',
+            new_sheet: result.new_sheet !== undefined ? result.new_sheet : true,
+            query_fields: result.query_fields || [],
+          }
+          const fileInfo = {
+            file_path: result.file_path,
+            filename: result.file_name || '查询数据.xlsx',
+            columns: result.file_columns || [],
+            row_count: result.file_row_count || 0,
+          }
+          const cardMsg = {
+            id: tr.message_id || Date.now() + Math.random(),
+            role: 'assistant',
+            content: `正在执行查询：${result.script_name || '查询任务'}`,
+            _type: 'smart_query',
+            _action_type: 'query',
+            _scripts: [scriptInfo],
+            _selected: [result.script_id],
+            _selectedScripts: [scriptInfo],
+            _select_message: '',
+            _executing: true,
+            _done: false,
+            _failed: false,
+            _ignored: false,
+            _progress: 0,
+            _status_text: '正在初始化...',
+            _error_msg: '',
+            _download_url: '',
+            _file_info: fileInfo,
+          }
+          messages.value.push(cardMsg)
+          await nextTick()
+          saveMessageState(cardMsg)
+          await smartMatchDirectExecute(cardMsg, fileInfo, [result.param_column || result.primary_key].filter(Boolean))
+          continue
+        }
       }
       // 监督者已自动执行，不创建确认卡片，显示简短结果并自动执行
       if (result._supervisor_auto_executed) {
@@ -3097,14 +3129,26 @@ async function handleToolResults(toolResults) {
       messages.value.push(toolCard)
       saveMessageState(toolCard)
     } else if (result && result._select_mode) {
+      const selectItems = result.scripts || result.tasks || []
+      const actionType = selectItems.length > 0
+        ? (tr.name === 'list_export_options' ? 'export' : tr.name === 'list_system_tasks' ? 'system_task' : tr.name === 'list_lookup_options' ? 'lookup' : 'query')
+        : ''
+      if (actionType && requestActionTypes.has(actionType)) {
+        console.log(`跳过选择卡片: ${tr.name}，同轮已确定${actionType}任务`)
+        continue
+      }
+      if (selectItems.length <= 1) {
+        console.log(`跳过选择卡片: ${tr.name}，候选数量为${selectItems.length}`)
+        continue
+      }
       messages.value.push({
         id: tr.message_id || Date.now() + Math.random(),
         role: 'assistant',
         content: result.message || '',
         _type: 'select_options',
         _select_mode: result._select_mode,
-        _scripts: result.scripts || result.tasks || [],
-        _action_type: (result.scripts || result.tasks || []).length > 0 ? (tr.name === 'list_export_options' ? 'export' : tr.name === 'list_system_tasks' ? 'system_task' : tr.name === 'list_lookup_options' ? 'lookup' : 'query') : '',
+        _scripts: selectItems,
+        _action_type: actionType,
         _selected: [],
         _params_checked: false,
         _param_values: {},

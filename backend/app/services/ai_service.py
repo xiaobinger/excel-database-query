@@ -85,7 +85,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "list_export_options",
-            "description": "列出所有可用的导出选项。导出选项是指从数据库导出数据到Excel的脚本，与查询任务和系统任务不同。当用户需要导出数据、下载报表时调用此工具。",
+            "description": "列出所有可用的导出选项。导出选项是指从数据库导出数据到Excel的脚本，与查询任务和系统任务不同。仅在无法从用户表述确定具体导出选项时调用；如果已经能确定唯一导出选项，直接调用 request_export，不要先调用本工具让用户重复选择。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -152,7 +152,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "list_query_options",
-            "description": "列出所有可用的查询选项。查询选项是指根据Excel文件中的数据（如主键列）去数据库查询匹配数据的脚本，需要上传Excel文件。与导出任务和系统任务不同。当用户需要根据Excel数据查询匹配信息时调用此工具。",
+            "description": "列出所有可用的查询选项。查询选项是指根据Excel文件中的数据（如主键列）去数据库查询匹配数据的脚本，需要上传Excel文件。与导出任务和系统任务不同。仅在无法从用户表述确定具体查询选项时调用；如果已经能确定唯一查询选项，直接调用 request_query，不要先调用本工具让用户重复选择。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -200,7 +200,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "request_query",
-            "description": "当用户明确要执行查询任务时调用此工具。需要指定查询选项名称。",
+            "description": "当用户明确要执行查询任务时调用此工具。需要指定查询选项名称；如果用户已上传Excel文件，请把上传接口返回的 file_path 一并传入，任务确定且文件可读时系统会直接执行，不再弹出确认卡片。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -211,6 +211,10 @@ AI_TOOLS = [
                     "description": {
                         "type": "string",
                         "description": "用户原始需求的简要描述"
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "可选，用户已上传Excel文件的服务器路径（来自上传接口/文件信息中的 file_path），用于直接执行查询"
                     }
                 },
                 "required": ["query_option_name", "description"]
@@ -221,7 +225,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "list_system_tasks",
-            "description": "列出所有可用的系统任务。系统任务是指后台运维类任务（如数据清理、缓存刷新、终端解绑等），与导出任务和查询任务完全不同。只有当用户明确提到\"系统任务\"或描述的是运维类操作时才调用此工具。不要将查询任务或导出任务误认为是系统任务。返回结果中API类型任务可能包含response_mapping字段，表示响应字段的意义枚举映射。API类型任务参数齐全时会自动执行并返回结果，SQL类型和本地脚本类型任务需要用户确认后执行。",
+            "description": "列出所有可用的系统任务。系统任务是指后台运维类任务（如数据清理、缓存刷新、终端解绑等），与导出任务和查询任务完全不同。仅在无法从用户表述确定具体系统任务时调用；如果已经能确定唯一系统任务，直接调用 request_system_task，不要先调用本工具让用户重复选择。返回结果中API类型任务可能包含response_mapping字段，表示响应字段的意义枚举映射。API类型任务参数齐全时会自动执行并返回结果，SQL类型和本地脚本类型任务需要用户确认后执行。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -268,7 +272,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "list_lookup_options",
-            "description": "列出所有可用的信息查询选项。信息查询是指根据用户提供的参数值（如SN号、商户号、订单号等）快速查询数据库返回结果，结果直接在对话中展示，不需要上传Excel文件也不需要下载。与导出任务、查询任务和系统任务完全不同。当用户询问某个实体的状态、信息、详情时调用此工具。重要：如果用户提供了具体的参数值，务必同时传入params参数，这样当匹配到唯一查询时系统可以自动执行查询，大幅加快响应速度。",
+            "description": "列出所有可用的信息查询选项。信息查询是指根据用户提供的参数值（如SN号、商户号、订单号等）快速查询数据库返回结果，结果直接在对话中展示，不需要上传Excel文件也不需要下载。与导出任务、查询任务和系统任务完全不同。仅在无法从用户表述确定具体信息查询时调用；如果已经能确定唯一信息查询，直接调用 request_lookup。重要：如果用户提供了具体的参数值，务必同时传入params参数，这样当匹配到唯一查询时系统可以自动执行查询，大幅加快响应速度。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2126,9 +2130,12 @@ class AiService:
             params = {}
         desc = args.get('description', '')
 
-        # 查找匹配的导出选项
+        # 查找匹配的导出选项（优先精确匹配，模糊匹配仅作兜底）
+        exact_match = False
         script = Script.query.filter_by(name=export_name, type='export').first()
-        if not script:
+        if script:
+            exact_match = True
+        else:
             # 尝试模糊匹配
             script = Script.query.filter(Script.name.like(f'%{export_name}%'), Script.type == 'export').first()
 
@@ -2167,19 +2174,27 @@ class AiService:
             'output_format': args.get('output_format', 'sheets'),
             'required_missing': [p['name'] for p in required_params],
             'description': desc,
-            'confirm_message': f'AI 准备执行导出：{script.name}，参数：{json.dumps(params, ensure_ascii=False)}，输出格式：{args.get("output_format", "sheets")}'
+            'confirm_message': f'AI 准备执行导出：{script.name}，参数：{json.dumps(params, ensure_ascii=False)}，输出格式：{args.get("output_format", "sheets")}',
+            # 已精确确定任务且必填参数齐全 → 只读导出可直接执行，无需确认卡片
+            '_determined': exact_match,
+            '_auto_execute': exact_match and not required_params,
         }
 
     @staticmethod
     def _tool_request_query(args: dict, user_id: int = None) -> dict:
         """处理查询请求 - 返回结构化信息供前端确认（含权限校验）"""
+        import os
+        from flask import current_app
         from app.models.script import Script
         from app.models.user import User
         query_name = args.get('query_option_name', '')
         desc = args.get('description', '')
 
+        exact_match = False
         script = Script.query.filter_by(name=query_name, type='query').first()
-        if not script:
+        if script:
+            exact_match = True
+        else:
             script = Script.query.filter(Script.name.like(f'%{query_name}%'), Script.type == 'query').first()
 
         if not script:
@@ -2193,6 +2208,29 @@ class AiService:
                 if allowed_ids and script.id not in allowed_ids:
                     return {'error': f'你没有权限使用查询选项"{script.name}"'}
 
+        # 校验 AI 传入的已上传文件路径（仅允许上传/输出目录内的表格文件）
+        file_path = (args.get('file_path') or '').strip()
+        resolved_file_path = ''
+        file_columns = []
+        file_row_count = 0
+        if file_path:
+            try:
+                upload_root = os.path.realpath(current_app.config.get('UPLOAD_FOLDER') or './uploads')
+                output_root = os.path.realpath(current_app.config.get('OUTPUT_FOLDER') or './outputs')
+                resolved = os.path.realpath(file_path)
+                within_allowed = any(
+                    resolved == root or resolved.startswith(root + os.sep)
+                    for root in (upload_root, output_root)
+                )
+                if within_allowed and os.path.isfile(resolved):
+                    from app.utils.file_reader import get_table_summary
+                    summary = get_table_summary(resolved)
+                    resolved_file_path = resolved
+                    file_columns = summary.get('columns', [])
+                    file_row_count = summary.get('row_count', 0)
+            except Exception as e:
+                logger.warning(f'校验查询任务文件失败: {e}')
+
         return {
             'action_type': 'query',
             'script_id': script.id,
@@ -2202,7 +2240,14 @@ class AiService:
             'param_column': script.param_column or '',
             'new_sheet': script.new_sheet if script.new_sheet is not None else True,
             'query_fields': AiService._extract_select_columns(script.sql_text or ''),
-            'confirm_message': f'AI 准备执行查询：{script.name}'
+            'file_path': resolved_file_path,
+            'file_name': os.path.basename(resolved_file_path) if resolved_file_path else '',
+            'file_columns': file_columns,
+            'file_row_count': file_row_count,
+            'confirm_message': f'AI 准备执行查询：{script.name}',
+            '_determined': exact_match,
+            # 已精确确定任务且已有可读取的表格文件 → 只读查询可直接执行，无需确认卡片
+            '_auto_execute': exact_match and bool(resolved_file_path and file_columns),
         }
 
     # ============ 工具调用记忆 ============
