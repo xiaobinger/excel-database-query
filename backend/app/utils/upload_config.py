@@ -8,8 +8,14 @@ from typing import List
 
 from app.models.system_config import SystemConfig
 
-# AI 聊天附件默认格式（按表格文件解析）
-DEFAULT_AI_UPLOAD_EXTENSIONS = ['xlsx', 'xls', 'csv']
+# AI 聊天附件默认格式：表格类解析行列，其他类型由 AI 按需读取
+DEFAULT_AI_UPLOAD_EXTENSIONS = [
+    'xlsx', 'xls', 'xlsm', 'csv',
+    'txt', 'md', 'json', 'xml', 'log', 'yaml', 'yml',
+    'pdf', 'doc', 'docx',
+    'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp',
+    'zip',
+]
 
 # 工单附件默认格式：数据文件 + 压缩包 + 文档 + 图片
 DEFAULT_TICKET_ATTACHMENT_EXTENSIONS = [

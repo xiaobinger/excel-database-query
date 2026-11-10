@@ -104,7 +104,7 @@
                 <el-option v-for="ext in aiExtOptions" :key="ext" :label="'.' + ext" :value="ext" />
               </el-select>
               <div style="color: #909399; font-size: 12px; margin-top: 4px">
-                扩展名无需带点；AI 聊天附件会按表格文件解析，建议仅保留 xlsx / xls / csv
+                扩展名无需带点；表格类文件（xlsx/xls/csv）会解析行列，文本/PDF/Word/图片等其他类型由 AI 按需读取
               </div>
             </el-form-item>
             <el-form-item label="工单附件格式">
@@ -795,14 +795,20 @@ const savingDingtalk = ref(false)
 const testingDingtalk = ref(false)
 
 // 文件上传格式配置
-const DEFAULT_AI_UPLOAD_EXTS = ['xlsx', 'xls', 'csv']
+const DEFAULT_AI_UPLOAD_EXTS = [
+  'xlsx', 'xls', 'xlsm', 'csv',
+  'txt', 'md', 'json', 'xml', 'log', 'yaml', 'yml',
+  'pdf', 'doc', 'docx',
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp',
+  'zip',
+]
 const DEFAULT_TICKET_ATTACHMENT_EXTS = [
   'xlsx', 'xls', 'csv', 'txt', 'json', 'xml',
   'zip', 'rar', '7z', 'gz', 'tar',
   'pdf', 'doc', 'docx', 'md',
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp',
 ]
-const aiExtOptions = [...new Set([...DEFAULT_AI_UPLOAD_EXTS, 'xlsm'])]
+const aiExtOptions = DEFAULT_AI_UPLOAD_EXTS
 const ticketExtOptions = DEFAULT_TICKET_ATTACHMENT_EXTS
 const uploadForm = reactive({
   ai: [...DEFAULT_AI_UPLOAD_EXTS],

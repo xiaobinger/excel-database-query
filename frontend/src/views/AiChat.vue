@@ -113,21 +113,27 @@
               <template v-if="msg._type === 'file'">
                 <div class="file-card">
                   <div class="file-card-header">
-                    <i class="fas fa-file-excel file-icon"></i>
+                    <i :class="fileIconClass(msg._file_data)"></i>
                     <span class="file-title">{{ msg._file_data.filename }}</span>
                   </div>
                   <div class="file-card-body">
-                    <div class="file-info-row">
-                      <span><i class="fas fa-table"></i> {{ msg._file_data.row_count }} 行</span>
-                      <span><i class="fas fa-columns"></i> {{ msg._file_data.columns.length }} 列</span>
-                    </div>
-                    <div class="file-columns">
-                      <el-tag v-for="col in msg._file_data.columns.slice(0, 10)" :key="col" size="small" effect="plain" style="margin: 2px 4px 2px 0">
-                        {{ col }}
-                      </el-tag>
-                      <el-tag v-if="msg._file_data.columns.length > 10" size="small" type="info" effect="plain">
-                        +{{ msg._file_data.columns.length - 10 }}
-                      </el-tag>
+                    <template v-if="isTableFile(msg._file_data)">
+                      <div class="file-info-row">
+                        <span><i class="fas fa-table"></i> {{ msg._file_data.row_count }} 行</span>
+                        <span><i class="fas fa-columns"></i> {{ (msg._file_data.columns || []).length }} 列</span>
+                      </div>
+                      <div class="file-columns">
+                        <el-tag v-for="col in (msg._file_data.columns || []).slice(0, 10)" :key="col" size="small" effect="plain" style="margin: 2px 4px 2px 0">
+                          {{ col }}
+                        </el-tag>
+                        <el-tag v-if="(msg._file_data.columns || []).length > 10" size="small" type="info" effect="plain">
+                          +{{ msg._file_data.columns.length - 10 }}
+                        </el-tag>
+                      </div>
+                    </template>
+                    <div v-else class="file-info-row">
+                      <span><i class="fas fa-file"></i> {{ msg._file_data.file_type_label || '文件' }}</span>
+                      <span><i class="fas fa-database"></i> {{ formatFileSize(msg._file_data.file_size) }}</span>
                     </div>
                   </div>
                 </div>
@@ -675,9 +681,12 @@
               </el-tag>
             </div>
             <div v-if="uploadedFile" class="file-attachment">
-              <i class="fas fa-file-excel"></i>
+              <i :class="fileIconClass(uploadedFile)"></i>
               <span class="file-name">{{ uploadedFile.filename }}</span>
-              <span class="file-info">{{ uploadedFile.row_count }} 行 · {{ uploadedFile.columns.length }} 列</span>
+              <span class="file-info">
+                <template v-if="isTableFile(uploadedFile)">{{ uploadedFile.row_count }} 行 · {{ (uploadedFile.columns || []).length }} 列</template>
+                <template v-else>{{ uploadedFile.file_type_label || '文件' }} · {{ formatFileSize(uploadedFile.file_size) }}</template>
+              </span>
               <i class="fas fa-times file-remove" @click="uploadedFile = null"></i>
             </div>
             <div class="input-text-wrapper">
@@ -1484,7 +1493,7 @@ const queueEditInput = ref(null)
 const messagesRef = ref(null)
 const uploadedFile = ref(null)
 // AI聊天附件允许的格式（由系统配置「文件上传」维护）
-const aiUploadExts = ref(['xlsx', 'xls', 'csv'])
+const aiUploadExts = ref(['xlsx', 'xls', 'xlsm', 'csv', 'txt', 'md', 'json', 'xml', 'log', 'yaml', 'yml', 'pdf', 'doc', 'docx', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'zip'])
 const aiUploadAccept = computed(() => aiUploadExts.value.map(e => `.${e}`).join(','))
 const store = useAppStore()
 
@@ -2440,6 +2449,31 @@ async function fetchUploadFormats() {
   } catch {}
 }
 
+// 是否为表格类附件（兼容旧数据：无 file_kind 但有 columns 视为表格）
+function isTableFile(fileInfo) {
+  if (!fileInfo) return false
+  if (fileInfo.file_kind) return fileInfo.file_kind === 'table'
+  return Array.isArray(fileInfo.columns)
+}
+
+function fileIconClass(fileInfo) {
+  const kind = fileInfo?.file_kind
+  if (kind === 'pdf') return 'fas fa-file-pdf file-icon'
+  if (kind === 'document') return 'fas fa-file-word file-icon'
+  if (kind === 'image') return 'fas fa-file-image file-icon'
+  if (kind === 'archive') return 'fas fa-file-archive file-icon'
+  if (kind === 'text') return 'fas fa-file-alt file-icon'
+  if (kind === 'table') return 'fas fa-file-excel file-icon'
+  return 'fas fa-file file-icon'
+}
+
+function formatFileSize(size) {
+  if (size == null) return ''
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
 async function handleFileUpload(file) {
   if (!currentChatId.value) {
     await createNewChat()
@@ -2451,7 +2485,11 @@ async function handleFileUpload(file) {
     const res = await api.ai.uploadFile(formData)
     if (res.data) {
       uploadedFile.value = res.data
-      ElMessage.success(`文件解析成功：${res.data.row_count} 行，${res.data.columns.length} 列`)
+      if (isTableFile(res.data)) {
+        ElMessage.success(`文件解析成功：${res.data.row_count} 行，${(res.data.columns || []).length} 列`)
+      } else {
+        ElMessage.success(`文件上传成功：${res.data.file_type_label || '文件'} ${res.data.filename}`)
+      }
     }
   } catch (e) {
     ElMessage.error('文件上传失败: ' + (e.message || '未知错误'))
@@ -2762,7 +2800,13 @@ async function sendMessage() {
   let content = text
   if (uploadedFile.value) {
     const fileInfo = uploadedFile.value
-    const fileDesc = `用户上传了文件 "${fileInfo.filename}"（${fileInfo.row_count} 行，${fileInfo.columns.length} 列），文件路径：${fileInfo.file_path || '无'}，列名：${fileInfo.columns.join(', ')}`
+    const baseDesc = `用户上传了文件 "${fileInfo.filename}"（${fileInfo.file_type_label || '文件'}，${formatFileSize(fileInfo.file_size) || '大小未知'}），文件路径：${fileInfo.file_path || '无'}`
+    let fileDesc
+    if (isTableFile(fileInfo)) {
+      fileDesc = `${baseDesc}，${fileInfo.row_count} 行，${(fileInfo.columns || []).length} 列，列名：${(fileInfo.columns || []).join(', ')}`
+    } else {
+      fileDesc = `${baseDesc}。该文件不是表格，请调用 parse_uploaded_file 工具读取文件内容，再按用户需求处理`
+    }
     content = text ? `${content}\n\n[${fileDesc}]` : fileDesc
   }
 
@@ -2801,8 +2845,8 @@ async function sendMessage() {
   await nextTick()
   scrollToBottom()
 
-  // 智能匹配：如果用户上传了文件且消息包含查询意图，尝试智能匹配查询选项
-  if (currentUploadedFile && isQueryIntent(text)) {
+  // 智能匹配：仅表格附件且消息包含查询意图时，尝试智能匹配查询选项
+  if (currentUploadedFile && isTableFile(currentUploadedFile) && isQueryIntent(text)) {
     const smartMatchResult = await trySmartMatchQuery(currentUploadedFile, text)
     if (smartMatchResult) {
       loading.value = false

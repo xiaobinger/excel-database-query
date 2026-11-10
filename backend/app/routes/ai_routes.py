@@ -870,7 +870,7 @@ def upload_file():
         return jsonify({'success': False, 'message': f'仅支持 {", ".join(sorted(allowed_ext))} 格式的文件'}), 400
 
     try:
-        from app.services.excel_service import ExcelService
+        from app.utils.file_reader import inspect_uploaded_file
         upload_dir = current_app.config['UPLOAD_FOLDER']
         os.makedirs(upload_dir, exist_ok=True)
 
@@ -878,29 +878,16 @@ def upload_file():
         input_path = os.path.join(upload_dir, filename)
         file.save(input_path)
 
-        info = ExcelService.get_file_info(input_path)
-        if not info:
-            # 已配置但无法按表格解析的格式（如 PDF/Word）给出明确提示，避免返回空行空列
-            try:
+        # 表格类解析行数与列名；其他类型仅保存并识别文件类型，内容由 AI 按需读取
+        data = inspect_uploaded_file(input_path, original_filename=file.filename)
+        return jsonify({'success': True, 'data': data})
+    except ValueError as e:
+        try:
+            if 'input_path' in locals() and os.path.exists(input_path):
                 os.remove(input_path)
-            except OSError:
-                pass
-            return jsonify({
-                'success': False,
-                'message': f'文件解析失败：AI 聊天附件需为可解析的表格文件（{", ".join(sorted(allowed_ext))}）',
-            }), 400
-        columns = info.get('column_names', [])
-
-        return jsonify({
-            'success': True,
-            'data': {
-                'file_path': input_path,
-                'filename': file.filename,
-                'row_count': info.get('data_rows', 0),
-                'columns': columns,
-                'preview': info.get('preview_rows', []),
-            }
-        })
+        except OSError:
+            pass
+        return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 400
 

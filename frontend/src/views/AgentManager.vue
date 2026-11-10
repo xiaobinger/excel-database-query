@@ -302,7 +302,7 @@ const memoryTypeTag = { rule: 'danger', preference: 'warning', fact: 'info' }
 const toolOptions = [
   { name: 'list_export_options', label: '列出导出选项' },
   { name: 'request_export', label: '执行导出' },
-  { name: 'parse_uploaded_file', label: '解析Excel文件' },
+  { name: 'parse_uploaded_file', label: '解析/读取上传文件' },
   { name: 'list_query_options', label: '列出查询选项' },
   { name: 'request_query', label: '执行查询' },
   { name: 'list_system_tasks', label: '列出系统任务' },

@@ -102,13 +102,13 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "parse_uploaded_file",
-            "description": "解析Excel文件，返回工作表列表、列名、行数和数据预览。当用户上传了文件、提到附件，或需要查看某个Excel文件的内容时调用此工具。可传 file_path（推荐，来自上传接口返回值）或 filename（按上传文件名自动查找最新文件）；可通过 sheet_name 指定工作表、columns 指定预览列、preview_rows 指定预览行数；如需某列的全部非空值（例如用于 IN 查询、核对清单），传 values_column 指定列名。",
+            "description": "解析/读取已上传的文件：表格类（xlsx/xlsm/xls/csv）返回工作表、列名、行数与数据预览；文本类（txt/md/json/xml/log/yaml/ini/sql/代码等）返回正文；PDF（需 pypdf）与 Word(docx) 提取文本；压缩包返回文件清单；图片返回基本信息。当用户上传了文件、提到附件，或需要查看文件内容时调用此工具。可传 file_path（推荐，来自上传接口返回值）或 filename（按上传文件名自动查找最新文件）；表格类可通过 sheet_name 指定工作表、columns 指定预览列、preview_rows 指定预览行数；如需某列的全部非空值（例如用于 IN 查询、核对清单），传 values_column 指定列名。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "Excel文件的服务器路径（优先使用，通常来自上传接口返回的 file_path）"
+                        "description": "文件的服务器路径（优先使用，通常来自上传接口返回的 file_path）"
                     },
                     "filename": {
                         "type": "string",
@@ -116,24 +116,32 @@ AI_TOOLS = [
                     },
                     "sheet_name": {
                         "type": "string",
-                        "description": "可选，要解析的工作表名称，默认第一个工作表"
+                        "description": "可选，表格类文件要解析的工作表名称，默认第一个工作表"
                     },
                     "columns": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "可选，只预览这些列（按列名），不传则预览前若干列"
+                        "description": "可选，表格类文件只预览这些列（按列名），不传则预览前若干列"
                     },
                     "preview_rows": {
                         "type": "integer",
-                        "description": "可选，数据预览行数，默认5，最多20"
+                        "description": "可选，表格类文件数据预览行数，默认5，最多20"
                     },
                     "values_column": {
                         "type": "string",
-                        "description": "可选，要提取「所有非空值」的列名（表头名，大小写不敏感，也支持列字母如 A）。需要拿到某列完整数据（如用于 IN 查询、去重核对）时传入"
+                        "description": "可选，表格类文件要提取「所有非空值」的列名（表头名，大小写不敏感，也支持列字母如 A）。需要拿到某列完整数据（如用于 IN 查询、去重核对）时传入"
                     },
                     "max_values": {
                         "type": "integer",
                         "description": "可选，values_column 最多返回多少个非空值，默认200，最多1000"
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "description": "可选，文本/PDF/Word 类文件最多返回的字符数，默认20000，最多100000"
+                    },
+                    "max_pages": {
+                        "type": "integer",
+                        "description": "可选，PDF 最多解析的页数，默认50，最多200"
                     }
                 },
                 "required": []
@@ -1338,10 +1346,9 @@ class AiService:
 
     @staticmethod
     def _tool_parse_file(args: dict, user_id: int = None) -> dict:
-        """解析Excel文件：工作表列表、列名、行数与数据预览"""
+        """读取上传文件：表格返回结构/预览，其他类型返回正文或文件信息"""
         import os
         from flask import current_app
-        from app.services.excel_service import ExcelService
 
         file_path = (args.get('file_path') or '').strip()
         filename = (args.get('filename') or '').strip()
@@ -1376,54 +1383,18 @@ class AiService:
             resolved = max(candidates, key=os.path.getmtime)
 
         ext = os.path.splitext(resolved)[1].lower()
-        if ext not in ('.xlsx', '.xlsm'):
-            return {'error': f'暂不支持 {ext or "未知"} 格式的文件解析，请使用 .xlsx 格式'}
-
-        sheet_name = (args.get('sheet_name') or '').strip() or None
-        columns = args.get('columns') or None
-        if isinstance(columns, str):
-            columns = [c.strip() for c in columns.split(',') if c.strip()]
-        try:
-            preview_rows = int(args.get('preview_rows') or 5)
-        except (TypeError, ValueError):
-            preview_rows = 5
-        preview_rows = max(1, min(preview_rows, 20))
-
-        values_column = (args.get('values_column') or '').strip() or None
-        try:
-            max_values = int(args.get('max_values') or 200)
-        except (TypeError, ValueError):
-            max_values = 200
-        max_values = max(1, min(max_values, 1000))
+        if not ext:
+            return {'error': '无法识别文件格式（缺少扩展名）'}
 
         try:
-            data = ExcelService.parse_file(
-                resolved, sheet_name=sheet_name, preview_rows=preview_rows, columns=columns,
-                values_column=values_column, max_values=max_values
-            )
+            from app.utils.file_reader import read_uploaded_file
+            result = read_uploaded_file(resolved, args)
         except Exception as e:
-            logger.error(f'解析Excel文件失败: {resolved}, 错误: {e}', exc_info=True)
-            return {'error': f'解析文件失败: {str(e)}'}
+            logger.error(f'读取上传文件失败: {resolved}, 错误: {e}', exc_info=True)
+            return {'error': f'读取文件失败: {str(e)}'}
 
-        def _truncate(value):
-            if isinstance(value, str) and len(value) > 200:
-                return value[:200] + '…'
-            return value
-
-        preview = data.get('preview', {})
-        preview['rows'] = [[_truncate(cell) for cell in row] for row in preview.get('rows', [])]
-        file_info = data.get('file_info', {})
-        result = {
-            'file_path': resolved,
-            'filename': os.path.basename(resolved),
-            'active_sheet': data.get('active_sheet'),
-            'row_count': file_info.get('data_rows', 0),
-            'columns': file_info.get('column_names', []),
-            'sheets': data.get('sheets', []),
-            'preview': preview,
-        }
-        if data.get('column_values') is not None:
-            result['column_values'] = data['column_values']
+        result.setdefault('file_path', resolved)
+        result.setdefault('filename', os.path.basename(resolved))
         return result
 
     @staticmethod
