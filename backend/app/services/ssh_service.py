@@ -28,6 +28,7 @@ class SshService:
             pkey_path=data.get('pkey_path'),
             local_bind_port=int(data['local_bind_port']) if data.get('local_bind_port') is not None else None,
             is_jump_host=bool(data.get('is_jump_host', False)),
+            authorized_hosts_command=(data.get('authorized_hosts_command') or '').strip() or None,
         )
         if data.get('password'):
             ssh_config.set_password(data['password'])
@@ -48,6 +49,8 @@ class SshService:
                 if key in int_fields and val is not None:
                     val = int(val)
                 setattr(ssh_config, key, val)
+        if 'authorized_hosts_command' in data:
+            ssh_config.authorized_hosts_command = (data.get('authorized_hosts_command') or '').strip() or None
         if 'password' in data and data['password']:
             ssh_config.set_password(data['password'])
         db.session.commit()
@@ -76,19 +79,50 @@ class SshService:
         if not jump.is_jump_host:
             return {'success': False, 'message': '所选配置未标记为跳板机'}
 
-        targets = SshConfig.query.filter(
+        all_targets = SshConfig.query.filter(
             SshConfig.is_active.is_(True),
             SshConfig.is_jump_host.is_(False),
             SshConfig.id != ssh_id,
         ).order_by(SshConfig.name.asc()).all()
-        if not targets:
-            return {'success': True, 'data': [], 'unreachable': []}
+        if not all_targets:
+            return {
+                'success': True, 'data': [], 'unreachable': [],
+                'authorized_total': 0, 'unmatched': [], 'source': 'none',
+                'notice': '平台未配置任何目标机 SSH 配置',
+            }
 
         from concurrent.futures import ThreadPoolExecutor
         from flask import current_app
         from app.services.system_task_service import SystemTaskService
 
         app = current_app._get_current_object()
+
+        # 先登录跳板机，取堡垒机/跳板机上的授权主机列表，再按 IP 匹配平台配置
+        authorized_ips, source, notice = [], 'all', ''
+        try:
+            authorized_ips, source, _raw = SystemTaskService._fetch_authorized_target_ips(jump)
+        except Exception as exc:
+            logger.warning(f"跳板机授权主机列表获取失败: {exc}")
+            notice = f'未能从跳板机获取授权主机列表（{str(exc)[:150]}），已回退为逐台实测'
+
+        unmatched = []
+        if authorized_ips:
+            authorized_set = set(authorized_ips)
+            configured_hosts = {(t.host or '').strip() for t in all_targets}
+            targets = [t for t in all_targets if (t.host or '').strip() in authorized_set]
+            unmatched = [ip for ip in authorized_ips if ip not in configured_hosts]
+            if not targets:
+                return {
+                    'success': True, 'data': [], 'unreachable': [],
+                    'authorized_total': len(authorized_ips), 'unmatched': unmatched,
+                    'source': source,
+                    'notice': f'跳板机授权 {len(authorized_ips)} 台主机，但与平台已配置的目标机 IP 均不匹配，请先在「SSH 配置」中补全目标机',
+                }
+        else:
+            targets = all_targets
+            source = 'all'
+            if not notice:
+                notice = '未能从跳板机登录信息中解析出授权主机 IP，已回退为逐台实测'
 
         def _probe(target: SshConfig):
             with app.app_context():
@@ -119,7 +153,11 @@ class SshService:
                     reachable.append(ok_item)
                 if fail_item:
                     unreachable.append(fail_item)
-        return {'success': True, 'data': reachable, 'unreachable': unreachable}
+        return {
+            'success': True, 'data': reachable, 'unreachable': unreachable,
+            'authorized_total': len(authorized_ips), 'unmatched': unmatched,
+            'source': source, 'notice': notice,
+        }
 
     @staticmethod
     def test_connection(ssh_id: int) -> dict:

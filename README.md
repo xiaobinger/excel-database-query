@@ -23,7 +23,7 @@
 
 <!-- 徽章 -->
 <p>
-  <img src="https://img.shields.io/badge/version-2.6.71-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-2.6.72-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/python-3.10+-yellow?style=flat-square&logo=python&logoColor=white" alt="python" />
   <img src="https://img.shields.io/badge/vue-3-green?style=flat-square&logo=vuedotjs&logoColor=white" alt="vue" />
   <img src="https://img.shields.io/badge/flask-black?style=flat-square&logo=flask&logoColor=white" alt="flask" />
@@ -435,6 +435,7 @@ WHERE merchant_id = :value
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-11-12 | v2.6.72 | SSH 跳板机改为**堡垒机模式**：选择跳板机后不再盲目逐台实测平台配置，而是先「登录跳板机 → 取授权主机列表 → 按 IP 匹配平台 SSH 配置 → 仅对匹配项验证可登录」：① **授权列表** 优先执行 SSH 配置中新增的「授权主机清单命令」（`authorized_hosts_command`，如 `cat /etc/bastion/hosts`）；留空时用 paramiko `invoke_shell` 交互式登录跳板机，捕获登录欢迎信息/堡垒机主机菜单（自动去除 ANSI 控制符），从中解析 IPv4（排除回环与非法地址、保序去重），像 Xshell 登录堡垒机一样拿列表；② **IP 匹配** 只有平台已配置且 IP 命中授权列表的目标机才进入下拉，授权了但平台未配置的 IP 以 `unmatched` 返回并提示补配置；③ **仍做可登录验证** 匹配后逐台 `echo __SSH_OK__`（免密优先、失败回退），确保列出的机器真能登录；④ **兜底** 列表获取异常或解析不到 IP 时自动回退为原「逐台实测全部目标机」，并返回 `notice` 说明原因；⑤ 前端新增提示「跳板机授权 N 台 / 匹配 M 台 / 未在平台配置 K 台」，SSH 配置弹窗新增「授权主机清单」输入（仅跳板机显示）。后端 5 组断言（IP 提取、命中过滤+不可登录剔除、空列表回退、完全不匹配短路、取列表异常回退）全部通过，`vite build` 通过 |
 | 2026-11-12 | v2.6.71 | SSH 跳板机支持**目标机免密优先、失败回退**：① **免密优先** 系统任务（API 类）与目标机探测改为先由后端连上跳板机，在跳板机本机执行 `ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -p <端口> <用户>@<目标机> '<命令>'`，依赖跳板机 → 目标机已配置免密（密钥）登录，此时**目标机 SSH 配置可不再填写密码/私钥**；② **自动回退** 若 ssh 自身失败（认证/网络失败固定返回 255）或执行异常，自动回退到原「目标机凭据 + paramiko `direct-tcpip` 端口转发」方式，老配置无需改动即可继续使用；目标机上命令自身的非 0 退出码（如 curl 返回 22/500）视为正常结果直接返回，不触发回退；③ **错误合并** 两种方式都失败时抛出合并错误「跳板机免密登录目标机[X]失败(原因)，回退到目标机凭据方式也失败: 原因」，便于定位是免密未配置还是目标机凭据错误；④ **复用** `SshService.probe_targets` 与 `_execute_api_via_ssh` 共用同一编排方法，探测结果与实际执行链路一致。`py_compile` 通过，新增 5 组断言（免密成功不回退、255 回退隧道、免密异常回退隧道、双失败合并报错、目标机命令非 0 退出码不回退） |
 | 2026-11-12 | v2.6.70 | 修复「是否为跳板机」在 SSH 配置页不可见——v2.6.69 只在未被路由引用的 `SshManager.vue` 中加了开关，而实际入口是「数据库管理 → SSH 配置」Tab（`DatabaseManager.vue`）；现已在真实页面的新建/编辑弹窗加入「是否为跳板机」开关（默认关闭，编辑时正确回显，随表单提交 `is_jump_host`），并在 SSH 配置列表新增「跳板机」标记列，可直接看出哪些配置会出现在系统任务的跳板机下拉中。`vite build` 通过 |
 | 2026-11-12 | v2.6.69 | SSH 配置新增**「是否为跳板机」属性**，选择跳板机后**自动实测拉取有权限的目标机列表**：① **角色区分** `ssh_configs` 新增 `is_jump_host`（默认 False，`_auto_migrate` 自动补列、`database/init.sql` 同步），「SSH 配置管理」表单增加跳板机开关、列表增加跳板机标记列，存量配置默认为目标机，需显式标记后才可作为跳板机；② **下拉按角色过滤** 系统任务弹窗中「SSH跳板机」只列出 `is_jump_host=true` 且启用的配置，「目标机器」不再展示全量配置，未标记跳板机时给出引导提示；③ **自动探测可登录目标机** 新增 `GET /api/ssh/<id>/targets`，选中跳板机后由后端并发（最多 6 线程）以「跳板机 → 目标机」两跳方式执行 `echo __SSH_OK__` 逐台实测登录，仅返回真正可登录的非跳板机配置，不可登录的连同原因进入 `unreachable` 并以「已隐藏 N 台」提示，探测期间下拉显示 loading 并禁用；④ **编辑回显** 打开已配置的 SSH 任务时自动重新探测，原目标机若仍可登录则保持选中，否则要求重新选择；⑤ **服务端强校验** 创建/更新系统任务时跳板机必须是跳板机配置、目标机必须是非跳板机配置（`_normalize_ssh_config_id(value, require_jump_host)`），角色填反、配置停用或不存在均返回 400。`py_compile`、`vite build` 通过，新增 7 组断言（字段默认值与序列化、探测只测启用非跳板机并过滤不可登录、非跳板机配置拒绝探测、update 切换角色、targets 路由、任务角色校验与直连兼容）及 v2.6.68 的 8 组回归全部通过 |

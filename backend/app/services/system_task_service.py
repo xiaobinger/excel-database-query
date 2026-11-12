@@ -850,6 +850,76 @@ class SystemTaskService:
         return ' '.join(shlex.quote(part) for part in options) + ' ' + shlex.quote(command)
 
     @staticmethod
+    def _capture_jump_login_banner(jump_config, wait_seconds: float = 8.0) -> str:
+        """以交互式 shell 登录跳板机，捕获登录欢迎信息/堡垒机主机菜单后立即断开"""
+        import paramiko
+        import time as _time
+
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        channel = None
+        chunks = []
+        try:
+            client.connect(**SystemTaskService._ssh_connect_kwargs(jump_config))
+            channel = client.invoke_shell(width=200, height=60)
+            channel.settimeout(1.0)
+            deadline = _time.time() + wait_seconds
+            last_data_at = None
+            while _time.time() < deadline:
+                if channel.recv_ready():
+                    chunk = channel.recv(65536).decode('utf-8', errors='replace')
+                    if chunk:
+                        chunks.append(chunk)
+                        last_data_at = _time.time()
+                else:
+                    # 输出安静 1.5 秒视为菜单已打印完毕
+                    if last_data_at and _time.time() - last_data_at >= 1.5:
+                        break
+                    _time.sleep(0.2)
+            return ''.join(chunks)
+        finally:
+            if channel is not None:
+                try:
+                    channel.close()
+                except Exception:
+                    pass
+            try:
+                client.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _extract_ipv4_list(text: str) -> List[str]:
+        """从跳板机输出中提取 IPv4（去掉 ANSI 控制符、回环与非法地址，保持原顺序去重）"""
+        cleaned = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', text or '')
+        ips = []
+        for ip in re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', cleaned):
+            parts = [int(p) for p in ip.split('.')]
+            if any(p > 255 for p in parts):
+                continue
+            if parts[0] == 0 or parts[0] == 127 or ip == '255.255.255.255':
+                continue
+            if ip not in ips:
+                ips.append(ip)
+        return ips
+
+    @staticmethod
+    def _fetch_authorized_target_ips(jump_config):
+        """获取跳板机/堡垒机上的授权目标机 IP 列表，返回 (IP列表, 来源, 原始输出摘要)"""
+        command = (getattr(jump_config, 'authorized_hosts_command', '') or '').strip()
+        if command:
+            out, err, code = SystemTaskService._run_command_on_jump(jump_config, command, 15)
+            text = (out or '') + '\n' + (err or '')
+            ips = SystemTaskService._extract_ipv4_list(text)
+            if code == 0 and ips:
+                return ips, 'command', text.strip()[:2000]
+            detail = (err or out or '').strip()[:200] or f'退出码 {code}'
+            raise ValueError(f'跳板机授权清单命令执行失败: {detail}')
+
+        banner = SystemTaskService._capture_jump_login_banner(jump_config)
+        return SystemTaskService._extract_ipv4_list(banner), 'banner', banner.strip()[-2000:]
+
+    @staticmethod
     def _run_ssh_command_via_tunnel(jump_config, target_config, command: str, timeout: int):
         """通过跳板机建立到目标机的SSH通道，并在目标机执行命令"""
         import paramiko

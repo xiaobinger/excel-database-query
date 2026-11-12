@@ -293,6 +293,16 @@
             开启后该配置才会出现在系统任务的SSH跳板机下拉中；目标机器只从非跳板机配置中探测
           </span>
         </el-form-item>
+
+        <el-form-item v-if="sshForm.is_jump_host" label="授权主机清单">
+          <el-input
+            v-model="sshForm.authorized_hosts_command"
+            placeholder="选填，如 cat /etc/bastion/hosts"
+          />
+          <div style="color: #909399; font-size: 12px; margin-top: 4px">
+            在跳板机上执行该命令，从输出中解析授权目标机 IP；留空则读取登录跳板机后的欢迎信息/堡垒机主机菜单
+          </div>
+        </el-form-item>
       </el-form>
 
       <template #footer>
@@ -355,6 +365,7 @@ const defaultSshForm = {
   password: '',
   pkey_path: '',
   is_jump_host: false,
+  authorized_hosts_command: '',
   local_bind_port: null
 }
 const sshForm = reactive({ ...defaultSshForm })
@@ -553,6 +564,7 @@ function openSshDialog(row) {
       password: '',
       pkey_path: row.pkey_path || '',
       is_jump_host: row.is_jump_host || false,
+      authorized_hosts_command: row.authorized_hosts_command || '',
       local_bind_port: row.local_bind_port || null
     })
   } else {

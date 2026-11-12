@@ -306,6 +306,9 @@
               <div v-else-if="sshProbeLoaded && probedTargets.length > 0" style="color: #67c23a; font-size: 12px; margin-top: 4px">
                 <i class="fas fa-check-circle"></i> 已通过跳板机实测登录，共 {{ probedTargets.length }} 台可登录目标机
               </div>
+              <div v-if="sshProbeNotice" style="color: #e6a23c; font-size: 12px; margin-top: 4px">
+                <i class="fas fa-info-circle"></i> {{ sshProbeNotice }}
+              </div>
               <div style="color: #909399; font-size: 12px; margin-top: 4px">
                 后端先连接跳板机，再由跳板机登录目标机执行 curl；目标 IP、端口与账号取自目标机器的 SSH 配置
               </div>
@@ -1078,11 +1081,13 @@ const jumpHostOptions = computed(() => sshConfigs.value.filter(item => item.is_j
 const sshProbing = ref(false)
 const sshProbeLoaded = ref(false)
 const sshProbeFailed = ref('')
+const sshProbeNotice = ref('')
 const probedTargets = ref([])
 
 function resetProbedTargets() {
   sshProbeLoaded.value = false
   sshProbeFailed.value = ''
+  sshProbeNotice.value = ''
   probedTargets.value = []
 }
 
@@ -1096,9 +1101,16 @@ async function handleJumpHostChange(jumpId) {
     if (res && res.success) {
       sshProbeLoaded.value = true
       probedTargets.value = res.data || []
+      const authorized = res.authorized_total || 0
+      const unmatched = (res.unmatched || []).length
       const skipped = (res.unreachable || []).length
+      sshProbeNotice.value = res.notice || (authorized > 0
+        ? `跳板机授权 ${authorized} 台主机，匹配平台配置 ${probedTargets.value.length} 台${unmatched > 0 ? `，另有 ${unmatched} 台未在平台配置` : ''}`
+        : '')
       if (probedTargets.value.length === 0) {
-        sshProbeFailed.value = '该跳板机下暂无可登录的目标机，可在「SSH 配置管理」中补充配置'
+        sshProbeFailed.value = res.notice || '该跳板机下暂无可登录的目标机，可在「SSH 配置管理」中补充配置'
+      } else if (unmatched > 0) {
+        ElMessage.warning(`跳板机授权 ${authorized} 台，已匹配 ${probedTargets.value.length} 台可登录，${unmatched} 台未在平台配置`)
       } else if (skipped > 0) {
         ElMessage.warning(`已拉取 ${probedTargets.value.length} 台可登录目标机，${skipped} 台无法登录已隐藏`)
       }
