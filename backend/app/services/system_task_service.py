@@ -815,7 +815,42 @@ class SystemTaskService:
         return kwargs
 
     @staticmethod
-    def _run_ssh_command_via_jump(jump_config, target_config, command: str, timeout: int):
+    def _run_command_on_jump(jump_config, remote_command: str, timeout: int):
+        """在跳板机本机执行命令，返回 (标准输出, 标准错误, 退出码)"""
+        import paramiko
+
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            client.connect(**SystemTaskService._ssh_connect_kwargs(jump_config))
+            stdin, stdout, stderr = client.exec_command(remote_command, timeout=timeout)
+            out = stdout.read().decode('utf-8', errors='replace')
+            err = stderr.read().decode('utf-8', errors='replace')
+            return out, err, stdout.channel.recv_exit_status()
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _build_jump_side_ssh_command(target_config, command: str) -> str:
+        """构造在跳板机上执行的 ssh 命令，依赖跳板机到目标机的免密登录"""
+        import shlex
+
+        options = [
+            'ssh',
+            '-o', 'BatchMode=yes',
+            '-o', 'StrictHostKeyChecking=no',
+            '-o', 'UserKnownHostsFile=/dev/null',
+            '-o', 'ConnectTimeout=10',
+            '-p', str(int(target_config.port or 22)),
+            '{}@{}'.format(target_config.username, target_config.host),
+        ]
+        return ' '.join(shlex.quote(part) for part in options) + ' ' + shlex.quote(command)
+
+    @staticmethod
+    def _run_ssh_command_via_tunnel(jump_config, target_config, command: str, timeout: int):
         """通过跳板机建立到目标机的SSH通道，并在目标机执行命令"""
         import paramiko
 
@@ -877,6 +912,34 @@ class SystemTaskService:
                     channel.close()
                 except Exception:
                     pass
+
+    @staticmethod
+    def _run_ssh_command_via_jump(jump_config, target_config, command: str, timeout: int):
+        """优先在跳板机上经免密 ssh 登录目标机执行命令，失败时回退到「目标机凭据 + 端口转发」"""
+        jump_command = SystemTaskService._build_jump_side_ssh_command(target_config, command)
+        jump_error = None
+        try:
+            out, err, exit_code = SystemTaskService._run_command_on_jump(
+                jump_config, jump_command, timeout
+            )
+            # ssh 自身失败（认证/网络）固定返回 255，其余退出码来自目标机上的命令
+            if exit_code != 255:
+                return out, err, exit_code
+            jump_error = (err or out or '').strip() or 'ssh 返回 255'
+        except Exception as exc:
+            jump_error = str(exc)
+
+        try:
+            return SystemTaskService._run_ssh_command_via_tunnel(
+                jump_config, target_config, command, timeout
+            )
+        except Exception as exc:
+            raise ValueError(
+                '跳板机免密登录目标机[{}]失败({})，回退到目标机凭据方式也失败: {}'.format(
+                    target_config.name, jump_error, exc
+                )
+            ) from exc
+
 
     @staticmethod
     def _execute_api_via_ssh(execution: SystemTaskExecution, system_task: SystemTask,
