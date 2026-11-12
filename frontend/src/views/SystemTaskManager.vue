@@ -1093,18 +1093,17 @@ async function handleJumpHostChange(jumpId) {
   sshProbing.value = true
   try {
     const res = await api.ssh.targets(jumpId)
-    const data = res.data || res || {}
-    if (data.success) {
+    if (res && res.success) {
       sshProbeLoaded.value = true
-      probedTargets.value = data.data || []
-      const skipped = (data.unreachable || []).length
+      probedTargets.value = res.data || []
+      const skipped = (res.unreachable || []).length
       if (probedTargets.value.length === 0) {
-        sshProbeFailed.value = '该跳板机下暂无可登录的目标机，可在「SSH 管理」中补充配置'
+        sshProbeFailed.value = '该跳板机下暂无可登录的目标机，可在「SSH 配置管理」中补充配置'
       } else if (skipped > 0) {
         ElMessage.warning(`已拉取 ${probedTargets.value.length} 台可登录目标机，${skipped} 台无法登录已隐藏`)
       }
     } else {
-      sshProbeFailed.value = data.message || '目标机探测失败'
+      sshProbeFailed.value = (res && res.message) || '目标机探测失败'
     }
   } catch (e) {
     sshProbeFailed.value = e?.message || '目标机探测失败'
