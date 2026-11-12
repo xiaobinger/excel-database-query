@@ -34,7 +34,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import { useWidgetsStore } from '../../stores/widgets'
 import { widgetComponent } from '../../config/widgetRegistry'
 
@@ -62,8 +62,21 @@ function toggle() {
 }
 
 onMounted(() => {
-  store.load()
+  // 每次进入主框架都重新拉取，确保权限变更或切换账号后不会展示未授权插件
+  store.load(true)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
 })
+
+onUnmounted(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+})
+
+function handleVisibilityChange() {
+  // 从其他标签页/窗口切回时重新校验权限，管理员撤销授权后无需刷新页面
+  if (document.visibilityState === 'visible') {
+    store.load(true)
+  }
+}
 </script>
 
 <style scoped>

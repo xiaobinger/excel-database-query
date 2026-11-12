@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import router from '../router'
 import { useTagsViewStore } from './tagsView'
 import { useTaskMonitorStore } from './taskMonitor'
+import { useWidgetsStore } from './widgets'
 import { DEFAULT_MENU_CONFIG } from '../config/menuConfig'
 
 export const useAppStore = defineStore('app', () => {
@@ -77,6 +78,8 @@ export const useAppStore = defineStore('app', () => {
     useTagsViewStore().removeAllViews()
     // 重置任务监控
     try { useTaskMonitorStore().reset() } catch (e) {}
+    // 重置个性插件状态，避免下一个账号看到上一个账号的插件
+    try { useWidgetsStore().reset() } catch (e) {}
     router.push('/login')
   }
 

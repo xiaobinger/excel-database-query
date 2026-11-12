@@ -419,8 +419,9 @@ const widgetForm = reactive({
 
 function resetWidgetForm() {
   const cfg = widgetStore.config
-  widgetForm.enabled = [...cfg.enabled]
-  widgetForm.order = [...cfg.order]
+  const allowed = new Set(widgetStore.definitions.map((item) => item.key))
+  widgetForm.enabled = cfg.enabled.filter((key) => allowed.has(key))
+  widgetForm.order = cfg.order.filter((key) => allowed.has(key))
   widgetForm.settings = JSON.parse(JSON.stringify(cfg.settings || {}))
 }
 

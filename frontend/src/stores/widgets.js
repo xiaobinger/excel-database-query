@@ -18,8 +18,13 @@ export const useWidgetsStore = defineStore('widgets', () => {
   const loading = ref(false)
   const loaded = ref(false)
 
-  /** 已启用且按用户排序的插件 key */
-  const enabledKeys = computed(() => config.value.order.filter((key) => config.value.enabled.includes(key)))
+  /** 当前用户被授权的插件 key 集合（以接口返回的 definitions 为准） */
+  const allowedKeys = computed(() => new Set(definitions.value.map((item) => item.key)))
+
+  /** 已启用、已授权且按用户排序的插件 key */
+  const enabledKeys = computed(() =>
+    config.value.order.filter((key) => allowedKeys.value.has(key) && config.value.enabled.includes(key))
+  )
   const hasWidgets = computed(() => enabledKeys.value.length > 0)
 
   function definitionFor(key) {
@@ -67,11 +72,19 @@ export const useWidgetsStore = defineStore('widgets', () => {
     config.value = normalizeConfig(next)
   }
 
+  /** 退出登录时清空，避免下一个账号复用上一个账号的插件清单 */
+  function reset() {
+    definitions.value = []
+    config.value = normalizeConfig({})
+    loaded.value = false
+  }
+
   return {
     definitions,
     config,
     loading,
     loaded,
+    allowedKeys,
     enabledKeys,
     hasWidgets,
     definitionFor,
@@ -79,5 +92,6 @@ export const useWidgetsStore = defineStore('widgets', () => {
     persist,
     setCollapsed,
     applyConfig,
+    reset,
   }
 })
