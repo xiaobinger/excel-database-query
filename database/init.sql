@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS roles (
     can_switch_agent BOOLEAN DEFAULT FALSE COMMENT '是否允许切换Agent',
     can_switch_model BOOLEAN DEFAULT FALSE COMMENT '是否允许切换模型',
     model_permissions TEXT COMMENT '模型权限(JSON数组，存储可用的AI配置ID)',
+    widget_permissions TEXT COMMENT '个性插件权限(JSON数组，all表示全部)',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_name (name)
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS users (
     is_active BOOLEAN DEFAULT TRUE COMMENT '是否激活',
     theme VARCHAR(50) DEFAULT 'default' COMMENT '用户主题偏好',
     auto_task_ids TEXT COMMENT '授权的自动导出任务ID列表(JSON)',
+    widget_config TEXT COMMENT '个性插件配置(JSON)',
     last_login_at TIMESTAMP NULL COMMENT '最后登录时间',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

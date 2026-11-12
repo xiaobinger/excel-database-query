@@ -429,4 +429,15 @@ const tokenStats = {
   my: () => http.get('/token-stats/my'),
 }
 
-export default { auth, users, logs, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, mcp, openApi, business, systemTask, lookup, profitShare, tickets, pay, payFlow, dataDashboard, tokenStats }
+const widgets = {
+  get: () => http.get('/widgets'),
+  saveConfig: (data) => http.put('/widgets/config', data),
+  weather: (params) => http.get('/widgets/weather', { params }),
+  news: (params) => http.get('/widgets/news', { params }),
+  stocks: (params) => http.get('/widgets/stocks', { params }),
+  todos: (params) => http.get('/widgets/todos', { params }),
+  uploadSticker: (formData) => http.post('/widgets/sticker', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  deleteSticker: () => http.delete('/widgets/sticker'),
+}
+
+export default { auth, users, logs, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, mcp, openApi, business, systemTask, lookup, profitShare, tickets, pay, payFlow, dataDashboard, tokenStats, widgets }

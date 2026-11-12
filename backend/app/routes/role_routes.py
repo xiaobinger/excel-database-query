@@ -52,6 +52,8 @@ def create_role():
             role.can_switch_model = data['can_switch_model']
         if 'model_permissions' in data:
             role.set_model_permissions(data['model_permissions'])
+        if 'widget_permissions' in data:
+            role.set_widget_permissions(data['widget_permissions'])
 
         db.session.add(role)
         db.session.commit()
@@ -104,6 +106,9 @@ def update_role(role_id):
 
         if 'model_permissions' in data:
             role.set_model_permissions(data['model_permissions'])
+
+        if 'widget_permissions' in data:
+            role.set_widget_permissions(data['widget_permissions'])
 
         db.session.commit()
 

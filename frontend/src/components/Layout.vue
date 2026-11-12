@@ -118,13 +118,16 @@
         </div>
       </el-header>
       <TagsView />
-      <el-main class="layout-main">
-        <router-view v-slot="{ Component }">
-          <keep-alive>
-            <component :is="Component" />
-          </keep-alive>
-        </router-view>
-      </el-main>
+      <el-container class="layout-body">
+        <el-main class="layout-main">
+          <router-view v-slot="{ Component }">
+            <keep-alive>
+              <component :is="Component" />
+            </keep-alive>
+          </router-view>
+        </el-main>
+        <WidgetDock />
+      </el-container>
       <el-footer class="layout-footer">
         <span>Copyright © 2026-{{ currentYear }} Power By XiaoBinger</span>
         <span class="footer-divider">|</span>
@@ -168,7 +171,7 @@
     <el-dialog
       v-model="profileDialogVisible"
       title="个人中心"
-      width="480px"
+      width="560px"
       destroy-on-close
       :close-on-click-modal="false"
     >
@@ -260,6 +263,94 @@
             </div>
           </div>
         </el-form-item>
+
+        <el-divider content-position="left">个性插件</el-divider>
+        <el-form-item label="右侧插件栏">
+          <div class="widget-setting">
+            <div class="widget-setting-tip">管理员在「角色管理」授权后，可在这里勾选并排序右侧插件坞展示的插件</div>
+            <div v-if="!widgetStore.definitions.length" class="widget-no-auth">
+              <i class="fas fa-lock"></i> 暂无可用的个性插件，请联系管理员授权
+            </div>
+            <div v-else class="widget-config-list">
+              <div v-for="(key, idx) in widgetForm.order" :key="key" class="widget-config-item">
+                <div class="widget-config-head">
+                  <span class="widget-config-name">
+                    <i class="fas" :class="widgetIcon(key)"></i>
+                    {{ widgetName(key) }}
+                  </span>
+                  <div class="widget-config-actions">
+                    <el-button text size="small" :disabled="idx === 0" title="上移" @click="moveWidget(idx, -1)">
+                      <i class="fas fa-arrow-up"></i>
+                    </el-button>
+                    <el-button text size="small" :disabled="idx === widgetForm.order.length - 1" title="下移" @click="moveWidget(idx, 1)">
+                      <i class="fas fa-arrow-down"></i>
+                    </el-button>
+                    <el-switch
+                      :model-value="isWidgetEnabled(key)"
+                      size="small"
+                      @change="(val) => toggleWidget(key, val)"
+                    />
+                  </div>
+                </div>
+                <div v-if="isWidgetEnabled(key)" class="widget-config-settings">
+                  <template v-if="key === 'weather'">
+                    <span class="widget-field-label">城市</span>
+                    <el-input v-model="widgetForm.settings.weather.city" size="small" placeholder="如：深圳" style="max-width: 200px" />
+                  </template>
+                  <template v-else-if="key === 'news'">
+                    <span class="widget-field-label">RSS 源</span>
+                    <el-input v-model="widgetForm.settings.news.feed_url" size="small" placeholder="https://www.36kr.com/feed" />
+                  </template>
+                  <template v-else-if="key === 'stocks'">
+                    <span class="widget-field-label">股票代码</span>
+                    <el-input v-model="widgetForm.settings.stocks.symbols" size="small" placeholder="sh000001,sz399001" />
+                  </template>
+                  <template v-else-if="key === 'todo'">
+                    <span class="widget-field-label">显示条数</span>
+                    <el-input-number v-model="widgetForm.settings.todo.limit" size="small" :min="1" :max="20" />
+                  </template>
+                  <template v-else-if="key === 'sticker'">
+                    <div class="widget-sticker-editor">
+                      <el-input
+                        v-model="widgetForm.settings.sticker.text"
+                        type="textarea"
+                        :rows="2"
+                        placeholder="写一张便签，例如：今天要核对渠道对账"
+                      />
+                      <div class="widget-sticker-tools">
+                        <el-color-picker v-model="widgetForm.settings.sticker.color" size="small" />
+                        <el-upload
+                          :show-file-list="false"
+                          :before-upload="beforeStickerUpload"
+                          :http-request="handleStickerUpload"
+                          accept="image/*"
+                        >
+                          <el-button size="small" :loading="stickerUploading">
+                            <i class="fas fa-upload"></i> 上传贴图
+                          </el-button>
+                        </el-upload>
+                        <el-button
+                          v-if="widgetForm.settings.sticker.image"
+                          size="small"
+                          text
+                          type="danger"
+                          @click="handleStickerDelete"
+                        >删除贴图</el-button>
+                      </div>
+                      <img
+                        v-if="widgetForm.settings.sticker.image"
+                        :src="widgetForm.settings.sticker.image"
+                        class="widget-sticker-preview"
+                        alt="贴图预览"
+                      />
+                    </div>
+                  </template>
+                  <span v-else class="widget-field-hint">无需额外设置</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="profileDialogVisible = false">取消</el-button>
@@ -280,6 +371,8 @@ import ThemeSwitch from './ThemeSwitch.vue'
 import TagsView from './TagsView.vue'
 import TaskBadge from './TaskBadge.vue'
 import AiPet from './AiPet.vue'
+import WidgetDock from './widgets/WidgetDock.vue'
+import { useWidgetsStore } from '../stores/widgets'
 import RobotPet from './pets/RobotPet.vue'
 import CatPet from './pets/CatPet.vue'
 import BunnyPet from './pets/BunnyPet.vue'
@@ -296,6 +389,7 @@ const route = useRoute()
 const router = useRouter()
 const store = useAppStore()
 const monitor = useTaskMonitorStore()
+const widgetStore = useWidgetsStore()
 const isCollapsed = ref(localStorage.getItem('sidebar_collapsed') === 'true')
 const serverOnline = ref(false)
 const passwordDialogVisible = ref(false)
@@ -305,6 +399,7 @@ const passwordFormRef = ref(null)
 const profileDialogVisible = ref(false)
 const profileSubmitting = ref(false)
 const avatarUploading = ref(false)
+const stickerUploading = ref(false)
 const profileForm = reactive({
   username: '',
   display_name: '',
@@ -314,6 +409,98 @@ const profileForm = reactive({
   pet_enabled: true,
   pet_style: 'robot',
 })
+
+/** 个人中心里的插件配置草稿（点保存后写回后端） */
+const widgetForm = reactive({
+  enabled: [],
+  order: [],
+  settings: {},
+})
+
+function resetWidgetForm() {
+  const cfg = widgetStore.config
+  widgetForm.enabled = [...cfg.enabled]
+  widgetForm.order = [...cfg.order]
+  widgetForm.settings = JSON.parse(JSON.stringify(cfg.settings || {}))
+}
+
+function widgetDefinition(key) {
+  return widgetStore.definitionFor(key)
+}
+
+function widgetName(key) {
+  return widgetDefinition(key)?.name || key
+}
+
+function widgetIcon(key) {
+  return widgetDefinition(key)?.icon || 'fa-puzzle-piece'
+}
+
+function isWidgetEnabled(key) {
+  return widgetForm.enabled.includes(key)
+}
+
+function toggleWidget(key, value) {
+  if (value) {
+    if (!widgetForm.enabled.includes(key)) widgetForm.enabled.push(key)
+  } else {
+    widgetForm.enabled = widgetForm.enabled.filter((item) => item !== key)
+  }
+}
+
+function moveWidget(index, offset) {
+  const target = index + offset
+  if (target < 0 || target >= widgetForm.order.length) return
+  const list = [...widgetForm.order]
+  const [item] = list.splice(index, 1)
+  list.splice(target, 0, item)
+  widgetForm.order = list
+}
+
+function beforeStickerUpload(file) {
+  const isImage = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp'].includes(file.type)
+  if (!isImage) {
+    ElMessage.error('贴图仅支持 JPG/PNG/GIF/WEBP/BMP 格式')
+    return false
+  }
+  if (file.size / 1024 / 1024 > 2) {
+    ElMessage.error('贴图大小不能超过 2MB')
+    return false
+  }
+  return true
+}
+
+async function handleStickerUpload({ file }) {
+  stickerUploading.value = true
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+    const res = await api.widgets.uploadSticker(formData)
+    const data = res.data || res || {}
+    if (data.url) {
+      widgetForm.settings.sticker = { ...(widgetForm.settings.sticker || {}), image: data.url }
+      widgetStore.config.settings.sticker = { ...(widgetStore.config.settings.sticker || {}), image: data.url }
+    }
+    ElMessage.success('贴图已上传')
+  } catch {
+  } finally {
+    stickerUploading.value = false
+  }
+}
+
+async function handleStickerDelete() {
+  try {
+    const res = await api.widgets.deleteSticker()
+    const data = res.data || res || {}
+    widgetForm.settings.sticker = { ...(widgetForm.settings.sticker || {}), image: '' }
+    if (data.config) {
+      widgetStore.applyConfig(data.config)
+      widgetForm.settings = JSON.parse(JSON.stringify(widgetStore.config.settings || {}))
+    }
+    ElMessage.success('贴图已删除')
+  } catch {
+  }
+}
 
 /** AI宠物可选造型（key 与后端 PET_STYLES 白名单一致） */
 const PET_OPTIONS = [
@@ -445,7 +632,7 @@ function handleUserCommand(command) {
   }
 }
 
-function openProfileDialog() {
+async function openProfileDialog() {
   loadMyTokens()
   const u = store.user || {}
   Object.assign(profileForm, {
@@ -458,6 +645,11 @@ function openProfileDialog() {
     pet_style: u.pet_style || 'robot',
   })
   profileDialogVisible.value = true
+  try {
+    await widgetStore.load(true)
+  } catch {
+  }
+  resetWidgetForm()
 }
 
 async function handleSaveProfile() {
@@ -472,6 +664,13 @@ async function handleSaveProfile() {
     })
     if (res.data) {
       store.user = { ...store.user, ...res.data }
+    }
+    if (widgetStore.definitions.length) {
+      await widgetStore.persist({
+        enabled: widgetForm.enabled,
+        order: widgetForm.order,
+        settings: widgetForm.settings,
+      })
     }
     ElMessage.success('资料已更新')
     profileDialogVisible.value = false
@@ -827,6 +1026,13 @@ onUnmounted(() => {
   background-color: var(--main-bg);
   padding: 20px;
   overflow-y: auto;
+  min-width: 0;
+}
+
+.layout-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .layout-footer {
@@ -965,5 +1171,118 @@ onUnmounted(() => {
   font-size: 11px;
   color: var(--text-primary, #606266);
   white-space: nowrap;
+}
+
+.widget-setting {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.widget-setting-tip {
+  color: var(--text-muted, #909399);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.widget-no-auth {
+  padding: 12px 14px;
+  border: 1px dashed var(--border-color, #e4e7ed);
+  border-radius: 8px;
+  color: var(--text-muted, #909399);
+  font-size: 12px;
+}
+
+.widget-config-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.widget-config-item {
+  border: 1px solid var(--border-color, #e4e7ed);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: var(--main-bg, #f8fafc);
+}
+
+.widget-config-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.widget-config-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #303133);
+}
+
+.widget-config-name i {
+  width: 14px;
+  text-align: center;
+  color: var(--primary-color, #409eff);
+}
+
+.widget-config-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.widget-config-actions :deep(.el-button) {
+  margin-left: 0;
+  padding: 2px 4px;
+}
+
+.widget-config-settings {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-color, #e4e7ed);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.widget-field-label {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-secondary, #606266);
+}
+
+.widget-field-hint {
+  font-size: 12px;
+  color: var(--text-muted, #909399);
+}
+
+.widget-sticker-editor {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.widget-sticker-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.widget-sticker-preview {
+  max-width: 120px;
+  max-height: 80px;
+  border-radius: 6px;
+  object-fit: contain;
+  border: 1px solid var(--border-color, #e4e7ed);
 }
 </style>

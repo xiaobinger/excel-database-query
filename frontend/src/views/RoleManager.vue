@@ -83,6 +83,23 @@
             <span v-else style="color: #c0c4cc">-</span>
           </template>
         </el-table-column>
+        <el-table-column label="个性插件" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">
+            <template v-if="row.widget_permissions && row.widget_permissions.length > 0">
+              <el-tag
+                v-for="perm in row.widget_permissions"
+                :key="perm"
+                size="small"
+                type="primary"
+                effect="plain"
+                style="margin: 2px 4px 2px 0"
+              >
+                {{ perm === 'all' ? '全部插件' : (widgetPermLabels[perm] || perm) }}
+              </el-tag>
+            </template>
+            <span v-else style="color: #c0c4cc">-</span>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="180" align="center" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="primary" text @click="openDialog(row)">
@@ -199,6 +216,28 @@
               <div v-if="availableModels.length === 0" style="color: #c0c4cc; font-size: 13px">暂无可用的AI模型配置</div>
             </div>
           </el-form-item>
+          <el-form-item label="个性插件">
+            <div class="widget-perm-config">
+              <el-checkbox
+                v-model="form.widget_all"
+                @change="handleWidgetAllChange"
+              >
+                全部插件（不限制）
+              </el-checkbox>
+              <el-checkbox-group v-if="!form.widget_all" v-model="form.widget_permissions">
+                <el-checkbox
+                  v-for="widget in widgetOptions"
+                  :key="widget.value"
+                  :label="widget.value"
+                >
+                  {{ widget.label }}
+                </el-checkbox>
+              </el-checkbox-group>
+              <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                授权后用户可在「个人中心 → 个性插件」自由选择右侧插件坞展示的插件
+              </div>
+            </div>
+          </el-form-item>
         </template>
       </el-form>
       <template #footer>
@@ -213,6 +252,13 @@
 import { ref, reactive, onMounted, watch } from 'vue'
 import api from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { WIDGET_OPTIONS } from '../config/widgetRegistry'
+
+const widgetOptions = WIDGET_OPTIONS
+const widgetPermLabels = WIDGET_OPTIONS.reduce((acc, item) => {
+  acc[item.value] = item.label
+  return acc
+}, {})
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -443,7 +489,9 @@ const defaultForm = {
   agent_all: false,
   can_switch_agent: false,
   can_switch_model: false,
-  model_permissions: []
+  model_permissions: [],
+  widget_permissions: [],
+  widget_all: false
 }
 
 const form = reactive({ ...defaultForm })
@@ -457,6 +505,8 @@ watch(() => form.is_admin, (val) => {
     form.can_switch_agent = false
     form.can_switch_model = false
     form.model_permissions = []
+    form.widget_permissions = []
+    form.widget_all = false
   }
 })
 
@@ -512,12 +562,18 @@ function handleAgentAllChange(val) {
   }
 }
 
+function handleWidgetAllChange(val) {
+  form.widget_permissions = val ? ['all'] : []
+}
+
 function openDialog(row) {
   if (row) {
     isEdit.value = true
     editId.value = row.id
     const agentPerms = row.agent_permissions || []
     const hasAll = agentPerms.includes('all')
+    const widgetPerms = row.widget_permissions || []
+    const widgetAll = widgetPerms.includes('all')
     Object.assign(form, {
       name: row.name,
       description: row.description || '',
@@ -528,7 +584,9 @@ function openDialog(row) {
       agent_all: hasAll,
       can_switch_agent: row.can_switch_agent || false,
       can_switch_model: row.can_switch_model || false,
-      model_permissions: (row.model_permissions || []).map(p => String(p))
+      model_permissions: (row.model_permissions || []).map(p => String(p)),
+      widget_permissions: widgetAll ? [] : widgetPerms,
+      widget_all: widgetAll
     })
   } else {
     isEdit.value = false
@@ -552,7 +610,8 @@ async function handleSubmit() {
       agent_permissions: form.is_admin ? null : (form.agent_all ? ['all'] : form.agent_permissions.map(p => parseInt(p))),
       can_switch_agent: form.is_admin ? null : form.can_switch_agent,
       can_switch_model: form.is_admin ? null : form.can_switch_model,
-      model_permissions: form.is_admin ? null : form.model_permissions.map(p => parseInt(p))
+      model_permissions: form.is_admin ? null : form.model_permissions.map(p => parseInt(p)),
+      widget_permissions: form.is_admin ? null : (form.widget_all ? ['all'] : form.widget_permissions)
     }
     if (isEdit.value) {
       await api.roles.update(editId.value, payload)
@@ -684,5 +743,17 @@ onMounted(() => {
   border: 1px solid #eef2f7;
   border-radius: 8px;
   padding: 12px 16px;
+}
+
+.widget-perm-config {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #f8fafc;
+  border: 1px solid #eef2f7;
+  border-radius: 8px;
+  padding: 12px 16px;
+  width: 100%;
+  box-sizing: border-box;
 }
 </style>

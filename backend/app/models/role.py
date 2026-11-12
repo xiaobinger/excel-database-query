@@ -17,6 +17,7 @@ class Role(db.Model):
     can_switch_agent = db.Column(db.Boolean, default=False, comment='是否允许切换Agent')
     can_switch_model = db.Column(db.Boolean, default=False, comment='是否允许切换模型')
     model_permissions = db.Column(db.Text, comment='model permissions (JSON array, 存储可用的AI配置ID)')
+    widget_permissions = db.Column(db.Text, comment='个性化插件权限(JSON数组，all表示全部)')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def get_menu_permissions(self):
@@ -63,6 +64,17 @@ class Role(db.Model):
     def set_model_permissions(self, perms):
         self.model_permissions = json.dumps(perms) if perms else None
 
+    def get_widget_permissions(self):
+        if self.widget_permissions:
+            try:
+                return json.loads(self.widget_permissions)
+            except (json.JSONDecodeError, TypeError):
+                return []
+        return []
+
+    def set_widget_permissions(self, perms):
+        self.widget_permissions = json.dumps(perms) if perms else None
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -75,6 +87,7 @@ class Role(db.Model):
             'can_switch_agent': self.can_switch_agent or False,
             'can_switch_model': self.can_switch_model or False,
             'model_permissions': self.get_model_permissions(),
+            'widget_permissions': self.get_widget_permissions(),
             'created_at': beijing_isoformat(self.created_at),
         }
 

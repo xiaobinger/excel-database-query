@@ -23,7 +23,7 @@
 
 <!-- 徽章 -->
 <p>
-  <img src="https://img.shields.io/badge/version-2.6.35-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-2.6.65-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/python-3.10+-yellow?style=flat-square&logo=python&logoColor=white" alt="python" />
   <img src="https://img.shields.io/badge/vue-3-green?style=flat-square&logo=vuedotjs&logoColor=white" alt="vue" />
   <img src="https://img.shields.io/badge/flask-black?style=flat-square&logo=flask&logoColor=white" alt="flask" />
@@ -130,6 +130,16 @@
 - 按月分表场景：`SELECT * FROM transaction_{{ m }}`
 - 支持日期范围、文本、数字变量类型
 - 自动渲染并执行
+
+</details>
+
+<details>
+<summary><strong>🧩 个性插件</strong> — 右侧插件坞，管理员授权 + 个人自由配置</summary>
+
+- 内置插件：时钟、黄历、天气、支付圈新闻、系统待办、自定义贴图、自选股行情
+- 管理员在「角色管理」按角色授权，用户在「个人中心 → 个性插件」勾选、排序、配置参数
+- 天气走 Open-Meteo、新闻走可配置 RSS、行情走腾讯接口，统一由后端代理并缓存
+- 插件坞可折叠且记忆状态；新增插件只需在后端 `WIDGETS` 与前端 `widgetRegistry` 各注册一次
 
 </details>
 
@@ -350,6 +360,7 @@ smart_match:
 | 开放 API | `/api/open-api/*` | OpenAI 兼容端点 |
 | 代付流程 | `/api/pay-flow/*` | 流程模板、执行记录 |
 | 工单 | `/api/tickets/*` | 工单管理 |
+| 个性插件 | `/api/widgets/*` | 插件清单、用户配置、天气/RSS/行情/待办/贴图 |
 
 ---
 
@@ -422,6 +433,7 @@ WHERE merchant_id = :value
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-11-12 | v2.6.65 | 新增**右侧个性化插件坞**：① **插件体系** 后端 `widget_service.py` 集中定义 7 个内置插件（时钟、黄历、天气、支付圈新闻、系统待办、自定义贴图、自选股行情），前端 `widgetRegistry.js` 按 key 注册组件，新增插件只需两边各注册一次；② **分级授权** `Role` 新增 `widget_permissions`（JSON，支持 `all`），管理员在「角色管理」按角色勾选可用插件，管理员默认全部可用，普通角色未授权时不出现在个人中心；③ **个人配置** `User` 新增 `widget_config`（JSON），个人中心新增「个性插件」区块——开关、上下排序、天气城市、RSS 源、股票代码、待办条数、便签文字/颜色与贴图上传，保存后右侧实时生效；④ **插件坞** Layout 主内容右侧新增 `WidgetDock`（300px，可折叠且记忆状态，窄屏自动隐藏），每个插件为独立卡片；⑤ **数据与安全** 天气走 Open-Meteo、行情走腾讯 `qt.gtimg.cn`、新闻走后端 RSS 代理（10 分钟缓存、手动重定向逐跳校验、拒绝内网地址），黄历使用本地农历/干支/建除算法不依赖网络，待办聚合当前用户待处理工单，贴图存储于 `uploads/widgets/<user_id>/`（2MB 图片校验、UUID 文件名）；⑥ **验证** 后端 `py_compile`、前端 `vite build` 通过，真实接口冒烟（登录鉴权、角色授权隔离、配置保存、天气/新闻/行情/待办、贴图上传与读取）全部通过，浏览器实测插件坞与个人中心配置正常 |
 | 2026-11-10 | v2.6.64 | 修复**任务已确定仍弹选择/确认卡片**：① **只读任务直接执行** 导出/查询在任务精确匹配且必填参数齐全（查询还需已上传可读 Excel）时，`request_export` / `request_query` 返回 `_auto_execute`，前端直接执行并显示进度/下载卡片，不再弹确认卡片；参数不全或查询无文件时保留原确认/参数卡片；系统任务等写操作仍保留一次确认（参数齐全也不再静默自动执行）；② **查询文件直传** `request_query` 新增 `file_path` 参数，AI 在上传 Excel 后将文件路径传入即可直接执行，后端校验路径范围并读取列信息用于自动匹配参数列；③ **选择卡片去重** 同一轮 AI 已调用 `request_*` 确定具体任务时，后端与前端均跳过对应的 select_options 选择卡片；候选数 ≤1 时也直接跳过，避免唯一任务仍让用户重复选择；④ **提示词引导** list_* 工具描述与默认提示词补充「已能确定唯一任务时直接调用 request_*，只有多候选无法确定时才调用 list_*」，并提示上传表格后将 `file_path` 传给 `request_query`。`py_compile`、`vite build` 通过，自动执行判定（精确/必填缺失/模糊匹配/文件校验）与自动执行卡片元数据自测通过 |
 | 2026-11-10 | v2.6.63 | 修复**监督者未感知执行者已调用工具**（监督不同步）：① **AI 对话监督者** 复核使用的工具记录改为跨监督者重试累计——新增 `_merge_tool_results`（按 `tool_call_id` 去重）与 `_all_tool_results`，监督者要求重新生成后，即使执行者复用上一轮工具结果、不再重复调用工具，监督者仍能看到此前调用与结果，不再误判「本次未调用工具」；复核提示同步说明工具记录为累计记录、结果可能截断，避免据此判定未执行/编造；② **工单多Agent监督者** 执行者工具循环新增 `tool_call_count`（统计所有工具调用，含解析/列表类非操作工具与失败调用），监督者审查提示由单一 `tool_executed` 布尔值改为「是否调用过工具 + 调用次数 + 调用记录（截断）」，修复执行者只调用了非操作型工具时监督者看到「未调用工具」而误判返工。`py_compile` 通过，累计合并去重逻辑自测通过 |
 | 2026-11-10 | v2.6.62 | AI 聊天附件支持**非表格文件识别读取**：① **上传不再强制解析表格** 新增 `app/utils/file_reader.py` 按扩展名识别文件大类——表格类（xlsx/xlsm/xls/csv）解析行列与预览，文本类（txt/md/json/xml/log/yaml/ini/sql/代码等）读取正文，PDF（pypdf）与 Word(docx) 提取文本，压缩包返回文件清单，图片返回基本信息；上传接口（`POST /api/ai/upload-file`）对非表格文件仅保存并返回 `file_kind` / `file_type_label` / `file_size`，不再报「仅支持表格文件」；② **AI 工具统一读取** `parse_uploaded_file` 升级为通用「解析/读取上传文件」工具，新增 `max_chars`（默认 20000）与 `max_pages`（默认 50）参数，表格参数（sheet_name/columns/preview_rows/values_column）保持不变；③ **前端展示** AI 助手文件卡片与附件条按类型显示图标/类型/大小，非表格文件在消息中提示 AI 调用工具读取后按需求处理，且不再触发查询智能匹配；④ **默认格式** AI 聊天附件默认扩展名扩展为表格/文本/PDF/Word/图片/zip 共 21 种（仍可在系统配置「文件上传」中自定义），`requirements.txt` 新增 `pypdf`。`py_compile`、`vite build` 通过，表格（xlsx/xls/csv）、文本、docx、zip 读取与类型识别自测通过 |

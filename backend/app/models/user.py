@@ -26,6 +26,7 @@ class User(db.Model):
 
     pet_enabled = db.Column(db.Boolean, default=True, nullable=True, comment='AI宠物助手开关')
     pet_style = db.Column(db.String(20), default='robot', nullable=True, comment='AI宠物造型(robot/cat/bunny/panda/bear/fox/pig/frog/koala/chick)')
+    widget_config = db.Column(db.Text, comment='个性化插件配置(JSON)')
 
     role = db.relationship('Role', backref='users', lazy='joined')
 
@@ -72,6 +73,17 @@ class User(db.Model):
         if self.role and self.role.is_admin:
             return True
         return False
+
+    def get_widget_config(self):
+        if self.widget_config:
+            try:
+                return json.loads(self.widget_config)
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return {}
+
+    def set_widget_config(self, config):
+        self.widget_config = json.dumps(config, ensure_ascii=False) if config else None
 
     def get_agent_ids(self):
         """获取用户可用的AgentID列表。管理员返回None表示全部可用"""
@@ -166,6 +178,7 @@ class User(db.Model):
             'system_task_ids': self.get_system_task_ids(),
             'pet_enabled': self.pet_enabled is not False,
             'pet_style': self.pet_style or 'robot',
+            'widget_config': self.get_widget_config(),
             'created_at': beijing_isoformat(self.created_at),
         }
 

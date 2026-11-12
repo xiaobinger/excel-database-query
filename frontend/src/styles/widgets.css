@@ -1,0 +1,72 @@
+/* 个性化插件通用样式（配合主题变量，支持全部主题） */
+.widget-card {
+  background: var(--card-bg, #fff);
+  border: 1px solid var(--border-color, #e4e7ed);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.widget-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color, #e4e7ed);
+}
+
+.widget-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #303133);
+}
+
+.widget-title i {
+  color: var(--primary-color, #409eff);
+  font-size: 13px;
+}
+
+.widget-body {
+  padding: 12px;
+}
+
+.widget-muted {
+  color: var(--text-muted, #909399);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.widget-error {
+  color: var(--el-color-danger, #f56c6c);
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-all;
+}
+
+.widget-empty {
+  padding: 10px 0;
+  text-align: center;
+  color: var(--text-muted, #909399);
+  font-size: 12px;
+}
+
+.widget-refresh {
+  border: none;
+  background: transparent;
+  color: var(--text-muted, #909399);
+  cursor: pointer;
+  padding: 2px 5px;
+  border-radius: 5px;
+  font-size: 11px;
+  line-height: 1;
+  transition: all 0.2s;
+}
+
+.widget-refresh:hover {
+  color: var(--primary-color, #409eff);
+  background: var(--primary-light, rgba(64, 158, 255, 0.1));
+}
