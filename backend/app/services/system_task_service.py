@@ -500,16 +500,57 @@ class SystemTaskService:
         db.session.commit()
         update_execution_progress(execution_id, 15, '参数已就绪，准备API请求')
 
+        prepared = SystemTaskService._prepare_api_request(execution, system_task, params_values)
+
+        # 配置了SSH跳板机时，由跳板机执行curl（用于访问本机无法直达的目标地址）
+        if system_task.ssh_config_id:
+            return SystemTaskService._execute_api_via_ssh(execution, system_task, prepared)
+
+        # SSRF protection: validate URL before making request
+        from app.utils.url_validator import validate_url
+        is_valid, reason = validate_url(prepared['url'])
+        if not is_valid:
+            raise ValueError(f'SSRF protection: {reason}')
+
+        execution.progress = 50
+        db.session.commit()
+        update_execution_progress(execution_id, 50, '发送API请求')
+
+        try:
+            resp = SystemTaskService._send_api_request_via_requests(prepared)
+        except requests.exceptions.Timeout:
+            raise ValueError(f'API请求超时({prepared["timeout"]}秒)')
+        except requests.exceptions.RequestException as e:
+            raise ValueError(f'API请求失败: {str(e)}')
+
+        execution.progress = 80
+        execution.add_log(f'API响应状态码: {resp.status_code}')
+        db.session.commit()
+        update_execution_progress(execution_id, 80, f'API响应状态码: {resp.status_code}')
+
+        try:
+            resp_data = resp.json()
+            resp_text = json.dumps(resp_data, ensure_ascii=False)
+        except (json.JSONDecodeError, ValueError):
+            resp_data = resp.text
+            resp_text = resp.text
+
+        SystemTaskService._finalize_api_response(
+            execution, system_task, prepared, resp.status_code,
+            dict(resp.headers), resp_data, resp_text,
+        )
+
+    @staticmethod
+    def _prepare_api_request(execution: SystemTaskExecution, system_task: SystemTask,
+                             params_values: Dict[str, Any]) -> Dict[str, Any]:
+        """构造最终请求（占位符替换、参数归一化、加签），直连与SSH模式共用"""
         url = system_task.api_url
         method = (system_task.api_method or 'POST').upper()
-        headers = system_task.get_api_headers()
+        headers = dict(system_task.get_api_headers() or {})
         timeout = system_task.api_timeout or 30
 
-        # Prepare params and body
         request_params = dict(params_values) if params_values else {}
         body = system_task.api_body or ''
-
-        # 已用于URL/body占位符替换的参数名集合（这些参数不应再作为query/form重复附加）
         used_param_keys = set()
 
         # Replace placeholders in body {{param}}
@@ -535,7 +576,7 @@ class SystemTaskService:
         execution.progress = 30
         execution.add_log(f'准备请求: {method} {url}')
         db.session.commit()
-        update_execution_progress(execution_id, 30, f'准备请求: {method} {url}')
+        update_execution_progress(execution.execution_id, 30, f'准备请求: {method} {url}')
 
         # Signing
         if system_task.sign_enabled and system_task.sign_key:
@@ -547,18 +588,15 @@ class SystemTaskService:
             append_type = system_task.sign_append_type or 'query'
 
             if append_type == 'query':
-                # Add sign to URL query string
                 separator = '&' if '?' in url else '?'
                 url = f"{url}{separator}{sign_name}={sign}"
             elif append_type == 'body':
-                # Try to add to JSON body
                 try:
                     body_obj = json.loads(body) if body else {}
                     if isinstance(body_obj, dict):
                         body_obj[sign_name] = sign
                         body = json.dumps(body_obj, ensure_ascii=False)
                 except (json.JSONDecodeError, TypeError):
-                    # If body is not JSON, append as form param
                     if 'application/x-www-form-urlencoded' in headers.get('Content-Type', ''):
                         body = f"{body}&{sign_name}={sign}" if body else f"{sign_name}={sign}"
                     else:
@@ -568,125 +606,390 @@ class SystemTaskService:
 
             execution.add_log(f'已生成签名并附加到{append_type}')
 
-        execution.progress = 50
-        db.session.commit()
-        update_execution_progress(execution_id, 50, '发送API请求')
-
-        # SSRF protection: validate URL before making request
-        from app.utils.url_validator import validate_url
-        is_valid, reason = validate_url(url)
-        if not is_valid:
-            raise ValueError(f'SSRF protection: {reason}')
-
         # Parse body for JSON content-type
         request_body = body
-        if headers.get('Content-Type', '').startswith('application/json') and body:
+        content_type = headers.get('Content-Type', '')
+        if content_type.startswith('application/json') and body:
             try:
                 request_body = json.loads(body)
             except (json.JSONDecodeError, TypeError):
                 pass
 
         # 如果body为空但有params，且是JSON请求，将params作为JSON body发送
-        if not body and request_params and headers.get('Content-Type', '').startswith('application/json'):
+        if not body and request_params and content_type.startswith('application/json'):
             request_body = request_params
-            request_params = {}  # 避免参数重复
+            request_params = {}
 
-        # 记录实际请求信息（占位符替换与加签后的最终请求），完整返回给调用方（含AI）
         request_info = {
             'method': method,
             'url': url,
             'headers': dict(headers),
             'request_params': request_params,
             'request_body': request_body,
+            'via': 'direct',
+        }
+        return {
+            'method': method,
+            'url': url,
+            'headers': headers,
+            'timeout': timeout,
+            'request_params': request_params,
+            'request_body': request_body,
+            'request_info': request_info,
         }
 
-        # Make request
+    @staticmethod
+    def _send_api_request_via_requests(prepared: Dict[str, Any]):
+        """本机直连发送HTTP请求"""
+        url = prepared['url']
+        method = prepared['method']
+        headers = prepared['headers']
+        timeout = prepared['timeout']
+        request_params = prepared['request_params']
+        request_body = prepared['request_body']
+
+        if method == 'GET':
+            return requests.get(url, headers=headers, params=request_params, timeout=timeout)
+        if method == 'POST':
+            if isinstance(request_body, dict):
+                return requests.post(url, headers=headers, json=request_body, timeout=timeout)
+            if request_body:
+                return requests.post(url, headers=headers, data=request_body, timeout=timeout)
+            if request_params:
+                return requests.post(url, headers=headers, data=request_params, timeout=timeout)
+            return requests.post(url, headers=headers, timeout=timeout)
+        if method == 'PUT':
+            if isinstance(request_body, dict):
+                return requests.put(url, headers=headers, json=request_body, timeout=timeout)
+            if request_body:
+                return requests.put(url, headers=headers, data=request_body, timeout=timeout)
+            if request_params:
+                return requests.put(url, headers=headers, data=request_params, timeout=timeout)
+            return requests.put(url, headers=headers, timeout=timeout)
+        if method == 'DELETE':
+            if isinstance(request_body, dict):
+                return requests.delete(url, headers=headers, json=request_body, timeout=timeout)
+            if request_body:
+                return requests.delete(url, headers=headers, data=request_body, timeout=timeout)
+            return requests.delete(url, headers=headers, params=request_params, timeout=timeout)
+        raise ValueError(f'不支持的HTTP方法: {method}')
+
+    @staticmethod
+    def _is_http_url(url: str) -> bool:
+        from urllib.parse import urlsplit
         try:
-            if method == 'GET':
-                # For GET, pass request_params as query params
-                resp = requests.get(url, headers=headers, params=request_params, timeout=timeout)
-            elif method == 'POST':
-                if isinstance(request_body, dict):
-                    resp = requests.post(url, headers=headers, json=request_body, timeout=timeout)
-                elif request_body:
-                    resp = requests.post(url, headers=headers, data=request_body, timeout=timeout)
-                elif request_params:
-                    # body为空且有params，作为form data发送
-                    resp = requests.post(url, headers=headers, data=request_params, timeout=timeout)
-                else:
-                    resp = requests.post(url, headers=headers, timeout=timeout)
-            elif method == 'PUT':
-                if isinstance(request_body, dict):
-                    resp = requests.put(url, headers=headers, json=request_body, timeout=timeout)
-                elif request_body:
-                    resp = requests.put(url, headers=headers, data=request_body, timeout=timeout)
-                elif request_params:
-                    # body为空且有params，作为form data发送
-                    resp = requests.put(url, headers=headers, data=request_params, timeout=timeout)
-                else:
-                    resp = requests.put(url, headers=headers, timeout=timeout)
-            elif method == 'DELETE':
-                # DELETE通常用query params，但若有body则用body
-                if isinstance(request_body, dict):
-                    resp = requests.delete(url, headers=headers, json=request_body, timeout=timeout)
-                elif request_body:
-                    resp = requests.delete(url, headers=headers, data=request_body, timeout=timeout)
-                else:
-                    resp = requests.delete(url, headers=headers, params=request_params, timeout=timeout)
+            parsed = urlsplit(url)
+        except ValueError:
+            return False
+        return parsed.scheme in ('http', 'https') and bool(parsed.hostname)
+
+    @staticmethod
+    def _has_header(headers: Dict[str, str], name: str) -> bool:
+        return any(str(key).lower() == name.lower() for key in headers)
+
+    @staticmethod
+    def _append_query_params(url: str, params: Dict[str, Any]) -> str:
+        if not params:
+            return url
+        from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+        try:
+            parts = urlsplit(url)
+        except ValueError as exc:
+            raise ValueError(f'API地址不合法: {exc}') from exc
+        query = parse_qsl(parts.query, keep_blank_values=True)
+        for key, value in params.items():
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    query.append((str(key), '' if item is None else str(item)))
             else:
-                raise ValueError(f'不支持的HTTP方法: {method}')
+                query.append((str(key), '' if value is None else str(value)))
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
-            execution.progress = 80
-            execution.add_log(f'API响应状态码: {resp.status_code}')
-            db.session.commit()
-            update_execution_progress(execution_id, 80, f'API响应状态码: {resp.status_code}')
+    @staticmethod
+    def _curl_body_text(request_body: Any) -> str:
+        if request_body is None:
+            return ''
+        if isinstance(request_body, (dict, list)):
+            return json.dumps(request_body, ensure_ascii=False)
+        return str(request_body)
 
-            # Try to parse response as JSON
+    @staticmethod
+    def _build_curl_arguments(prepared: Dict[str, Any], mask_sensitive: bool = False):
+        """把已构造好的HTTP请求转换为curl参数，返回(command, args)"""
+        import shlex
+        from urllib.parse import urlencode
+
+        method = prepared['method']
+        headers = dict(prepared['headers'])
+        if mask_sensitive:
+            for key in list(headers.keys()):
+                lower = str(key).lower()
+                if any(token in lower for token in ('authorization', 'cookie', 'token', 'secret', 'key', 'sign', 'password')):
+                    headers[key] = '***'
+
+        url = prepared['url']
+        timeout = int(prepared['timeout'] or 30)
+        request_params = dict(prepared['request_params'] or {})
+        request_body = prepared['request_body']
+        body_text = ''
+
+        if method == 'GET':
+            url = SystemTaskService._append_query_params(url, request_params)
+            request_params = {}
+        elif method == 'DELETE':
+            if request_body:
+                body_text = SystemTaskService._curl_body_text(request_body)
+                if isinstance(request_body, (dict, list)) and not SystemTaskService._has_header(headers, 'Content-Type'):
+                    headers['Content-Type'] = 'application/json'
+            else:
+                url = SystemTaskService._append_query_params(url, request_params)
+                request_params = {}
+        else:
+            if isinstance(request_body, (dict, list)):
+                body_text = SystemTaskService._curl_body_text(request_body)
+                if not SystemTaskService._has_header(headers, 'Content-Type'):
+                    headers['Content-Type'] = 'application/json'
+            elif request_body:
+                body_text = str(request_body)
+            elif request_params:
+                body_text = urlencode(request_params, doseq=True)
+                if not SystemTaskService._has_header(headers, 'Content-Type'):
+                    headers['Content-Type'] = 'application/x-www-form-urlencoded'
+
+        args = [
+            'curl', '-sS', '-L',
+            '--max-time', str(timeout),
+            '--connect-timeout', str(min(10, max(1, timeout))),
+            '-X', method,
+        ]
+        for key, value in headers.items():
+            args.extend(['-H', f'{key}: {value}'])
+        if body_text:
+            args.extend(['--data-binary', body_text])
+        args.extend(['-w', '\n__CURL_META__:%{http_code}:%{content_type}:%{time_total}'])
+        args.append(url)
+
+        command = ' '.join(shlex.quote(str(arg)) for arg in args)
+        return command, args
+
+    @staticmethod
+    def _parse_curl_output(output: str):
+        """解析 curl -w 标记，返回(status_code, content_type, elapsed, body)"""
+        marker = '__CURL_META__'
+        index = (output or '').rfind(marker)
+        if index < 0:
+            raise ValueError('无法解析curl响应：缺少状态标记')
+
+        body = output[:index]
+        if body.endswith('\n'):
+            body = body[:-1]
+        if body.endswith('\r'):
+            body = body[:-1]
+
+        meta = output[index + len(marker):].strip().lstrip(':')
+        parts = meta.split(':', 2)
+        status_code = int(parts[0]) if parts and parts[0].isdigit() else 0
+        content_type = parts[1] if len(parts) > 1 else ''
+        elapsed = parts[2] if len(parts) > 2 else ''
+        return status_code, content_type, elapsed, body
+
+    @staticmethod
+    def _ssh_connect_kwargs(ssh_config) -> Dict[str, Any]:
+        password = ssh_config.get_password()
+        if not password and not ssh_config.pkey_path:
+            raise ValueError(f'SSH配置[{ssh_config.name}]未配置密码或私钥')
+        kwargs = {
+            'hostname': ssh_config.host,
+            'port': int(ssh_config.port or 22),
+            'username': ssh_config.username,
+            'timeout': 10,
+            'banner_timeout': 15,
+            'auth_timeout': 15,
+            'allow_agent': False,
+            'look_for_keys': False,
+        }
+        if password:
+            kwargs['password'] = password
+        if ssh_config.pkey_path:
+            kwargs['key_filename'] = ssh_config.pkey_path
+        return kwargs
+
+    @staticmethod
+    def _run_ssh_command_via_jump(jump_config, target_config, command: str, timeout: int):
+        """通过跳板机建立到目标机的SSH通道，并在目标机执行命令"""
+        import paramiko
+
+        jump_client = paramiko.SSHClient()
+        target_client = paramiko.SSHClient()
+        channel = None
+        target_host = target_config.host
+        target_port = int(target_config.port or 22)
+
+        try:
+            jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             try:
-                resp_data = resp.json()
-                resp_text = json.dumps(resp_data, ensure_ascii=False)
-            except (json.JSONDecodeError, ValueError):
-                resp_data = resp.text
-                resp_text = resp.text
+                jump_client.connect(**SystemTaskService._ssh_connect_kwargs(jump_config))
+            except ValueError:
+                raise
+            except Exception as exc:
+                raise ValueError(f'SSH跳板机[{jump_config.name}]连接失败: {str(exc)}') from exc
 
-            is_success = 200 <= resp.status_code < 300
+            transport = jump_client.get_transport()
+            if not transport or not transport.is_active():
+                raise ValueError(f'SSH跳板机[{jump_config.name}]连接未就绪')
 
-            # 应用响应字段映射
-            resp_data_mapped = resp_data
-            mapping_info = ''
-            response_mapping = system_task.get_response_mapping()
-            if response_mapping and isinstance(resp_data, dict):
-                resp_data_mapped, mapping_info, is_business_success = SystemTaskService._apply_response_mapping(resp_data, response_mapping)
-                if is_business_success is True:
-                    is_success = True
-                elif is_business_success is False:
-                    is_success = False
-                    execution.error_message = mapping_info
+            try:
+                channel = transport.open_channel(
+                    'direct-tcpip',
+                    (target_host, target_port),
+                    ('127.0.0.1', 0),
+                    timeout=10,
+                )
+            except Exception as exc:
+                raise ValueError(f'跳板机无法连接目标机 {target_host}:{target_port}: {str(exc)}') from exc
+            if channel is None:
+                raise ValueError(f'跳板机无法连接目标机 {target_host}:{target_port}')
 
-            execution.set_result_data({
-                'status_code': resp.status_code,
-                'request': request_info,
-                'response': resp_data_mapped if isinstance(resp_data_mapped, (dict, list)) else resp_text,
-                'response_raw': resp_data if isinstance(resp_data, (dict, list)) else resp_text,
-                'mapping_applied': bool(mapping_info),
-                'mapping_info': mapping_info,
-                'response_headers': dict(resp.headers),
-                'success': is_success,
-            })
+            target_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            target_kwargs = SystemTaskService._ssh_connect_kwargs(target_config)
+            target_kwargs['sock'] = channel
+            try:
+                target_client.connect(**target_kwargs)
+            except Exception as exc:
+                raise ValueError(f'跳板机登录目标机[{target_config.name}]失败: {str(exc)}') from exc
 
-            execution.progress = 100
-            execution.status = 'completed' if is_success else 'failed'
-            execution.completed_at = datetime.utcnow()
-            if not is_success and not execution.error_message:
-                execution.error_message = f'API返回非成功状态码: {resp.status_code}'
-            execution.add_log(f'API请求完成，状态码: {resp.status_code}')
-            db.session.commit()
-            update_execution_progress(execution_id, 100, f'API请求完成')
+            try:
+                stdin, stdout, stderr = target_client.exec_command(command, timeout=timeout)
+                out = stdout.read().decode('utf-8', errors='replace')
+                err = stderr.read().decode('utf-8', errors='replace')
+                exit_code = stdout.channel.recv_exit_status()
+                return out, err, exit_code
+            except Exception as exc:
+                raise ValueError(f'目标机执行curl失败: {str(exc)}') from exc
+        finally:
+            for client in (target_client, jump_client):
+                try:
+                    client.close()
+                except Exception:
+                    pass
+            if channel is not None:
+                try:
+                    channel.close()
+                except Exception:
+                    pass
 
-        except requests.exceptions.Timeout:
-            raise ValueError(f'API请求超时({timeout}秒)')
-        except requests.exceptions.RequestException as e:
-            raise ValueError(f'API请求失败: {str(e)}')
+    @staticmethod
+    def _execute_api_via_ssh(execution: SystemTaskExecution, system_task: SystemTask,
+                            prepared: Dict[str, Any]):
+        """通过SSH跳板机登录目标机执行curl，并将响应按原有API任务逻辑落库"""
+        from app.models.ssh_config import SshConfig
+
+        jump_config = SshConfig.query.get(system_task.ssh_config_id)
+        if not jump_config or not jump_config.is_active:
+            raise ValueError('SSH跳板机不存在或已停用')
+        if not system_task.target_ssh_config_id:
+            raise ValueError('未配置目标机器SSH配置')
+        target_config = SshConfig.query.get(system_task.target_ssh_config_id)
+        if not target_config or not target_config.is_active:
+            raise ValueError('目标机器SSH配置不存在或已停用')
+        if not SystemTaskService._is_http_url(prepared['url']):
+            raise ValueError('API地址必须是 http/https 协议')
+
+        execution_id = execution.execution_id
+        execution.progress = 50
+        target_label = f'{target_config.username}@{target_config.host}:{target_config.port or 22}'
+        execution.add_log(
+            f'通过SSH跳板机[{jump_config.name}]登录目标机[{target_label}]执行 '
+            f'{prepared["method"]} {prepared["url"]}'
+        )
+        db.session.commit()
+        update_execution_progress(execution_id, 50, f'通过跳板机登录目标机[{target_config.host}]发送请求')
+
+        command, _ = SystemTaskService._build_curl_arguments(prepared, mask_sensitive=False)
+        preview, _ = SystemTaskService._build_curl_arguments(prepared, mask_sensitive=True)
+        execution.add_log(f'curl命令(敏感头已脱敏): {preview[:4000]}')
+        db.session.commit()
+
+        timeout = int(prepared['timeout'] or 30)
+        out, err, exit_code = SystemTaskService._run_ssh_command_via_jump(
+            jump_config, target_config, command, timeout + 15
+        )
+        if exit_code != 0:
+            detail = (err or out).strip()[:1000]
+            raise ValueError(f'目标机curl执行失败(exit={exit_code})：{detail or "无输出"}')
+
+        status_code, content_type, elapsed, body_text = SystemTaskService._parse_curl_output(out)
+        prepared['request_info'].update({
+            'via': 'ssh',
+            'ssh_config_id': jump_config.id,
+            'ssh_config_name': jump_config.name,
+            'target_ssh_config_id': target_config.id,
+            'target_ssh_config_name': target_config.name,
+            'target_host': target_config.host,
+            'curl_preview': preview[:4000],
+        })
+
+        execution.progress = 80
+        execution.add_log(f'目标机响应状态码: {status_code}')
+        db.session.commit()
+        update_execution_progress(execution_id, 80, f'目标机响应状态码: {status_code}')
+
+        resp_headers = {'Content-Type': content_type} if content_type else {}
+        try:
+            resp_data = json.loads(body_text)
+            resp_text = json.dumps(resp_data, ensure_ascii=False)
+        except (json.JSONDecodeError, ValueError):
+            resp_data = body_text
+            resp_text = body_text
+
+        SystemTaskService._finalize_api_response(
+            execution, system_task, prepared, status_code,
+            resp_headers, resp_data, resp_text, elapsed=elapsed,
+        )
+
+    @staticmethod
+    def _finalize_api_response(execution: SystemTaskExecution, system_task: SystemTask,
+                               prepared: Dict[str, Any], status_code: int,
+                               resp_headers: Dict[str, str], resp_data: Any, resp_text: str,
+                               elapsed: str = None):
+        """API响应统一处理：字段映射、结果落库、状态判定"""
+        request_info = prepared['request_info']
+        is_success = 200 <= status_code < 300
+
+        resp_data_mapped = resp_data
+        mapping_info = ''
+        response_mapping = system_task.get_response_mapping()
+        if response_mapping and isinstance(resp_data, dict):
+            resp_data_mapped, mapping_info, is_business_success = SystemTaskService._apply_response_mapping(resp_data, response_mapping)
+            if is_business_success is True:
+                is_success = True
+            elif is_business_success is False:
+                is_success = False
+                execution.error_message = mapping_info
+
+        result_data = {
+            'status_code': status_code,
+            'request': request_info,
+            'response': resp_data_mapped if isinstance(resp_data_mapped, (dict, list)) else resp_text,
+            'response_raw': resp_data if isinstance(resp_data, (dict, list)) else resp_text,
+            'mapping_applied': bool(mapping_info),
+            'mapping_info': mapping_info,
+            'response_headers': resp_headers,
+            'success': is_success,
+        }
+        if elapsed:
+            result_data['elapsed'] = elapsed
+
+        execution.set_result_data(result_data)
+        execution.progress = 100
+        execution.status = 'completed' if is_success else 'failed'
+        execution.completed_at = datetime.utcnow()
+        if not is_success and not execution.error_message:
+            execution.error_message = f'API返回非成功状态码: {status_code}'
+        execution.add_log(f'API请求完成，状态码: {status_code}')
+        db.session.commit()
+        update_execution_progress(execution.execution_id, 100, 'API请求完成')
+
 
     @staticmethod
     def _execute_script(execution: SystemTaskExecution, system_task: SystemTask,

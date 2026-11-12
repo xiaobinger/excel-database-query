@@ -45,6 +45,11 @@
                 </span>
                 <span v-else-if="row.task_type === 'api'">
                   {{ row.api_method }} {{ row.api_url || '-' }}
+                  <div v-if="row.ssh_config_id" style="color: #409eff; font-size: 12px; margin-top: 2px">
+                    <i class="fas fa-route"></i>
+                    跳板机 {{ sshConfigLabel(row.ssh_config_id) }}
+                    <template v-if="row.target_ssh_config_id"> → 目标机 {{ sshConfigLabel(row.target_ssh_config_id) }}</template>
+                  </div>
                   <div v-if="row.api_body" style="color: #909399; font-size: 12px; margin-top: 2px">
                     Body: {{ row.api_body.length > 50 ? row.api_body.substring(0, 50) + '...' : row.api_body }}
                   </div>
@@ -255,6 +260,40 @@
           <el-form-item label="API地址" prop="api_url">
             <el-input v-model="form.api_url" placeholder="https://api.example.com/endpoint" />
           </el-form-item>
+          <el-form-item label="执行方式">
+            <el-radio-group v-model="form.api_exec_mode">
+              <el-radio value="direct">本机直连</el-radio>
+              <el-radio value="ssh">SSH跳板机 → 目标机</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <template v-if="form.api_exec_mode === 'ssh'">
+            <el-form-item label="SSH跳板机">
+              <el-select v-model="form.ssh_config_id" placeholder="请选择SSH跳板机" style="width: 100%">
+                <el-option
+                  v-for="item in sshConfigs"
+                  :key="item.id"
+                  :label="`${item.name} (${item.username}@${item.host}:${item.port})`"
+                  :value="item.id"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="目标机器">
+              <el-select v-model="form.target_ssh_config_id" placeholder="请选择目标机器SSH配置" style="width: 100%">
+                <el-option
+                  v-for="item in sshConfigs"
+                  :key="item.id"
+                  :label="`${item.name} (${item.username}@${item.host}:${item.port})`"
+                  :value="item.id"
+                />
+              </el-select>
+              <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                后端先连接跳板机，再由跳板机登录目标机执行 curl；目标 IP、端口与账号取自目标机器的 SSH 配置
+              </div>
+              <div v-if="sshConfigs.length === 0" style="color: #e6a23c; font-size: 12px; margin-top: 4px">
+                暂无可用 SSH 配置，请先在「SSH 管理」中创建并测试连接
+              </div>
+            </el-form-item>
+          </template>
           <el-form-item label="请求头">
             <div style="width: 100%">
               <div class="json-toolbar" v-if="showRawHeaders">
@@ -977,6 +1016,9 @@ const defaultForm = {
   api_headers: {},
   api_body: '',
   api_timeout: 30,
+  api_exec_mode: 'direct',
+  ssh_config_id: null,
+  target_ssh_config_id: null,
   params_config: [],
   response_mapping: [],
   param_source_enabled: false,
@@ -996,6 +1038,23 @@ const defaultForm = {
 }
 
 const form = reactive({ ...defaultForm })
+
+// SSH 配置列表（API任务通过跳板机登录目标机执行curl时使用）
+const sshConfigs = ref([])
+
+async function fetchSshConfigs() {
+  try {
+    const res = await api.ssh.list()
+    sshConfigs.value = res.data || res || []
+  } catch {
+    sshConfigs.value = []
+  }
+}
+
+function sshConfigLabel(id) {
+  const config = sshConfigs.value.find(item => item.id === id)
+  return config ? `${config.name}(${config.host})` : (id ? `#${id}` : '-')
+}
 
 // 本地脚本上传
 const uploadingScript = ref(false)
@@ -1281,6 +1340,9 @@ function openDialog(row) {
       api_headers: row.api_headers || {},
       api_body: row.api_body || '',
       api_timeout: row.api_timeout || 30,
+      api_exec_mode: row.ssh_config_id ? 'ssh' : 'direct',
+      ssh_config_id: row.ssh_config_id || null,
+      target_ssh_config_id: row.target_ssh_config_id || null,
       params_config: row.params_config && row.params_config.length > 0
         ? JSON.parse(JSON.stringify(row.params_config)).map(p => ({
             ...p,
@@ -1332,6 +1394,16 @@ function openDialog(row) {
 async function handleSubmit() {
   if (!formRef.value) return
   await formRef.value.validate()
+  if (form.task_type === 'api' && form.api_exec_mode === 'ssh') {
+    if (!form.ssh_config_id) {
+      ElMessage.warning('请选择SSH跳板机')
+      return
+    }
+    if (!form.target_ssh_config_id) {
+      ElMessage.warning('请选择目标机器SSH配置')
+      return
+    }
+  }
   submitting.value = true
   try {
     const payload = {
@@ -1345,6 +1417,8 @@ async function handleSubmit() {
       api_url: form.api_url,
       api_body: form.api_body,
       api_timeout: form.api_timeout,
+      ssh_config_id: form.task_type === 'api' && form.api_exec_mode === 'ssh' ? form.ssh_config_id : null,
+      target_ssh_config_id: form.task_type === 'api' && form.api_exec_mode === 'ssh' ? form.target_ssh_config_id : null,
       sign_enabled: form.sign_enabled,
       sign_key: form.sign_key,
       sign_method: form.sign_method,
@@ -1648,12 +1722,14 @@ onMounted(() => {
   fetchScripts()
   fetchDatabases()
   fetchGlobalEnums()
+  fetchSshConfigs()
 })
 
 // 页面被keep-alive缓存，从脚本管理等页面切回时自动刷新脚本下拉，
 // 避免管理员新建脚本后本页仍显示旧快照、选不到新脚本
 let scriptsActivatedOnce = false
 onActivated(() => {
+  fetchSshConfigs()
   if (!scriptsActivatedOnce) {
     // 首次激活时onMounted刚拉取过，跳过
     scriptsActivatedOnce = true

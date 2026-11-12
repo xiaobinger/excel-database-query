@@ -17,6 +17,21 @@ logger = logging.getLogger(__name__)
 system_task_bp = Blueprint('system_task', __name__, url_prefix='/api/system-tasks')
 
 
+def _normalize_ssh_config_id(value):
+    """校验并转换API任务使用的SSH跳板机配置ID"""
+    if value in (None, '', 0, '0'):
+        return None
+    try:
+        ssh_id = int(value)
+    except (TypeError, ValueError):
+        return False
+    from app.models.ssh_config import SshConfig
+    ssh_config = SshConfig.query.get(ssh_id)
+    if not ssh_config or not ssh_config.is_active:
+        return False
+    return ssh_id
+
+
 @system_task_bp.route('', methods=['GET'])
 @login_required
 def get_system_tasks():
@@ -95,6 +110,15 @@ def create_system_task():
     task_type = data.get('task_type', 'sql')
     current_user = get_current_user()
 
+    ssh_config_id = _normalize_ssh_config_id(data.get('ssh_config_id'))
+    target_ssh_config_id = _normalize_ssh_config_id(data.get('target_ssh_config_id'))
+    if ssh_config_id is False or target_ssh_config_id is False:
+        return jsonify({'success': False, 'message': 'SSH配置不存在或已停用'}), 400
+    if ssh_config_id and not target_ssh_config_id:
+        return jsonify({'success': False, 'message': '请选择目标机器SSH配置'}), 400
+    if target_ssh_config_id and not ssh_config_id:
+        return jsonify({'success': False, 'message': '请先选择SSH跳板机'}), 400
+
     task = SystemTask(
         name=name,
         description=data.get('description', ''),
@@ -105,6 +129,8 @@ def create_system_task():
         api_url=data.get('api_url', ''),
         api_body=data.get('api_body', ''),
         api_timeout=data.get('api_timeout', 30),
+        ssh_config_id=ssh_config_id,
+        target_ssh_config_id=target_ssh_config_id,
         script_type=data.get('script_type', 'python'),
         script_path=data.get('script_path', ''),
         script_timeout=data.get('script_timeout', 60),
@@ -168,9 +194,23 @@ def update_system_task(task_id):
     if not data:
         return jsonify({'success': False, 'message': '请求数据为空'}), 400
 
+    if 'ssh_config_id' in data or 'target_ssh_config_id' in data:
+        jump_value = data.get('ssh_config_id') if 'ssh_config_id' in data else task.ssh_config_id
+        target_value = data.get('target_ssh_config_id') if 'target_ssh_config_id' in data else task.target_ssh_config_id
+        ssh_config_id = _normalize_ssh_config_id(jump_value)
+        target_ssh_config_id = _normalize_ssh_config_id(target_value)
+        if ssh_config_id is False or target_ssh_config_id is False:
+            return jsonify({'success': False, 'message': 'SSH配置不存在或已停用'}), 400
+        if ssh_config_id and not target_ssh_config_id:
+            return jsonify({'success': False, 'message': '请选择目标机器SSH配置'}), 400
+        if target_ssh_config_id and not ssh_config_id:
+            return jsonify({'success': False, 'message': '请先选择SSH跳板机'}), 400
+        data['ssh_config_id'] = ssh_config_id
+        data['target_ssh_config_id'] = target_ssh_config_id
+
     simple_fields = [
         'name', 'description', 'task_type', 'script_id', 'database_connection_id',
-        'api_method', 'api_url', 'api_body', 'api_timeout',
+        'api_method', 'api_url', 'api_body', 'api_timeout', 'ssh_config_id', 'target_ssh_config_id',
         'script_type', 'script_path', 'script_timeout',
         'param_source_enabled', 'param_source_script_id', 'param_source_db_id',
         'ai_notes',

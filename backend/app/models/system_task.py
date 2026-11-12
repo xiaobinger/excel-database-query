@@ -24,6 +24,8 @@ class SystemTask(db.Model):
     api_headers = db.Column(db.Text, comment='请求头(JSON)')
     api_body = db.Column(db.Text, comment='请求体模板(JSON或字符串)')
     api_timeout = db.Column(db.Integer, default=30, comment='API超时时间(秒)')
+    ssh_config_id = db.Column(db.Integer, db.ForeignKey('ssh_configs.id'), nullable=True, comment='SSH跳板机配置ID，配置后API请求通过跳板机执行curl')
+    target_ssh_config_id = db.Column(db.Integer, db.ForeignKey('ssh_configs.id'), nullable=True, comment='目标机器SSH配置ID，通过跳板机登录目标机执行curl')
 
     # Local script related
     script_type = db.Column(db.String(20), comment='本地脚本类型: python/shell/bat/powershell等')
@@ -140,6 +142,8 @@ class SystemTask(db.Model):
             'api_headers': self.get_api_headers(),
             'api_body': self.api_body,
             'api_timeout': self.api_timeout,
+            'ssh_config_id': self.ssh_config_id,
+            'target_ssh_config_id': self.target_ssh_config_id,
             'script_type': self.script_type,
             'script_path': self.script_path,
             'script_timeout': self.script_timeout,
