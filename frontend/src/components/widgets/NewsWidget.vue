@@ -15,7 +15,10 @@
             {{ item.title }}
           </a>
           <span v-else class="news-title">{{ item.title }}</span>
-          <span v-if="formatTime(item.published)" class="news-time">{{ formatTime(item.published) }}</span>
+          <span class="news-meta">
+            <span v-if="item.source" class="news-source">{{ item.source }}</span>
+            <span v-if="formatTime(item.published)" class="news-time">{{ formatTime(item.published) }}</span>
+          </span>
         </li>
       </ul>
     </div>
@@ -23,12 +26,8 @@
 </template>
 
 <script setup>
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import api from '../../api'
-
-const props = defineProps({
-  settings: { type: Object, default: () => ({}) },
-})
 
 const items = ref([])
 const error = ref('')
@@ -47,7 +46,7 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const res = await api.widgets.news({ feed_url: props.settings?.feed_url })
+    const res = await api.widgets.news()
     if (res.success === false) {
       error.value = res.message || '资讯获取失败'
       items.value = []
@@ -60,8 +59,6 @@ async function load() {
     loading.value = false
   }
 }
-
-watch(() => props.settings?.feed_url, load)
 
 onMounted(() => {
   load()
@@ -113,5 +110,16 @@ a.news-title:hover {
 .news-time {
   font-size: 11px;
   color: var(--text-muted, #909399);
+}
+
+.news-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.news-source {
+  font-size: 11px;
+  color: var(--primary-color, #409eff);
 }
 </style>

@@ -8,6 +8,8 @@ import re
 import socket
 import time
 import xml.etree.ElementTree as ET
+from datetime import datetime
+from email.utils import parsedate_to_datetime
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -19,6 +21,9 @@ NEWS_CACHE_TTL = 600
 STOCKS_CACHE_TTL = 30
 HTTP_TIMEOUT = 10
 MAX_RESPONSE_BYTES = 3 * 1024 * 1024
+
+NEWS_SOURCE_CONFIG_KEY = 'widget_news_sources'
+DEFAULT_NEWS_SOURCES = ['https://www.mpaypass.com.cn/']
 
 USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'
 
@@ -48,8 +53,8 @@ WIDGETS = [
         'key': 'news',
         'name': '支付圈新闻',
         'icon': 'fa-newspaper',
-        'description': '可配置 RSS 资讯源',
-        'default_settings': {'feed_url': 'https://www.36kr.com/feed'},
+        'description': '支付牌照、银联政策与支付上下游资讯',
+        'default_settings': {},
     },
     {
         'key': 'todo',
@@ -151,7 +156,8 @@ def _sanitize_settings(key, settings):
     if key == 'weather':
         settings['city'] = str(settings.get('city') or '').strip()[:50] or '深圳'
     elif key == 'news':
-        settings['feed_url'] = str(settings.get('feed_url') or '').strip()[:500]
+        # 新闻源由管理员统一配置，用户侧不保留可编辑字段
+        settings.clear()
     elif key == 'stocks':
         raw = str(settings.get('symbols') or '')
         symbols = [s.strip().lower() for s in raw.split(',') if s.strip()]
@@ -289,20 +295,17 @@ def _find_child(node, name):
     return None
 
 
-def _fetch_feed_response(feed_url):
-    """请求 RSS 源；手动处理重定向并逐跳校验地址，避免 SSRF"""
-    url = feed_url
+def _fetch_remote_response(source_url, accept):
+    """请求资讯源；手动处理重定向并逐跳校验地址，避免 SSRF"""
+    url = source_url
     for _ in range(4):
         if not _is_safe_public_url(url):
-            raise WidgetError('RSS 地址不合法或不允许访问内网地址')
+            raise WidgetError('资讯源地址不合法或不允许访问内网地址')
         try:
             resp = requests.get(
                 url,
                 timeout=HTTP_TIMEOUT,
-                headers={
-                    'User-Agent': USER_AGENT,
-                    'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*',
-                },
+                headers={'User-Agent': USER_AGENT, 'Accept': accept},
                 allow_redirects=False,
             )
         except requests.RequestException as exc:
@@ -324,27 +327,102 @@ def _fetch_feed_response(feed_url):
     raise WidgetError('资讯源重定向次数过多')
 
 
-def fetch_news(feed_url):
-    feed_url = (feed_url or '').strip()
-    if not feed_url:
-        raise WidgetError('请先在个人中心配置 RSS 资讯源')
-
-    cache_key = 'news:' + feed_url
-    cached = _cache_get(cache_key)
-    if cached:
-        return cached
-
-    resp = _fetch_feed_response(feed_url)
-
-    content = resp.content[:MAX_RESPONSE_BYTES]
+def _decode_html(resp):
+    raw = resp.content[:MAX_RESPONSE_BYTES]
+    match = re.search(rb'<meta[^>]+charset=["\']?([\w-]+)', raw[:4000], re.IGNORECASE)
+    charset = match.group(1).decode('ascii', 'ignore') if match else (resp.encoding or 'utf-8')
     try:
-        root = ET.fromstring(content)
-    except ET.ParseError as exc:
-        raise WidgetError('资讯源不是有效的 RSS/Atom 内容') from exc
+        return raw.decode(charset, errors='ignore')
+    except LookupError:
+        return raw.decode('utf-8', errors='ignore')
 
-    entries = [n for n in root.iter() if _local_name(n.tag) in ('item', 'entry')]
+
+def _published_timestamp(value):
+    """把 RSS/Atom 时间或 yyyy-MM-dd HH:mm:ss 转成可排序时间戳"""
+    text = (value or '').strip()
+    if not text:
+        return 0
+    try:
+        return parsedate_to_datetime(text).timestamp()
+    except (TypeError, ValueError, OverflowError):
+        pass
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%Y-%m-%d'):
+        try:
+            return datetime.strptime(text, fmt).timestamp()
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(text.replace('Z', '+00:00')).timestamp()
+    except ValueError:
+        return 0
+
+
+def get_news_sources():
+    """读取管理员配置的新闻源；未配置时使用默认支付行业源"""
+    try:
+        from app.models.system_config import SystemConfig
+        config = SystemConfig.query.filter_by(config_key=NEWS_SOURCE_CONFIG_KEY).first()
+        raw = (config.config_value if config else '') or ''
+    except Exception:
+        raw = ''
+
+    sources = []
+    for line in re.split(r'[\r\n]+', raw):
+        url = line.strip()
+        if not url or url.startswith('#'):
+            continue
+        if not url.startswith(('http://', 'https://')):
+            continue
+        if url not in sources:
+            sources.append(url)
+    return sources[:5] or list(DEFAULT_NEWS_SOURCES)
+
+
+def _fetch_mpaypass(source_url):
+    """抓取移动支付网首页最新文章（该站无 RSS，按文章链接解析）"""
+    resp = _fetch_remote_response(source_url, 'text/html,application/xhtml+xml,*/*')
+    html = _decode_html(resp)
+    pattern = re.compile(
+        r'<a[^>]+href=["\'](?:https?://www\.mpaypass\.com\.cn)?(/news/(\d{6})/(\d+)\.html)["\'][^>]*>(.*?)</a>',
+        re.IGNORECASE | re.DOTALL,
+    )
     items = []
-    for entry in entries[:8]:
+    seen = set()
+    for href, year_month, rest, raw_title in pattern.findall(html):
+        title = _strip_tags(raw_title)
+        if len(title) < 6 or href in seen:
+            continue
+        seen.add(href)
+        published = ''
+        if len(year_month) == 6 and len(rest) >= 8:
+            published = (
+                f'{year_month[:4]}-{year_month[4:6]}-{rest[:2]} '
+                f'{rest[2:4]}:{rest[4:6]}:{rest[6:8]}'
+            )
+        items.append({
+            'title': title,
+            'link': 'https://www.mpaypass.com.cn' + href,
+            'published': published,
+            'source': '移动支付网',
+        })
+    if not items:
+        raise WidgetError('移动支付网暂无可解析的新闻')
+    items.sort(key=lambda item: item['published'], reverse=True)
+    return items[:20]
+
+
+def _parse_rss_items(root, source_url):
+    channel = _find_child(root, 'channel')
+    if channel is None:
+        channel = root
+    title_node = _find_child(channel, 'title')
+    source_name = _strip_tags(title_node.text if title_node is not None else '')
+    if not source_name:
+        source_name = urlparse(source_url).hostname or 'RSS'
+
+    entries = [node for node in root.iter() if _local_name(node.tag) in ('item', 'entry')]
+    items = []
+    for entry in entries[:20]:
         title_node = _find_child(entry, 'title')
         title = _strip_tags(title_node.text if title_node is not None else '')
         if not title:
@@ -366,12 +444,73 @@ def fetch_news(feed_url):
             date_node = _find_child(entry, 'updated')
         published = (date_node.text or '').strip() if date_node is not None else ''
 
-        items.append({'title': title, 'link': link, 'published': published})
+        items.append({
+            'title': title,
+            'link': link,
+            'published': published,
+            'source': source_name,
+        })
+    return items
 
+
+def _fetch_rss_source(source_url):
+    resp = _fetch_remote_response(
+        source_url,
+        'application/rss+xml, application/atom+xml, application/xml, text/xml, */*',
+    )
+    try:
+        root = ET.fromstring(resp.content[:MAX_RESPONSE_BYTES])
+    except ET.ParseError as exc:
+        raise WidgetError('资讯源不是有效的 RSS/Atom 内容') from exc
+    items = _parse_rss_items(root, source_url)
     if not items:
         raise WidgetError('资讯源暂无可解析的内容')
+    return items
 
-    data = {'feed_url': feed_url, 'items': items}
+
+def fetch_news():
+    """聚合所有管理员配置的支付行业新闻源，按时间倒序去重"""
+    sources = get_news_sources()
+    cache_key = 'news:' + '|'.join(sources)
+    cached = _cache_get(cache_key)
+    if cached:
+        return cached
+
+    merged = []
+    errors = []
+    for source in sources:
+        try:
+            if 'mpaypass.com.cn' in (urlparse(source).hostname or ''):
+                merged.extend(_fetch_mpaypass(source))
+            else:
+                merged.extend(_fetch_rss_source(source))
+        except WidgetError as exc:
+            errors.append(str(exc))
+        except Exception as exc:  # noqa: BLE001 - 单个源失败不影响其他源
+            errors.append(str(exc))
+
+    if not merged:
+        detail = f'（{errors[0]}）' if errors else ''
+        raise WidgetError(f'支付圈新闻暂时获取失败{detail}')
+
+    merged.sort(key=lambda item: _published_timestamp(item.get('published')), reverse=True)
+
+    items = []
+    seen_titles = set()
+    seen_links = set()
+    for item in merged:
+        title_key = re.sub(r'\s+', '', item.get('title') or '')[:80]
+        link = item.get('link') or ''
+        if not title_key or title_key in seen_titles or (link and link in seen_links):
+            continue
+        seen_titles.add(title_key)
+        if link:
+            seen_links.add(link)
+        items.append(item)
+        if len(items) >= 10:
+            break
+
+    data = {'sources': sources, 'items': items}
     _cache_set(cache_key, NEWS_CACHE_TTL, data)
     return data
 

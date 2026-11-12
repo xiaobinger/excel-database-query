@@ -298,8 +298,7 @@
                     <el-input v-model="widgetForm.settings.weather.city" size="small" placeholder="如：深圳" style="max-width: 200px" />
                   </template>
                   <template v-else-if="key === 'news'">
-                    <span class="widget-field-label">RSS 源</span>
-                    <el-input v-model="widgetForm.settings.news.feed_url" size="small" placeholder="https://www.36kr.com/feed" />
+                    <span class="widget-field-hint">新闻源由管理员统一配置，普通用户不可修改</span>
                   </template>
                   <template v-else-if="key === 'stocks'">
                     <span class="widget-field-label">股票代码</span>

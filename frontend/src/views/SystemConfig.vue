@@ -135,6 +135,32 @@
           </el-form>
         </el-tab-pane>
 
+        <el-tab-pane label="个性插件" name="widget">
+          <el-form label-width="150px" style="max-width: 760px; margin-top: 16px">
+            <el-form-item label="支付圈新闻源">
+              <el-input
+                id="widget-news-sources"
+                v-model="widgetSettingsForm.news_sources"
+                type="textarea"
+                :rows="6"
+                placeholder="每行一个来源，例如：&#10;https://www.mpaypass.com.cn/"
+              />
+              <div style="color: #909399; font-size: 12px; margin-top: 4px; line-height: 1.7">
+                默认使用移动支付网，覆盖支付牌照公司动态、银联/央行政策披露与支付上下游资讯；
+                支持追加标准 RSS 地址（移动支付网域名会自动按页面抓取）。普通用户不可修改，新来源保存后立即生效（结果缓存 10 分钟）。
+              </div>
+            </el-form-item>
+            <el-form-item>
+              <el-button id="widget-news-sources-save" type="primary" :loading="savingWidgetSettings" @click="handleSaveWidgetSettings">
+                <i class="fas fa-save"></i> 保存配置
+              </el-button>
+              <el-button @click="handleResetWidgetSettings">
+                <i class="fas fa-undo"></i> 恢复默认源
+              </el-button>
+            </el-form-item>
+          </el-form>
+        </el-tab-pane>
+
         <el-tab-pane label="列名同义词" name="synonym">
           <div class="synonym-section">
             <div class="synonym-header">
@@ -864,6 +890,28 @@ function handleResetUpload() {
   ElMessage.info('已恢复默认格式，请点击保存生效')
 }
 
+const savingWidgetSettings = ref(false)
+const DEFAULT_NEWS_SOURCE = 'https://www.mpaypass.com.cn/'
+const widgetSettingsForm = reactive({ news_sources: DEFAULT_NEWS_SOURCE })
+
+async function handleSaveWidgetSettings() {
+  savingWidgetSettings.value = true
+  try {
+    await api.system.updateConfig({
+      items: [{ key: 'widget_news_sources', value: widgetSettingsForm.news_sources }]
+    })
+    ElMessage.success('配置保存成功')
+  } catch {
+  } finally {
+    savingWidgetSettings.value = false
+  }
+}
+
+function handleResetWidgetSettings() {
+  widgetSettingsForm.news_sources = DEFAULT_NEWS_SOURCE
+  ElMessage.info('已恢复默认新闻源，请点击保存生效')
+}
+
 const synonymGroups = ref([])
 const savingSynonym = ref(false)
 const addingWordIndex = ref(-1)
@@ -898,6 +946,9 @@ async function fetchConfig() {
       }
       if (key === 'ticket_attachment_allowed_extensions') {
         uploadForm.ticket = splitExtensions(value, DEFAULT_TICKET_ATTACHMENT_EXTS)
+      }
+      if (key === 'widget_news_sources') {
+        widgetSettingsForm.news_sources = value || DEFAULT_NEWS_SOURCE
       }
       if (key === 'column_synonym_groups' && value) {
         try {

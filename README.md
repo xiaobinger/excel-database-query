@@ -23,7 +23,7 @@
 
 <!-- 徽章 -->
 <p>
-  <img src="https://img.shields.io/badge/version-2.6.66-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-2.6.67-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/python-3.10+-yellow?style=flat-square&logo=python&logoColor=white" alt="python" />
   <img src="https://img.shields.io/badge/vue-3-green?style=flat-square&logo=vuedotjs&logoColor=white" alt="vue" />
   <img src="https://img.shields.io/badge/flask-black?style=flat-square&logo=flask&logoColor=white" alt="flask" />
@@ -139,7 +139,8 @@
 - 内置插件：时钟、黄历、天气、支付圈新闻、系统待办、自定义贴图、自选股行情
 - 管理员在「角色管理」按角色授权，用户在「个人中心 → 个性插件」勾选、排序、配置参数
 - 未授权的插件不会出现在个人中心与右侧插件坞（切换账号/权限变更后自动重新校验）
-- 天气走 Open-Meteo、新闻走可配置 RSS、行情走腾讯接口，统一由后端代理并缓存
+- 支付圈新闻默认聚合移动支付网，覆盖支付牌照公司动态、银联/央行政策披露与支付上下游资讯；新闻源仅管理员可在「系统配置 → 个性插件」调整，普通用户不可修改
+- 天气走 Open-Meteo、新闻走后端支付行业源聚合、行情走腾讯接口，统一由后端代理并缓存
 - 插件坞可折叠且记忆状态；新增插件只需在后端 `WIDGETS` 与前端 `widgetRegistry` 各注册一次
 
 </details>
@@ -434,6 +435,7 @@ WHERE merchant_id = :value
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-11-12 | v2.6.67 | 支付圈新闻改为**支付行业垂直源且普通用户不可改**：① **默认源** 从 36Kr 综合科技源切换为移动支付网，覆盖支付牌照公司动态（如度小满支付更名）、银联/央行政策披露（央行支付体系报告）与支付上下游资讯；该站无 RSS，后端新增首页文章解析（按 `/news/YYYYMM/DDHHMMSS.html` 提取标题、链接与发布时间）；② **管理员统一配置** 新增系统配置项 `widget_news_sources`（每行一个来源，最多 5 个），「系统配置 → 个性插件」提供编辑与恢复默认源；移动支付网域名走页面抓取，其余地址按标准 RSS/Atom 解析，多源合并后按发布时间倒序去重取前 10 条；③ **普通用户不可改** 移除个人中心新闻 RSS 输入框，用户配置不再保存 `feed_url`，后端 `/api/widgets/news` 忽略客户端传入的 `feed_url`，统一读取管理员配置；④ **安全与容错** 所有源逐跳校验重定向、拒绝内网地址，单源失败不影响其他源，全部失败才返回错误；⑤ **验证** `py_compile`、`vite build` 通过，真实抓取返回 10 条支付行业新闻并按时间倒序；普通用户携带 36Kr `feed_url` 请求仍只返回支付行业新闻，管理员改为未央网 RSS 后立即生效；浏览器实测普通用户个人中心仅显示「新闻源由管理员统一配置」提示，管理员个性插件配置页可读取并保存 `mpaypass.com.cn` |
 | 2026-11-12 | v2.6.66 | 修复**普通用户仍看到未授权插件**：① **根因** 插件状态存放在 Pinia `widgets` store，退出登录时只重置了 app/taskMonitor store，`definitions` 与 `config` 保留上一个账号（通常是管理员）的数据；下一个账号登录后 Layout 重新挂载，但 `load()` 因 `loaded=true` 不会重新请求，导致右侧插件坞和个人中心继续展示上一个账号的插件；② **账号隔离** `widgets` store 新增 `reset()` 并在 `logout()` 时调用，清空插件定义与配置；③ **强制刷新** 插件坞挂载时改为 `load(true)` 强制拉取当前账号权限，并监听 `visibilitychange`，从其他标签页切回时重新校验，管理员撤销授权后无需手动刷新页面；④ **双重过滤** `enabledKeys` 与个人中心表单均按接口返回的 `definitions`（已按角色授权过滤）再取交集，即使配置中存在历史 key 也不会渲染未授权插件。`vite build` 通过；浏览器实测管理员退出后普通用户（仅授权时钟/天气）登录，右侧插件坞与个人中心均只显示时钟/天气，其余插件不再出现 |
 | 2026-11-12 | v2.6.65 | 新增**右侧个性化插件坞**：① **插件体系** 后端 `widget_service.py` 集中定义 7 个内置插件（时钟、黄历、天气、支付圈新闻、系统待办、自定义贴图、自选股行情），前端 `widgetRegistry.js` 按 key 注册组件，新增插件只需两边各注册一次；② **分级授权** `Role` 新增 `widget_permissions`（JSON，支持 `all`），管理员在「角色管理」按角色勾选可用插件，管理员默认全部可用，普通角色未授权时不出现在个人中心；③ **个人配置** `User` 新增 `widget_config`（JSON），个人中心新增「个性插件」区块——开关、上下排序、天气城市、RSS 源、股票代码、待办条数、便签文字/颜色与贴图上传，保存后右侧实时生效；④ **插件坞** Layout 主内容右侧新增 `WidgetDock`（300px，可折叠且记忆状态，窄屏自动隐藏），每个插件为独立卡片；⑤ **数据与安全** 天气走 Open-Meteo、行情走腾讯 `qt.gtimg.cn`、新闻走后端 RSS 代理（10 分钟缓存、手动重定向逐跳校验、拒绝内网地址），黄历使用本地农历/干支/建除算法不依赖网络，待办聚合当前用户待处理工单，贴图存储于 `uploads/widgets/<user_id>/`（2MB 图片校验、UUID 文件名）；⑥ **验证** 后端 `py_compile`、前端 `vite build` 通过，真实接口冒烟（登录鉴权、角色授权隔离、配置保存、天气/新闻/行情/待办、贴图上传与读取）全部通过，浏览器实测插件坞与个人中心配置正常 |
 | 2026-11-10 | v2.6.64 | 修复**任务已确定仍弹选择/确认卡片**：① **只读任务直接执行** 导出/查询在任务精确匹配且必填参数齐全（查询还需已上传可读 Excel）时，`request_export` / `request_query` 返回 `_auto_execute`，前端直接执行并显示进度/下载卡片，不再弹确认卡片；参数不全或查询无文件时保留原确认/参数卡片；系统任务等写操作仍保留一次确认（参数齐全也不再静默自动执行）；② **查询文件直传** `request_query` 新增 `file_path` 参数，AI 在上传 Excel 后将文件路径传入即可直接执行，后端校验路径范围并读取列信息用于自动匹配参数列；③ **选择卡片去重** 同一轮 AI 已调用 `request_*` 确定具体任务时，后端与前端均跳过对应的 select_options 选择卡片；候选数 ≤1 时也直接跳过，避免唯一任务仍让用户重复选择；④ **提示词引导** list_* 工具描述与默认提示词补充「已能确定唯一任务时直接调用 request_*，只有多候选无法确定时才调用 list_*」，并提示上传表格后将 `file_path` 传给 `request_query`。`py_compile`、`vite build` 通过，自动执行判定（精确/必填缺失/模糊匹配/文件校验）与自动执行卡片元数据自测通过 |

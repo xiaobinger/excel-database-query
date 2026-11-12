@@ -116,10 +116,9 @@ def get_news():
     user = get_current_user()
     if 'news' not in _allowed_keys(user):
         return jsonify({'success': False, 'message': '未授权新闻插件'})
-    config = _load_config(user, _allowed_keys(user))
-    feed_url = request.args.get('feed_url') or config['settings']['news'].get('feed_url')
     try:
-        return jsonify({'success': True, 'data': widget_service.fetch_news(feed_url)})
+        # 新闻源统一由管理员在系统配置中维护，普通用户不可修改
+        return jsonify({'success': True, 'data': widget_service.fetch_news()})
     except WidgetError as exc:
         return jsonify({'success': False, 'message': str(exc)})
 
