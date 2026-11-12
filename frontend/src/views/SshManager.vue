@@ -33,6 +33,12 @@
             <el-tag v-else type="info" size="small">密码</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="跳板机" width="90" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.is_jump_host" type="warning" size="small">跳板机</el-tag>
+            <span v-else style="color: #c0c4cc">-</span>
+          </template>
+        </el-table-column>
         <el-table-column label="关联连接" width="100" align="center">
           <template #default="{ row }">
             <el-tag size="small">{{ getConnectionCount(row.id) }}</el-tag>
@@ -110,6 +116,12 @@
         <el-form-item label="本地绑定端口">
           <el-input-number v-model="form.local_bind_port" :min="0" :max="65535" placeholder="0为自动" style="width: 100%" />
         </el-form-item>
+        <el-form-item label="是否为跳板机">
+          <el-switch v-model="form.is_jump_host" />
+          <span style="margin-left: 12px; color: #909399; font-size: 12px">
+            开启后该配置才会出现在系统任务的SSH跳板机下拉中；目标机器只从非跳板机配置中探测
+          </span>
+        </el-form-item>
       </el-form>
 
       <template #footer>
@@ -143,7 +155,8 @@ const defaultForm = {
   username: '',
   password: '',
   pkey_path: '',
-  local_bind_port: null
+  local_bind_port: null,
+  is_jump_host: false
 }
 
 const form = reactive({ ...defaultForm })
@@ -190,7 +203,8 @@ function openDialog(row) {
       username: row.username,
       password: '',
       pkey_path: row.pkey_path || '',
-      local_bind_port: row.local_bind_port || null
+      local_bind_port: row.local_bind_port || null,
+      is_jump_host: row.is_jump_host || false
     })
   } else {
     isEdit.value = false

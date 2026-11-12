@@ -27,6 +27,7 @@ class SshService:
             username=data['username'],
             pkey_path=data.get('pkey_path'),
             local_bind_port=int(data['local_bind_port']) if data.get('local_bind_port') is not None else None,
+            is_jump_host=bool(data.get('is_jump_host', False)),
         )
         if data.get('password'):
             ssh_config.set_password(data['password'])
@@ -41,7 +42,7 @@ class SshService:
         if not ssh_config:
             return None
         int_fields = ['port', 'local_bind_port']
-        for key in ['name', 'host', 'port', 'username', 'pkey_path', 'local_bind_port', 'is_active']:
+        for key in ['name', 'host', 'port', 'username', 'pkey_path', 'local_bind_port', 'is_jump_host', 'is_active']:
             if key in data:
                 val = data[key]
                 if key in int_fields and val is not None:
@@ -65,6 +66,60 @@ class SshService:
         db.session.commit()
         logger.info(f"删除SSH配置: {ssh_config.name}")
         return True
+
+    @staticmethod
+    def probe_targets(ssh_id: int, timeout: int = 8) -> dict:
+        """通过指定跳板机探测当前可登录的目标机列表（非跳板机配置）"""
+        jump = SshConfig.query.get(ssh_id)
+        if not jump or not jump.is_active:
+            return {'success': False, 'message': 'SSH配置不存在或已停用'}
+        if not jump.is_jump_host:
+            return {'success': False, 'message': '所选配置未标记为跳板机'}
+
+        targets = SshConfig.query.filter(
+            SshConfig.is_active.is_(True),
+            SshConfig.is_jump_host.is_(False),
+            SshConfig.id != ssh_id,
+        ).order_by(SshConfig.name.asc()).all()
+        if not targets:
+            return {'success': True, 'data': [], 'unreachable': []}
+
+        from concurrent.futures import ThreadPoolExecutor
+        from flask import current_app
+        from app.services.system_task_service import SystemTaskService
+
+        app = current_app._get_current_object()
+
+        def _probe(target: SshConfig):
+            with app.app_context():
+                try:
+                    out, err, code = SystemTaskService._run_ssh_command_via_jump(
+                        jump, target, 'echo __SSH_OK__', timeout
+                    )
+                    if code == 0 and '__SSH_OK__' in (out or ''):
+                        return {
+                            'id': target.id,
+                            'name': target.name,
+                            'host': target.host,
+                            'port': target.port,
+                            'username': target.username,
+                        }, None
+                    detail = (err or out or '').strip()[:200] or f'退出码 {code}'
+                    return None, {'id': target.id, 'name': target.name, 'host': target.host, 'reason': detail}
+                except Exception as exc:
+                    logger.warning(f"跳板机探测目标机失败: {target.name} - {exc}")
+                    return None, {'id': target.id, 'name': target.name, 'host': target.host, 'reason': str(exc)[:200]}
+                finally:
+                    db.session.remove()
+
+        reachable, unreachable = [], []
+        with ThreadPoolExecutor(max_workers=min(6, len(targets))) as pool:
+            for ok_item, fail_item in pool.map(_probe, targets):
+                if ok_item:
+                    reachable.append(ok_item)
+                if fail_item:
+                    unreachable.append(fail_item)
+        return {'success': True, 'data': reachable, 'unreachable': unreachable}
 
     @staticmethod
     def test_connection(ssh_id: int) -> dict:

@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS ssh_configs (
     encrypted_password TEXT COMMENT '加密后的SSH密码',
     pkey_path VARCHAR(500) COMMENT 'SSH私钥路径',
     local_bind_port INT COMMENT 'SSH本地绑定端口',
+    is_jump_host BOOLEAN DEFAULT FALSE COMMENT '是否为跳板机',
     is_active BOOLEAN DEFAULT TRUE COMMENT '是否启用',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

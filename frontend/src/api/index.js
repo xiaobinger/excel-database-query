@@ -81,7 +81,8 @@ const ssh = {
   delete: (id) => http.delete(`/ssh/${id}`),
   batchDelete: (ids) => http.post('/ssh/batch-delete', { ids }),
   deleteAll: () => http.delete('/ssh/all'),
-  test: (id) => http.post(`/ssh/${id}/test`)
+  test: (id) => http.post(`/ssh/${id}/test`),
+  targets: (id) => http.get(`/ssh/${id}/targets`)
 }
 
 const databases = {

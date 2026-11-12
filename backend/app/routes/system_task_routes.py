@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 system_task_bp = Blueprint('system_task', __name__, url_prefix='/api/system-tasks')
 
 
-def _normalize_ssh_config_id(value):
-    """校验并转换API任务使用的SSH跳板机配置ID"""
+def _normalize_ssh_config_id(value, require_jump_host=True):
+    """校验并转换API任务使用的SSH配置ID（跳板机必须是跳板机，目标机必须不是跳板机）"""
     if value in (None, '', 0, '0'):
         return None
     try:
@@ -28,6 +28,8 @@ def _normalize_ssh_config_id(value):
     from app.models.ssh_config import SshConfig
     ssh_config = SshConfig.query.get(ssh_id)
     if not ssh_config or not ssh_config.is_active:
+        return False
+    if bool(ssh_config.is_jump_host) != bool(require_jump_host):
         return False
     return ssh_id
 
@@ -110,10 +112,10 @@ def create_system_task():
     task_type = data.get('task_type', 'sql')
     current_user = get_current_user()
 
-    ssh_config_id = _normalize_ssh_config_id(data.get('ssh_config_id'))
-    target_ssh_config_id = _normalize_ssh_config_id(data.get('target_ssh_config_id'))
+    ssh_config_id = _normalize_ssh_config_id(data.get('ssh_config_id'), require_jump_host=True)
+    target_ssh_config_id = _normalize_ssh_config_id(data.get('target_ssh_config_id'), require_jump_host=False)
     if ssh_config_id is False or target_ssh_config_id is False:
-        return jsonify({'success': False, 'message': 'SSH配置不存在或已停用'}), 400
+        return jsonify({'success': False, 'message': 'SSH配置不存在、已停用或类型不匹配（跳板机/目标机）'}), 400
     if ssh_config_id and not target_ssh_config_id:
         return jsonify({'success': False, 'message': '请选择目标机器SSH配置'}), 400
     if target_ssh_config_id and not ssh_config_id:
@@ -197,10 +199,10 @@ def update_system_task(task_id):
     if 'ssh_config_id' in data or 'target_ssh_config_id' in data:
         jump_value = data.get('ssh_config_id') if 'ssh_config_id' in data else task.ssh_config_id
         target_value = data.get('target_ssh_config_id') if 'target_ssh_config_id' in data else task.target_ssh_config_id
-        ssh_config_id = _normalize_ssh_config_id(jump_value)
-        target_ssh_config_id = _normalize_ssh_config_id(target_value)
+        ssh_config_id = _normalize_ssh_config_id(jump_value, require_jump_host=True)
+        target_ssh_config_id = _normalize_ssh_config_id(target_value, require_jump_host=False)
         if ssh_config_id is False or target_ssh_config_id is False:
-            return jsonify({'success': False, 'message': 'SSH配置不存在或已停用'}), 400
+            return jsonify({'success': False, 'message': 'SSH配置不存在、已停用或类型不匹配（跳板机/目标机）'}), 400
         if ssh_config_id and not target_ssh_config_id:
             return jsonify({'success': False, 'message': '请选择目标机器SSH配置'}), 400
         if target_ssh_config_id and not ssh_config_id:

@@ -17,6 +17,7 @@ class SshConfig(db.Model):
     encrypted_password = db.Column(db.Text, comment='加密后的SSH密码')
     pkey_path = db.Column(db.String(500), comment='SSH私钥路径')
     local_bind_port = db.Column(db.Integer, comment='SSH本地绑定端口')
+    is_jump_host = db.Column(db.Boolean, default=False, comment='是否为跳板机')
     is_active = db.Column(db.Boolean, default=True, comment='是否启用')
     created_at = db.Column(db.DateTime, default=datetime.utcnow, comment='创建时间')
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment='更新时间')
@@ -54,6 +55,7 @@ class SshConfig(db.Model):
             'username': self.username,
             'pkey_path': self.pkey_path,
             'local_bind_port': self.local_bind_port,
+            'is_jump_host': bool(self.is_jump_host),
             'is_active': self.is_active,
             'created_at': beijing_isoformat(self.created_at),
             'updated_at': beijing_isoformat(self.updated_at),

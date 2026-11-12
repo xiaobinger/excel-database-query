@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify
 from app import db
 from app.models.ssh_config import SshConfig
 from app.services.ssh_service import SshService
+from app.utils.auth import login_required
 
 ssh_bp = Blueprint('ssh', __name__, url_prefix='/api/ssh')
 
@@ -93,6 +94,14 @@ def delete_all_ssh_configs():
         return jsonify({'success': True, 'message': f'成功删除{deleted_count}个SSH配置', 'deleted_count': deleted_count})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 400
+
+
+@ssh_bp.route('/<int:ssh_id>/targets', methods=['GET'])
+@login_required
+def get_ssh_targets(ssh_id):
+    """通过跳板机拉取当前可登录的目标机列表"""
+    result = SshService.probe_targets(ssh_id)
+    return jsonify(result)
 
 
 @ssh_bp.route('/<int:ssh_id>/test', methods=['POST'])

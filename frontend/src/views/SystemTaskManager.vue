@@ -268,29 +268,46 @@
           </el-form-item>
           <template v-if="form.api_exec_mode === 'ssh'">
             <el-form-item label="SSH跳板机">
-              <el-select v-model="form.ssh_config_id" placeholder="请选择SSH跳板机" style="width: 100%">
+              <el-select
+                v-model="form.ssh_config_id"
+                placeholder="请选择SSH跳板机（仅显示已标记为跳板机的配置）"
+                style="width: 100%"
+                @change="handleJumpHostChange"
+              >
                 <el-option
-                  v-for="item in sshConfigs"
+                  v-for="item in jumpHostOptions"
                   :key="item.id"
                   :label="`${item.name} (${item.username}@${item.host}:${item.port})`"
                   :value="item.id"
                 />
               </el-select>
+              <div v-if="jumpHostOptions.length === 0" style="color: #e6a23c; font-size: 12px; margin-top: 4px">
+                暂无标记为跳板机的 SSH 配置，请先在「SSH 管理」中创建并开启「跳板机」开关
+              </div>
             </el-form-item>
             <el-form-item label="目标机器">
-              <el-select v-model="form.target_ssh_config_id" placeholder="请选择目标机器SSH配置" style="width: 100%">
+              <el-select
+                v-model="form.target_ssh_config_id"
+                :placeholder="form.ssh_config_id ? (sshProbing ? '正在通过跳板机探测可登录的目标机...' : '请选择可登录的目标机器') : '先选择SSH跳板机，自动拉取可登录目标机'"
+                style="width: 100%"
+                :loading="sshProbing"
+                :disabled="!form.ssh_config_id || sshProbing"
+              >
                 <el-option
-                  v-for="item in sshConfigs"
+                  v-for="item in probedTargets"
                   :key="item.id"
                   :label="`${item.name} (${item.username}@${item.host}:${item.port})`"
                   :value="item.id"
                 />
               </el-select>
+              <div v-if="sshProbeFailed" style="color: #f56c6c; font-size: 12px; margin-top: 4px">
+                <i class="fas fa-exclamation-circle"></i> {{ sshProbeFailed }}
+              </div>
+              <div v-else-if="sshProbeLoaded && probedTargets.length > 0" style="color: #67c23a; font-size: 12px; margin-top: 4px">
+                <i class="fas fa-check-circle"></i> 已通过跳板机实测登录，共 {{ probedTargets.length }} 台可登录目标机
+              </div>
               <div style="color: #909399; font-size: 12px; margin-top: 4px">
                 后端先连接跳板机，再由跳板机登录目标机执行 curl；目标 IP、端口与账号取自目标机器的 SSH 配置
-              </div>
-              <div v-if="sshConfigs.length === 0" style="color: #e6a23c; font-size: 12px; margin-top: 4px">
-                暂无可用 SSH 配置，请先在「SSH 管理」中创建并测试连接
               </div>
             </el-form-item>
           </template>
@@ -1056,6 +1073,46 @@ function sshConfigLabel(id) {
   return config ? `${config.name}(${config.host})` : (id ? `#${id}` : '-')
 }
 
+// 跳板机/目标机分离：目标机列表通过跳板机实测登录后自动拉取
+const jumpHostOptions = computed(() => sshConfigs.value.filter(item => item.is_jump_host))
+const sshProbing = ref(false)
+const sshProbeLoaded = ref(false)
+const sshProbeFailed = ref('')
+const probedTargets = ref([])
+
+function resetProbedTargets() {
+  sshProbeLoaded.value = false
+  sshProbeFailed.value = ''
+  probedTargets.value = []
+}
+
+async function handleJumpHostChange(jumpId) {
+  form.target_ssh_config_id = null
+  resetProbedTargets()
+  if (!jumpId) return
+  sshProbing.value = true
+  try {
+    const res = await api.ssh.targets(jumpId)
+    const data = res.data || res || {}
+    if (data.success) {
+      sshProbeLoaded.value = true
+      probedTargets.value = data.data || []
+      const skipped = (data.unreachable || []).length
+      if (probedTargets.value.length === 0) {
+        sshProbeFailed.value = '该跳板机下暂无可登录的目标机，可在「SSH 管理」中补充配置'
+      } else if (skipped > 0) {
+        ElMessage.warning(`已拉取 ${probedTargets.value.length} 台可登录目标机，${skipped} 台无法登录已隐藏`)
+      }
+    } else {
+      sshProbeFailed.value = data.message || '目标机探测失败'
+    }
+  } catch (e) {
+    sshProbeFailed.value = e?.message || '目标机探测失败'
+  } finally {
+    sshProbing.value = false
+  }
+}
+
 // 本地脚本上传
 const uploadingScript = ref(false)
 const scriptCreateDirs = ref(false)
@@ -1378,10 +1435,20 @@ function openDialog(row) {
         ? JSON.parse(JSON.stringify(row.param_source_param_mapping))
         : [],
     })
+    // 编辑模式：若任务已选跳板机，自动实测探测可登录目标机并回显原目标机
+    if (form.api_exec_mode === 'ssh' && form.ssh_config_id) {
+      const savedTarget = form.target_ssh_config_id
+      handleJumpHostChange(form.ssh_config_id).then(() => {
+        if (savedTarget && probedTargets.value.some(t => t.id === savedTarget)) {
+          form.target_ssh_config_id = savedTarget
+        }
+      })
+    }
   } else {
     isEdit.value = false
     editId.value = null
     Object.assign(form, { ...defaultForm, params_config: [], response_mapping: [] })
+    resetProbedTargets()
   }
   syncEntriesFromHeaders()
   showRawHeaders.value = false
