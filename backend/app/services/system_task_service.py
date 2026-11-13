@@ -904,20 +904,73 @@ class SystemTaskService:
         return ips
 
     @staticmethod
+    def _normalize_host(host: str) -> str:
+        """归一化主机标识：去空白、去端口、去 IPv6 方括号、转小写"""
+        value = (host or '').strip().lower()
+        if not value:
+            return ''
+        if value.startswith('['):
+            value = value[1:value.find(']')] if ']' in value else value[1:]
+        elif value.count(':') == 1:
+            value = value.split(':', 1)[0]
+        return value.rstrip('.')
+
+    @staticmethod
+    def _read_jump_host_known_hosts(jump_config) -> str:
+        """兜底读取跳板机上 /etc/hosts 与 known_hosts 中记录过的主机"""
+        command = (
+            "cat /etc/hosts 2>/dev/null; echo '=== known_hosts ==='; "
+            "cat ~/.ssh/known_hosts 2>/dev/null | cut -d' ' -f1"
+        )
+        try:
+            out, err, _code = SystemTaskService._run_command_on_jump(jump_config, command, 15)
+            return (out or '') + '\n' + (err or '')
+        except Exception as exc:
+            return f'<读取失败: {exc}>'
+
+    @staticmethod
     def _fetch_authorized_target_ips(jump_config):
-        """获取跳板机/堡垒机上的授权目标机 IP 列表，返回 (IP列表, 来源, 原始输出摘要)"""
+        """获取跳板机/堡垒机上的授权目标机 IP 列表，返回 (IP列表, 来源, 原始输出摘要)
+
+        依次尝试：配置的授权清单命令 → 登录交互式 shell 抓取主机菜单 → /etc/hosts 与 known_hosts。
+        全部失败时返回空列表与来源 none，原始输出放在第三个返回值中供前端排查。
+        """
+        trails = []
         command = (getattr(jump_config, 'authorized_hosts_command', '') or '').strip()
         if command:
-            out, err, code = SystemTaskService._run_command_on_jump(jump_config, command, 15)
-            text = (out or '') + '\n' + (err or '')
-            ips = SystemTaskService._extract_ipv4_list(text)
-            if code == 0 and ips:
-                return ips, 'command', text.strip()[:2000]
-            detail = (err or out or '').strip()[:200] or f'退出码 {code}'
-            raise ValueError(f'跳板机授权清单命令执行失败: {detail}')
+            try:
+                out, err, code = SystemTaskService._run_command_on_jump(jump_config, command, 15)
+                text = (out or '') + '\n' + (err or '')
+                ips = SystemTaskService._extract_ipv4_list(text)
+                if ips:
+                    return ips, 'command', text.strip()[:2000]
+                detail = (err or out or '').strip()[:120] or f'退出码 {code}'
+                trails.append(f'授权主机清单命令未返回 IP（{detail}）')
+            except Exception as exc:
+                trails.append(f'授权主机清单命令执行失败: {str(exc)[:120]}')
 
-        banner = SystemTaskService._capture_jump_login_banner(jump_config)
-        return SystemTaskService._extract_ipv4_list(banner), 'banner', banner.strip()[-2000:]
+        banner = ''
+        try:
+            banner = SystemTaskService._capture_jump_login_banner(jump_config)
+        except Exception as exc:
+            trails.append(f'登录菜单抓取失败: {str(exc)[:120]}')
+        banner_ips = SystemTaskService._extract_ipv4_list(banner)
+        if banner_ips:
+            return banner_ips, 'banner', banner.strip()[-2000:]
+        trails.append('登录欢迎信息/主机菜单中未解析到 IP')
+
+        hosts_text = SystemTaskService._read_jump_host_known_hosts(jump_config)
+        hosts_ips = SystemTaskService._extract_ipv4_list(hosts_text)
+        if hosts_ips:
+            return hosts_ips, 'hosts', hosts_text.strip()[:2000]
+        trails.append('/etc/hosts 与 known_hosts 中未解析到 IP')
+
+        sample = '\n'.join([
+            '【尝试记录】', '\n'.join(trails),
+            '', '【登录菜单原始输出】', banner.strip()[-1500:] or '(空)',
+            '', '【hosts/known_hosts 原始输出】', hosts_text.strip()[:800] or '(空)',
+        ])
+        return [], 'none', sample
 
     @staticmethod
     def _run_ssh_command_via_tunnel(jump_config, target_config, command: str, timeout: int):

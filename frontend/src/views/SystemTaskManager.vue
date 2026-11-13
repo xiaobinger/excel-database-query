@@ -306,8 +306,16 @@
               <div v-else-if="sshProbeLoaded && probedTargets.length > 0" style="color: #67c23a; font-size: 12px; margin-top: 4px">
                 <i class="fas fa-check-circle"></i> 已通过跳板机实测登录，共 {{ probedTargets.length }} 台可登录目标机
               </div>
-              <div v-if="sshProbeNotice" style="color: #e6a23c; font-size: 12px; margin-top: 4px">
+              <div v-if="sshProbeNotice && sshProbeNotice !== sshProbeFailed" style="color: #e6a23c; font-size: 12px; margin-top: 4px">
                 <i class="fas fa-info-circle"></i> {{ sshProbeNotice }}
+              </div>
+              <div v-if="sshAuthorizedIps.length" style="color: #909399; font-size: 12px; margin-top: 4px">
+                <i class="fas fa-list"></i> 跳板机授权 IP（{{ sshAuthorizedIps.length }}）：{{ sshAuthorizedIps.join('、') }}
+              </div>
+              <div v-if="sshProbeSample" style="font-size: 12px; margin-top: 4px">
+                <el-link type="primary" :underline="false" @click="showProbeSample">
+                  <i class="fas fa-terminal"></i> 查看跳板机返回内容
+                </el-link>
               </div>
               <div style="color: #909399; font-size: 12px; margin-top: 4px">
                 后端先连接跳板机，再由跳板机登录目标机执行 curl；目标 IP、端口与账号取自目标机器的 SSH 配置
@@ -1082,13 +1090,25 @@ const sshProbing = ref(false)
 const sshProbeLoaded = ref(false)
 const sshProbeFailed = ref('')
 const sshProbeNotice = ref('')
+const sshAuthorizedIps = ref([])
+const sshProbeSample = ref('')
 const probedTargets = ref([])
 
 function resetProbedTargets() {
   sshProbeLoaded.value = false
   sshProbeFailed.value = ''
   sshProbeNotice.value = ''
+  sshAuthorizedIps.value = []
+  sshProbeSample.value = ''
   probedTargets.value = []
+}
+
+function showProbeSample() {
+  ElMessageBox.alert(
+    `<pre style="white-space: pre-wrap; word-break: break-all; font-size: 12px; max-height: 60vh; overflow: auto; margin: 0">${(sshProbeSample.value || '').replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]))}</pre>`,
+    '跳板机原始返回内容',
+    { dangerouslyUseHTMLString: true, confirmButtonText: '关闭' }
+  ).catch(() => {})
 }
 
 async function handleJumpHostChange(jumpId) {
@@ -1101,6 +1121,8 @@ async function handleJumpHostChange(jumpId) {
     if (res && res.success) {
       sshProbeLoaded.value = true
       probedTargets.value = res.data || []
+      sshAuthorizedIps.value = res.authorized_ips || []
+      sshProbeSample.value = res.sample || ''
       const authorized = res.authorized_total || 0
       const unmatched = (res.unmatched || []).length
       const skipped = (res.unreachable || []).length
@@ -1109,10 +1131,12 @@ async function handleJumpHostChange(jumpId) {
         : '')
       if (probedTargets.value.length === 0) {
         sshProbeFailed.value = res.notice || '该跳板机下暂无可登录的目标机，可在「SSH 配置管理」中补充配置'
-      } else if (unmatched > 0) {
-        ElMessage.warning(`跳板机授权 ${authorized} 台，已匹配 ${probedTargets.value.length} 台可登录，${unmatched} 台未在平台配置`)
-      } else if (skipped > 0) {
-        ElMessage.warning(`已拉取 ${probedTargets.value.length} 台可登录目标机，${skipped} 台无法登录已隐藏`)
+      } else {
+        if (unmatched > 0) {
+          ElMessage.warning(`跳板机授权 ${authorized} 台，已匹配 ${probedTargets.value.length} 台可登录，${unmatched} 台未在平台配置`)
+        } else if (skipped > 0) {
+          ElMessage.warning(`已拉取 ${probedTargets.value.length} 台可登录目标机，${skipped} 台无法登录已隐藏`)
+        }
       }
     } else {
       sshProbeFailed.value = (res && res.message) || '目标机探测失败'

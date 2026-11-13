@@ -87,7 +87,8 @@ class SshService:
         if not all_targets:
             return {
                 'success': True, 'data': [], 'unreachable': [],
-                'authorized_total': 0, 'unmatched': [], 'source': 'none',
+                'authorized_total': 0, 'unmatched': [], 'authorized_ips': [],
+                'source': 'none', 'sample': '',
                 'notice': '平台未配置任何目标机 SSH 配置',
             }
 
@@ -98,31 +99,39 @@ class SshService:
         app = current_app._get_current_object()
 
         # 先登录跳板机，取堡垒机/跳板机上的授权主机列表，再按 IP 匹配平台配置
-        authorized_ips, source, notice = [], 'all', ''
+        authorized_ips, source, sample, notice, matched_by = [], 'all', '', '', 'probe'
         try:
-            authorized_ips, source, _raw = SystemTaskService._fetch_authorized_target_ips(jump)
+            authorized_ips, source, sample = SystemTaskService._fetch_authorized_target_ips(jump)
         except Exception as exc:
             logger.warning(f"跳板机授权主机列表获取失败: {exc}")
-            notice = f'未能从跳板机获取授权主机列表（{str(exc)[:150]}），已回退为逐台实测'
+            sample = str(exc)[:800]
+            notice = f'未能从跳板机获取授权主机列表（{str(exc)[:120]}），已回退为逐台实测'
 
+        normalize = SystemTaskService._normalize_host
         unmatched = []
+        targets = all_targets
         if authorized_ips:
-            authorized_set = set(authorized_ips)
-            configured_hosts = {(t.host or '').strip() for t in all_targets}
-            targets = [t for t in all_targets if (t.host or '').strip() in authorized_set]
-            unmatched = [ip for ip in authorized_ips if ip not in configured_hosts]
-            if not targets:
-                return {
-                    'success': True, 'data': [], 'unreachable': [],
-                    'authorized_total': len(authorized_ips), 'unmatched': unmatched,
-                    'source': source,
-                    'notice': f'跳板机授权 {len(authorized_ips)} 台主机，但与平台已配置的目标机 IP 均不匹配，请先在「SSH 配置」中补全目标机',
-                }
-        else:
-            targets = all_targets
-            source = 'all'
-            if not notice:
-                notice = '未能从跳板机登录信息中解析出授权主机 IP，已回退为逐台实测'
+            authorized_map = {normalize(ip) for ip in authorized_ips}
+            configured_map = {normalize(t.host) for t in all_targets}
+            matched_targets = [t for t in all_targets if normalize(t.host) in authorized_map]
+            unmatched = [ip for ip in authorized_ips if normalize(ip) not in configured_map]
+            if matched_targets:
+                targets = matched_targets
+                matched_by = 'ip'
+            else:
+                # 解析到的 IP 与平台配置完全不匹配（可能是登录 MOTD 等噪声），回退为逐台实测
+                targets = all_targets
+                matched_by = 'probe'
+                preview = '、'.join(authorized_ips[:5]) + ('...' if len(authorized_ips) > 5 else '')
+                notice = (
+                    f'跳板机返回 {len(authorized_ips)} 个 IP（{preview}），'
+                    '与平台已配置的目标机地址均不匹配，已回退为逐台实测；请核对「SSH 配置」中的主机地址'
+                )
+        elif not notice:
+            notice = (
+                '未能从跳板机解析出授权主机 IP（已尝试授权清单命令、登录菜单、known_hosts），'
+                '已回退为逐台实测；可在「SSH 配置」中填写「授权主机清单」命令'
+            )
 
         def _probe(target: SshConfig):
             with app.app_context():
@@ -153,9 +162,16 @@ class SshService:
                     reachable.append(ok_item)
                 if fail_item:
                     unreachable.append(fail_item)
+        if reachable and matched_by == 'ip':
+            notice = ''
+        elif unreachable and not notice:
+            first = unreachable[0]
+            notice = f'{len(unreachable)} 台目标机均无法登录，首个失败原因：{first["name"]} - {first["reason"]}'
         return {
             'success': True, 'data': reachable, 'unreachable': unreachable,
             'authorized_total': len(authorized_ips), 'unmatched': unmatched,
+            'authorized_ips': authorized_ips[:100], 'sample': sample,
+            'matched_by': matched_by,
             'source': source, 'notice': notice,
         }
 
