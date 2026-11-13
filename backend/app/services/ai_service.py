@@ -225,7 +225,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "list_system_tasks",
-            "description": "列出所有可用的系统任务。系统任务是指后台运维类任务（如数据清理、缓存刷新、终端解绑等），与导出任务和查询任务完全不同。仅在无法从用户表述确定具体系统任务时调用；如果已经能确定唯一系统任务，直接调用 request_system_task，不要先调用本工具让用户重复选择。返回结果中API类型任务可能包含response_mapping字段，表示响应字段的意义枚举映射。API类型任务参数齐全时会自动执行并返回结果，SQL类型和本地脚本类型任务需要用户确认后执行。",
+            "description": "列出所有可用的系统任务。系统任务是指后台运维类任务（如数据清理、缓存刷新、终端解绑等），与导出任务和查询任务完全不同。仅在无法从用户表述确定具体系统任务时调用；如果已经能确定唯一系统任务，直接调用 request_system_task，绝对不要先调用本工具让用户重复选择。返回结果中API类型任务可能包含response_mapping字段，表示响应字段的意义枚举映射。任务参数齐全时会自动执行并返回结果，只有缺少必填参数或需要在多个数据库中选择时才会请用户补充。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -242,7 +242,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "request_system_task",
-            "description": "当用户明确要执行系统任务（运维类任务）时调用此工具。系统任务与导出任务、查询任务完全不同，只有运维类操作才属于系统任务。需要指定系统任务名称和参数值。注意：1、必须从用户的自然语言描述中提取所有可能的参数值填入params对象；2、params的键名必须使用list_system_tasks返回的参数配置中的name字段值，不要自己编造参数名；3、如果之前没有调用list_system_tasks，请先调用以获取正确的参数名；4、如果任务关联了多个数据库连接，请从用户描述中提取数据库名称填入database_name；5、API类型任务参数齐全时会自动执行，结果中包含完整的请求信息（request字段：方法/URL/请求头/请求参数/请求体）、完整响应body（response/response_raw字段）和mapping_summary（映射摘要）字段，请基于这些完整信息用自然语言告诉用户执行结果；6、多参数处理：如果用户通过换行给出了多个值（如多个SN号），且参数支持列表(IN查询)，则将多个值用逗号分隔填入同一个参数；如果参数不支持列表或用户要求分别执行，则需要多次调用本工具分别执行，系统会自动并行执行；7、对于type=enum的枚举参数（常用于环境切换），params中传入options里的label或value均可，若用户未明确指定环境，必须主动询问用户选择哪个环境后再调用。",
+            "description": "当用户明确要执行系统任务（运维类任务）时调用此工具。系统任务与导出任务、查询任务完全不同，只有运维类操作才属于系统任务。需要指定系统任务名称和参数值。注意：1、必须从用户的自然语言描述中提取所有可能的参数值填入params对象；2、params的键名必须使用list_system_tasks返回的参数配置中的name字段值，不要自己编造参数名；3、只有当任务名称不确定或不知道参数名时才调用list_system_tasks；用户已明确任务名称时直接调用本工具，不要先列出任务让用户重复选择；4、如果任务关联了多个数据库连接，请从用户描述中提取数据库名称填入database_name；5、任务参数齐全时会直接执行，结果中包含完整的请求信息（request字段：方法/URL/请求头/请求参数/请求体）、完整响应body（response/response_raw字段）和mapping_summary（映射摘要）字段，请基于这些完整信息用自然语言告诉用户执行结果；6、多参数处理：如果用户通过换行给出了多个值（如多个SN号），且参数支持列表(IN查询)，则将多个值用逗号分隔填入同一个参数；如果参数不支持列表或用户要求分别执行，则需要多次调用本工具分别执行，系统会自动并行执行；7、对于type=enum的枚举参数（常用于环境切换），params中传入options里的label或value均可，若用户未明确指定环境，必须主动询问用户选择哪个环境后再调用。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1592,7 +1592,7 @@ class AiService:
         from app.services.system_task_service import SystemTaskService
         task_name = args.get('system_task_name', '')
         desc = args.get('description', '')
-        params = args.get('params', {})
+        params = args.get('params') or {}
         if isinstance(params, str):
             try:
                 params = json.loads(params)
@@ -1736,11 +1736,12 @@ class AiService:
         # API类型任务 + 参数齐全 + 不需要选择数据库 → 直接同步执行
         is_api_task = (task.task_type or 'sql') == 'api'
         is_script_task = (task.task_type or 'sql') == 'script'
-        # 检查所有配置的参数是否都有值（不仅仅是required的）
+        # 只按必填参数判断是否可执行，可选参数留空不阻塞
+        required_params = [p for p in task_params if p.get('required')] if task_params else []
         if task_params:
             all_params_filled = all(
                 p.get('name') in params and params[p.get('name')] not in (None, '')
-                for p in task_params
+                for p in required_params
             )
         else:
             # 没有配置参数，检查body中是否有未替换的占位符
@@ -1841,6 +1842,7 @@ class AiService:
                 logger.warning(f'本地脚本任务同步执行失败: {e}')
                 pass
 
+        hint = AiService._build_missing_params_hint(task_params, params, needs_dbSelection, databases_info)
         return {
             'action_type': 'system_task',
             'task_id': task.id,
@@ -1854,7 +1856,7 @@ class AiService:
             'response_mapping': response_mapping_info,
             'ai_notes': ai_notes,
             'confirm_message': f'AI 准备执行系统任务：{task.name}',
-            '_hint': AiService._build_missing_params_hint(task_params, params, needs_dbSelection, databases_info),
+            '_hint': hint or '必填参数齐全，系统已直接开始执行该任务，请告知用户任务正在执行，不要再次询问是否确认。',
         }
 
     @staticmethod
@@ -1879,6 +1881,9 @@ class AiService:
         """构建缺失参数提示，帮助AI询问用户补充信息"""
         missing = []
         for p in (task_params or []):
+            # 只提示必填参数，可选参数留空由任务默认逻辑处理
+            if not p.get('required'):
+                continue
             name = p.get('name')
             val = params.get(name) if params else None
             if val in (None, ''):
@@ -1935,7 +1940,7 @@ class AiService:
         from app.services.lookup_service import LookupService
         lookup_name = args.get('lookup_name', '')
         desc = args.get('description', '')
-        params = args.get('params', {})
+        params = args.get('params') or {}
         if isinstance(params, str):
             # AI可能将params传为字符串，尝试解析为dict
             try:

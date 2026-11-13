@@ -2935,6 +2935,16 @@ async function handleToolResults(toolResults) {
       requestActionTypes.add(r.action_type)
     }
   }
+  // 已确定具体任务时，收起之前轮次遗留的同类选择卡片，避免任务都开始执行了还挂着「让用户选择」的框
+  if (requestActionTypes.size > 0) {
+    for (const m of messages.value) {
+      if (m._type === 'select_options' && !m._dismissed && requestActionTypes.has(m._action_type)
+          && (!m._selected || m._selected.length === 0)) {
+        m._dismissed = true
+        saveMessageState(m)
+      }
+    }
+  }
   for (const tr of toolResults) {
     const result = tr.result
     // 工单创建：成功显示已创建卡片，失败/缺失参数由AI自然语言询问用户（不创建卡片）
@@ -2962,22 +2972,25 @@ async function handleToolResults(toolResults) {
         continue
       }
       // 系统任务：缺少参数或需要选择数据库时弹出参数对话框；
-      // 参数齐全时保留一次确认卡片，不自动执行（写操作确认策略）
+      // 必填参数齐全且数据库已确定时直接执行，不再弹确认卡片
       if (result.action_type === 'system_task' && !result.error) {
         const params = result.params || []
         const paramsValues = result.params_values || {}
         const databases = result.databases || []
         const databaseId = result.database_id || null
-        const allParamsFilled = params.length === 0 || params.every(p => {
-          const val = paramsValues[p.name]
-          return val !== undefined && val !== null && val !== ''
-        })
+        // 只有必填参数缺失才需要用户补充，可选参数留空不影响执行
+        const missingRequired = params
+          .filter(p => p.required === true || p.required === 'true')
+          .filter(p => {
+            const val = paramsValues[p.name]
+            return val === undefined || val === null || val === ''
+          })
         const needsDbSelection = databases.length > 1 && !databaseId
-        if (!allParamsFilled || needsDbSelection) {
+        if (missingRequired.length > 0 || needsDbSelection) {
           const paramMsg = {
             id: tr.message_id || Date.now() + Math.random(),
             role: 'assistant',
-            content: needsDbSelection && !allParamsFilled
+            content: needsDbSelection && missingRequired.length > 0
               ? `匹配到系统任务「${result.task_name}」，需要填写参数并选择数据库连接：`
               : needsDbSelection
                 ? `匹配到系统任务「${result.task_name}」，该任务关联多个数据库，请选择执行数据库：`
@@ -3003,6 +3016,32 @@ async function handleToolResults(toolResults) {
           openSystemTaskParamDialog(paramMsg)
           continue
         }
+        // 任务已明确、必填参数齐全：直接执行
+        const autoMsg = {
+          id: tr.message_id || Date.now() + Math.random(),
+          role: 'assistant',
+          content: `正在执行系统任务：${result.task_name || '系统任务'}`,
+          _type: 'tool',
+          _dismissed: false,
+          tool_data: result,
+          _selected: [result.task_id],
+          _selectedScripts: [{
+            id: result.task_id,
+            name: result.task_name || '系统任务',
+            task_type: result.task_type || 'sql',
+            params: params,
+          }],
+          _action_type: 'system_task',
+          _param_values: paramsValues,
+          _params_checked: true,
+          _databases: databases,
+          _database_id: databaseId,
+        }
+        messages.value.push(autoMsg)
+        await nextTick()
+        saveMessageState(autoMsg)
+        doExecuteSystemTask(autoMsg)
+        continue
       }
       // 信息查询：只有show_all_fields=true时才创建卡片，否则由AI二次回复自然语言回答
       if (result.action_type === 'lookup') {
@@ -4526,18 +4565,17 @@ async function confirmSystemTask(msg) {
   msg._action_type = 'system_task'
 
   const hasParams = td.params && td.params.length > 0
-  const hasRequiredParams = hasParams && td.params.some(p => p.required)
   const paramsValues = td.params_values || {}
   const databases = td.databases || []
   const databaseId = td.database_id || null
   const needsDbSelection = databases.length > 1 && !databaseId
 
-  // 检查必填参数是否都有值
+  // 只校验必填参数，可选参数留空不阻塞执行
   const missingRequired = hasParams && td.params
-    .filter(p => p.required)
+    .filter(p => p.required === true || p.required === 'true')
     .some(p => !paramsValues[p.name] && paramsValues[p.name] !== 0)
 
-  if ((hasParams && (missingRequired || Object.keys(paramsValues).length === 0)) || needsDbSelection) {
+  if (missingRequired || needsDbSelection) {
     // 有必填参数未填写，或需要选择数据库，弹出参数设置对话框
     msg._param_values = paramsValues
     msg._databases = databases
