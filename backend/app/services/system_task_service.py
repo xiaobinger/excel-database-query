@@ -860,10 +860,11 @@ class SystemTaskService:
         return re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', text or '')
 
     @staticmethod
-    def _read_channel(channel, timeout: float, quiet: float = 1.2, stop_when=None) -> str:
-        """读取交互式通道输出：命中 stop_when、输出安静 quiet 秒或超时即返回"""
+    def _read_channel(channel, timeout: float, quiet: float = 1.2, stop_when=None, min_wait: float = 0) -> str:
+        """读取交互式通道输出：命中 stop_when、输出安静 quiet 秒（且已运行 min_wait 秒）或超时即返回"""
         chunks = []
-        deadline = time.time() + timeout
+        start_at = time.time()
+        deadline = start_at + timeout
         last_data_at = None
         while time.time() < deadline:
             if channel.recv_ready():
@@ -874,14 +875,14 @@ class SystemTaskService:
                     if stop_when and stop_when(''.join(chunks)):
                         break
             else:
-                # 输出安静一段时间视为本次响应结束
-                if last_data_at and time.time() - last_data_at >= quiet:
+                # 输出安静一段时间（且已运行够 min_wait 秒）视为本次响应结束
+                if last_data_at and time.time() - last_data_at >= quiet and time.time() - start_at >= min_wait:
                     break
                 time.sleep(0.2)
         return ''.join(chunks)
 
     @staticmethod
-    def _capture_jump_login_banner(jump_config, wait_seconds: float = 8.0) -> str:
+    def _capture_jump_login_banner(jump_config, wait_seconds: float = 10.0) -> str:
         """以交互式 shell 登录跳板机，捕获登录欢迎信息/堡垒机主机菜单后立即断开"""
         import paramiko
 
@@ -892,7 +893,9 @@ class SystemTaskService:
             client.connect(**SystemTaskService._ssh_connect_kwargs(jump_config))
             channel = client.invoke_shell(width=200, height=60)
             channel.settimeout(1.0)
-            return SystemTaskService._read_channel(channel, wait_seconds, quiet=1.5)
+            # 发换行触发菜单显示（部分堡垒机需用户输入才展示主机列表）
+            channel.send('\n')
+            return SystemTaskService._read_channel(channel, wait_seconds, quiet=3.0, min_wait=3.0)
         finally:
             if channel is not None:
                 try:
@@ -1082,9 +1085,11 @@ class SystemTaskService:
 
             channel = client.invoke_shell(width=200, height=60)
             channel.settimeout(1.0)
+            # 发换行触发菜单显示（部分堡垒机需用户输入才展示主机列表）
+            channel.send('\n')
 
-            menu_timeout = min(12.0, max(5.0, timeout / 3.0))
-            menu_text = SystemTaskService._read_channel(channel, menu_timeout, quiet=1.5)
+            menu_timeout = min(15.0, max(6.0, timeout / 2.0))
+            menu_text = SystemTaskService._read_channel(channel, menu_timeout, quiet=3.0, min_wait=3.0)
             entries = SystemTaskService._parse_jump_menu(menu_text)
             if not entries:
                 SystemTaskService._cache_bastion_menu_support(jump_config, False)
@@ -1104,7 +1109,7 @@ class SystemTaskService:
             # 输入菜单序号跳转到目标机，并等待目标机 shell 就绪
             channel.send(str(entry['index']) + '\n')
             ready_timeout = min(20.0, max(5.0, timeout / 2.0))
-            SystemTaskService._read_channel(channel, ready_timeout, quiet=1.5)
+            SystemTaskService._read_channel(channel, ready_timeout, quiet=3.0, min_wait=2.0)
 
             token = uuid.uuid4().hex[:12]
             begin_marker = f'__BASTION_BEGIN_{token}__'
