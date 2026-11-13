@@ -23,6 +23,8 @@ class SystemTask(db.Model):
     api_url = db.Column(db.String(500), comment='API地址')
     api_headers = db.Column(db.Text, comment='请求头(JSON)')
     api_body = db.Column(db.Text, comment='请求体模板(JSON或字符串)')
+    api_body_type = db.Column(db.String(20), default='json', comment='请求体类型: none/json/raw/form_urlencoded/form_data')
+    api_body_params = db.Column(db.Text, comment='表单字段列表(JSON): [{"key":"","value":"","enabled":true}]')
     api_timeout = db.Column(db.Integer, default=30, comment='API超时时间(秒)')
     ssh_config_id = db.Column(db.Integer, db.ForeignKey('ssh_configs.id'), nullable=True, comment='SSH跳板机配置ID，配置后API请求通过跳板机执行curl')
     target_ssh_config_id = db.Column(db.Integer, db.ForeignKey('ssh_configs.id'), nullable=True, comment='目标机器SSH配置ID，通过跳板机登录目标机执行curl')
@@ -84,6 +86,18 @@ class SystemTask(db.Model):
     def set_api_headers(self, headers: dict):
         self.api_headers = json.dumps(headers, ensure_ascii=False) if headers else None
 
+    def get_api_body_params(self) -> list:
+        if self.api_body_params:
+            try:
+                data = json.loads(self.api_body_params)
+                return data if isinstance(data, list) else []
+            except (json.JSONDecodeError, TypeError):
+                return []
+        return []
+
+    def set_api_body_params(self, params: list):
+        self.api_body_params = json.dumps(params, ensure_ascii=False) if params else None
+
     def get_params_config(self) -> list:
         if self.params_config:
             try:
@@ -141,6 +155,8 @@ class SystemTask(db.Model):
             'api_url': self.api_url,
             'api_headers': self.get_api_headers(),
             'api_body': self.api_body,
+            'api_body_type': self.api_body_type or 'json',
+            'api_body_params': self.get_api_body_params(),
             'api_timeout': self.api_timeout,
             'ssh_config_id': self.ssh_config_id,
             'target_ssh_config_id': self.target_ssh_config_id,

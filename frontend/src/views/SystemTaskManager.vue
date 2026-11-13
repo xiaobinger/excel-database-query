@@ -50,8 +50,8 @@
                     跳板机 {{ sshConfigLabel(row.ssh_config_id) }}
                     <template v-if="row.target_ssh_config_id"> → 目标机 {{ sshConfigLabel(row.target_ssh_config_id) }}</template>
                   </div>
-                  <div v-if="row.api_body" style="color: #909399; font-size: 12px; margin-top: 2px">
-                    Body: {{ row.api_body.length > 50 ? row.api_body.substring(0, 50) + '...' : row.api_body }}
+                  <div v-if="apiBodySummary(row)" style="color: #909399; font-size: 12px; margin-top: 2px">
+                    Body: {{ apiBodySummary(row) }}
                   </div>
                 </span>
                 <span v-else-if="row.task_type === 'script'">
@@ -371,7 +371,75 @@
               />
             </div>
           </el-form-item>
-          <el-form-item label="请求体模板">
+          <el-form-item label="请求体类型">
+            <div style="width: 100%">
+              <el-radio-group v-model="form.api_body_type">
+                <el-radio-button value="none">none</el-radio-button>
+                <el-radio-button value="form_urlencoded">x-www-form-urlencoded</el-radio-button>
+                <el-radio-button value="form_data">form-data</el-radio-button>
+                <el-radio-button value="json">JSON</el-radio-button>
+                <el-radio-button value="raw">Raw</el-radio-button>
+              </el-radio-group>
+              <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                <template v-if="form.api_body_type === 'form_urlencoded'">
+                  以 application/x-www-form-urlencoded 提交（参考 Postman 表单），Content-Type 自动设置；字段值支持参数占位符
+                </template>
+                <template v-else-if="form.api_body_type === 'form_data'">
+                  以 multipart/form-data 提交，适合文件/长文本字段；Content-Type 与 boundary 由发送端自动生成
+                </template>
+                <template v-else-if="form.api_body_type === 'json'">
+                  以 JSON 提交，支持参数占位符；启用签名且附加到 body 时会自动并入 JSON
+                </template>
+                <template v-else-if="form.api_body_type === 'raw'">
+                  原样提交文本，需自行设置 Content-Type（如 application/xml）
+                </template>
+                <template v-else>不发送请求体</template>
+              </div>
+            </div>
+          </el-form-item>
+          <el-form-item
+            v-if="form.api_body_type === 'form_urlencoded' || form.api_body_type === 'form_data'"
+            label="表单字段"
+          >
+            <div style="width: 100%">
+              <div class="param-row" style="color: #909399; font-size: 12px; margin-bottom: 4px">
+                <span style="width: 28px; text-align: center">启用</span>
+                <span style="width: 220px">Key</span>
+                <span style="flex: 1">Value（支持参数占位符，可粘贴 base64 长串）</span>
+                <span style="width: 32px"></span>
+              </div>
+              <div
+                v-for="(p, idx) in form.api_body_params"
+                :key="idx"
+                class="param-row"
+                style="align-items: flex-start"
+              >
+                <div style="width: 28px; padding-top: 6px">
+                  <el-checkbox v-model="p.enabled" />
+                </div>
+                <el-input v-model="p.key" placeholder="Key" style="width: 220px" />
+                <el-input
+                  v-model="p.value"
+                  type="textarea"
+                  :autosize="{ minRows: 1, maxRows: 4 }"
+                  placeholder="Value"
+                  style="flex: 1"
+                />
+                <el-button type="danger" text @click="form.api_body_params.splice(idx, 1)">
+                  <i class="fas fa-times"></i>
+                </el-button>
+              </div>
+              <el-button
+                type="primary"
+                text
+                size="small"
+                @click="form.api_body_params.push({ key: '', value: '', enabled: true })"
+              >
+                <i class="fas fa-plus"></i> 添加字段
+              </el-button>
+            </div>
+          </el-form-item>
+          <el-form-item v-if="form.api_body_type === 'json' || form.api_body_type === 'raw'" label="请求体模板">
             <div class="json-toolbar">
               <el-button size="small" text @click="jsonBeautifyField('api_body')">
                 <i class="fas fa-align-left"></i> 美化
@@ -1043,6 +1111,8 @@ const defaultForm = {
   api_url: '',
   api_headers: {},
   api_body: '',
+  api_body_type: 'json',
+  api_body_params: [],
   api_timeout: 30,
   api_exec_mode: 'direct',
   ssh_config_id: null,
@@ -1082,6 +1152,19 @@ async function fetchSshConfigs() {
 function sshConfigLabel(id) {
   const config = sshConfigs.value.find(item => item.id === id)
   return config ? `${config.name}(${config.host})` : (id ? `#${id}` : '-')
+}
+
+// API 任务列表的 Body 摘要（表单类型显示字段数量，JSON/Raw 显示片段）
+function apiBodySummary(row) {
+  const bodyType = row.api_body_type || 'json'
+  if (bodyType === 'none') return ''
+  if (bodyType === 'form_urlencoded' || bodyType === 'form_data') {
+    const count = (row.api_body_params || []).filter(p => (p.key || '').trim()).length
+    return count ? `${bodyType === 'form_data' ? 'form-data' : 'x-www-form-urlencoded'} (${count} 个字段)` : ''
+  }
+  const body = row.api_body || ''
+  if (!body) return ''
+  return body.length > 50 ? `${body.substring(0, 50)}...` : body
 }
 
 // 跳板机/目标机分离：目标机列表通过跳板机实测登录后自动拉取
@@ -1242,6 +1325,10 @@ function presetHeader(preset) {
   }
   existing['Content-Type'] = ctMap[preset]
   form.api_headers = existing
+  // 同步切换请求体类型，避免 Header 与 Body 类型不一致
+  if (preset === 'form') form.api_body_type = 'form_urlencoded'
+  else if (preset === 'multipart') form.api_body_type = 'form_data'
+  else if (preset === 'json') form.api_body_type = 'json'
   syncEntriesFromHeaders()
 }
 
@@ -1437,6 +1524,12 @@ function openDialog(row) {
       api_url: row.api_url || '',
       api_headers: row.api_headers || {},
       api_body: row.api_body || '',
+      api_body_type: row.api_body_type || 'json',
+      api_body_params: (row.api_body_params || []).map(p => ({
+        key: p.key || '',
+        value: p.value || '',
+        enabled: p.enabled !== false,
+      })),
       api_timeout: row.api_timeout || 30,
       api_exec_mode: row.ssh_config_id ? 'ssh' : 'direct',
       ssh_config_id: row.ssh_config_id || null,
@@ -1524,6 +1617,8 @@ async function handleSubmit() {
       api_method: form.api_method,
       api_url: form.api_url,
       api_body: form.api_body,
+      api_body_type: form.api_body_type,
+      api_body_params: (form.api_body_params || []).filter(p => (p.key || '').trim()),
       api_timeout: form.api_timeout,
       ssh_config_id: form.task_type === 'api' && form.api_exec_mode === 'ssh' ? form.ssh_config_id : null,
       target_ssh_config_id: form.task_type === 'api' && form.api_exec_mode === 'ssh' ? form.target_ssh_config_id : null,

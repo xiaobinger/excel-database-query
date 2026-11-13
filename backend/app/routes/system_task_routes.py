@@ -130,6 +130,7 @@ def create_system_task():
         api_method=data.get('api_method', 'POST'),
         api_url=data.get('api_url', ''),
         api_body=data.get('api_body', ''),
+        api_body_type=data.get('api_body_type', 'json'),
         api_timeout=data.get('api_timeout', 30),
         ssh_config_id=ssh_config_id,
         target_ssh_config_id=target_ssh_config_id,
@@ -152,6 +153,8 @@ def create_system_task():
         task.set_database_ids(data['database_ids'])
     if data.get('api_headers'):
         task.set_api_headers(data['api_headers'])
+    if 'api_body_params' in data:
+        task.set_api_body_params(data['api_body_params'])
     if data.get('params_config'):
         task.set_params_config(data['params_config'])
     if data.get('response_mapping'):
@@ -212,7 +215,7 @@ def update_system_task(task_id):
 
     simple_fields = [
         'name', 'description', 'task_type', 'script_id', 'database_connection_id',
-        'api_method', 'api_url', 'api_body', 'api_timeout', 'ssh_config_id', 'target_ssh_config_id',
+        'api_method', 'api_url', 'api_body', 'api_body_type', 'api_timeout', 'ssh_config_id', 'target_ssh_config_id',
         'script_type', 'script_path', 'script_timeout',
         'param_source_enabled', 'param_source_script_id', 'param_source_db_id',
         'ai_notes',
@@ -227,6 +230,8 @@ def update_system_task(task_id):
         task.set_database_ids(data['database_ids'])
     if 'api_headers' in data:
         task.set_api_headers(data['api_headers'])
+    if 'api_body_params' in data:
+        task.set_api_body_params(data['api_body_params'])
     if 'params_config' in data:
         task.set_params_config(data['params_config'])
     if 'response_mapping' in data:

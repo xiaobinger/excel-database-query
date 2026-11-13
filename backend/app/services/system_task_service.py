@@ -546,92 +546,169 @@ class SystemTaskService:
         )
 
     @staticmethod
+    def _resolve_body_type(system_task: SystemTask) -> str:
+        """归一化请求体类型（参考 Postman 的 Body 类型选择，兼容旧数据）"""
+        raw = (getattr(system_task, 'api_body_type', None) or '').strip().lower()
+        aliases = {
+            'form': 'form_urlencoded',
+            'urlencoded': 'form_urlencoded',
+            'x-www-form-urlencoded': 'form_urlencoded',
+            'formdata': 'form_data',
+            'multipart': 'form_data',
+            'multipart/form-data': 'form_data',
+            'text': 'raw',
+        }
+        if raw in ('none', 'json', 'raw', 'form_urlencoded', 'form_data'):
+            return raw
+        if raw in aliases:
+            return aliases[raw]
+        return 'json' if (system_task.api_body or '').strip() else 'none'
+
+    @staticmethod
+    def _get_enabled_form_fields(system_task: SystemTask) -> List[Dict[str, str]]:
+        """读取启用中的表单字段（Key/Value），过滤空 key 与未勾选行"""
+        fields = []
+        for item in system_task.get_api_body_params() or []:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get('key') or '').strip()
+            if not key or item.get('enabled') is False:
+                continue
+            value = item.get('value')
+            fields.append({'key': key, 'value': '' if value is None else str(value)})
+        return fields
+
+    @staticmethod
     def _prepare_api_request(execution: SystemTaskExecution, system_task: SystemTask,
                              params_values: Dict[str, Any]) -> Dict[str, Any]:
-        """构造最终请求（占位符替换、参数归一化、加签），直连与SSH模式共用"""
+        """构造最终请求（占位符替换、参数归一化、Body序列化、加签），直连与SSH模式共用
+
+        Body 类型参考 Postman：none / json / raw / form_urlencoded / form_data
+        """
+        from urllib.parse import urlencode
+
         url = system_task.api_url
         method = (system_task.api_method or 'POST').upper()
         headers = dict(system_task.get_api_headers() or {})
         timeout = system_task.api_timeout or 30
+        body_type = SystemTaskService._resolve_body_type(system_task)
 
         request_params = dict(params_values) if params_values else {}
         body = system_task.api_body or ''
+        form_fields = SystemTaskService._get_enabled_form_fields(system_task) \
+            if body_type in ('form_urlencoded', 'form_data') else []
         used_param_keys = set()
 
-        # Replace placeholders in body {{param}}
-        if body and params_values:
+        def fill_placeholders(value: Any) -> str:
+            """替换 {{param}} 占位符，并记录已使用的参数"""
+            text = '' if value is None else str(value)
+            if not params_values or not text:
+                return text
             for key, val in params_values.items():
                 placeholder = f'{{{{{key}}}}}'
-                if placeholder in body:
-                    body = body.replace(placeholder, str(val))
+                if placeholder in text:
+                    text = text.replace(placeholder, str(val))
                     used_param_keys.add(key)
+            return text
 
-        # Replace placeholders in url
-        if params_values:
-            for key, val in params_values.items():
-                placeholder = f'{{{{{key}}}}}'
-                if placeholder in url:
-                    url = url.replace(placeholder, str(val))
-                    used_param_keys.add(key)
+        body = fill_placeholders(body)
+        url = fill_placeholders(url)
+        for field in form_fields:
+            field['value'] = fill_placeholders(field.get('value'))
 
         # 从request_params中移除已用于URL/body替换的参数，避免重复附加
         for key in used_param_keys:
             request_params.pop(key, None)
 
         execution.progress = 30
-        execution.add_log(f'准备请求: {method} {url}')
+        execution.add_log(f'准备请求: {method} {url}（请求体类型: {body_type}）')
         db.session.commit()
         update_execution_progress(execution.execution_id, 30, f'准备请求: {method} {url}')
 
         # Signing（参考 buildCurl 签名算法）
         if system_task.sign_enabled and system_task.sign_key:
             sign_name = system_task.sign_param_name or 'sign'
-            sign = SystemTaskService._compute_sign(
-                request_params, body, headers,
-                system_task.sign_key, system_task.sign_method,
-                sign_param_name=sign_name
-            )
+            if body_type in ('form_urlencoded', 'form_data'):
+                # 表单字段本身就是签名参数，直接用原始值参与排序，避免被URL编码干扰
+                sign_params = dict(request_params)
+                sign_params.update({f['key']: f['value'] for f in form_fields})
+                sign = SystemTaskService._compute_sign(
+                    sign_params, '', headers,
+                    system_task.sign_key, system_task.sign_method,
+                    sign_param_name=sign_name
+                )
+            else:
+                sign = SystemTaskService._compute_sign(
+                    request_params, body, headers,
+                    system_task.sign_key, system_task.sign_method,
+                    sign_param_name=sign_name
+                )
             append_type = system_task.sign_append_type or 'query'
 
             if append_type == 'query':
                 separator = '&' if '?' in url else '?'
                 url = f"{url}{separator}{sign_name}={sign}"
             elif append_type == 'body':
-                try:
-                    body_obj = json.loads(body) if body else {}
-                    if isinstance(body_obj, dict):
-                        body_obj[sign_name] = sign
-                        body = json.dumps(body_obj, ensure_ascii=False)
-                except (json.JSONDecodeError, TypeError):
-                    if 'application/x-www-form-urlencoded' in headers.get('Content-Type', ''):
-                        body = f"{body}&{sign_name}={sign}" if body else f"{sign_name}={sign}"
-                    else:
-                        execution.add_log('签名附加到body失败，body不是有效的JSON', 'warning')
+                if body_type in ('form_urlencoded', 'form_data'):
+                    form_fields.append({'key': sign_name, 'value': sign})
+                else:
+                    try:
+                        body_obj = json.loads(body) if body else {}
+                        if isinstance(body_obj, dict):
+                            body_obj[sign_name] = sign
+                            body = json.dumps(body_obj, ensure_ascii=False)
+                    except (json.JSONDecodeError, TypeError):
+                        if body_type == 'raw' or 'application/x-www-form-urlencoded' in headers.get('Content-Type', ''):
+                            body = f"{body}&{sign_name}={sign}" if body else f"{sign_name}={sign}"
+                        else:
+                            execution.add_log('签名附加到body失败，body不是有效的JSON', 'warning')
             elif append_type == 'header':
                 headers[sign_name] = sign
 
             execution.add_log(f'已生成签名并附加到{append_type}')
 
-        # Parse body for JSON content-type
-        request_body = body
+        # 按 Body 类型序列化请求体
+        request_body = None
         content_type = headers.get('Content-Type', '')
-        if content_type.startswith('application/json') and body:
-            try:
-                request_body = json.loads(body)
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        # 如果body为空但有params，且是JSON请求，将params作为JSON body发送
-        if not body and request_params and content_type.startswith('application/json'):
-            request_body = request_params
+        if body_type == 'none' or method in ('GET', 'HEAD', 'OPTIONS'):
+            request_body = None
+        elif body_type == 'form_urlencoded':
+            headers['Content-Type'] = 'application/x-www-form-urlencoded'
+            request_body = urlencode([(f['key'], f['value']) for f in form_fields]) if form_fields else None
             request_params = {}
+        elif body_type == 'form_data':
+            # multipart 边界由发送端自动生成，需移除手写的 Content-Type
+            for header_key in [k for k in headers if str(k).lower() == 'content-type']:
+                headers.pop(header_key, None)
+            request_body = None
+            request_params = {}
+        elif body_type == 'json':
+            request_body = body or None
+            if body:
+                try:
+                    request_body = json.loads(body)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            elif request_params and content_type.startswith('application/json'):
+                # 兼容旧配置：body为空但声明了JSON Content-Type，将参数作为JSON body发送
+                request_body = request_params
+                request_params = {}
+        else:  # raw
+            request_body = body or None
 
         request_info = {
             'method': method,
             'url': url,
             'headers': dict(headers),
+            'body_type': body_type,
+            # 超长字段值（如 base64 图片）只保留摘要，避免执行结果落库过大
+            'form_fields': [
+                {'key': f['key'], 'value': SystemTaskService._brief_value(f['value'])}
+                for f in form_fields
+            ],
             'request_params': request_params,
-            'request_body': request_body,
+            'request_body': request_body if not isinstance(request_body, str)
+            else SystemTaskService._brief_value(request_body),
             'via': 'direct',
         }
         return {
@@ -639,6 +716,8 @@ class SystemTaskService:
             'url': url,
             'headers': headers,
             'timeout': timeout,
+            'body_type': body_type,
+            'form_fields': form_fields,
             'request_params': request_params,
             'request_body': request_body,
             'request_info': request_info,
@@ -654,31 +733,40 @@ class SystemTaskService:
         request_params = prepared['request_params']
         request_body = prepared['request_body']
 
+        body_kwargs = SystemTaskService._api_body_kwargs(prepared)
+
         if method == 'GET':
             return requests.get(url, headers=headers, params=request_params, timeout=timeout)
         if method == 'POST':
-            if isinstance(request_body, dict):
-                return requests.post(url, headers=headers, json=request_body, timeout=timeout)
-            if request_body:
-                return requests.post(url, headers=headers, data=request_body, timeout=timeout)
-            if request_params:
-                return requests.post(url, headers=headers, data=request_params, timeout=timeout)
-            return requests.post(url, headers=headers, timeout=timeout)
+            return requests.post(url, headers=headers, timeout=timeout, **body_kwargs)
         if method == 'PUT':
-            if isinstance(request_body, dict):
-                return requests.put(url, headers=headers, json=request_body, timeout=timeout)
-            if request_body:
-                return requests.put(url, headers=headers, data=request_body, timeout=timeout)
-            if request_params:
-                return requests.put(url, headers=headers, data=request_params, timeout=timeout)
-            return requests.put(url, headers=headers, timeout=timeout)
+            return requests.put(url, headers=headers, timeout=timeout, **body_kwargs)
         if method == 'DELETE':
-            if isinstance(request_body, dict):
-                return requests.delete(url, headers=headers, json=request_body, timeout=timeout)
-            if request_body:
-                return requests.delete(url, headers=headers, data=request_body, timeout=timeout)
+            if body_kwargs:
+                return requests.delete(url, headers=headers, timeout=timeout, **body_kwargs)
             return requests.delete(url, headers=headers, params=request_params, timeout=timeout)
         raise ValueError(f'不支持的HTTP方法: {method}')
+
+    @staticmethod
+    def _api_body_kwargs(prepared: Dict[str, Any]) -> Dict[str, Any]:
+        """把准备好的请求体转换为 requests 关键字参数（JSON / 表单 / multipart / 原始文本）"""
+        body_type = prepared.get('body_type') or 'json'
+        form_fields = prepared.get('form_fields') or []
+        request_body = prepared.get('request_body')
+        request_params = prepared.get('request_params') or {}
+
+        if body_type == 'form_data':
+            # requests 传 files 时为字段列表才能发送 multipart（支持重复 key）
+            if not form_fields:
+                return {}
+            return {'files': [(f['key'], (None, f['value'])) for f in form_fields]}
+        if isinstance(request_body, dict):
+            return {'json': request_body}
+        if request_body:
+            return {'data': request_body}
+        if request_params:
+            return {'data': request_params}
+        return {}
 
     @staticmethod
     def _is_http_url(url: str) -> bool:
@@ -688,6 +776,14 @@ class SystemTaskService:
         except ValueError:
             return False
         return parsed.scheme in ('http', 'https') and bool(parsed.hostname)
+
+    @staticmethod
+    def _brief_value(value: Any, limit: int = 500) -> str:
+        """超长值摘要（用于执行日志/结果落库，避免 base64 图片等撑爆数据库）"""
+        text = '' if value is None else str(value)
+        if len(text) <= limit:
+            return text
+        return f'{text[:100]}...共{len(text)}字符'
 
     @staticmethod
     def _has_header(headers: Dict[str, str], name: str) -> bool:
@@ -737,9 +833,25 @@ class SystemTaskService:
         timeout = int(prepared['timeout'] or 30)
         request_params = dict(prepared['request_params'] or {})
         request_body = prepared['request_body']
+        body_type = prepared.get('body_type') or 'json'
+        form_fields = prepared.get('form_fields') or []
         body_text = ''
+        form_args = []
 
-        if method == 'GET':
+        def preview_value(value: str) -> str:
+            """脱敏预览时截断超长表单值（如 base64 图片）"""
+            if not mask_sensitive or len(value) <= 200:
+                return value
+            return f'{value[:60]}...共{len(value)}字符'
+
+        if body_type in ('form_urlencoded', 'form_data') and method not in ('GET', 'HEAD', 'OPTIONS'):
+            for field in form_fields:
+                if body_type == 'form_urlencoded':
+                    form_args.extend(['--data-urlencode',
+                                      f"{field['key']}={preview_value(field['value'])}"])
+                else:
+                    form_args.extend(['-F', f"{field['key']}={preview_value(field['value'])}"])
+        elif method == 'GET':
             url = SystemTaskService._append_query_params(url, request_params)
             request_params = {}
         elif method == 'DELETE':
@@ -770,7 +882,9 @@ class SystemTaskService:
         ]
         for key, value in headers.items():
             args.extend(['-H', f'{key}: {value}'])
-        if body_text:
+        if form_args:
+            args.extend(form_args)
+        elif body_text:
             args.extend(['--data-binary', body_text])
         args.extend(['-w', '\n__CURL_META__:%{http_code}:%{content_type}:%{time_total}'])
         args.append(url)
