@@ -856,8 +856,18 @@ class SystemTaskService:
 
     @staticmethod
     def _strip_ansi(text: str) -> str:
-        """去掉终端 ANSI 控制序列"""
-        return re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', text or '')
+        """去掉终端 ANSI 控制序列（参考 buildCurl GateShell 实现）"""
+        if not text:
+            return ''
+        # OSC: ESC ] ... BEL 或 ESC ] ... ESC \
+        text = re.sub(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)', '', text)
+        # CSI: ESC [ ... 终止符
+        text = re.sub(r'\x1b\[[0-9;?]*[ -/]*[@-~]', '', text)
+        # Charset designation: ESC ( X / ESC ) X
+        text = re.sub(r'\x1b[()][A-Za-z0-9]', '', text)
+        # Single-char escapes
+        text = re.sub(r'\x1b[=>78MDEHc]', '', text)
+        return text.replace('\r\n', '\n').replace('\r', '\n')
 
     @staticmethod
     def _read_channel(channel, timeout: float, quiet: float = 1.2, stop_when=None, min_wait: float = 0) -> str:
@@ -882,7 +892,7 @@ class SystemTaskService:
         return ''.join(chunks)
 
     @staticmethod
-    def _capture_jump_login_banner(jump_config, wait_seconds: float = 10.0) -> str:
+    def _capture_jump_login_banner(jump_config, wait_seconds: float = 25.0) -> str:
         """以交互式 shell 登录跳板机，捕获登录欢迎信息/堡垒机主机菜单后立即断开"""
         import paramiko
 
@@ -891,11 +901,15 @@ class SystemTaskService:
         channel = None
         try:
             client.connect(**SystemTaskService._ssh_connect_kwargs(jump_config))
-            channel = client.invoke_shell(width=200, height=60)
+            # GateShell 需要 pty 才能进入 TUI 菜单
+            channel = client.get_transport().open_session(timeout=10)
             channel.settimeout(1.0)
-            # 发换行触发菜单显示（部分堡垒机需用户输入才展示主机列表）
-            channel.send('\n')
-            return SystemTaskService._read_channel(channel, wait_seconds, quiet=3.0, min_wait=3.0)
+            channel.get_pty(term='xterm', width=200, height=50)
+            channel.invoke_shell()
+            raw, _ = SystemTaskService._read_channel_until(
+                channel, re.compile(r'\d{3}:'), timeout=wait_seconds, idle=4.0
+            )
+            return raw
         finally:
             if channel is not None:
                 try:
@@ -909,10 +923,44 @@ class SystemTaskService:
 
     @staticmethod
     def _parse_jump_menu(text: str) -> List[Dict[str, str]]:
-        """解析堡垒机主机菜单，返回 [{'index','ip','name','raw'}]，index 为菜单序号（可能为空）"""
+        """解析堡垒机主机菜单，返回 [{'index','ip','name','raw'}]，index 为菜单序号（可能为空）
+
+        同时支持两种格式：
+        1. GateShell 全屏 TUI 格式：  001: 名称(备注)   10.0.0.1:22   ssh   root
+        2. 普通逐行列表格式：  1) web-01   10.1.2.3   或   [2] db-02   10.1.2.4
+        GateShell 用光标定位重绘（无换行），需对整段文本 finditer。
+        """
+        cleaned = SystemTaskService._strip_ansi(text)
         entries = []
         seen = set()
-        for line in SystemTaskService._strip_ansi(text).replace('\r', '').splitlines():
+
+        # GateShell 格式：NNN: 名称(备注)   IP:port   proto   user
+        # 名称中可能含数字（tomcat01），故用 IP:port 作为右锚点做非贪婪匹配
+        gate_re = re.compile(
+            r'(\d{3}):\s+(.*?)\s+((?:\d{1,3}\.){3}\d{1,3}):(\d+)\s+(\S+)\s+(\S+)'
+        )
+        for m in gate_re.finditer(cleaned):
+            idx, name, ip, port, proto, user = m.groups()
+            if ip in seen:
+                continue
+            parts = [int(p) for p in ip.split('.')]
+            if any(p > 255 for p in parts) or parts[0] in (0, 127):
+                continue
+            seen.add(ip)
+            entries.append({
+                'index': idx.lstrip('0') or '0',
+                'ip': ip,
+                'name': name.strip()[:60],
+                'raw': m.group(0).strip()[:160],
+                'port': port,
+                'proto': proto,
+                'user': user,
+            })
+        if entries:
+            return sorted(entries, key=lambda e: int(e['index']) if e['index'].isdigit() else 0)
+
+        # 普通逐行列表格式
+        for line in cleaned.splitlines():
             match = re.search(r'(?<![\d.])((?:\d{1,3}\.){3}\d{1,3})(?![\d.])', line)
             if not match:
                 continue
@@ -923,8 +971,10 @@ class SystemTaskService:
             if ip in seen:
                 continue
             seen.add(ip)
-            # 序号通常出现在 IP 之前，形如 "1)" "[2]" "3." "4:"
-            idx_match = re.search(r'[\[\(]?\s*(\d{1,3})\s*[\]\)\.、:：>\-]', line[:match.start()])
+            # 序号通常出现在 IP 之前，形如 "1)" "[2]" "3." "4:" "001:"
+            idx_match = re.search(
+                r'[\[\(]?\s*(\d{1,3})\s*[\]\)\.、:：>\-]', line[:match.start()]
+            )
             entries.append({
                 'index': idx_match.group(1) if idx_match else '',
                 'ip': ip,
@@ -1068,8 +1118,44 @@ class SystemTaskService:
         return [], 'none', sample
 
     @staticmethod
+    def _type_chars(channel, text: str, delay: float = 0.1):
+        """逐字符输入（GateShell 菜单一次性发送会被吞，必须逐字符）"""
+        for ch in text:
+            channel.send(ch.encode('utf-8'))
+            if delay:
+                time.sleep(delay)
+
+    @staticmethod
+    def _read_channel_until(channel, until_re, timeout: float, idle: float = 4.0) -> tuple:
+        """读取通道直到正则命中或超时，返回 (原始文本, match或None)
+
+        正则在「已剥离 ANSI 且 \\r 已归一为 \\n」的文本上匹配。
+        参考 buildCurl GateShellSession._pump。
+        """
+        raw = ''
+        deadline = time.time() + timeout
+        last = time.time()
+        while time.time() < deadline:
+            if time.time() - last > idle:
+                break
+            if channel.recv_ready():
+                chunk = channel.recv(65536).decode('utf-8', errors='replace')
+                if chunk:
+                    raw += chunk
+                    last = time.time()
+                    m = until_re.search(SystemTaskService._strip_ansi(raw))
+                    if m:
+                        return raw, m
+            else:
+                time.sleep(0.05)
+        m = until_re.search(SystemTaskService._strip_ansi(raw))
+        return raw, m
+
+    @staticmethod
     def _run_command_via_bastion_menu(jump_config, target_config, command: str, timeout: int):
-        """堡垒机模式：登录后解析带序号的主机菜单，按 IP 命中目标机并输入序号跳转，再在目标机执行命令"""
+        """堡垒机模式（参考 buildCurl GateShellSession）：
+        登录 → 解析菜单 → /{ip} 搜索进入目标机 → 哨兵包裹执行命令
+        """
         import paramiko
 
         client = paramiko.SSHClient()
@@ -1083,55 +1169,118 @@ class SystemTaskService:
             except Exception as exc:
                 raise ValueError(f'堡垒机[{jump_config.name}]连接失败: {str(exc)}') from exc
 
-            channel = client.invoke_shell(width=200, height=60)
+            # GateShell 需要 pty 才能进入 TUI 菜单
+            channel = client.get_transport().open_session(timeout=10)
             channel.settimeout(1.0)
-            # 发换行触发菜单显示（部分堡垒机需用户输入才展示主机列表）
-            channel.send('\n')
+            channel.get_pty(term='xterm', width=200, height=50)
+            channel.invoke_shell()
 
-            menu_timeout = min(15.0, max(6.0, timeout / 2.0))
-            menu_text = SystemTaskService._read_channel(channel, menu_timeout, quiet=3.0, min_wait=3.0)
+            # 等待菜单渲染完成（GateShell 全屏 TUI，用 idle 判定渲染结束）
+            raw = SystemTaskService._read_channel(channel, 25, quiet=4.0, min_wait=3.0)
+            menu_text = SystemTaskService._strip_ansi(raw)
             entries = SystemTaskService._parse_jump_menu(menu_text)
             if not entries:
                 SystemTaskService._cache_bastion_menu_support(jump_config, False)
                 raise ValueError('堡垒机登录后未解析到主机菜单')
-            if not any(entry.get('index') for entry in entries):
-                SystemTaskService._cache_bastion_menu_support(jump_config, False)
-                raise ValueError('堡垒机主机菜单缺少序号，无法按序号跳转')
 
             entry = SystemTaskService._find_menu_entry(entries, target_config)
             if not entry:
                 raise ValueError(
                     f'堡垒机授权菜单中未找到目标机 {target_config.host}（菜单共 {len(entries)} 台）'
                 )
-            if not entry.get('index'):
-                raise ValueError(f'堡垒机菜单项 {target_config.host} 未解析到序号')
 
-            # 输入菜单序号跳转到目标机，并等待目标机 shell 就绪
-            channel.send(str(entry['index']) + '\n')
-            ready_timeout = min(20.0, max(5.0, timeout / 2.0))
-            SystemTaskService._read_channel(channel, ready_timeout, quiet=3.0, min_wait=2.0)
-
-            token = uuid.uuid4().hex[:12]
-            begin_marker = f'__BASTION_BEGIN_{token}__'
-            done_marker = f'__BASTION_DONE_{token}__'
-            # 用 __BASTION""_XXX 形式输出标记，避免终端回显的命令行里出现完整标记
-            quoted_begin = f'__BASTION""_BEGIN_{token}__'
-            quoted_done = f'__BASTION""_DONE_{token}__'
-            channel.send('echo {}; {}; echo {}\n'.format(quoted_begin, command, quoted_done))
-
-            output = SystemTaskService._read_channel(
-                channel, timeout, quiet=2.0,
-                stop_when=lambda text: done_marker in text,
+            # 用 /{ip} 搜索 + 回车进入目标机（GateShell 菜单交互方式）
+            target_ip = entry['ip']
+            SystemTaskService._type_chars(channel, f'/{target_ip}', delay=0.1)
+            time.sleep(1.2)
+            channel.send(b'\r')  # 执行搜索
+            SystemTaskService._read_channel_until(
+                channel, re.compile(r'.'), timeout=10, idle=2.5
             )
-            text = SystemTaskService._strip_ansi(output).replace('\r', '')
-            start = text.find(begin_marker)
-            end = text.rfind(done_marker)
-            if end < 0 or start < 0 or end <= start:
+            channel.send(b'\r')  # 回车进入选中行
+
+            # 用哨兵回显确认目标机 shell 已可交互（比匹配提示符更可靠）
+            ready = f'__BASTION_READY_{uuid.uuid4().hex[:8]}__'
+            time.sleep(1.0)
+            SystemTaskService._type_chars(channel, f'echo {ready}', delay=0.02)
+            channel.send(b'\r')
+            raw_ready, m_ready = SystemTaskService._read_channel_until(
+                channel, re.compile(r'(?m)^' + re.escape(ready) + r'[ \t]*$'),
+                timeout=40, idle=5.0
+            )
+            if not m_ready:
+                text = SystemTaskService._strip_ansi(raw_ready).strip()
+                low = text.lower()
+                hint = ''
+                if 'permission' in low or 'denied' in low or 'not authorized' in low:
+                    hint = '（堡垒机拒绝了该连接）'
+                elif 'not found' in low or 'no such' in low:
+                    hint = '（菜单中未找到该机器）'
+                raise ValueError(
+                    f'进入目标机 {target_ip} 失败{hint}，请确认该机器在堡垒机授权列表内。'
+                )
+
+            # 排空欢迎语/提示符/哨兵回显，避免污染业务命令输出
+            SystemTaskService._read_channel(channel, 1.5, quiet=0.4)
+
+            # 执行命令：双哨兵 + 退出码（stderr 合并进 stdout）
+            token = uuid.uuid4().hex[:10]
+            start_mark = f'__BS_S_{token}__'
+            end_mark = f'__BS_E_{token}__'
+            wrapped = (
+                f'echo {start_mark}; {command} 2>&1; '
+                f'__ec=$?; echo; echo {end_mark}$__ec'
+            )
+            start_pat = re.compile(r'(?m)^' + re.escape(start_mark) + r'[ \t]*$')
+            end_pat = re.compile(r'(?m)^' + re.escape(end_mark) + r'(\d+)[ \t]*$')
+
+            SystemTaskService._type_chars(channel, wrapped, delay=0)
+            channel.send(b'\r')
+
+            exec_deadline = time.time() + timeout + 10
+            raw = ''
+
+            def _match(pattern):
+                return pattern.search(SystemTaskService._strip_ansi(raw))
+
+            # 阶段一：等 START 独占成行
+            while time.time() < exec_deadline and not _match(start_pat):
+                chunk, _ = SystemTaskService._read_channel_until(
+                    channel, start_pat, timeout=5.0, idle=5.0
+                )
+                if chunk:
+                    raw += chunk
+            if not _match(start_pat):
+                raise ValueError('堡垒机目标机未开始执行命令（超时）')
+
+            # 阶段二：流式读取到 END 行
+            match = None
+            while time.time() < exec_deadline:
+                match = _match(end_pat)
+                if match:
+                    break
+                chunk, _ = SystemTaskService._read_channel_until(
+                    channel, end_pat, timeout=3.0, idle=3.0
+                )
+                if chunk:
+                    raw += chunk
+
+            if not match:
                 raise ValueError('堡垒机目标机执行超时（未收到结束标记）')
 
-            body = text[start + len(begin_marker):end].strip('\n')
+            exit_code = int(match.group(1))
+            # 提取 START 与 END 之间的正文
+            text = SystemTaskService._strip_ansi(raw)
+            m_start = start_pat.search(text)
+            body_start = m_start.end() if m_start else 0
+            m_end = end_pat.search(text)
+            body_end = m_end.start() if m_end else len(text)
+            body = text[body_start:body_end].strip('\n')
+            # 去掉尾部残留的 shell 提示符
+            body = re.sub(r'\[[^\]\n]*\][#$][ \t]*$', '', body.rstrip()).rstrip()
+
             SystemTaskService._cache_bastion_menu_support(jump_config, True)
-            return body, '', 0
+            return body, '', exit_code
         finally:
             if channel is not None:
                 try:
