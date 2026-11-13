@@ -583,13 +583,14 @@ class SystemTaskService:
         db.session.commit()
         update_execution_progress(execution.execution_id, 30, f'准备请求: {method} {url}')
 
-        # Signing
+        # Signing（参考 buildCurl 签名算法）
         if system_task.sign_enabled and system_task.sign_key:
+            sign_name = system_task.sign_param_name or 'sign'
             sign = SystemTaskService._compute_sign(
                 request_params, body, headers,
-                system_task.sign_key, system_task.sign_method
+                system_task.sign_key, system_task.sign_method,
+                sign_param_name=sign_name
             )
-            sign_name = system_task.sign_param_name or 'sign'
             append_type = system_task.sign_append_type or 'query'
 
             if append_type == 'query':
@@ -1643,38 +1644,58 @@ class SystemTaskService:
 
     @staticmethod
     def _compute_sign(params: Dict[str, Any], body: str, headers: Dict[str, str],
-                      sign_key: str, sign_method: str) -> str:
-        """Compute signature based on method."""
-        # Build sign string from sorted params
-        sign_parts = []
-        if params:
-            for k in sorted(params.keys()):
-                sign_parts.append(f"{k}={params[k]}")
+                      sign_key: str, sign_method: str, sign_param_name: str = 'sign') -> str:
+        """计算签名（参考 buildCurl 项目的 Java 风格签名算法）
 
-        sign_str = '&'.join(sign_parts)
+        规则：过滤空值/sign参数 → 键名不区分大小写排序 → 拼接 k1=v1&k2=v2& → 追加 key={secret}
+        → MD5/SHA256 → 全大写十六进制。
+        """
+        # 汇总参与签名的参数（query + body 字段）
+        all_params = dict(params) if params else {}
 
-        # Include body in sign if present and method supports it
-        if body and sign_method not in ('md5_param_only', 'sha256_param_only'):
-            sign_str = f"{sign_str}&body={body}" if sign_str else f"body={body}"
+        # body 中的参数也并入签名（参考 buildCurl: JSON/Form/Raw 都并入）
+        if body:
+            body_text = body.strip()
+            content_type = (headers or {}).get('Content-Type', '')
+            if 'application/json' in content_type or body_text.startswith('{'):
+                try:
+                    obj = json.loads(body_text)
+                    if isinstance(obj, dict):
+                        for k, v in obj.items():
+                            if isinstance(v, bool):
+                                all_params[str(k)] = 'true' if v else 'false'
+                            elif isinstance(v, (dict, list)):
+                                all_params[str(k)] = json.dumps(v, separators=(',', ':'), ensure_ascii=False)
+                            elif v is not None:
+                                all_params[str(k)] = v
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            elif 'application/x-www-form-urlencoded' in content_type or '&' in body_text:
+                for pair in body_text.split('&'):
+                    pair = pair.strip()
+                    if '=' in pair:
+                        k, v = pair.split('=', 1)
+                        all_params[k.strip()] = v.strip()
 
-        # Append key
-        sign_str = f"{sign_str}{sign_key}"
+        # 过滤空值与 sign 参数本身，键名不区分大小写排序
+        filtered = {
+            k: v for k, v in all_params.items()
+            if v is not None and str(v) != '' and str(k) != sign_param_name
+        }
+        sorted_items = sorted(filtered.items(), key=lambda x: x[0].upper())
+        sign_str = '&'.join(f'{k}={v}' for k, v in sorted_items) + '&'
+        sign_str += f'key={sign_key}'
 
         method = (sign_method or 'md5').lower()
-
-        if method == 'md5':
-            return hashlib.md5(sign_str.encode('utf-8')).hexdigest()
-        elif method == 'sha256':
-            return hashlib.sha256(sign_str.encode('utf-8')).hexdigest()
+        if method in ('sha256', 'sha256_upper'):
+            return hashlib.sha256(sign_str.encode('utf-8')).hexdigest().upper()
         elif method == 'hmac_sha256':
-            return hmac.new(sign_key.encode('utf-8'), sign_str.encode('utf-8'), hashlib.sha256).hexdigest()
-        elif method == 'md5_upper':
-            return hashlib.md5(sign_str.encode('utf-8')).hexdigest().upper()
+            return hmac.new(sign_key.encode('utf-8'), sign_str.encode('utf-8'), hashlib.sha256).hexdigest().upper()
         elif method == 'sha1':
-            return hashlib.sha1(sign_str.encode('utf-8')).hexdigest()
+            return hashlib.sha1(sign_str.encode('utf-8')).hexdigest().upper()
         else:
-            # Default to md5
-            return hashlib.md5(sign_str.encode('utf-8')).hexdigest()
+            # md5 / md5_upper / 默认
+            return hashlib.md5(sign_str.encode('utf-8')).hexdigest().upper()
 
     @staticmethod
     def _apply_response_mapping(resp_data: dict, response_mapping: list) -> tuple:
@@ -1823,13 +1844,14 @@ class SystemTaskService:
         for key in used_param_keys:
             request_params.pop(key, None)
 
-        # Signing
+        # Signing（参考 buildCurl 签名算法）
         if system_task.sign_enabled and system_task.sign_key:
+            sign_name = system_task.sign_param_name or 'sign'
             sign = SystemTaskService._compute_sign(
                 request_params, body, headers,
-                system_task.sign_key, system_task.sign_method
+                system_task.sign_key, system_task.sign_method,
+                sign_param_name=sign_name
             )
-            sign_name = system_task.sign_param_name or 'sign'
             append_type = system_task.sign_append_type or 'query'
 
             if append_type == 'query':
