@@ -296,7 +296,7 @@
                 <el-option
                   v-for="item in probedTargets"
                   :key="item.id"
-                  :label="`${item.name} (${item.username}@${item.host}:${item.port})`"
+                  :label="targetOptionLabel(item)"
                   :value="item.id"
                 />
               </el-select>
@@ -304,7 +304,7 @@
                 <i class="fas fa-exclamation-circle"></i> {{ sshProbeFailed }}
               </div>
               <div v-else-if="sshProbeLoaded && probedTargets.length > 0" style="color: #67c23a; font-size: 12px; margin-top: 4px">
-                <i class="fas fa-check-circle"></i> 已通过跳板机实测登录，共 {{ probedTargets.length }} 台可登录目标机
+                <i class="fas fa-check-circle"></i> 已通过跳板机实测登录，共 {{ probedTargets.length }} 台可登录目标机<template v-if="bastionMenuCount">（其中 {{ bastionMenuCount }} 台可经堡垒机菜单序号跳转）</template>
               </div>
               <div v-if="sshProbeNotice && sshProbeNotice !== sshProbeFailed" style="color: #e6a23c; font-size: 12px; margin-top: 4px">
                 <i class="fas fa-info-circle"></i> {{ sshProbeNotice }}
@@ -318,7 +318,7 @@
                 </el-link>
               </div>
               <div style="color: #909399; font-size: 12px; margin-top: 4px">
-                后端先连接跳板机，再由跳板机登录目标机执行 curl；目标 IP、端口与账号取自目标机器的 SSH 配置
+                后端先连接跳板机；若为堡垒机，则按 IP 在授权菜单中找到目标机并输入对应序号跳转，再执行 curl
               </div>
             </el-form-item>
           </template>
@@ -1093,6 +1093,12 @@ const sshProbeNotice = ref('')
 const sshAuthorizedIps = ref([])
 const sshProbeSample = ref('')
 const probedTargets = ref([])
+const bastionMenuCount = computed(() => probedTargets.value.filter(t => t.bastion_index).length)
+
+function targetOptionLabel(item) {
+  const prefix = item.bastion_index ? `#${item.bastion_index} ` : ''
+  return `${prefix}${item.name} (${item.username}@${item.host}:${item.port})`
+}
 
 function resetProbedTargets() {
   sshProbeLoaded.value = false

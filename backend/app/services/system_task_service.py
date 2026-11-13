@@ -29,6 +29,11 @@ _execution_lock = threading.Lock()
 _execution_threads = {}  # execution_id -> thread reference
 _execution_cancel_events = {}  # execution_id -> threading.Event
 
+# 跳板机是否支持「堡垒机菜单序号跳转」的进程内缓存：key -> {'supported': bool, 'expires_at': float}
+_bastion_menu_cache = {}
+_bastion_menu_lock = threading.Lock()
+_BASTION_MENU_CACHE_TTL = 600
+
 
 def update_execution_progress(execution_id: str, progress: int, log_message: str = None, level: str = 'info'):
     with _execution_lock:
@@ -850,33 +855,44 @@ class SystemTaskService:
         return ' '.join(shlex.quote(part) for part in options) + ' ' + shlex.quote(command)
 
     @staticmethod
+    def _strip_ansi(text: str) -> str:
+        """去掉终端 ANSI 控制序列"""
+        return re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', text or '')
+
+    @staticmethod
+    def _read_channel(channel, timeout: float, quiet: float = 1.2, stop_when=None) -> str:
+        """读取交互式通道输出：命中 stop_when、输出安静 quiet 秒或超时即返回"""
+        chunks = []
+        deadline = time.time() + timeout
+        last_data_at = None
+        while time.time() < deadline:
+            if channel.recv_ready():
+                chunk = channel.recv(65536).decode('utf-8', errors='replace')
+                if chunk:
+                    chunks.append(chunk)
+                    last_data_at = time.time()
+                    if stop_when and stop_when(''.join(chunks)):
+                        break
+            else:
+                # 输出安静一段时间视为本次响应结束
+                if last_data_at and time.time() - last_data_at >= quiet:
+                    break
+                time.sleep(0.2)
+        return ''.join(chunks)
+
+    @staticmethod
     def _capture_jump_login_banner(jump_config, wait_seconds: float = 8.0) -> str:
         """以交互式 shell 登录跳板机，捕获登录欢迎信息/堡垒机主机菜单后立即断开"""
         import paramiko
-        import time as _time
 
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         channel = None
-        chunks = []
         try:
             client.connect(**SystemTaskService._ssh_connect_kwargs(jump_config))
             channel = client.invoke_shell(width=200, height=60)
             channel.settimeout(1.0)
-            deadline = _time.time() + wait_seconds
-            last_data_at = None
-            while _time.time() < deadline:
-                if channel.recv_ready():
-                    chunk = channel.recv(65536).decode('utf-8', errors='replace')
-                    if chunk:
-                        chunks.append(chunk)
-                        last_data_at = _time.time()
-                else:
-                    # 输出安静 1.5 秒视为菜单已打印完毕
-                    if last_data_at and _time.time() - last_data_at >= 1.5:
-                        break
-                    _time.sleep(0.2)
-            return ''.join(chunks)
+            return SystemTaskService._read_channel(channel, wait_seconds, quiet=1.5)
         finally:
             if channel is not None:
                 try:
@@ -889,11 +905,51 @@ class SystemTaskService:
                 pass
 
     @staticmethod
+    def _parse_jump_menu(text: str) -> List[Dict[str, str]]:
+        """解析堡垒机主机菜单，返回 [{'index','ip','name','raw'}]，index 为菜单序号（可能为空）"""
+        entries = []
+        seen = set()
+        for line in SystemTaskService._strip_ansi(text).replace('\r', '').splitlines():
+            match = re.search(r'(?<![\d.])((?:\d{1,3}\.){3}\d{1,3})(?![\d.])', line)
+            if not match:
+                continue
+            ip = match.group(1)
+            parts = [int(p) for p in ip.split('.')]
+            if any(p > 255 for p in parts) or parts[0] in (0, 127) or ip == '255.255.255.255':
+                continue
+            if ip in seen:
+                continue
+            seen.add(ip)
+            # 序号通常出现在 IP 之前，形如 "1)" "[2]" "3." "4:"
+            idx_match = re.search(r'[\[\(]?\s*(\d{1,3})\s*[\]\)\.、:：>\-]', line[:match.start()])
+            entries.append({
+                'index': idx_match.group(1) if idx_match else '',
+                'ip': ip,
+                'name': line[match.end():].strip(' \t-|:：)>】')[:60],
+                'raw': line.strip()[:160],
+            })
+        return entries
+
+    @staticmethod
+    def _find_menu_entry(entries, target_config):
+        """在堡垒机菜单中按 IP（其次按配置名）定位目标机记录"""
+        normalize = SystemTaskService._normalize_host
+        target_host = normalize(getattr(target_config, 'host', ''))
+        target_name = (getattr(target_config, 'name', '') or '').strip().lower()
+        for entry in entries:
+            if entry.get('ip') and normalize(entry['ip']) == target_host:
+                return entry
+        if target_name:
+            for entry in entries:
+                if target_name in (entry.get('name') or '').lower():
+                    return entry
+        return None
+
+    @staticmethod
     def _extract_ipv4_list(text: str) -> List[str]:
         """从跳板机输出中提取 IPv4（去掉 ANSI 控制符、回环与非法地址，保持原顺序去重）"""
-        cleaned = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', text or '')
         ips = []
-        for ip in re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', cleaned):
+        for ip in re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', SystemTaskService._strip_ansi(text)):
             parts = [int(p) for p in ip.split('.')]
             if any(p > 255 for p in parts):
                 continue
@@ -929,10 +985,36 @@ class SystemTaskService:
             return f'<读取失败: {exc}>'
 
     @staticmethod
-    def _fetch_authorized_target_ips(jump_config):
-        """获取跳板机/堡垒机上的授权目标机 IP 列表，返回 (IP列表, 来源, 原始输出摘要)
+    def _bastion_cache_key(jump_config):
+        return getattr(jump_config, 'id', None) or getattr(jump_config, 'host', '')
 
-        依次尝试：配置的授权清单命令 → 登录交互式 shell 抓取主机菜单 → /etc/hosts 与 known_hosts。
+    @staticmethod
+    def _bastion_menu_supported(jump_config) -> bool:
+        """跳板机是否支持堡垒机菜单序号跳转；无缓存记录时先按支持处理（尝试后写回缓存）"""
+        key = SystemTaskService._bastion_cache_key(jump_config)
+        with _bastion_menu_lock:
+            item = _bastion_menu_cache.get(key)
+            if item and item.get('expires_at', 0) > time.time():
+                return bool(item.get('supported'))
+        return True
+
+    @staticmethod
+    def _cache_bastion_menu_support(jump_config, supported: bool):
+        key = SystemTaskService._bastion_cache_key(jump_config)
+        if not key:
+            return
+        with _bastion_menu_lock:
+            _bastion_menu_cache[key] = {
+                'supported': bool(supported),
+                'expires_at': time.time() + _BASTION_MENU_CACHE_TTL,
+            }
+
+    @staticmethod
+    def _fetch_bastion_menu(jump_config):
+        """获取跳板机/堡垒机上的主机菜单，返回 (菜单项列表, 来源, 原始输出摘要)
+
+        菜单项形如 {'index': '1', 'ip': '10.1.2.3', 'name': 'web-01', 'raw': '...'}。
+        依次尝试：配置的授权清单命令 → 登录交互式 shell 抓取主机菜单 → /etc/hosts 与 known_hosts（无序号）。
         全部失败时返回空列表与来源 none，原始输出放在第三个返回值中供前端排查。
         """
         trails = []
@@ -941,11 +1023,13 @@ class SystemTaskService:
             try:
                 out, err, code = SystemTaskService._run_command_on_jump(jump_config, command, 15)
                 text = (out or '') + '\n' + (err or '')
-                ips = SystemTaskService._extract_ipv4_list(text)
-                if ips:
-                    return ips, 'command', text.strip()[:2000]
+                entries = SystemTaskService._parse_jump_menu(text)
+                if entries:
+                    if any(entry.get('index') for entry in entries):
+                        SystemTaskService._cache_bastion_menu_support(jump_config, True)
+                    return entries, 'command', text.strip()[:2000]
                 detail = (err or out or '').strip()[:120] or f'退出码 {code}'
-                trails.append(f'授权主机清单命令未返回 IP（{detail}）')
+                trails.append(f'授权主机清单命令未返回可解析主机（{detail}）')
             except Exception as exc:
                 trails.append(f'授权主机清单命令执行失败: {str(exc)[:120]}')
 
@@ -954,15 +1038,23 @@ class SystemTaskService:
             banner = SystemTaskService._capture_jump_login_banner(jump_config)
         except Exception as exc:
             trails.append(f'登录菜单抓取失败: {str(exc)[:120]}')
-        banner_ips = SystemTaskService._extract_ipv4_list(banner)
-        if banner_ips:
-            return banner_ips, 'banner', banner.strip()[-2000:]
-        trails.append('登录欢迎信息/主机菜单中未解析到 IP')
+        banner_entries = SystemTaskService._parse_jump_menu(banner)
+        if banner_entries:
+            has_index = any(entry.get('index') for entry in banner_entries)
+            # 菜单带序号才代表可用「输入序号跳转」方式登录目标机
+            SystemTaskService._cache_bastion_menu_support(jump_config, has_index)
+            return banner_entries, 'banner', banner.strip()[-2000:]
+        SystemTaskService._cache_bastion_menu_support(jump_config, False)
+        trails.append('登录欢迎信息/主机菜单中未解析到主机')
 
         hosts_text = SystemTaskService._read_jump_host_known_hosts(jump_config)
         hosts_ips = SystemTaskService._extract_ipv4_list(hosts_text)
         if hosts_ips:
-            return hosts_ips, 'hosts', hosts_text.strip()[:2000]
+            entries = [
+                {'index': '', 'ip': ip, 'name': '', 'raw': ip}
+                for ip in hosts_ips
+            ]
+            return entries, 'hosts', hosts_text.strip()[:2000]
         trails.append('/etc/hosts 与 known_hosts 中未解析到 IP')
 
         sample = '\n'.join([
@@ -971,6 +1063,84 @@ class SystemTaskService:
             '', '【hosts/known_hosts 原始输出】', hosts_text.strip()[:800] or '(空)',
         ])
         return [], 'none', sample
+
+    @staticmethod
+    def _run_command_via_bastion_menu(jump_config, target_config, command: str, timeout: int):
+        """堡垒机模式：登录后解析带序号的主机菜单，按 IP 命中目标机并输入序号跳转，再在目标机执行命令"""
+        import paramiko
+
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        channel = None
+        try:
+            try:
+                client.connect(**SystemTaskService._ssh_connect_kwargs(jump_config))
+            except ValueError:
+                raise
+            except Exception as exc:
+                raise ValueError(f'堡垒机[{jump_config.name}]连接失败: {str(exc)}') from exc
+
+            channel = client.invoke_shell(width=200, height=60)
+            channel.settimeout(1.0)
+
+            menu_timeout = min(12.0, max(5.0, timeout / 3.0))
+            menu_text = SystemTaskService._read_channel(channel, menu_timeout, quiet=1.5)
+            entries = SystemTaskService._parse_jump_menu(menu_text)
+            if not entries:
+                SystemTaskService._cache_bastion_menu_support(jump_config, False)
+                raise ValueError('堡垒机登录后未解析到主机菜单')
+            if not any(entry.get('index') for entry in entries):
+                SystemTaskService._cache_bastion_menu_support(jump_config, False)
+                raise ValueError('堡垒机主机菜单缺少序号，无法按序号跳转')
+
+            entry = SystemTaskService._find_menu_entry(entries, target_config)
+            if not entry:
+                raise ValueError(
+                    f'堡垒机授权菜单中未找到目标机 {target_config.host}（菜单共 {len(entries)} 台）'
+                )
+            if not entry.get('index'):
+                raise ValueError(f'堡垒机菜单项 {target_config.host} 未解析到序号')
+
+            # 输入菜单序号跳转到目标机，并等待目标机 shell 就绪
+            channel.send(str(entry['index']) + '\n')
+            ready_timeout = min(20.0, max(5.0, timeout / 2.0))
+            SystemTaskService._read_channel(channel, ready_timeout, quiet=1.5)
+
+            token = uuid.uuid4().hex[:12]
+            begin_marker = f'__BASTION_BEGIN_{token}__'
+            done_marker = f'__BASTION_DONE_{token}__'
+            # 用 __BASTION""_XXX 形式输出标记，避免终端回显的命令行里出现完整标记
+            quoted_begin = f'__BASTION""_BEGIN_{token}__'
+            quoted_done = f'__BASTION""_DONE_{token}__'
+            channel.send('echo {}; {}; echo {}\n'.format(quoted_begin, command, quoted_done))
+
+            output = SystemTaskService._read_channel(
+                channel, timeout, quiet=2.0,
+                stop_when=lambda text: done_marker in text,
+            )
+            text = SystemTaskService._strip_ansi(output).replace('\r', '')
+            start = text.find(begin_marker)
+            end = text.rfind(done_marker)
+            if end < 0 or start < 0 or end <= start:
+                raise ValueError('堡垒机目标机执行超时（未收到结束标记）')
+
+            body = text[start + len(begin_marker):end].strip('\n')
+            SystemTaskService._cache_bastion_menu_support(jump_config, True)
+            return body, '', 0
+        finally:
+            if channel is not None:
+                try:
+                    channel.send('exit\n')
+                except Exception:
+                    pass
+                try:
+                    channel.close()
+                except Exception:
+                    pass
+            try:
+                client.close()
+            except Exception:
+                pass
 
     @staticmethod
     def _run_ssh_command_via_tunnel(jump_config, target_config, command: str, timeout: int):
@@ -1038,9 +1208,23 @@ class SystemTaskService:
 
     @staticmethod
     def _run_ssh_command_via_jump(jump_config, target_config, command: str, timeout: int):
-        """优先在跳板机上经免密 ssh 登录目标机执行命令，失败时回退到「目标机凭据 + 端口转发」"""
+        """依次尝试：堡垒机菜单序号跳转 → 跳板机免密 ssh → 目标机凭据 + 端口转发"""
+        errors = []
+
+        if SystemTaskService._bastion_menu_supported(jump_config):
+            try:
+                return SystemTaskService._run_command_via_bastion_menu(
+                    jump_config, target_config, command, timeout
+                )
+            except Exception as exc:
+                detail = str(exc)[:200]
+                errors.append(f'堡垒机菜单跳转失败: {detail}')
+                logger.info(
+                    "堡垒机菜单跳转失败(%s -> %s): %s",
+                    jump_config.name, target_config.host, detail
+                )
+
         jump_command = SystemTaskService._build_jump_side_ssh_command(target_config, command)
-        jump_error = None
         try:
             out, err, exit_code = SystemTaskService._run_command_on_jump(
                 jump_config, jump_command, timeout
@@ -1048,18 +1232,20 @@ class SystemTaskService:
             # ssh 自身失败（认证/网络）固定返回 255，其余退出码来自目标机上的命令
             if exit_code != 255:
                 return out, err, exit_code
-            jump_error = (err or out or '').strip() or 'ssh 返回 255'
+            detail = (err or out or '').strip()[:200] or '无输出'
+            errors.append(f'跳板机免密登录目标机返回 255: {detail}')
         except Exception as exc:
-            jump_error = str(exc)
+            errors.append(f'跳板机免密登录目标机失败: {str(exc)[:200]}')
 
         try:
             return SystemTaskService._run_ssh_command_via_tunnel(
                 jump_config, target_config, command, timeout
             )
         except Exception as exc:
+            errors.append(f'目标机凭据+端口转发失败: {str(exc)[:200]}')
             raise ValueError(
-                '跳板机免密登录目标机[{}]失败({})，回退到目标机凭据方式也失败: {}'.format(
-                    target_config.name, jump_error, exc
+                '无法通过跳板机[{}]登录目标机[{}]：{}'.format(
+                    jump_config.name, target_config.name, '；'.join(errors)
                 )
             ) from exc
 

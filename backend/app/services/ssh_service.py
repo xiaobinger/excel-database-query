@@ -98,16 +98,23 @@ class SshService:
 
         app = current_app._get_current_object()
 
-        # 先登录跳板机，取堡垒机/跳板机上的授权主机列表，再按 IP 匹配平台配置
-        authorized_ips, source, sample, notice, matched_by = [], 'all', '', '', 'probe'
+        # 先登录跳板机，取堡垒机/跳板机上的授权主机（含菜单序号），再按 IP 匹配平台配置
+        menu_entries, authorized_ips, source, sample = [], [], 'all', ''
+        notice, matched_by = '', 'probe'
         try:
-            authorized_ips, source, sample = SystemTaskService._fetch_authorized_target_ips(jump)
+            menu_entries, source, sample = SystemTaskService._fetch_bastion_menu(jump)
+            authorized_ips = [entry['ip'] for entry in menu_entries if entry.get('ip')]
         except Exception as exc:
             logger.warning(f"跳板机授权主机列表获取失败: {exc}")
             sample = str(exc)[:800]
             notice = f'未能从跳板机获取授权主机列表（{str(exc)[:120]}），已回退为逐台实测'
 
         normalize = SystemTaskService._normalize_host
+        index_map = {
+            normalize(entry['ip']): entry['index']
+            for entry in menu_entries
+            if entry.get('ip') and entry.get('index')
+        }
         unmatched = []
         targets = all_targets
         if authorized_ips:
@@ -135,6 +142,7 @@ class SshService:
 
         def _probe(target: SshConfig):
             with app.app_context():
+                bastion_index = index_map.get(normalize(target.host), '')
                 try:
                     out, err, code = SystemTaskService._run_ssh_command_via_jump(
                         jump, target, 'echo __SSH_OK__', timeout
@@ -146,6 +154,7 @@ class SshService:
                             'host': target.host,
                             'port': target.port,
                             'username': target.username,
+                            'bastion_index': bastion_index,
                         }, None
                     detail = (err or out or '').strip()[:200] or f'退出码 {code}'
                     return None, {'id': target.id, 'name': target.name, 'host': target.host, 'reason': detail}
@@ -156,7 +165,9 @@ class SshService:
                     db.session.remove()
 
         reachable, unreachable = [], []
-        with ThreadPoolExecutor(max_workers=min(6, len(targets))) as pool:
+        # 堡垒机菜单跳转需要交互式会话，并发过高容易被堡垒机限制，降为 3
+        max_workers = 3 if index_map else min(6, len(targets))
+        with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(targets)))) as pool:
             for ok_item, fail_item in pool.map(_probe, targets):
                 if ok_item:
                     reachable.append(ok_item)
