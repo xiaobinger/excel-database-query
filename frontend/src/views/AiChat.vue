@@ -74,7 +74,7 @@
               <img v-if="msg.role === 'user' && userAvatarUrl" :src="userAvatarUrl" class="message-avatar-img" alt="" />
               <i v-else :class="msg.role === 'user' ? 'fas fa-user' : 'fas fa-robot'"></i>
             </div>
-            <div class="message-content" :class="{ 'full-width': msg._type === 'tool' || msg._type === 'file' || msg._type === 'lookup' || msg._type === 'ticket' }">
+            <div class="message-content" :class="{ 'full-width': msg._type === 'tool' || msg._type === 'file' || msg._type === 'lookup' || msg._type === 'ticket' || msg._type === 'generated_file' }">
               <!-- 消息发送时间 -->
               <div v-if="!msg._streaming && formatMsgTime(msg.created_at)" class="message-time">{{ formatMsgTime(msg.created_at) }}</div>
               <!-- 消息操作按钮（悬浮显示，执行中的任务不显示操作按钮） -->
@@ -598,6 +598,38 @@
                     </div>
                   </div>
                   <div v-if="msg.content" class="ticket-confirm-msg">{{ msg.content }}</div>
+                </div>
+              </template>
+              <!-- AI 生成文件卡片 -->
+              <template v-else-if="msg._type === 'generated_file'">
+                <div class="tool-card generated-file-card">
+                  <div class="tool-card-header">
+                    <i class="fas fa-file-circle-check tool-icon tool-icon-success"></i>
+                    <span class="tool-title">{{ msg._file_data?.file_type_label || '文件' }}已生成</span>
+                  </div>
+                  <div class="tool-card-body">
+                    <div class="file-card">
+                      <div class="file-card-header">
+                        <i :class="fileIconClass(msg._file_data)"></i>
+                        <span class="file-title">{{ msg._file_data?.filename }}</span>
+                      </div>
+                      <div class="file-card-body">
+                        <div class="file-info-row">
+                          <span><i class="fas fa-file"></i> {{ msg._file_data?.file_type_label || '文件' }}</span>
+                          <span><i class="fas fa-database"></i> {{ formatFileSize(msg._file_data?.file_size) }}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div v-if="msg._file_data?.file_kind === 'image' && msg._file_data?.preview_url" class="generated-image-preview">
+                      <img :src="msg._file_data.preview_url" :alt="msg._file_data?.filename" @click="previewGeneratedImage(msg._file_data.preview_url)" />
+                    </div>
+                    <p v-if="msg.content" class="generated-file-tip">{{ msg.content }}</p>
+                  </div>
+                  <div class="tool-card-actions">
+                    <el-button type="success" size="small" @click="downloadFile(msg._download_url)">
+                      <i class="fas fa-download"></i> 下载文件
+                    </el-button>
+                  </div>
                 </div>
               </template>
             </div>
@@ -2006,6 +2038,11 @@ async function selectChat(chatId) {
         base._done = true
         base.tool_data = meta.tool_data || {}
         base.content = m.content || meta.tool_data?.confirm_message || ''
+      } else if (meta._type === 'generated_file') {
+        base._type = 'generated_file'
+        base._done = true
+        base._file_data = meta.file_data || {}
+        base._download_url = meta._download_url || ''
       }
       // 恢复思考内容
       if (meta._thinking) {
@@ -2947,6 +2984,26 @@ async function handleToolResults(toolResults) {
   }
   for (const tr of toolResults) {
     const result = tr.result
+    // AI 生成文件/图片：渲染可下载卡片
+    if (result && result.action_type === 'file' && result.download_url) {
+      const fileMsg = {
+        id: tr.message_id || Date.now() + Math.random(),
+        role: 'assistant',
+        content: result.message || '',
+        _type: 'generated_file',
+        _download_url: result.download_url,
+        _file_data: {
+          filename: result.filename,
+          file_size: result.file_size,
+          file_kind: result.file_kind,
+          file_type_label: result.file_type_label,
+          preview_url: result.preview_url || '',
+        },
+      }
+      messages.value.push(fileMsg)
+      saveMessageState(fileMsg)
+      continue
+    }
     // 工单创建：成功显示已创建卡片，失败/缺失参数由AI自然语言询问用户（不创建卡片）
     if (result && result.action_type === 'create_ticket') {
       if (result.error || !result.ticket_id) {
@@ -3587,6 +3644,13 @@ async function saveMessageState(msg) {
   if (msg._type === 'ticket') {
     metadata._type = 'ticket'
     metadata.tool_data = msg.tool_data || {}
+    metadata._done = true
+  }
+  // 保存AI生成文件类型的元数据
+  if (msg._type === 'generated_file') {
+    metadata._type = 'generated_file'
+    metadata.file_data = msg._file_data || {}
+    metadata._download_url = msg._download_url || ''
     metadata._done = true
   }
   // 保存思考内容的元数据
@@ -4480,6 +4544,12 @@ function downloadFile(url) {
       URL.revokeObjectURL(blobUrl)
     })
     .catch(() => {})
+}
+
+// 预览 AI 生成的图片（新标签页打开原图）
+function previewGeneratedImage(url) {
+  if (!url) return
+  window.open(url, '_blank')
 }
 
 async function confirmQuery(msg) {
@@ -5895,6 +5965,36 @@ onActivated(() => {
 .file-columns {
   display: flex;
   flex-wrap: wrap;
+}
+
+/* ===== AI 生成文件卡片 ===== */
+.generated-file-card .tool-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.generated-file-card .file-card {
+  max-width: 100%;
+}
+.generated-image-preview {
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f5f7fa;
+  max-width: 360px;
+}
+.generated-image-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 320px;
+  object-fit: contain;
+  cursor: zoom-in;
+}
+.generated-file-tip {
+  margin: 0;
+  font-size: 12px;
+  color: #909399;
 }
 
 /* ===== Tool Card Styles ===== */

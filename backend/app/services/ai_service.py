@@ -555,6 +555,81 @@ AI_TOOLS = [
                 "required": ["to_emails", "subject", "body"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_file",
+            "description": "把内容生成为真实文件并返回下载链接。当用户要求生成、创建、导出、保存、下载文件，或要求把结果整理成文档/表格时调用。支持 xlsx、csv、docx、pdf、md、txt、json、html、xml、yaml、sql 以及常见代码文件。内容较多时也必须调用本工具生成文件，不要只在回复里贴出内容，更不要声称无法生成文件。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {
+                        "type": "string",
+                        "description": "目标文件名（含扩展名），如 '商户对账明细.xlsx'、'月度报告.docx'，扩展名决定文件格式"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "文件正文。文本类格式直接写入；csv 第一行为表头；json 必须是合法 JSON；docx/pdf 支持 Markdown 风格的 #/##/### 标题、- 列表和普通段落；xlsx 未提供 sheets 时按 CSV/TSV 解析本字段"
+                    },
+                    "format": {
+                        "type": "string",
+                        "description": "可选，显式指定格式（filename 缺少扩展名时使用），如 xlsx、csv、docx、pdf、md、txt、json、html"
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "可选，docx/pdf 文档标题"
+                    },
+                    "sheets": {
+                        "type": "array",
+                        "description": "可选，仅 xlsx 使用：工作表列表。每项包含 name（工作表名）、headers（表头数组）、rows（二维数据数组）",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string", "description": "工作表名称"},
+                                "headers": {"type": "array", "description": "表头数组"},
+                                "rows": {
+                                    "type": "array",
+                                    "description": "数据行，每行是一个与表头对应的数组",
+                                    "items": {"type": "array"}
+                                }
+                            },
+                            "required": ["headers", "rows"]
+                        }
+                    }
+                },
+                "required": ["filename"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_image",
+            "description": "调用系统已配置的图片生成模型生成图片并保存为可下载文件。当用户要求画图、生成图片、制作插画/海报/配图时调用。若系统未配置可用的图片生成模型，工具会返回错误，此时应如实告知用户，不要伪造图片或声称已生成。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "图片描述提示词，尽量具体：主体、场景、风格、构图、色彩、画面文字等"
+                    },
+                    "size": {
+                        "type": "string",
+                        "description": "可选，图片尺寸，如 1024x1024、1792x1024、1024x1792；不填由模型决定"
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "可选，指定图片模型名称（需已在 AI 配置中存在该模型）"
+                    },
+                    "filename": {
+                        "type": "string",
+                        "description": "可选，保存的文件名（含扩展名），如 '产品海报.png'"
+                    }
+                },
+                "required": ["prompt"]
+            }
+        }
     }
 ]
 
@@ -1333,6 +1408,10 @@ class AiService:
             return AiService._tool_save_skill(args, user_id, agent_id=agent_id)
         elif tool_name == 'send_email':
             return AiService._tool_send_email(args, user_id)
+        elif tool_name == 'create_file':
+            return AiService._tool_create_file(args, user_id)
+        elif tool_name == 'generate_image':
+            return AiService._tool_generate_image(args, user_id)
         else:
             return {'error': f'未知工具: {tool_name}'}
 
@@ -3040,6 +3119,53 @@ AI回复：{ai_response[:500] if ai_response else ''}
         except Exception as e:
             logger.error(f'邮件发送失败: {e}')
             return {'error': f'邮件发送失败: {str(e)}'}
+
+    @staticmethod
+    def _tool_create_file(args: dict, user_id: int = None) -> dict:
+        """把对话内容生成为可下载的真实文件"""
+        from app.services.file_generation_service import create_file
+
+        filename = (args.get('filename') or '').strip()
+        if not filename:
+            return {'error': '请提供 filename（含扩展名的目标文件名）'}
+        try:
+            result = create_file(
+                filename=filename,
+                content=args.get('content'),
+                sheets=args.get('sheets'),
+                title=args.get('title'),
+                fmt=args.get('format'),
+            )
+        except Exception as e:
+            logger.error(f'生成文件失败: {e}', exc_info=True)
+            return {'error': f'生成文件失败: {str(e)}'}
+        if result.get('error'):
+            return result
+        logger.info(f'AI 生成文件成功: {result.get("file_path")} (user_id={user_id})')
+        return result
+
+    @staticmethod
+    def _tool_generate_image(args: dict, user_id: int = None) -> dict:
+        """调用已配置的图片生成模型生成图片文件"""
+        from app.services.file_generation_service import generate_image
+
+        prompt = (args.get('prompt') or '').strip()
+        if not prompt:
+            return {'error': '请提供 prompt（图片描述）'}
+        try:
+            result = generate_image(
+                prompt=prompt,
+                size=(args.get('size') or '').strip() or None,
+                model=(args.get('model') or '').strip() or None,
+                filename=(args.get('filename') or '').strip() or None,
+            )
+        except Exception as e:
+            logger.error(f'生成图片失败: {e}', exc_info=True)
+            return {'error': f'生成图片失败: {str(e)}'}
+        if result.get('error'):
+            return result
+        logger.info(f'AI 生成图片成功: {result.get("file_path")} (user_id={user_id})')
+        return result
 
     @staticmethod
     def _tool_fetch_url(args: dict) -> dict:

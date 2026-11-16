@@ -316,6 +316,8 @@ const toolOptions = [
   { name: 'request_pay_withdraw', label: '代付提现' },
   { name: 'save_skill', label: '保存技能/规则' },
   { name: 'send_email', label: '发送邮件' },
+  { name: 'create_file', label: '生成文件（Excel/Word/PDF/文本等）' },
+  { name: 'generate_image', label: '生成图片' },
 ]
 
 const defaultForm = {
