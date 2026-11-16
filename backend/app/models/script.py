@@ -12,6 +12,7 @@ class Script(db.Model):
     description = db.Column(db.String(500), comment='脚本描述')
     sql_text = db.Column(db.Text, nullable=False, comment='SQL语句')
     tag = db.Column(db.String(100), comment='标签')
+    priority = db.Column(db.Integer, default=0, comment='同标签同类型优先级，数值越大越优先')
     result_sheet_name = db.Column(db.String(100), default='查询结果', comment='结果工作表名')
     batch_size = db.Column(db.Integer, default=100, comment='批处理大小')
     timeout = db.Column(db.Integer, default=30, comment='超时时间(秒)')
@@ -102,6 +103,7 @@ class Script(db.Model):
             'description': self.description,
             'sql_text': self.sql_text,
             'tag': self.tag,
+            'priority': self.priority or 0,
             'result_sheet_name': self.result_sheet_name,
             'batch_size': self.batch_size,
             'timeout': self.timeout,

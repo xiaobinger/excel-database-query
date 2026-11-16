@@ -59,6 +59,7 @@ def create_script():
             description=data.get('description', ''),
             sql_text=data['sql_text'],
             tag=data.get('tag'),
+            priority=data.get('priority', 0),
             result_sheet_name=data.get('result_sheet_name', '查询结果'),
             batch_size=data.get('batch_size', 100),
             timeout=data.get('timeout', 30),
@@ -124,7 +125,7 @@ def update_script(script_id):
         return jsonify({'success': False, 'message': '请求数据为空'}), 400
 
     try:
-        simple_fields = ['name', 'description', 'sql_text', 'tag', 'result_sheet_name',
+        simple_fields = ['name', 'description', 'sql_text', 'tag', 'priority', 'result_sheet_name',
                          'batch_size', 'timeout', 'query_mode', 'param_column',
                          'database_connection_id', 'merge_strategy', 'new_sheet', 'is_active',
                          'primary_key', 'type', 'is_template', 'sql_template',
@@ -316,6 +317,38 @@ def simplify_sql():
         'success': True,
         'simplified_sql': sql,
     })
+
+
+@script_bp.route('/tag-priorities', methods=['POST'])
+@login_required
+def update_tag_priorities():
+    """批量保存「同标签同类型」脚本的优先级"""
+    data = request.get_json() or {}
+    items = data.get('items', [])
+    if not isinstance(items, list):
+        return jsonify({'success': False, 'message': 'items必须是非空列表'}), 400
+
+    updated = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            script_id = int(item.get('id'))
+            priority = int(item.get('priority', 0))
+        except (TypeError, ValueError):
+            continue
+        script = Script.query.get(script_id)
+        if script:
+            script.priority = priority
+            updated += 1
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+    return jsonify({'success': True, 'message': '优先级保存成功', 'updated': updated})
 
 
 @script_bp.route('/tags', methods=['GET'])

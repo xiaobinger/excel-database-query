@@ -113,6 +113,7 @@ const scripts = {
   simplifySql: (data) => http.post('/scripts/simplify', data),
   extractColumns: (data) => http.post('/scripts/extract-columns', data),
   getTags: () => http.get('/scripts/tags'),
+  updateTagPriorities: (data) => http.post('/scripts/tag-priorities', data),
   renderTemplate: (data) => http.post('/scripts/render-template', data),
   renderScriptTemplate: (id, data) => http.post(`/scripts/${id}/render-template`, data),
 }

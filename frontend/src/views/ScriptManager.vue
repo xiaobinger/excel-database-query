@@ -33,6 +33,9 @@
             <el-button v-hasPermi="['script:delete']" type="danger" size="small" plain @click="handleDeleteAll">
               <i class="fas fa-trash"></i> 删除全部
             </el-button>
+            <el-button v-if="store.hasButtonPermission('script:edit')" type="warning" plain @click="openTagDialog">
+              <i class="fas fa-tags"></i> 标签管理
+            </el-button>
             <el-button v-if="store.hasButtonPermission('script:create')" type="primary" @click="openDialog()">
               <i class="fas fa-plus"></i> 新建脚本
             </el-button>
@@ -58,6 +61,12 @@
         <el-table-column prop="tag" label="标签" min-width="160" show-overflow-tooltip>
           <template #default="{ row }">
             <el-tag v-if="row.tag" size="small" effect="plain">{{ row.tag }}</el-tag>
+            <span v-else style="color: #c0c4cc">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="优先级" width="90" align="center">
+          <template #default="{ row }">
+            <span v-if="row.tag">{{ row.priority || 0 }}</span>
             <span v-else style="color: #c0c4cc">-</span>
           </template>
         </el-table-column>
@@ -103,6 +112,41 @@
       </el-table>
       <el-empty v-if="!loading && filteredScripts.length === 0" :description="`暂无${typeLabel(typeFilter || 'query')}脚本`" />
     </el-card>
+
+    <el-dialog v-model="tagDialogVisible" title="标签管理" width="860px" destroy-on-close>
+      <div class="tag-manage-tip">
+        <i class="fas fa-info-circle"></i>
+        同一标签、同一类型的脚本可设置优先级（数值越大越优先）。查询任务中同时执行多个同标签同类型脚本时，按优先级取值：高优先级脚本匹配到数据则取它，否则依次取下一个有数据的脚本。
+      </div>
+      <el-table :data="tagManageList" stripe size="small" max-height="520" style="width: 100%">
+        <el-table-column prop="tag" label="标签" width="150" show-overflow-tooltip />
+        <el-table-column label="类型" width="110" align="center">
+          <template #default="{ row }">
+            <el-tag :type="typeTag(row.type)" size="small">{{ typeLabel(row.type) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="name" label="脚本名称" min-width="220" show-overflow-tooltip />
+        <el-table-column label="优先级" width="160" align="center">
+          <template #default="{ row }">
+            <el-input-number
+              v-model="row.priority"
+              :min="0"
+              :max="9999"
+              size="small"
+              controls-position="right"
+              style="width: 120px"
+            />
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-if="tagManageList.length === 0" description="暂无带标签的脚本" />
+      <template #footer>
+        <el-button @click="tagDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="tagSaving" :disabled="tagManageList.length === 0" @click="saveTagPriorities">
+          <i class="fas fa-check"></i> 保存优先级
+        </el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog
       v-model="dialogVisible"
@@ -615,6 +659,9 @@ const tagFilter = ref('')
 const typeFilter = ref('')
 const previewing = ref(false)
 const renderedPreview = ref('')
+const tagDialogVisible = ref(false)
+const tagSaving = ref(false)
+const tagManageList = ref([])
 
 const defaultForm = {
   name: '',
@@ -624,6 +671,7 @@ const defaultForm = {
   is_template: false,
   template_config: [],
   tag: '',
+  priority: 0,
   type: 'query',
   query_mode: 'in',
   batch_size: 100,
@@ -868,6 +916,42 @@ async function fetchTags() {
   }
 }
 
+async function openTagDialog() {
+  try {
+    const res = await api.scripts.list({})
+    const list = (res.data || res || [])
+      .filter(s => s.tag && String(s.tag).trim())
+      .map(s => ({ ...s, priority: s.priority || 0 }))
+    list.sort((a, b) => {
+      const tagCmp = String(a.tag).localeCompare(String(b.tag), 'zh-CN')
+      if (tagCmp) return tagCmp
+      const typeCmp = String(a.type || '').localeCompare(String(b.type || ''), 'zh-CN')
+      if (typeCmp) return typeCmp
+      return (b.priority || 0) - (a.priority || 0) ||
+        String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN')
+    })
+    tagManageList.value = list
+    tagDialogVisible.value = true
+  } catch {
+    tagManageList.value = []
+  }
+}
+
+async function saveTagPriorities() {
+  tagSaving.value = true
+  try {
+    await api.scripts.updateTagPriorities({
+      items: tagManageList.value.map(s => ({ id: s.id, priority: s.priority || 0 }))
+    })
+    ElMessage.success('优先级保存成功')
+    tagDialogVisible.value = false
+    fetchList()
+  } catch {
+  } finally {
+    tagSaving.value = false
+  }
+}
+
 function openDialog(row) {
   renderedPreview.value = ''
   if (row) {
@@ -1066,6 +1150,22 @@ onMounted(() => {
 .header-actions {
   display: flex;
   align-items: center;
+}
+
+.tag-manage-tip {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #606266;
+  background: #f4f8ff;
+  border: 1px solid #d9ecff;
+  border-radius: 4px;
+}
+
+.tag-manage-tip i {
+  margin-right: 6px;
+  color: #409eff;
 }
 
 .editor-container {
