@@ -442,24 +442,39 @@ class QueryService:
             }
 
     @staticmethod
-    def _script_has_data(sheet_results: Dict[str, Any], script_id: int) -> bool:
-        """判断某个脚本在当前工作表中是否查询到数据"""
-        prefix = f"{script_id}_"
-        for key, db_result in sheet_results.items():
-            if not key.startswith(prefix) or not db_result.get('success'):
-                continue
-            for item in db_result.get('results', []):
-                if item.get('success') and item.get('result'):
-                    return True
-        return False
+    def _normalize_cell(value) -> str:
+        """将单元格值归一化为可比较的字符串，用于跨脚本行去重"""
+        if value is None:
+            return ''
+        if isinstance(value, bool):
+            return str(value)
+        if isinstance(value, (int, float)):
+            return format(float(value), 'g')
+        try:
+            from decimal import Decimal
+            if isinstance(value, Decimal):
+                return format(float(value), 'g')
+        except Exception:
+            pass
+        if hasattr(value, 'isoformat'):
+            try:
+                return value.isoformat()
+            except Exception:
+                pass
+        return str(value)
+
+    @staticmethod
+    def _row_key(row) -> tuple:
+        return tuple(QueryService._normalize_cell(v) for v in row)
 
     @staticmethod
     def _apply_tag_priority(sheet_results: Dict[str, Any], script_ids: List[int],
                             task=None, sheet_label: str = '') -> Dict[str, Any]:
-        """同标签 + 同类型的多个脚本按优先级取值。
+        """同标签 + 同类型的多个脚本按优先级逐行取值。
 
-        按优先级从高到低寻找第一个查询到数据的脚本，仅保留该脚本的结果；
-        若所有脚本都没有数据则保持原样（最终也不会写入任何行）。
+        按脚本优先级从高到低处理，每行数据只在「更高优先级的脚本未返回该行」时保留；
+        相同行取优先级最高脚本的结果，低优先级脚本独有的行仍会保留。
+        该逻辑同样适用于 IN 列表批量查询（无法按参数归属时按行内容判重）。
         未设置标签的脚本不参与优先级收敛。
         """
         scripts = {}
@@ -475,28 +490,61 @@ class QueryService:
                 continue
             groups.setdefault((tag, script.type or ''), []).append(sid)
 
-        drop_ids = set()
         order = {sid: idx for idx, sid in enumerate(script_ids)}
+        plans = []
         for (tag, script_type), sids in groups.items():
             if len(sids) < 2:
                 continue
             ordered = sorted(sids, key=lambda x: (-(scripts[x].priority or 0), order.get(x, 0)))
-            chosen = next((sid for sid in ordered if QueryService._script_has_data(sheet_results, sid)), None)
-            if chosen is None:
-                continue
-            dropped = [sid for sid in sids if sid != chosen]
-            if dropped:
-                drop_ids.update(dropped)
-                if task:
-                    dropped_names = '、'.join(scripts[d].name for d in dropped)
-                    task.add_log(
-                        f'[Sheet:{sheet_label}] 标签[{tag}]/类型[{script_type}] 按优先级采用脚本 '
-                        f'[{scripts[chosen].name}]，未采用: {dropped_names}')
+            plans.append(((tag, script_type), ordered))
 
-        if not drop_ids:
+        if not plans:
             return sheet_results
-        return {k: v for k, v in sheet_results.items()
-                if int(k.split('_')[0]) not in drop_ids}
+
+        entries_by_sid = {}
+        for key, db_result in sheet_results.items():
+            try:
+                sid = int(key.split('_')[0])
+            except (ValueError, IndexError):
+                continue
+            entries_by_sid.setdefault(sid, []).append((key, db_result))
+
+        filtered = dict(sheet_results)
+        for (tag, script_type), ordered in plans:
+            seen_rows = set()
+            dropped_rows = 0
+            for sid in ordered:
+                script_row_keys = []
+                for key, db_result in entries_by_sid.get(sid, []):
+                    new_items = []
+                    for item in db_result.get('results', []):
+                        if not item.get('success'):
+                            new_items.append(item)
+                            continue
+                        kept = []
+                        for row in item.get('result', []):
+                            row_key = QueryService._row_key(row)
+                            if row_key in seen_rows:
+                                dropped_rows += 1
+                                continue
+                            kept.append(row)
+                            script_row_keys.append(row_key)
+                        new_item = dict(item)
+                        new_item['result'] = kept
+                        new_items.append(new_item)
+                    new_db = dict(db_result)
+                    new_db['results'] = new_items
+                    filtered[key] = new_db
+                # 同一脚本内部的重复行保持原样，只与更高优先级脚本的行判重
+                seen_rows.update(script_row_keys)
+
+            if dropped_rows and task:
+                ordered_names = '、'.join(scripts[sid].name for sid in ordered)
+                task.add_log(
+                    f'[Sheet:{sheet_label}] 标签[{tag}]/类型[{script_type}] 按优先级逐行取值 '
+                    f'(优先级从高到低: {ordered_names})，去重 {dropped_rows} 行')
+
+        return filtered
 
     @staticmethod
     def _process_all_results(all_results: Dict[str, Any], column_headers: List[str],

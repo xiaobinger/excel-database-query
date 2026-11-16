@@ -23,7 +23,7 @@
 
 <!-- 徽章 -->
 <p>
-  <img src="https://img.shields.io/badge/version-2.6.83-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-2.6.84-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/python-3.10+-yellow?style=flat-square&logo=python&logoColor=white" alt="python" />
   <img src="https://img.shields.io/badge/vue-3-green?style=flat-square&logo=vuedotjs&logoColor=white" alt="vue" />
   <img src="https://img.shields.io/badge/flask-black?style=flat-square&logo=flask&logoColor=white" alt="flask" />
@@ -436,6 +436,7 @@ WHERE merchant_id = :value
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-11-16 | v2.6.84 | 同标签同类型优先级取值改为**逐行去重**（适配 IN 列表批量查询）：① **逐行取值** 查询任务中同时执行多个「同标签 + 同类型」脚本时，不再整脚本丢弃低优先级结果，而是按优先级从高到低逐行收敛——重复行取优先级最高脚本的结果，低优先级脚本独有的行仍然保留；② **行身份判定** 新增 `_normalize_cell` / `_row_key`，将行内容归一化（数值统一为 `g` 格式、Decimal 转 float、日期取 `isoformat`、None 转空串）后作为 tuple 行键跨脚本判重，因此 IN 列表批量查询（结果无法按参数归属）同样生效；③ **边界处理** 同一脚本内部重复行保持原样，只与更高优先级脚本的行判重；未打标签的脚本不参与收敛；执行日志输出去重行数与优先级顺序。后端 `py_compile` 通过 |
 | 2026-11-16 | v2.6.83 | 脚本管理新增**标签管理与同标签同类型优先级**：① **优先级字段** 脚本新增 `priority`（数值越大越优先，默认 0），`_auto_migrate` 启动时自动补列，创建/更新/列表接口均支持；② **批量保存接口** 新增 `POST /api/scripts/tag-priorities`，一次提交多条 `{id, priority}`；③ **标签管理弹窗** 脚本管理页新增「标签管理」入口，按「标签 + 类型」排序展示所有带标签脚本，可逐条调整优先级并保存，主列表新增「优先级」列（无标签显示 `-`）；④ **任务取值按优先级收敛** 查询任务中同时执行多个「同标签 + 同类型」脚本时，按优先级从高到低选择第一个查询到数据的脚本结果，高优先级无数据时依次回退到下一个有数据的脚本，未打标签的脚本不参与收敛，执行日志输出本次采用的脚本与被忽略的脚本。后端 `py_compile`、前端 `vite build` 通过 |
 | 2026-11-16 | v2.6.82 | 系统任务参数能力优化：① **加签密钥支持参数占位符**——`sign_key` 可填写 `{{参数名}}`（如 `{{app_secret}}`），执行时（本机直连与 SSH 两条链路）自动用参数值替换后再参与签名，占位参数视为已使用、不再重复附加到请求参数中，避免密钥外泄；密钥中残留未解析占位符时执行日志给出警告；前端加签密钥输入框补充占位符说明；② **参数映射支持枚举映射**——脚本字段映射新增「映射方式：直接映射 / 枚举映射」，枚举映射可选择目标枚举参数与「枚举 key（匹配选项值 / 匹配显示名 / 自动匹配）」，执行时以脚本返回字段值作为 key 匹配枚举参数中的某个选项，取该选项的实际值映射到目标参数（默认同枚举参数），支持配置未匹配时的默认值，未命中会在执行日志中告警并跳过；后端统一解析任务枚举参数（含引用全局枚举、自定义选项）并兼容旧映射数据（无 `mode` 视为直接映射）。后端 `py_compile`、前端 `vite build` 通过 |
 | 2026-11-16 | v2.6.81 | AI 对话新增**监督者通过后的后续操作建议**：① **建议生成** 监督者的复核提示词扩展为同时输出 `suggestions`（2-4 条结合本次对话、具体可执行、以用户口吻表达的下一步操作，每条 ≤20 字；`retry`/`flag_human` 时为空），`_parse_verdict` 新增 `_parse_suggestions` 清洗（去列表符号、去空、截断 30 字、最多 4 条）；② **事件下发** 流式接口 `supervision=approved` 事件携带 `suggestions`，模型未返回时使用通用兜底建议（继续深入分析/更简洁总结/下一步行动建议）；③ **持久化** 复核记录写入消息 metadata 的 `follow_up_suggestions`，刷新或切换会话后仍可恢复；④ **前端交互** 输入框下方新增置灰虚线胶囊“接下来你可能想：”，加载中自动隐藏，点击直接以该建议发起下一轮对话（复用 `sendMessage`），仅展示最后一条 AI 文本回复的建议，工具卡片不干扰；⑤ **兜底与隔离** 未配置监督者或复核未通过时不展示。后端 `py_compile`、前端 `vite build` 通过 |
