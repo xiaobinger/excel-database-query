@@ -113,12 +113,25 @@
       <el-empty v-if="!loading && filteredScripts.length === 0" :description="`暂无${typeLabel(typeFilter || 'query')}脚本`" />
     </el-card>
 
-    <el-dialog v-model="tagDialogVisible" title="标签管理" width="860px" destroy-on-close>
+    <el-dialog v-model="tagDialogVisible" title="标签管理" width="900px" destroy-on-close>
       <div class="tag-manage-tip">
         <i class="fas fa-info-circle"></i>
-        同一标签、同一类型的脚本可设置优先级（数值越大越优先）。查询任务中同时执行多个同标签同类型脚本时，按优先级取值：高优先级脚本匹配到数据则取它，否则依次取下一个有数据的脚本。
+        同一标签、同一类型的脚本可设置优先级（数值越大越优先）。查询任务中同时执行多个同标签同类型脚本时按优先级逐行取值：重复行取高优先级脚本的结果，低优先级脚本独有的行仍会保留（IN 列表批量查询同样适用）。
       </div>
-      <el-table :data="tagManageList" stripe size="small" max-height="520" style="width: 100%">
+      <div class="tag-manage-filters">
+        <el-select v-model="tagDlgTypeFilter" placeholder="类型筛选" clearable size="small" style="width: 140px">
+          <el-option value="query" label="查询选项" />
+          <el-option value="export" label="导出选项" />
+          <el-option value="system" label="系统脚本" />
+          <el-option value="lookup" label="信息查询" />
+          <el-option value="dashboard" label="看板脚本" />
+        </el-select>
+        <el-select v-model="tagDlgTagFilter" placeholder="标签筛选" clearable size="small" style="width: 180px">
+          <el-option v-for="tag in tags" :key="tag" :label="tag" :value="tag" />
+        </el-select>
+        <span class="tag-manage-count">共 {{ filteredTagManageList.length }} 个脚本</span>
+      </div>
+      <el-table :data="filteredTagManageList" stripe size="small" max-height="520" style="width: 100%">
         <el-table-column prop="tag" label="标签" width="150" show-overflow-tooltip />
         <el-table-column label="类型" width="110" align="center">
           <template #default="{ row }">
@@ -139,7 +152,7 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-if="tagManageList.length === 0" description="暂无带标签的脚本" />
+      <el-empty v-if="filteredTagManageList.length === 0" description="暂无符合筛选条件的带标签脚本" />
       <template #footer>
         <el-button @click="tagDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="tagSaving" :disabled="tagManageList.length === 0" @click="saveTagPriorities">
@@ -660,6 +673,8 @@ const typeFilter = ref('')
 const previewing = ref(false)
 const renderedPreview = ref('')
 const tagDialogVisible = ref(false)
+const tagDlgTypeFilter = ref('')
+const tagDlgTagFilter = ref('')
 const tagSaving = ref(false)
 const tagManageList = ref([])
 
@@ -759,6 +774,14 @@ const filteredScripts = computed(() => {
 
 const showQueryColumns = computed(() => {
   return !typeFilter.value || (typeFilter.value !== 'system' && typeFilter.value !== 'lookup')
+})
+
+const filteredTagManageList = computed(() => {
+  return tagManageList.value.filter(s => {
+    if (tagDlgTypeFilter.value && s.type !== tagDlgTypeFilter.value) return false
+    if (tagDlgTagFilter.value && s.tag !== tagDlgTagFilter.value) return false
+    return true
+  })
 })
 
 function typeTag(type) {
@@ -917,6 +940,9 @@ async function fetchTags() {
 }
 
 async function openTagDialog() {
+  // 带入外层列表当前的筛选条件
+  tagDlgTypeFilter.value = typeFilter.value || ''
+  tagDlgTagFilter.value = tagFilter.value || ''
   try {
     const res = await api.scripts.list({})
     const list = (res.data || res || [])
@@ -1166,6 +1192,18 @@ onMounted(() => {
 .tag-manage-tip i {
   margin-right: 6px;
   color: #409eff;
+}
+
+.tag-manage-filters {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.tag-manage-count {
+  font-size: 12px;
+  color: #909399;
 }
 
 .editor-container {
