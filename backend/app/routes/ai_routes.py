@@ -157,6 +157,9 @@ def _save_review_record(msg_id: int, review_record: dict, supervisor_agent_id: i
         'feedback': review_record.get('feedback', ''),
         'supervisor_agent_id': supervisor_agent_id,
     }
+    # 保存监督者通过后给出的后续操作建议（供前端一键追问）
+    if review_record.get('suggestions'):
+        meta['follow_up_suggestions'] = review_record['suggestions']
     msg.msg_metadata = _json.dumps(meta, ensure_ascii=False)
     db.session.commit()
 
@@ -3214,9 +3217,14 @@ def send_message_stream(chat_id):
                         'timestamp': datetime.utcnow().isoformat(),
                     }
                     if _verdict['verdict'] == 'approved':
+                        # 监督者通过后给出后续操作建议（模型未返回时用通用兜底，保证前端有可选项）
+                        _follow_ups = _verdict.get('suggestions') or []
+                        if not _follow_ups:
+                            _follow_ups = ['继续深入分析这个问题', '用更简洁的方式总结一下', '给出具体的下一步行动建议']
+                        _review_record['suggestions'] = _follow_ups
                         # 保存复核通过记录
                         _save_review_record(msg_id, _review_record, _sup_id)
-                        yield f"data: {json.dumps({'type': 'supervision', 'status': 'approved', 'content': '✓ 监督者复核通过', 'review_record': _review_record}, ensure_ascii=False)}\n\n"
+                        yield f"data: {json.dumps({'type': 'supervision', 'status': 'approved', 'content': '✓ 监督者复核通过', 'review_record': _review_record, 'suggestions': _follow_ups}, ensure_ascii=False)}\n\n"
                         break
                     elif _verdict['verdict'] == 'flag_human':
                         mark_message(msg_id, _verdict, _sup_id)

@@ -899,6 +899,18 @@
               </div>
             </div>
           </div>
+          <!-- 监督者复核通过后的后续操作建议：置灰可点击，点击直接发起下一轮对话 -->
+          <div v-if="followUpSuggestions.length > 0" class="follow-up-suggestions">
+            <span class="follow-up-label"><i class="fas fa-lightbulb"></i> 接下来你可能想：</span>
+            <button
+              v-for="(item, idx) in followUpSuggestions"
+              :key="idx"
+              type="button"
+              class="follow-up-chip"
+              :disabled="loading"
+              @click="useFollowUpSuggestion(item)"
+            >{{ item }}</button>
+          </div>
         </div>
       </template>
     </div>
@@ -1750,6 +1762,10 @@ async function reloadCurrentMessages() {
         if (meta.supervision_records && meta.supervision_records.length > 0) {
           base._supervision_records = meta.supervision_records
         }
+        // 恢复监督者给出的后续操作建议
+        if (meta.follow_up_suggestions && meta.follow_up_suggestions.length > 0) {
+          base._follow_up_suggestions = meta.follow_up_suggestions
+        }
       }
       return base
     })
@@ -1958,6 +1974,27 @@ const canSend = computed(() => {
   return (inputText.value.trim() || uploadedFile.value) && !loading.value
 })
 
+// 监督者复核通过后给出的后续操作建议（仅取最后一条AI文本回复的建议）
+const followUpSuggestions = computed(() => {
+  if (loading.value) return []
+  const list = messages.value
+  for (let i = list.length - 1; i >= 0; i--) {
+    const m = list[i]
+    if (!m || m.role !== 'assistant') continue
+    if (m._streaming) return []
+    if (m._type) continue
+    return Array.isArray(m._follow_up_suggestions) ? m._follow_up_suggestions : []
+  }
+  return []
+})
+
+// 点击建议：直接以该内容发起下一轮对话
+function useFollowUpSuggestion(text) {
+  if (loading.value || !text) return
+  inputText.value = text
+  sendMessage()
+}
+
 async function fetchChats() {
   try {
     const res = await api.ai.getChats()
@@ -2050,6 +2087,10 @@ async function selectChat(chatId) {
         base._thinking_done = meta._thinking_done || false
         base._show_thinking = true
         base._thinking_collapsed = true
+      }
+      // 恢复监督者给出的后续操作建议
+      if (meta.follow_up_suggestions && meta.follow_up_suggestions.length > 0) {
+        base._follow_up_suggestions = meta.follow_up_suggestions
       }
         // 恢复执行状态
         if (meta._executing) base._executing = true
@@ -2170,6 +2211,7 @@ async function checkAndResumeStream(chatId) {
             } else if (event.status === 'approved') {
               streamMsg._supervision = '✓ 监督者复核通过'
               streamMsg._supervision_flagged = false
+              streamMsg._follow_up_suggestions = Array.isArray(event.suggestions) ? event.suggestions : []
             } else if (event.status === 'flagged') {
               streamMsg._supervision = event.content || '⚠️ 监督者标记本回复需人工复核'
               streamMsg._supervision_flagged = true
@@ -2253,6 +2295,9 @@ async function refreshMessages(chatId) {
           base._thinking_done = meta._thinking_done || false
           base._show_thinking = true
           base._thinking_collapsed = true
+        }
+        if (meta.follow_up_suggestions && meta.follow_up_suggestions.length > 0) {
+          base._follow_up_suggestions = meta.follow_up_suggestions
         }
       }
       return base
@@ -3423,6 +3468,7 @@ async function sendStreamMessage(content, modelId, agentId, options = {}) {
               } else if (event.status === 'approved') {
                 streamMsg._supervision = '✓ 监督者复核通过'
                 streamMsg._supervision_flagged = false
+                streamMsg._follow_up_suggestions = Array.isArray(event.suggestions) ? event.suggestions : []
               } else if (event.status === 'flagged') {
                 streamMsg._supervision = event.content || '⚠️ 监督者标记本回复需人工复核'
                 streamMsg._supervision_flagged = true
@@ -6774,6 +6820,49 @@ onActivated(() => {
 .input-wrapper:focus-within {
   border-color: #409eff;
   box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.12);
+}
+
+/* 监督者复核通过后的后续操作建议：置灰但可点击 */
+.follow-up-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 0 2px;
+}
+
+.follow-up-label {
+  font-size: 12px;
+  color: #b1b6c0;
+}
+
+.follow-up-label i {
+  margin-right: 2px;
+  color: #c0c4cc;
+}
+
+.follow-up-chip {
+  padding: 5px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #9aa0aa;
+  background: #f5f6f8;
+  border: 1px dashed #dcdfe6;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: color 0.2s, background 0.2s, border-color 0.2s;
+}
+
+.follow-up-chip:hover {
+  color: #409eff;
+  background: #ecf5ff;
+  border-color: #b3d8ff;
+}
+
+.follow-up-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .file-attachment {

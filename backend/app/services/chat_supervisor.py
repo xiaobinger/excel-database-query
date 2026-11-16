@@ -36,10 +36,13 @@ REVIEW_TEMPLATE = (
     '   - 正确态度应该是：谦虚、专业、耐心、以解决问题为导向\n\n'
     '{interrupt_section}'
     '请只输出一个JSON对象（不要输出任何其他内容），格式如下：\n'
-    '{{"verdict": "approved|retry|flag_human", "feedback": "简要说明"}}\n'
+    '{{"verdict": "approved|retry|flag_human", "feedback": "简要说明", "suggestions": ["后续操作1", "后续操作2"]}}\n'
     '- approved：回复质量合格，态度端正\n'
     '- retry：回复存在明显问题或态度不端正，feedback中写明具体问题和改进要求（将触发主Agent重新生成）\n'
-    '- flag_human：涉及金额/权限等高风险事项或无法判断对错，需要人工复核，feedback中写明风险点\n\n'
+    '- flag_human：涉及金额/权限等高风险事项或无法判断对错，需要人工复核，feedback中写明风险点\n'
+    '- suggestions：仅当 verdict=approved 时给出2-4条用户接下来最可能想执行的下一步操作，'
+    '需结合本次对话内容、具体可执行、以用户口吻表达，每条不超过20个字（例如“把结果导出为Excel”“再查一下上个月的记录”）；'
+    'retry/flag_human时 suggestions 返回空数组\n\n'
     '## 对话记录\n'
     '用户问题：\n{user_content}\n\n'
     '主Agent回复：\n{assistant_content}\n\n'
@@ -95,9 +98,26 @@ def _summarize_tools(tool_results: list) -> str:
     return '\n'.join(lines)
 
 
+def _parse_suggestions(raw) -> list:
+    """解析并清洗监督者给出的后续操作建议（最多4条，每条不超过30字）"""
+    if not isinstance(raw, list):
+        return []
+    result = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        text = re.sub(r'^\s*(?:[-•*]|\d+[.、)）])\s*', '', item).strip()
+        if not text:
+            continue
+        result.append(text[:30])
+        if len(result) >= 4:
+            break
+    return result
+
+
 def _parse_verdict(content: str) -> dict:
     """解析监督者输出的判定JSON，解析失败时按关键词兜底"""
-    verdict = {'verdict': 'approved', 'feedback': '', 'raw': content or ''}
+    verdict = {'verdict': 'approved', 'feedback': '', 'suggestions': [], 'raw': content or ''}
     if not content:
         return verdict
     # 提取第一个JSON对象
@@ -109,6 +129,7 @@ def _parse_verdict(content: str) -> dict:
             if v in ('approved', 'retry', 'flag_human', 'flag'):
                 verdict['verdict'] = 'flag_human' if v == 'flag' else v
             verdict['feedback'] = str(parsed.get('feedback', '') or '').strip()
+            verdict['suggestions'] = _parse_suggestions(parsed.get('suggestions'))
             return verdict
         except (json.JSONDecodeError, TypeError):
             pass
