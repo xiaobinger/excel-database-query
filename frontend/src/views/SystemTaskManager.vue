@@ -641,7 +641,8 @@
 
               <div class="param-source-hint" style="margin-bottom: 12px;">
                 <i class="fas fa-info-circle"></i>
-                配置脚本返回字段到任务参数的映射关系；不配置则自动合并所有字段（参数名与脚本字段名相同）
+                配置脚本返回字段到任务参数的映射关系；不配置则自动合并所有字段（参数名与脚本字段名相同）。
+                选择「枚举映射」时，脚本返回的字段值会作为 key，匹配枚举参数中的某个选项，并取该选项的实际值映射到目标参数。
               </div>
 
               <div v-if="form.param_source_param_mapping.length === 0" class="param-source-empty">
@@ -654,12 +655,42 @@
                   v-for="(item, idx) in form.param_source_param_mapping"
                   :key="idx"
                   class="param-source-mapping-row"
+                  style="flex-wrap: wrap;"
                 >
                   <el-input v-model="item.source_field" placeholder="脚本返回字段名" class="mapping-field" />
                   <span class="mapping-arrow">
                     <i class="fas fa-arrow-right"></i>
                   </span>
-                  <el-input v-model="item.target_param" placeholder="任务参数名" class="mapping-field" />
+                  <el-select v-model="item.mode" style="width: 120px" @change="onMappingModeChange(item)">
+                    <el-option value="direct" label="直接映射" />
+                    <el-option value="enum" label="枚举映射" />
+                  </el-select>
+                  <template v-if="item.mode === 'enum'">
+                    <el-select
+                      v-model="item.enum_param"
+                      placeholder="选择枚举参数"
+                      style="width: 170px"
+                      @change="onMappingEnumChange(item)"
+                    >
+                      <el-option
+                        v-for="p in enumParamsForMapping"
+                        :key="p.name"
+                        :label="`${p.label || p.name} (${p.name})`"
+                        :value="p.name"
+                      />
+                    </el-select>
+                    <el-select v-model="item.match_field" placeholder="枚举 key" style="width: 130px">
+                      <el-option value="value" label="匹配选项值" />
+                      <el-option value="label" label="匹配显示名" />
+                      <el-option value="auto" label="自动匹配" />
+                    </el-select>
+                    <span class="mapping-arrow">
+                      <i class="fas fa-arrow-right"></i>
+                    </span>
+                    <el-input v-model="item.target_param" placeholder="目标参数名(默认同枚举参数)" style="width: 190px" />
+                    <el-input v-model="item.fallback" placeholder="未匹配默认值(可选)" style="width: 160px" />
+                  </template>
+                  <el-input v-else v-model="item.target_param" placeholder="任务参数名" class="mapping-field" />
                   <el-button
                     type="danger"
                     circle
@@ -676,7 +707,7 @@
                 type="primary"
                 plain
                 size="small"
-                @click="form.param_source_param_mapping.push({source_field: '', target_param: ''})"
+                @click="addParamSourceMapping"
                 class="param-source-add-btn"
               >
                 <i class="fas fa-plus"></i>
@@ -699,7 +730,10 @@
         </el-form-item>
         <template v-if="form.sign_enabled">
           <el-form-item label="加签密钥">
-            <el-input v-model="form.sign_key" placeholder="签名密钥" show-password />
+            <el-input v-model="form.sign_key" :placeholder="'签名密钥，支持参数占位符，如 {{app_secret}}'" show-password />
+            <div style="color: #909399; font-size: 12px; margin-top: 4px;">
+              支持参数占位符：如填写 <code v-pre>{{app_secret}}</code>，执行时用参数「app_secret」的值作为密钥（该参数不会重复发送到请求中）
+            </div>
           </el-form-item>
           <el-form-item label="加签方法">
             <el-select v-model="form.sign_method" placeholder="选择加签方法" style="width: 200px">
@@ -1438,6 +1472,33 @@ function onEnumRefChange(param) {
   }
 }
 
+// 参数来源映射：可选的枚举参数（用于枚举映射）
+const enumParamsForMapping = computed(() => (form.params_config || []).filter(p => p.type === 'enum' && p.name))
+
+function addParamSourceMapping() {
+  if (!form.param_source_param_mapping) form.param_source_param_mapping = []
+  form.param_source_param_mapping.push({
+    source_field: '',
+    target_param: '',
+    mode: 'direct',
+    enum_param: '',
+    match_field: 'value',
+    fallback: '',
+  })
+}
+
+function onMappingModeChange(item) {
+  if (item.mode === 'enum' && !item.match_field) {
+    item.match_field = 'value'
+  }
+}
+
+function onMappingEnumChange(item) {
+  if (!item.target_param) {
+    item.target_param = item.enum_param
+  }
+}
+
 function addResponseMapping() {
   if (!form.response_mapping) form.response_mapping = []
   form.response_mapping.push({ field: '', label: '', mapping: {}, is_status: false, success_value: '0', error_field: '', mappingEntries: [{ key: '', value: '' }] })
@@ -1566,7 +1627,13 @@ function openDialog(row) {
       param_source_script_id: row.param_source_script_id || null,
       param_source_db_id: row.param_source_db_id || null,
       param_source_param_mapping: (row.param_source_param_mapping && Array.isArray(row.param_source_param_mapping))
-        ? JSON.parse(JSON.stringify(row.param_source_param_mapping))
+        ? row.param_source_param_mapping.map(m => ({
+            mode: 'direct',
+            enum_param: '',
+            match_field: 'value',
+            fallback: '',
+            ...m,
+          }))
         : [],
     })
     // 编辑模式：若任务已选跳板机，自动实测探测可登录目标机并回显原目标机
@@ -1661,7 +1728,18 @@ async function handleSubmit() {
         payload.param_source_script_id = form.param_source_script_id
         payload.param_source_db_id = form.param_source_db_id || null
         payload.param_source_param_mapping = (form.param_source_param_mapping || [])
-          .filter(m => m.source_field && m.target_param)
+          .filter(m => m.source_field && (m.target_param || m.enum_param))
+          .map(m => {
+            const mode = m.mode || 'direct'
+            return {
+              source_field: m.source_field,
+              target_param: m.target_param || (mode === 'enum' ? m.enum_param : ''),
+              mode,
+              enum_param: mode === 'enum' ? (m.enum_param || '') : '',
+              match_field: mode === 'enum' ? (m.match_field || 'value') : '',
+              fallback: mode === 'enum' ? (m.fallback || '') : '',
+            }
+          })
       }
     }
 

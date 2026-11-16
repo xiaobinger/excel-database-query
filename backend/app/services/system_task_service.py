@@ -211,15 +211,65 @@ class SystemTaskService:
         if param_mapping:
             merged = dict(params_values) if params_values else {}
             mapped_count = 0
+            global_enums = SystemTaskService._get_global_enums()
             for m in param_mapping:
                 source_field = m.get('source_field', '')
-                target_param = m.get('target_param', '')
-                if not source_field or not target_param:
+                if not source_field or source_field not in last_query_result:
                     continue
-                if source_field in last_query_result:
-                    val = last_query_result[source_field]
-                    merged[target_param] = str(val) if val is not None else ''
-                    mapped_count += 1
+                raw_val = last_query_result[source_field]
+                source_value = '' if raw_val is None else str(raw_val)
+                mode = (m.get('mode') or 'direct').lower()
+
+                if mode == 'enum':
+                    # 枚举映射：脚本字段值作为 key，匹配枚举参数的某个选项，取该选项的实际值映射到目标参数
+                    enum_param = (m.get('enum_param') or '').strip()
+                    target_param = (m.get('target_param') or enum_param).strip()
+                    if not enum_param or not target_param:
+                        continue
+                    options = SystemTaskService._resolve_enum_options(system_task, enum_param, global_enums)
+                    if not options:
+                        execution.add_log(f'枚举映射跳过：未找到枚举参数 {enum_param} 的选项', 'warning')
+                        continue
+                    match_field = (m.get('match_field') or 'value').lower()
+                    matched_value = None
+                    matched_label = ''
+                    for opt in options:
+                        if not isinstance(opt, dict):
+                            continue
+                        opt_value = '' if opt.get('value') is None else str(opt.get('value'))
+                        opt_label = '' if opt.get('label') is None else str(opt.get('label'))
+                        candidates = [opt_value, opt_label] if match_field == 'auto' \
+                            else ([opt_value] if match_field == 'value' else [opt_label])
+                        if source_value in candidates:
+                            matched_value = opt_value
+                            matched_label = opt_label
+                            break
+                    if matched_value is not None:
+                        merged[target_param] = matched_value
+                        mapped_count += 1
+                        execution.add_log(
+                            f'枚举映射：{source_field}={source_value} → 枚举参数 {enum_param} 选项'
+                            f'{matched_label or matched_value} → 参数 {target_param}={matched_value}'
+                        )
+                    elif m.get('fallback') not in (None, ''):
+                        merged[target_param] = str(m.get('fallback'))
+                        mapped_count += 1
+                        execution.add_log(
+                            f'枚举映射未匹配：{source_field}={source_value}，使用默认值 '
+                            f'{m.get("fallback")} → 参数 {target_param}', 'warning'
+                        )
+                    else:
+                        execution.add_log(
+                            f'枚举映射未匹配：{source_field}={source_value} 不在枚举参数 {enum_param} 的选项中，已跳过',
+                            'warning'
+                        )
+                    continue
+
+                target_param = m.get('target_param', '')
+                if not target_param:
+                    continue
+                merged[target_param] = source_value
+                mapped_count += 1
             execution.add_log(f'参数来源脚本执行成功，映射了 {mapped_count} 个参数')
             db.session.commit()
             return merged
@@ -229,6 +279,57 @@ class SystemTaskService:
             execution.add_log('参数来源脚本执行成功（无映射配置，自动合并所有字段）')
             db.session.commit()
             return merged
+
+    @staticmethod
+    def _get_global_enums() -> Dict[str, List[dict]]:
+        """读取全局枚举参数配置，返回 {枚举name: options} 映射"""
+        from app.models.system_config import SystemConfig
+        config = SystemConfig.query.filter_by(config_key='system_task_enums').first()
+        if not config or not config.config_value:
+            return {}
+        try:
+            data = json.loads(config.config_value)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        result = {}
+        if isinstance(data, list):
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                name = (item.get('name') or '').strip()
+                options = item.get('options')
+                if name and isinstance(options, list):
+                    result[name] = options
+        return result
+
+    @staticmethod
+    def _resolve_enum_options(system_task: SystemTask, enum_param: str,
+                              global_enums: Dict[str, List[dict]] = None) -> List[dict]:
+        """解析枚举参数可用的选项：优先取任务参数引用的全局枚举，其次取参数自定义选项"""
+        global_enums = global_enums or {}
+        for p in system_task.get_params_config() or []:
+            if not isinstance(p, dict) or p.get('name') != enum_param or p.get('type') != 'enum':
+                continue
+            enum_ref = (p.get('enum_ref') or '').strip()
+            if enum_ref and global_enums.get(enum_ref):
+                return global_enums[enum_ref]
+            options = p.get('options')
+            if isinstance(options, list) and options:
+                return options
+        # 兼容直接填写全局枚举名称的情况
+        return global_enums.get(enum_param) or []
+
+    @staticmethod
+    def _resolve_sign_secret(sign_key: str, params_values: Dict[str, Any]) -> str:
+        """解析加签密钥中的参数占位符，如 {{app_secret}}"""
+        secret = '' if sign_key is None else str(sign_key)
+        if not secret or not params_values or '{{' not in secret:
+            return secret
+        for key, val in params_values.items():
+            placeholder = f'{{{{{key}}}}}'
+            if placeholder in secret:
+                secret = secret.replace(placeholder, '' if val is None else str(val))
+        return secret
 
     @staticmethod
     def _split_sql_statements(sql: str) -> List[str]:
@@ -616,6 +717,14 @@ class SystemTaskService:
         for field in form_fields:
             field['value'] = fill_placeholders(field.get('value'))
 
+        # 加签密钥支持参数占位符（如 {{app_secret}}），解析后参与签名
+        sign_key_template = system_task.sign_key or ''
+        sign_secret = SystemTaskService._resolve_sign_secret(sign_key_template, params_values)
+        if sign_key_template and params_values:
+            for key in params_values:
+                if f'{{{{{key}}}}}' in sign_key_template:
+                    used_param_keys.add(key)
+
         # 从request_params中移除已用于URL/body替换的参数，避免重复附加
         for key in used_param_keys:
             request_params.pop(key, None)
@@ -626,7 +735,9 @@ class SystemTaskService:
         update_execution_progress(execution.execution_id, 30, f'准备请求: {method} {url}')
 
         # Signing（参考 buildCurl 签名算法）
-        if system_task.sign_enabled and system_task.sign_key:
+        if system_task.sign_enabled and sign_secret:
+            if '{{' in sign_secret:
+                execution.add_log('加签密钥中仍存在未解析的参数占位符，请检查参数配置', 'warning')
             sign_name = system_task.sign_param_name or 'sign'
             if body_type in ('form_urlencoded', 'form_data'):
                 # 表单字段本身就是签名参数，直接用原始值参与排序，避免被URL编码干扰
@@ -634,13 +745,13 @@ class SystemTaskService:
                 sign_params.update({f['key']: f['value'] for f in form_fields})
                 sign = SystemTaskService._compute_sign(
                     sign_params, '', headers,
-                    system_task.sign_key, system_task.sign_method,
+                    sign_secret, system_task.sign_method,
                     sign_param_name=sign_name
                 )
             else:
                 sign = SystemTaskService._compute_sign(
                     request_params, body, headers,
-                    system_task.sign_key, system_task.sign_method,
+                    sign_secret, system_task.sign_method,
                     sign_param_name=sign_name
                 )
             append_type = system_task.sign_append_type or 'query'
@@ -1954,16 +2065,24 @@ class SystemTaskService:
                     url = url.replace(placeholder, str(val))
                     used_param_keys.add(key)
 
+        # 加签密钥支持参数占位符（如 {{app_secret}}），解析后参与签名
+        sign_key_template = system_task.sign_key or ''
+        sign_secret = SystemTaskService._resolve_sign_secret(sign_key_template, params_values)
+        if sign_key_template and params_values:
+            for key in params_values:
+                if f'{{{{{key}}}}}' in sign_key_template:
+                    used_param_keys.add(key)
+
         # 从request_params中移除已用于URL/body替换的参数，避免重复附加
         for key in used_param_keys:
             request_params.pop(key, None)
 
         # Signing（参考 buildCurl 签名算法）
-        if system_task.sign_enabled and system_task.sign_key:
+        if system_task.sign_enabled and sign_secret:
             sign_name = system_task.sign_param_name or 'sign'
             sign = SystemTaskService._compute_sign(
                 request_params, body, headers,
-                system_task.sign_key, system_task.sign_method,
+                sign_secret, system_task.sign_method,
                 sign_param_name=sign_name
             )
             append_type = system_task.sign_append_type or 'query'
