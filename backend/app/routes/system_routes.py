@@ -283,6 +283,7 @@ MERGE_TRACK_KEY = 'menu_config_merged_items'
 
 MERGE_NEW_ITEMS = [
     {"path": "/token-stats", "title": "Token统计", "icon": "fa-coins", "permission": "token_stats", "group": "系统管理"},
+    {"path": "/workflows", "title": "混合工作流", "icon": "fa-project-diagram", "permission": "workflows", "group": "系统管理"},
 ]
 
 

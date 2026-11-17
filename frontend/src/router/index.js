@@ -42,6 +42,7 @@ const routes = [
       { path: 'pay-flow-executions', name: 'PayFlowExecutions', component: () => import('../views/PayFlowExecutions.vue'), meta: { menu: 'pay_flow', title: '代付流程执行记录' } },
       { path: 'ticket-analytics', name: 'TicketAnalytics', component: () => import('../views/TicketAnalytics.vue'), meta: { menu: 'ticket_analytics', title: '工单统计' } },
       { path: 'token-stats', name: 'TokenStats', component: () => import('../views/TokenStats.vue'), meta: { menu: 'token_stats', title: 'Token统计' } },
+      { path: 'workflows', name: 'WorkflowDesigner', component: () => import('../views/WorkflowDesigner.vue'), meta: { menu: 'workflows', title: '混合工作流' } },
       { path: 'system-map', name: 'SystemMap', component: () => import('../views/SystemMap.vue'), meta: { menu: 'system_map', title: '系统地图' } }
     ]
   }

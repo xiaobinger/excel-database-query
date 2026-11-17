@@ -318,6 +318,8 @@ const toolOptions = [
   { name: 'send_email', label: '发送邮件' },
   { name: 'create_file', label: '生成文件（Excel/Word/PDF/文本等）' },
   { name: 'generate_image', label: '生成图片' },
+  { name: 'list_workflow_resources', label: '列出工作流可用资源' },
+  { name: 'create_workflow', label: '生成/创建工作流' },
 ]
 
 const defaultForm = {

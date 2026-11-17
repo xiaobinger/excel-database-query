@@ -20,9 +20,11 @@ from app.models.pay_flow import PayFlowTemplate, PayFlowExecution, PayFlowNodeEx
 from app.models.dashboard import DashboardQuickQuery
 from app.models.login_log import LoginLog
 from app.models.operation_log import OperationLog
+from app.models.workflow import Workflow, WorkflowRun, WorkflowRunNode
 
 __all__ = ['SshConfig', 'DatabaseConnection', 'Script', 'QueryTask', 'Role', 'User',
            'SystemConfig', 'AutoExportTask', 'AiConfig', 'AiStrategy', 'UserBehavior', 'AiSkill',
            'AiChat', 'AiChatMessage', 'BusinessSystem', 'SystemTask', 'SystemTaskExecution', 'ToolMemory',
            'Ticket', 'TicketComment', 'PayConfig', 'PayFlowTemplate', 'PayFlowExecution', 'PayFlowNodeExecution',
-           'DashboardQuickQuery', 'LoginLog', 'OperationLog']
+           'DashboardQuickQuery', 'LoginLog', 'OperationLog',
+           'Workflow', 'WorkflowRun', 'WorkflowRunNode']

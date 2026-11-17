@@ -37,6 +37,7 @@ export const ALL_MENU_ITEMS = [
  { path: '/pay-flow-executions', title: '代付流程执行记录', icon: 'fa-list-check', permission: 'pay_flow_executions' },
  { path: '/ticket-analytics', title: '工单统计', icon: 'fa-chart-pie', permission: 'ticket_analytics' },
  { path: '/token-stats', title: 'Token统计', icon: 'fa-coins', permission: 'token_stats' },
+  { path: '/workflows', title: '混合工作流', icon: 'fa-project-diagram', permission: 'workflows' },
   { path: '/system-map', title: '系统地图', icon: 'fa-sitemap', permission: 'system_map' },
 ]
 
@@ -78,6 +79,7 @@ export const DEFAULT_MENU_CONFIG = [
   { path: '/pay-flow-executions', title: '代付流程执行记录', icon: 'fa-list-check', permission: 'pay_flow_executions', visible: true },
   { path: '/ticket-analytics', title: '工单统计', icon: 'fa-chart-pie', permission: 'ticket_analytics', visible: true },
   { path: '/token-stats', title: 'Token统计', icon: 'fa-coins', permission: 'token_stats', visible: true },
+    { path: '/workflows', title: '混合工作流', icon: 'fa-project-diagram', permission: 'workflows', visible: true },
     { path: '/system-map', title: '系统地图', icon: 'fa-sitemap', permission: 'system_map', visible: true },
   ]},
 ]

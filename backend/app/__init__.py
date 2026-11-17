@@ -56,6 +56,7 @@ def create_app(config_name='default'):
         from app.models.ticket import Ticket, TicketComment
         from app.models.pay_config import PayConfig
         from app.models.dashboard import DashboardQuickQuery
+        from app.models.workflow import Workflow, WorkflowRun, WorkflowRunNode
         db.create_all()
         _auto_migrate(app)
         _migrate_ticket_comments_nullable(app)
@@ -206,6 +207,7 @@ def _register_blueprints(app):
     from app.routes.dashboard_routes import dashboard_bp
     from app.routes.log_routes import log_bp
     from app.routes.widget_routes import widget_bp
+    from app.routes.workflow_routes import workflow_bp
 
     app.register_blueprint(ssh_bp)
     app.register_blueprint(database_bp)
@@ -237,6 +239,7 @@ def _register_blueprints(app):
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(log_bp)
     app.register_blueprint(widget_bp)
+    app.register_blueprint(workflow_bp)
 
 
 def _register_error_handlers(app):
@@ -581,7 +584,7 @@ def _init_default_admin(app):
         # 确保管理员角色包含新菜单权限
         try:
             menus = json.loads(admin_role.menu_permissions) if admin_role.menu_permissions else []
-            new_menus = ['ai_chat', 'ai_sessions', 'skills', 'agent_manager', 'mcp_servers', 'open_api', 'cache_stats', 'business_systems', 'system_tasks', 'profit_share', 'tickets', 'system_map', 'pay_withdraw', 'pay_flow', 'pay_flow_executions', 'data_dashboard', 'ticket_analytics', 'token_stats']
+            new_menus = ['ai_chat', 'ai_sessions', 'skills', 'agent_manager', 'mcp_servers', 'open_api', 'cache_stats', 'business_systems', 'system_tasks', 'profit_share', 'tickets', 'system_map', 'pay_withdraw', 'pay_flow', 'pay_flow_executions', 'data_dashboard', 'ticket_analytics', 'token_stats', 'workflows']
             updated = False
             for m in new_menus:
                 if m not in menus:

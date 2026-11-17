@@ -630,6 +630,86 @@ AI_TOOLS = [
                 "required": ["prompt"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_workflow_resources",
+            "description": "列出混合工作流可用的节点类型、配置字段说明，以及可引用的查询脚本、导出脚本、信息查询脚本、数据库连接、系统任务、审批人清单。在创建/修改工作流之前调用，用于拿到真实的 script_ids、system_task_id、database_id、审批人 user_id。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {
+                        "type": "string",
+                        "description": "可选，按名称筛选脚本/系统任务的关键词"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_workflow",
+            "description": "根据用户描述直接生成并保存一个混合工作流（画布可编辑、可一键运行）。需要提供节点与连线：节点类型见 list_workflow_resources 返回的 node_types。规则：1、必须有且只有一个 start 节点；2、查询节点 query 需要 script_ids + input_file；3、审批节点 approval 用 mode=manual 配 approvers（用户ID）或 mode=ai 配 ai_instruction；4、条件节点 condition 的出边 branch 用 true/false，审批节点出边 branch 用 approved/rejected；5、节点之间用 {{节点ID.字段}} 或 {{inputs.参数名}} 传递数据。未提供 id/坐标时会自动生成并排版。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "工作流名称"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "工作流用途说明"
+                    },
+                    "variables": {
+                        "type": "array",
+                        "description": "可选，运行时可填写的变量定义",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string", "description": "变量名"},
+                                "default": {"description": "默认值"}
+                            },
+                            "required": ["name"]
+                        }
+                    },
+                    "nodes": {
+                        "type": "array",
+                        "description": "节点列表",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string", "description": "节点ID（唯一，可省略，自动生成），后续用 {{id.字段}} 引用其输出"},
+                                "type": {"type": "string", "description": "节点类型：start/query/export/system_task/lookup/email/log_query/file_generate/approval/condition/delay/end"},
+                                "name": {"type": "string", "description": "节点显示名称"},
+                                "x": {"type": "number", "description": "可选，画布横坐标"},
+                                "y": {"type": "number", "description": "可选，画布纵坐标"},
+                                "config": {"type": "object", "description": "节点配置，字段见 list_workflow_resources 返回的 node_config_help"},
+                                "output_key": {"type": "string", "description": "可选，输出写入上下文的键名，默认用节点ID"}
+                            },
+                            "required": ["type"]
+                        }
+                    },
+                    "edges": {
+                        "type": "array",
+                        "description": "连线列表，方向从 source 指向 target",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "source": {"type": "string", "description": "起点节点ID"},
+                                "target": {"type": "string", "description": "终点节点ID"},
+                                "branch": {"type": "string", "description": "可选，分支标记：true/false/approved/rejected/success/fail/default"}
+                            },
+                            "required": ["source", "target"]
+                        }
+                    }
+                },
+                "required": ["name", "nodes"]
+            }
+        }
     }
 ]
 
@@ -1412,6 +1492,10 @@ class AiService:
             return AiService._tool_create_file(args, user_id)
         elif tool_name == 'generate_image':
             return AiService._tool_generate_image(args, user_id)
+        elif tool_name == 'list_workflow_resources':
+            return AiService._tool_list_workflow_resources(args, user_id)
+        elif tool_name == 'create_workflow':
+            return AiService._tool_create_workflow(args, user_id)
         else:
             return {'error': f'未知工具: {tool_name}'}
 
@@ -3166,6 +3250,216 @@ AI回复：{ai_response[:500] if ai_response else ''}
             return result
         logger.info(f'AI 生成图片成功: {result.get("file_path")} (user_id={user_id})')
         return result
+
+    # 工作流节点配置字段说明（供AI构图参考）
+    WORKFLOW_NODE_CONFIG_HELP = {
+        'start': '无需配置，输出运行入参 inputs',
+        'query': {'script_ids': '[脚本ID]', 'input_file': 'Excel参数文件的服务器路径',
+                  'database_ids': '[数据库ID]', 'param_values': '{参数名: 值}',
+                  'param_column': '参数列名', 'merge_strategy': 'concat 或 priority'},
+        'export': {'script_ids': '[脚本ID]', 'param_values': '{参数名: 值}',
+                   'output_format': 'sheets 或 zip'},
+        'system_task': {'system_task_id': '系统任务ID', 'param_values': '{参数名: 值}',
+                        'database_id': '数据库ID'},
+        'lookup': {'script_id': '信息查询脚本ID', 'param_values': '{参数名: 值}'},
+        'email': {'to': '收件人，多个用逗号分隔（可含模板）', 'subject': '主题（可含模板）',
+                  'content': '正文（可含模板）'},
+        'log_query': {'log_type': 'operation 或 login', 'keyword': '用户名关键词',
+                      'action': '操作动作（仅 operation）', 'limit': '条数，默认50，最多500'},
+        'file_generate': {'filename': '文件名（含扩展名）', 'content': '文件内容（可含模板）',
+                          'title': '文档标题', 'fmt': 'xlsx/csv/docx/pdf/md/txt/json/html'},
+        'approval': {'mode': 'manual 或 ai', 'approvers': '[审批人用户ID]',
+                     'message': '审批说明（可含模板）', 'ai_instruction': 'AI督查员的审批要求'},
+        'condition': {'expression': '如 lookup1.row_count > 0，支持 > < >= <= == != contains 与 and/or'},
+        'delay': {'seconds': '延时秒数，最大300'},
+        'end': {'message': '结束说明（可含模板）'},
+    }
+
+    @staticmethod
+    def _tool_list_workflow_resources(args: dict, user_id: int = None) -> dict:
+        """返回工作流编排可用的节点类型、配置说明与资源清单"""
+        from app.services import workflow_service
+
+        keyword = (args.get('keyword') or '').strip().lower()
+        caps = workflow_service.get_capabilities()
+        scripts = caps.get('scripts') or []
+
+        # 按用户权限过滤脚本
+        if user_id:
+            from app.models.user import User
+            user = User.query.get(user_id)
+            if user and not user.is_admin():
+                allowed = set(user.get_script_ids())
+                scripts = [s for s in scripts if s.get('id') in allowed]
+
+        def _matched(name, desc=''):
+            return not keyword or keyword in (name or '').lower() or keyword in (desc or '').lower()
+
+        items = []
+        for s in scripts:
+            if not _matched(s.get('name')):
+                continue
+            params = []
+            for p in s.get('params_config') or []:
+                if isinstance(p, dict):
+                    params.append({
+                        'name': p.get('name'),
+                        'label': p.get('label') or p.get('name'),
+                        'required': bool(p.get('required')),
+                    })
+            items.append({
+                'id': s.get('id'),
+                'name': s.get('name'),
+                'type': s.get('type'),
+                'tag': s.get('tag') or '',
+                'params': params,
+                'database_ids': s.get('database_ids') or [],
+            })
+
+        system_tasks = [t for t in (caps.get('system_tasks') or []) if _matched(t.get('name'))]
+
+        return {
+            'scripts': items,
+            'total_scripts': len(items),
+            'databases': caps.get('databases') or [],
+            'system_tasks': system_tasks,
+            'approvers': caps.get('approvers') or [],
+            'node_types': caps.get('node_types') or [],
+            'node_config_help': AiService.WORKFLOW_NODE_CONFIG_HELP,
+            'template_syntax': '用 {{节点ID.字段}} 引用节点输出，用 {{inputs.变量名}} 引用运行入参；节点输出默认写入与节点ID同名的上下文键，可用 output_key 覆盖。',
+            'edge_branches': {'condition': ['true', 'false'], 'approval': ['approved', 'rejected'],
+                              '任意节点失败': ['fail'], '普通连线': ['default']},
+        }
+
+    @staticmethod
+    def _tool_create_workflow(args: dict, user_id: int = None) -> dict:
+        """根据AI生成的节点与连线创建混合工作流"""
+        from app import db
+        from app.services import workflow_service
+        from app.services.workflow_service import NODE_TYPE_LABELS
+
+        name = (args.get('name') or '').strip()
+        if not name:
+            return {'error': '请提供工作流名称 name'}
+        raw_nodes = args.get('nodes')
+        if not isinstance(raw_nodes, list) or not raw_nodes:
+            return {'error': '请提供 nodes 节点列表'}
+
+        warnings = []
+        nodes = []
+        used_ids = set()
+        explicit_pos = {}
+        counters = {}
+
+        for idx, raw in enumerate(raw_nodes):
+            if not isinstance(raw, dict):
+                warnings.append(f'第 {idx + 1} 个节点格式不正确，已忽略')
+                continue
+            node_type = (raw.get('type') or '').strip()
+            if node_type not in NODE_TYPE_LABELS:
+                warnings.append(f'节点类型 "{node_type}" 不支持，已忽略')
+                continue
+            node_id = (raw.get('id') or '').strip()
+            if not node_id or node_id in used_ids:
+                counters[node_type] = counters.get(node_type, 0) + 1
+                node_id = f'{node_type}_{counters[node_type]}'
+                while node_id in used_ids:
+                    counters[node_type] += 1
+                    node_id = f'{node_type}_{counters[node_type]}'
+            used_ids.add(node_id)
+            node = {
+                'id': node_id,
+                'type': node_type,
+                'name': (raw.get('name') or '').strip() or NODE_TYPE_LABELS[node_type],
+                'config': raw.get('config') if isinstance(raw.get('config'), dict) else {},
+            }
+            if raw.get('output_key'):
+                node['output_key'] = str(raw['output_key']).strip()
+            if isinstance(raw.get('x'), (int, float)) and isinstance(raw.get('y'), (int, float)):
+                node['x'] = int(raw['x'])
+                node['y'] = int(raw['y'])
+                explicit_pos[node_id] = True
+            nodes.append(node)
+
+        if not nodes:
+            return {'error': '没有可用的节点，请检查 type 是否为支持的节点类型'}
+        if not any(n['type'] == 'start' for n in nodes):
+            first_target = next((n for n in nodes if n['type'] != 'end'), nodes[0])
+            start_node = {'id': 'start_1', 'type': 'start', 'name': '开始', 'config': {}}
+            while start_node['id'] in used_ids:
+                start_node['id'] += '_1'
+            nodes.insert(0, start_node)
+            used_ids.add(start_node['id'])
+            warnings.append(f'缺少开始节点，已自动添加并连接「{first_target["name"]}」')
+
+        # 补全缺失坐标（网格排版）
+        auto_idx = 0
+        for node in nodes:
+            if node['id'] in explicit_pos:
+                continue
+            node['x'] = 80 + (auto_idx % 4) * 300
+            node['y'] = 80 + (auto_idx // 4) * 170
+            auto_idx += 1
+
+        edges = []
+        seen_edges = set()
+        for raw in args.get('edges') or []:
+            if not isinstance(raw, dict):
+                continue
+            source = str(raw.get('source') or '').strip()
+            target = str(raw.get('target') or '').strip()
+            if source not in used_ids or target not in used_ids:
+                warnings.append(f'连线 {source} -> {target} 引用了不存在的节点，已忽略')
+                continue
+            branch = str(raw.get('branch') or '').strip()
+            key = (source, target, branch)
+            if key in seen_edges:
+                continue
+            seen_edges.add(key)
+            edge = {'id': f'e_{len(edges) + 1}', 'source': source, 'target': target}
+            if branch:
+                edge['branch'] = branch
+            edges.append(edge)
+
+        # 自动补上开始节点到首个节点的连线
+        start_node = next(n for n in nodes if n['type'] == 'start')
+        if not any(e['source'] == start_node['id'] for e in edges):
+            target = next((n['id'] for n in nodes if n['id'] != start_node['id']), None)
+            if target:
+                edges.insert(0, {'id': f'e_{len(edges) + 1}', 'source': start_node['id'],
+                                 'target': target, 'branch': 'default'})
+
+        if not any(n['type'] == 'end' for n in nodes):
+            warnings.append('未包含结束节点，流程会在没有后继节点时自动结束')
+
+        variables = [{'name': v['name'], 'default': v.get('default')}
+                     for v in (args.get('variables') or [])
+                     if isinstance(v, dict) and v.get('name')]
+
+        data = {
+            'name': name,
+            'description': (args.get('description') or '').strip(),
+            'graph': {'nodes': nodes, 'edges': edges},
+            'variables': variables,
+        }
+        try:
+            wf = workflow_service.create_workflow(data, created_by=user_id)
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f'AI 创建工作流失败: {e}', exc_info=True)
+            return {'error': f'创建工作流失败: {str(e)}'}
+
+        logger.info(f'AI 创建工作流成功: #{wf.get("id")} {name} (user_id={user_id})')
+        return {
+            'success': True,
+            'workflow_id': wf.get('id'),
+            'name': wf.get('name'),
+            'node_count': len(nodes),
+            'edge_count': len(edges),
+            'path': '/workflows',
+            'warnings': warnings,
+            'message': f'工作流「{name}」已创建，可在「混合工作流」页面查看、调整并一键运行。',
+        }
 
     @staticmethod
     def _tool_fetch_url(args: dict) -> dict:

@@ -374,6 +374,20 @@ const payFlow = {
   deleteNotifyTemplate: (id) => http.delete(`/pay-flow/notify-templates/${id}`),
 }
 
+const workflow = {
+  list: (params) => http.get('/workflows', { params }),
+  get: (id) => http.get(`/workflows/${id}`),
+  create: (data) => http.post('/workflows', data),
+  update: (id, data) => http.put(`/workflows/${id}`, data),
+  remove: (id) => http.delete(`/workflows/${id}`),
+  capabilities: () => http.get('/workflows/capabilities'),
+  run: (id, inputs) => http.post(`/workflows/${id}/run`, { inputs }),
+  runs: (params) => http.get('/workflows/runs', { params }),
+  getRun: (runId) => http.get(`/workflows/runs/${runId}`),
+  approve: (runId, data) => http.post(`/workflows/runs/${runId}/approve`, data),
+  cancelRun: (runId) => http.post(`/workflows/runs/${runId}/cancel`),
+}
+
 const mcp = {
   list: () => http.get('/mcp'),
   create: (data) => http.post('/mcp', data),
@@ -442,4 +456,4 @@ const widgets = {
   deleteSticker: () => http.delete('/widgets/sticker'),
 }
 
-export default { auth, users, logs, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, mcp, openApi, business, systemTask, lookup, profitShare, tickets, pay, payFlow, dataDashboard, tokenStats, widgets }
+export default { auth, users, logs, roles, ssh, databases, scripts, query, export: exportApi, autoExport, system, download, tasks, ai, agent, mcp, openApi, business, systemTask, lookup, profitShare, tickets, pay, payFlow, workflow, dataDashboard, tokenStats, widgets }
