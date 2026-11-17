@@ -70,6 +70,11 @@
               <text v-if="edge.branch && edge.branch !== 'default'" class="wf-edge-label"
                     :x="edgeLabelPos(edge).x" :y="edgeLabelPos(edge).y">{{ branchLabel(edge.branch) }}</text>
             </g>
+            <g v-for="node in loopNodes" :key="'loop-' + node.id">
+              <path class="wf-edge wf-self-loop" :class="{ active: nodeStatus[node.id] === 'running' }"
+                    :d="selfLoopPath(node)" marker-end="url(#wf-arrow)"></path>
+              <text class="wf-edge-label wf-loop-label" :x="node.x + 232" :y="node.y + 44">{{ loopLabel(node) }}</text>
+            </g>
             <path v-if="connecting" class="wf-edge temp" :d="connectingPath"></path>
           </svg>
 
@@ -317,6 +322,28 @@
             <template v-else>
               <div class="wf-hint">该节点类型暂无配置项。</div>
             </template>
+
+            <template v-if="isLoopable(selectedNode.type)">
+              <el-divider content-position="left">自循环</el-divider>
+              <el-form-item label="启用自循环">
+                <el-switch v-model="selectedNode.config.loop.enabled" @change="dirty = true" />
+              </el-form-item>
+              <template v-if="selectedNode.config.loop.enabled">
+                <el-form-item label="最大循环次数">
+                  <el-input-number v-model="selectedNode.config.loop.max_times" :min="1" :max="100" @change="dirty = true" />
+                </el-form-item>
+                <el-form-item label="循环跳出条件">
+                  <el-input v-model="selectedNode.config.loop.exit_condition"
+                            placeholder="留空则执行满最大次数后继续" @input="dirty = true" />
+                </el-form-item>
+                <el-form-item label="每次间隔（秒）">
+                  <el-input-number v-model="selectedNode.config.loop.interval" :min="0" :max="60" @change="dirty = true" />
+                </el-form-item>
+                <div class="wf-hint">
+                  节点执行完成后判断跳出条件：为真则离开循环继续后续节点，否则重复执行本节点；达到最大次数自动跳出，次数按本次运行累计。
+                </div>
+              </template>
+            </template>
           </el-form>
 
           <div v-if="nodeOutput(selectedNode.id)" class="wf-output-box">
@@ -514,6 +541,8 @@ const lookupScripts = computed(() => capabilities.value.scripts.filter(s => s.ty
 const databases = computed(() => capabilities.value.databases)
 const systemTasks = computed(() => capabilities.value.system_tasks)
 const approvers = computed(() => capabilities.value.approvers)
+const loopNodes = computed(() => graph.value.nodes.filter(
+  n => isLoopable(n.type) && n.config && n.config.loop && n.config.loop.enabled))
 const isRunActive = computed(() => activeRun.value &&
   ['pending', 'running', 'waiting_approval'].includes(activeRun.value.status))
 const runStatusText = computed(() => {
@@ -547,7 +576,7 @@ function uid(prefix) {
   return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
 }
 
-function defaultConfig(type) {
+function baseConfig(type) {
   switch (type) {
     case 'query':
       return { script_ids: [], database_ids: [], input_file: '', param_column: '', merge_strategy: 'concat', param_values: {} }
@@ -574,6 +603,21 @@ function defaultConfig(type) {
     default:
       return {}
   }
+}
+
+// 业务任务节点支持自循环（开始/结束/条件/延时/审批等控制类节点除外）
+const LOOPABLE_TYPES = ['query', 'export', 'system_task', 'lookup', 'email', 'log_query', 'file_generate']
+
+function isLoopable(type) {
+  return LOOPABLE_TYPES.includes(type)
+}
+
+function defaultConfig(type) {
+  const cfg = baseConfig(type)
+  if (isLoopable(type)) {
+    cfg.loop = { enabled: false, max_times: 3, exit_condition: '', interval: 0, ...(cfg.loop || {}) }
+  }
+  return cfg
 }
 
 function normalizeGraph(raw) {
@@ -991,6 +1035,20 @@ function edgePath(edge) {
   if (!a) return ''
   const dx = Math.max(60, Math.abs(a.x2 - a.x1) / 2)
   return `M ${a.x1} ${a.y1} C ${a.x1 + dx} ${a.y1}, ${a.x2 - dx} ${a.y2}, ${a.x2} ${a.y2}`
+}
+
+// 自循环连线：从节点右侧上方绕出、回到右侧下方
+function selfLoopPath(node) {
+  const sx = node.x + 190
+  const sy = node.y + 14
+  const ex = node.x + 190
+  const ey = node.y + 58
+  return `M ${sx} ${sy} C ${sx + 78} ${sy - 38}, ${sx + 78} ${ey + 38}, ${ex} ${ey}`
+}
+
+function loopLabel(node) {
+  const loop = (node.config && node.config.loop) || {}
+  return `循环 ≤${loop.max_times || 3}`
 }
 
 function edgeClass(edge) {
@@ -1430,6 +1488,22 @@ onBeforeUnmount(() => {
 .wf-edge.temp {
   stroke: #3b82f6;
   stroke-dasharray: 6 4;
+}
+.wf-self-loop {
+  stroke: #0ea5e9;
+  stroke-width: 2;
+  stroke-dasharray: 7 5;
+  opacity: 0.9;
+}
+.wf-self-loop.active {
+  animation: wf-dash 0.8s linear infinite;
+}
+.wf-loop-label {
+  fill: #0284c7;
+  font-size: 11px;
+}
+@keyframes wf-dash {
+  to { stroke-dashoffset: -24; }
 }
 .wf-edge-hit {
   fill: none;

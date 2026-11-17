@@ -652,7 +652,7 @@ AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "create_workflow",
-            "description": "根据用户描述直接生成并保存一个混合工作流（画布可编辑、可一键运行）。需要提供节点与连线：节点类型见 list_workflow_resources 返回的 node_types。规则：1、必须有且只有一个 start 节点；2、查询节点 query 需要 script_ids + input_file；3、审批节点 approval 用 mode=manual 配 approvers（用户ID）或 mode=ai 配 ai_instruction；4、条件节点 condition 的出边 branch 用 true/false，审批节点出边 branch 用 approved/rejected；5、节点之间用 {{节点ID.字段}} 或 {{inputs.参数名}} 传递数据。未提供 id/坐标时会自动生成并排版。",
+            "description": "根据用户描述直接生成并保存一个混合工作流（画布可编辑、可一键运行）。需要提供节点与连线：节点类型见 list_workflow_resources 返回的 node_types。规则：1、必须有且只有一个 start 节点；2、查询节点 query 需要 script_ids + input_file；3、审批节点 approval 用 mode=manual 配 approvers（用户ID）或 mode=ai 配 ai_instruction；4、条件节点 condition 的出边 branch 用 true/false，审批节点出边 branch 用 approved/rejected；5、节点之间用 {{节点ID.字段}} 或 {{inputs.参数名}} 传递数据；6、业务任务节点可用 config.loop 配置自循环（enabled/max_times/exit_condition/interval）。未提供 id/坐标时会自动生成并排版。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -3329,6 +3329,9 @@ AI回复：{ai_response[:500] if ai_response else ''}
             'template_syntax': '用 {{节点ID.字段}} 引用节点输出，用 {{inputs.变量名}} 引用运行入参；节点输出默认写入与节点ID同名的上下文键，可用 output_key 覆盖。',
             'edge_branches': {'condition': ['true', 'false'], 'approval': ['approved', 'rejected'],
                               '任意节点失败': ['fail'], '普通连线': ['default']},
+            'loop_help': '业务任务节点（query/export/system_task/lookup/email/log_query/file_generate）支持自循环，在 config.loop 中配置：'
+                         '{"enabled": true, "max_times": 3, "exit_condition": "节点ID.字段 > 0", "interval": 0}。'
+                         '节点执行完成后判断跳出条件：为真或达到最大次数（1-100）后继续后续节点，否则重复执行本节点；interval 为每次间隔秒数（0-60）。',
         }
 
     @staticmethod

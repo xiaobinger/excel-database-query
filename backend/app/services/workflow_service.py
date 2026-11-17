@@ -43,6 +43,11 @@ NODE_TYPE_LABELS = {
     'end': '结束',
 }
 
+# 支持自循环的业务任务节点（开始/结束/条件/延时/审批等控制类节点除外）
+LOOPABLE_NODE_TYPES = {
+    'query', 'export', 'system_task', 'lookup', 'email', 'log_query', 'file_generate',
+}
+
 _TEMPLATE_RE = re.compile(r'\{\{\s*([^{}]+?)\s*\}\}')
 _NUMBER_RE = re.compile(r'^-?\d+(\.\d+)?$')
 
@@ -466,6 +471,44 @@ def _execute_run(run_id):
         node_exec.status = 'completed'
         node_exec.set_output(output)
         run.add_log(f'节点 {node_name} 执行完成')
+
+        # 业务任务节点自循环：未满足跳出条件且未达最大次数时重复执行本节点
+        if node_type in LOOPABLE_NODE_TYPES:
+            loop_cfg = (node.get('config') or {}).get('loop') or {}
+            if loop_cfg.get('enabled'):
+                loops = ctx.setdefault('loops', {})
+                loop_count = int(loops.get(current_id) or 0) + 1
+                loops[current_id] = loop_count
+                try:
+                    max_times = int(loop_cfg.get('max_times') or 3)
+                except (TypeError, ValueError):
+                    max_times = 3
+                max_times = max(1, min(max_times, 100))
+
+                exit_expr = (loop_cfg.get('exit_condition') or '').strip()
+                exited = False
+                if exit_expr:
+                    try:
+                        exited = bool(_eval_condition(exit_expr, ctx))
+                    except Exception as e:
+                        run.add_log(f'节点「{node_name}」循环跳出条件解析失败：{e}', 'warning')
+
+                if exited or loop_count >= max_times:
+                    reason = '满足跳出条件' if exited else f'达到最大循环次数 {max_times}'
+                    run.add_log(f'节点「{node_name}」循环结束（已执行 {loop_count} 次，{reason}）')
+                    run.set_context(ctx)
+                else:
+                    try:
+                        interval = float(loop_cfg.get('interval') or 0)
+                    except (TypeError, ValueError):
+                        interval = 0
+                    interval = max(0.0, min(interval, 60.0))
+                    run.set_context(ctx)
+                    run.add_log(f'节点「{node_name}」第 {loop_count} 次执行完成，未满足跳出条件，继续循环', 'warning')
+                    db.session.commit()
+                    if interval:
+                        time.sleep(interval)
+                    continue
 
         if node_type == 'end':
             run.status = 'completed'

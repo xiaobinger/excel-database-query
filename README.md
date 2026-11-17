@@ -23,7 +23,7 @@
 
 <!-- 徽章 -->
 <p>
-  <img src="https://img.shields.io/badge/version-2.6.86-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-2.6.88-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/python-3.10+-yellow?style=flat-square&logo=python&logoColor=white" alt="python" />
   <img src="https://img.shields.io/badge/vue-3-green?style=flat-square&logo=vuedotjs&logoColor=white" alt="vue" />
   <img src="https://img.shields.io/badge/flask-black?style=flat-square&logo=flask&logoColor=white" alt="flask" />
@@ -155,6 +155,7 @@
 - 审批节点：指定审批人（人工暂停 `waiting_approval`，审批后恢复）或 AI 督查员（按提示词与上下文自动判定通过/拒绝）
 - 运行可视化：节点实时状态（执行中/成功/失败/待审批）、连线高亮、进度与执行记录详情
 - AI 直接生成：AI 对话/Agent 可挂配 `list_workflow_resources` 与 `create_workflow` 工具，用自然语言直接生成可编辑的工作流
+- 节点自循环：业务任务节点（查询/导出/系统任务/信息查询/邮件/日志/生成文件）可配置 `config.loop`——启用开关、最大循环次数（1-100）、循环跳出条件（与条件节点同语法）与每次间隔秒数（0-60）；开始/结束/条件/延时/审批等控制类节点不支持。节点执行完成后判断跳出条件：为真或达到最大次数则继续后续节点，否则重复执行本节点，画布上以虚线自循环弧与「循环 ≤N」标签展示，次数按本次运行累计
 
 </details>
 
@@ -450,6 +451,7 @@ WHERE merchant_id = :value
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-11-17 | v2.6.88 | 混合工作流新增**业务任务节点自循环**：① **可循环节点** 仅 `query` / `export` / `system_task` / `lookup` / `email` / `log_query` / `file_generate` 七类业务任务节点支持，开始/结束/条件/延时/审批等控制类节点不参与；② **配置项** 节点 `config.loop` 支持 `enabled`（启用开关）、`max_times`（最大循环次数 1-100）、`exit_condition`（循环跳出条件）、`interval`（每次间隔秒数 0-60）；③ **执行语义** 节点成功执行后判断跳出条件（复用条件节点表达式语法，可引用 `{{节点ID.字段}}`、`{{inputs.参数名}}` 等上下文）：条件为真或已达最大次数则离开循环继续后续节点，否则重复执行本节点；循环计数写入运行上下文 `loops` 按本次运行累计，跨审批暂停恢复不丢失；节点失败仍走 `fail` 分支不进入循环，全局 300 步上限兜底防死循环；④ **前端** 属性面板新增「自循环」区块（开关/最大次数/跳出条件/间隔 + 语义提示），画布为启用自循环的节点绘制虚线自循环弧与「循环 ≤N」标签，节点运行中弧线流动，旧工作流加载后自动补全 loop 默认配置；⑤ **AI 侧** `list_workflow_resources` 返回新增 `loop_help`，`create_workflow` 工具说明补充 loop 配置规则，AI 可直接生成带自循环的工作流。后端 `py_compile`、前端 `vite build` 通过；服务级冒烟：`max_times=3` 无跳出条件执行 3 次后继续（`loops={'fg':3}`），`exit_condition` 首次即为真仅执行 1 次（`loops={'fg':1}`），节点执行序列与循环日志均符合预期 |
 | 2026-11-17 | v2.6.87 | 新增**混合工作流**（画布拖拽编排 + 一键运行 + 动画演示）并支持 **AI 对话直接生成工作流**：① **编排能力** 新增 `Workflow`/`WorkflowRun`/`WorkflowRunNode` 三张表与 `workflow_service.py` 执行引擎，节点覆盖 start/query/export/system_task/lookup/email/log_query/file_generate/approval/condition/delay/end，任意节点输出经 `{{节点ID.字段}}`、`{{inputs.参数名}}` 在上下文中流转；② **审批节点** 支持 `manual`（指定审批人，流程暂停为 `waiting_approval`，审批通过/拒绝后沿 `approved`/`rejected` 分支恢复）与 `ai`（AI 督查员按提示词与上下文自动判定）；③ **条件与容错** 条件表达式支持 `> < >= <= == != contains` 与 `and/or`（裸路径与 `{{}}` 两种写法），节点失败沿 `fail` 分支流转并可回退；④ **画布设计器** 新增 `WorkflowDesigner.vue`：拖拽/点击添加节点、端口拖拽连线、缩放平移、属性面板编辑、变量定义、一键运行对话框、运行状态动画（节点高亮/连线流动）与执行记录抽屉；⑤ **后端接口** 新增 `/api/workflows` CRUD、`/capabilities`、`/runs`、`/runs/<id>`、`/runs/<id>/approve`、`/runs/<id>/cancel`、`/<id>/run`，菜单新增「混合工作流」（权限 `workflows`）；⑥ **AI 生成工作流** 新增 `list_workflow_resources`（返回节点类型、各类型配置字段说明、可用脚本/数据库/系统任务/审批人）与 `create_workflow`（按 name/nodes/edges/variables 直接落库，自动补全节点 ID、坐标与开始节点连线，并返回 `workflow_id` 与画布路径）两个工具，AI 对话与 Agent 均可挂配，用自然语言即可生成可在画布中继续编辑的工作流。后端 `py_compile`、前端 `vite build` 通过，服务级端到端冒烟（顺序流转/条件分支/人工审批通过/拒绝）与 AI 工具构图自测通过 |
 | 2026-11-17 | v2.6.86 | 同标签同类型优先级取值改为**按参数列去重**（修复「写入时仍未按优先级取值」）：① **去重键** 行不再只按整行内容判重（不同脚本列值天然不同，永远匹配不上），新增 `_normalize_cell` / `_param_values_of` / `_dedup_keys`——逐条模式直接取结果项 `params` 的参数值作键，IN 列表模式先匹配本次查询的参数值、再回退整表参数列扫描行内单元格，整行内容作兜底，任一键命中即判重；② **同参数唯一** IN 列表模式下同一参数在整组内只保留一行（同脚本多库返回的重复参数同样收敛），逐条模式仍保留单脚本 1:N 的多行结果，只与更高优先级脚本判重；③ **日志可诊断** 每个优先级组输出「按参数列去重 N 行，保留 M 行」，未形成同标签同类型分组时输出 warning（未设置标签 / 未发现多个同组脚本），便于确认是否生效；④ **写入安全** 去重发生在写回原表之前，避免低优先级脚本结果按 last-wins 覆盖高优先级结果。后端 `py_compile` 通过，跨脚本 IN 列表、同脚本多库、逐条 1:N、无标签四组断言全部通过 |
 | 2026-11-16 | v2.6.85 | 脚本管理「标签管理」弹窗体验优化：① **带入外层筛选** 打开弹窗时自动继承脚本列表当前的「类型筛选」「标签筛选」，只展示对应范围的脚本；② **弹窗内筛选** 弹窗新增类型、标签两个筛选下拉，可随时切换，右侧显示当前筛选条件下的脚本数量，无匹配时展示空状态；③ **提示文案更新** 按逐行去重语义说明优先级取值规则（重复行取高优先级、低优先级独有行保留、IN 列表批量查询同样适用）。前端 `vite build` 通过 |
