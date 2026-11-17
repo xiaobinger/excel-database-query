@@ -108,9 +108,27 @@ def update_workflow(workflow_id, data):
 
 
 def delete_workflow(workflow_id):
+    """物理删除工作流，并连带删除其全部执行记录与节点执行记录。
+
+    存在待执行/执行中/待审批的运行时禁止删除，需先取消，避免后台线程
+    写入已被删除的记录。
+    """
     wf = Workflow.query.get(workflow_id)
     if not wf:
         return False
+
+    active = WorkflowRun.query.filter(
+        WorkflowRun.workflow_id == workflow_id,
+        WorkflowRun.status.in_(('pending', 'running', 'waiting_approval')),
+    ).first()
+    if active:
+        raise ValueError(f'工作流存在进行中的执行记录（{active.status}），请先取消运行后再删除')
+
+    run_ids = [r.run_id for r in WorkflowRun.query.filter_by(workflow_id=workflow_id).all()]
+    if run_ids:
+        WorkflowRunNode.query.filter(WorkflowRunNode.run_id.in_(run_ids)).delete(synchronize_session=False)
+        WorkflowRun.query.filter(WorkflowRun.workflow_id == workflow_id).delete(synchronize_session=False)
+
     db.session.delete(wf)
     db.session.commit()
     return True

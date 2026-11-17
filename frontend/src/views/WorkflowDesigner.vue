@@ -728,7 +728,7 @@ async function newWorkflow() {
 
 async function removeWorkflow(row) {
   try {
-    await ElMessageBox.confirm(`确定删除工作流「${row.name}」？`, '提示', { type: 'warning' })
+    await ElMessageBox.confirm(`确定删除工作流「${row.name}」？其全部执行记录也会一并删除，且不可恢复。`, '提示', { type: 'warning' })
     await api.workflow.remove(row.id)
     ElMessage.success('已删除')
     if (current.value && current.value.id === row.id) {

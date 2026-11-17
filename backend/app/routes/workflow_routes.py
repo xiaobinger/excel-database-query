@@ -122,10 +122,13 @@ def update_workflow(workflow_id):
 @workflow_bp.route('/<int:workflow_id>', methods=['DELETE'])
 @login_required
 def delete_workflow(workflow_id):
-    ok = workflow_service.delete_workflow(workflow_id)
+    try:
+        ok = workflow_service.delete_workflow(workflow_id)
+    except ValueError as e:
+        return jsonify({'success': False, 'message': str(e)}), 400
     if not ok:
         return jsonify({'success': False, 'message': '工作流不存在'}), 404
-    return jsonify({'success': True, 'message': '已删除'})
+    return jsonify({'success': True, 'message': '已删除（含执行记录）'})
 
 
 @workflow_bp.route('/<int:workflow_id>/run', methods=['POST'])
