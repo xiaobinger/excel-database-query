@@ -1,8 +1,10 @@
 import logging
 import os
+import re
 import uuid
 import threading
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from app import db
@@ -310,9 +312,21 @@ class QueryService:
                         task.add_log(f'工作表 [{sheet_label}] 无查询结果，跳过', 'warning')
                         continue
 
+                    # 读取当前 sheet 的参数值集合，用于按参数列判断跨脚本的重复行
+                    sheet_param_values = set()
+                    try:
+                        sheet_params = ExcelService.read_params(
+                            input_file, param_column=param_name, sheet_name=current_sheet)
+                        sheet_param_values = {
+                            QueryService._normalize_cell(v)
+                            for v in sheet_params.get('data', [])
+                        }
+                    except Exception as e:
+                        task.add_log(f'工作表 [{sheet_label}] 读取参数列失败，将按行内容判重: {str(e)}', 'warning')
+
                     # 同标签 + 同类型的多个脚本按优先级取值：优先使用高优先级脚本的结果
                     sheet_results = QueryService._apply_tag_priority(
-                        sheet_results, script_ids, task, sheet_label)
+                        sheet_results, script_ids, task, sheet_label, sheet_param_values)
 
                     processed_results = QueryService._process_all_results(
                         sheet_results, column_headers, param_name,
@@ -443,38 +457,83 @@ class QueryService:
 
     @staticmethod
     def _normalize_cell(value) -> str:
-        """将单元格值归一化为可比较的字符串，用于跨脚本行去重"""
+        """将单元格值归一化为可比较的字符串，用于跨脚本行/参数判重"""
         if value is None:
             return ''
         if isinstance(value, bool):
             return str(value)
-        if isinstance(value, (int, float)):
-            return format(float(value), 'g')
-        try:
-            from decimal import Decimal
-            if isinstance(value, Decimal):
-                return format(float(value), 'g')
-        except Exception:
-            pass
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, float):
+            return str(int(value)) if value.is_integer() else format(value, 'g')
+        if isinstance(value, Decimal):
+            return format(value.normalize(), 'f')
         if hasattr(value, 'isoformat'):
             try:
                 return value.isoformat()
             except Exception:
                 pass
-        return str(value)
+        text = str(value).strip()
+        if re.fullmatch(r'-?\d+\.0+', text):
+            text = text.split('.')[0]
+        return text
 
     @staticmethod
     def _row_key(row) -> tuple:
         return tuple(QueryService._normalize_cell(v) for v in row)
 
     @staticmethod
+    def _param_values_of(params) -> List[str]:
+        """从结果项的 params 中提取参数值（兼容 dict / list / 单值）"""
+        values = []
+        if isinstance(params, dict):
+            for v in params.values():
+                if isinstance(v, (list, tuple, set)):
+                    values.extend(v)
+                else:
+                    values.append(v)
+        elif isinstance(params, (list, tuple, set)):
+            values.extend(params)
+        elif params is not None:
+            values.append(params)
+        return [QueryService._normalize_cell(v) for v in values]
+
+    @staticmethod
+    def _dedup_keys(row, item_params: List[str], sheet_param_values: set) -> List[tuple]:
+        """计算一行的去重键：优先按参数列的值，同时保留整行内容作为兜底。
+
+        逐条查询时一个结果项只对应一个参数，直接以该参数为键（结果可不含参数列）；
+        IN 列表查询时结果无法按参数归属，扫描行内单元格，命中本次查询参数值的单元格
+        即视为该行的参数列。任意一个键命中更高优先级脚本已出现的键即视为重复行。
+        """
+        keys = [('row', QueryService._row_key(row))]
+
+        distinct_item_params = set(item_params)
+        if len(distinct_item_params) == 1:
+            keys.append(('param', distinct_item_params.pop()))
+            return keys
+
+        # 先匹配本次查询的参数值，再退回整个工作表参数列，避免被其他列的同值误判
+        for candidates in (distinct_item_params, sheet_param_values or set()):
+            if not candidates:
+                continue
+            for cell in row:
+                norm = QueryService._normalize_cell(cell)
+                if norm in candidates:
+                    keys.append(('param', norm))
+                    return keys
+
+        return keys
+
+    @staticmethod
     def _apply_tag_priority(sheet_results: Dict[str, Any], script_ids: List[int],
-                            task=None, sheet_label: str = '') -> Dict[str, Any]:
+                            task=None, sheet_label: str = '',
+                            param_values: Optional[set] = None) -> Dict[str, Any]:
         """同标签 + 同类型的多个脚本按优先级逐行取值。
 
-        按脚本优先级从高到低处理，每行数据只在「更高优先级的脚本未返回该行」时保留；
-        相同行取优先级最高脚本的结果，低优先级脚本独有的行仍会保留。
-        该逻辑同样适用于 IN 列表批量查询（无法按参数归属时按行内容判重）。
+        按脚本优先级从高到低处理：以「参数列的值」作为行身份判重，同一参数已由更高
+        优先级脚本返回数据时，丢弃低优先级脚本该参数的行；低优先级脚本独有的参数行
+        仍会保留。参数列无法关联时退回整行内容判重（IN 列表查询同样适用）。
         未设置标签的脚本不参与优先级收敛。
         """
         scripts = {}
@@ -499,6 +558,15 @@ class QueryService:
             plans.append(((tag, script_type), ordered))
 
         if not plans:
+            if task:
+                if any((s.tag or '').strip() for s in scripts.values()):
+                    task.add_log(
+                        f'[Sheet:{sheet_label}] 未发现「同标签+同类型」的多个脚本，跳过优先级去重',
+                        'warning')
+                else:
+                    task.add_log(
+                        f'[Sheet:{sheet_label}] 所选脚本均未设置标签，跳过优先级去重',
+                        'warning')
             return sheet_results
 
         entries_by_sid = {}
@@ -509,40 +577,47 @@ class QueryService:
                 continue
             entries_by_sid.setdefault(sid, []).append((key, db_result))
 
+        param_values = param_values or set()
         filtered = dict(sheet_results)
         for (tag, script_type), ordered in plans:
             seen_rows = set()
+            kept_rows = 0
             dropped_rows = 0
             for sid in ordered:
-                script_row_keys = []
+                # 逐条查询模式下同一脚本可能对同一参数返回多行（1:N），只与更高优先级脚本判重；
+                # IN 列表模式下同一参数最终只需保留一行，同脚本多个库返回的重复参数也要去重。
+                is_in_mode = (scripts[sid].query_mode or 'batch') == 'in'
+                pre_script_keys = None if is_in_mode else set(seen_rows)
                 for key, db_result in entries_by_sid.get(sid, []):
                     new_items = []
                     for item in db_result.get('results', []):
                         if not item.get('success'):
                             new_items.append(item)
                             continue
+                        item_param_values = QueryService._param_values_of(item.get('params'))
                         kept = []
                         for row in item.get('result', []):
-                            row_key = QueryService._row_key(row)
-                            if row_key in seen_rows:
+                            dedup_keys = QueryService._dedup_keys(
+                                row, item_param_values, param_values)
+                            search_space = seen_rows if is_in_mode else pre_script_keys
+                            if any(k in search_space for k in dedup_keys):
                                 dropped_rows += 1
                                 continue
                             kept.append(row)
-                            script_row_keys.append(row_key)
+                            kept_rows += 1
+                            seen_rows.update(dedup_keys)
                         new_item = dict(item)
                         new_item['result'] = kept
                         new_items.append(new_item)
                     new_db = dict(db_result)
                     new_db['results'] = new_items
                     filtered[key] = new_db
-                # 同一脚本内部的重复行保持原样，只与更高优先级脚本的行判重
-                seen_rows.update(script_row_keys)
 
-            if dropped_rows and task:
+            if task:
                 ordered_names = '、'.join(scripts[sid].name for sid in ordered)
                 task.add_log(
                     f'[Sheet:{sheet_label}] 标签[{tag}]/类型[{script_type}] 按优先级逐行取值 '
-                    f'(优先级从高到低: {ordered_names})，去重 {dropped_rows} 行')
+                    f'(优先级从高到低: {ordered_names})，按参数列去重 {dropped_rows} 行，保留 {kept_rows} 行')
 
         return filtered
 
