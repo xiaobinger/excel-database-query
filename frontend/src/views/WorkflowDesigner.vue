@@ -241,10 +241,54 @@
               <div class="wf-hint">
                 按脚本自身类型调用原服务：query 执行查询、export 导出文件、lookup 信息查询、system 执行 SQL（DML/DDL，支持多语句）。
               </div>
-              <el-form-item label="脚本参数 (JSON)">
+              <div class="wf-param-head">
+                <span>脚本参数映射</span>
+                <span v-if="selectedScriptParams.length" class="wf-tip">脚本所需参数 ← 上游节点输出 / 变量 / 固定值</span>
+              </div>
+              <div v-if="!selectedNode.config.script_id" class="wf-hint">请先选择 SQL 脚本，脚本声明的输入参数会显示在这里。</div>
+              <div v-else-if="!selectedScriptParams.length" class="wf-hint">该脚本未声明输入参数；如确需传递，可在下方「原始参数 JSON」中手动填写。</div>
+              <div v-for="p in selectedScriptParams" :key="p.name" class="wf-param-row">
+                <div class="wf-param-name">
+                  <span class="wf-param-label">{{ p.label || p.name }}</span>
+                  <code>{{ p.name }}</code>
+                  <el-tag v-if="p.required" size="small" type="danger" effect="plain">必填</el-tag>
+                  <span class="wf-param-type">{{ (p.multi || p.type === 'list') ? '列表' : (p.type || 'text') }}</span>
+                </div>
+                <div class="wf-param-map">
+                  <el-select :model-value="paramSource(p.name)" size="small" style="width: 100%"
+                             @change="onParamSourceChange(p.name, $event)">
+                    <el-option label="上游节点输出" value="node" />
+                    <el-option label="流程变量" value="var" />
+                    <el-option label="固定值" value="const" />
+                  </el-select>
+                  <template v-if="paramSource(p.name) === 'node'">
+                    <el-select :model-value="paramNodeId(p.name)" size="small" filterable style="width: 100%"
+                               placeholder="选择节点" @change="onParamNodeChange(p.name, $event)">
+                      <el-option v-for="n in paramNodeOptions" :key="n.id"
+                                 :label="(n.name || meta(n.type).label) + ' · ' + meta(n.type).label" :value="n.id" />
+                    </el-select>
+                    <el-select :model-value="paramNodeField(p.name)" size="small" filterable allow-create
+                               default-first-option clearable style="width: 100%"
+                               placeholder="输出字段（留空取整个输出）"
+                               @change="onParamFieldChange(p.name, $event)">
+                      <el-option v-for="f in paramFieldOptions(paramNodeId(p.name))" :key="f" :label="f" :value="f" />
+                    </el-select>
+                  </template>
+                  <el-select v-else-if="paramSource(p.name) === 'var'" :model-value="paramRef(p.name)" size="small"
+                             filterable allow-create default-first-option style="width: 100%"
+                             placeholder="选择或输入变量名" @change="onParamVarChange(p.name, $event)">
+                    <el-option v-for="v in paramVarOptions" :key="v" :label="v" :value="v" />
+                  </el-select>
+                  <el-input v-else size="small" :model-value="paramRaw(p.name)"
+                            placeholder="固定值（也支持引用表达式）"
+                            @input="onParamConstInput(p.name, $event)" />
+                </div>
+              </div>
+              <details class="wf-param-advanced">
+                <summary>原始参数 JSON</summary>
                 <el-input type="textarea" :rows="3" :model-value="jsonText(selectedNode.config.param_values)"
                           @change="setJson(selectedNode.config, 'param_values', $event)" />
-              </el-form-item>
+              </details>
               <template v-if="selectedScriptType === 'query'">
                 <el-form-item label="输入文件路径">
                   <el-input v-model="selectedNode.config.input_file" placeholder="参数 Excel 文件绝对路径" @input="dirty = true" />
@@ -758,6 +802,103 @@ function onScriptTypeChange(type) {
   selectedNode.value.config.script_type = type
   selectedNode.value.config.script_id = null
   dirty.value = true
+}
+
+// ---- 脚本参数映射：脚本声明的参数 ← 上游节点输出 / 流程变量 / 固定值 ----
+const selectedScript = computed(() => {
+  const id = selectedNode.value?.config?.script_id
+  if (!id) return null
+  return capabilities.value.scripts.find(s => String(s.id) === String(id)) || null
+})
+const selectedScriptParams = computed(() => selectedScript.value?.params_config || [])
+const paramNodeOptions = computed(() =>
+  graph.value.nodes.filter(n => n.id !== selectedNode.value?.id))
+const paramVarOptions = computed(() => {
+  const names = (current.value?.variables || []).map(v => v && v.name).filter(Boolean)
+  return [...new Set(names)]
+})
+
+const REF_RE = /^\{\{\s*([^{}]+?)\s*\}\}$/
+
+function paramRaw(name) {
+  const vals = selectedNode.value?.config?.param_values
+  if (!vals || typeof vals !== 'object') return ''
+  const v = vals[name]
+  return v === undefined || v === null ? '' : String(v)
+}
+
+function paramRef(name) {
+  const m = REF_RE.exec(paramRaw(name).trim())
+  return m ? m[1].trim() : ''
+}
+
+function paramSource(name) {
+  const ref = paramRef(name)
+  if (ref.startsWith('nodes.')) return 'node'
+  if (ref && (ref.startsWith('inputs.') || paramVarOptions.value.includes(ref))) return 'var'
+  return 'const'
+}
+
+function paramNodeId(name) {
+  const ref = paramRef(name)
+  if (!ref.startsWith('nodes.')) return ''
+  return ref.slice(6).split('.')[0]
+}
+
+function paramNodeField(name) {
+  const ref = paramRef(name)
+  if (!ref.startsWith('nodes.')) return ''
+  return ref.split('.').slice(2).join('.')
+}
+
+function paramFieldOptions(nodeId) {
+  const out = nodeId ? nodeOutputs[nodeId] : null
+  if (!out || typeof out !== 'object' || Array.isArray(out)) return []
+  return Object.keys(out)
+}
+
+function setParamRaw(name, value) {
+  const cfg = selectedNode.value?.config
+  if (!cfg) return
+  if (!cfg.param_values || typeof cfg.param_values !== 'object') cfg.param_values = {}
+  const text = value === undefined || value === null ? '' : String(value)
+  if (text === '') delete cfg.param_values[name]
+  else cfg.param_values[name] = text
+  dirty.value = true
+}
+
+function onParamSourceChange(name, source) {
+  if (source === 'node') {
+    const first = paramNodeOptions.value[0]
+    setParamRaw(name, first ? `{{nodes.${first.id}}}` : '')
+  } else if (source === 'var') {
+    const first = paramVarOptions.value[0]
+    setParamRaw(name, first ? `{{${first}}}` : '')
+  } else {
+    setParamRaw(name, '')
+  }
+}
+
+function onParamNodeChange(name, nodeId) {
+  if (!nodeId) return setParamRaw(name, '')
+  const field = paramNodeField(name)
+  setParamRaw(name, `{{nodes.${nodeId}${field ? '.' + field : ''}}}`)
+}
+
+function onParamFieldChange(name, field) {
+  const nodeId = paramNodeId(name)
+  if (!nodeId) return
+  const f = String(field || '').trim().replace(/^\./, '')
+  setParamRaw(name, `{{nodes.${nodeId}${f ? '.' + f : ''}}}`)
+}
+
+function onParamVarChange(name, varName) {
+  const v = String(varName || '').trim().replace(/^\{\{\s*|\s*\}\}$/g, '')
+  setParamRaw(name, v ? `{{${v}}}` : '')
+}
+
+function onParamConstInput(name, value) {
+  setParamRaw(name, value)
 }
 const selectedEdge = computed(() => graph.value.edges.find(e => e.id === selectedEdgeId.value) || null)
 const queryScripts = computed(() => capabilities.value.scripts.filter(s => s.type === 'query'))
@@ -2195,6 +2336,61 @@ onBeforeUnmount(() => {
   border-radius: 3px;
   padding: 0 4px;
   color: #0f172a;
+}
+.wf-param-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+  margin: 4px 0 8px;
+}
+.wf-param-row {
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #fff;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.wf-param-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: #1f2937;
+  margin-bottom: 6px;
+}
+.wf-param-name code {
+  background: #f1f5f9;
+  border-radius: 3px;
+  padding: 0 4px;
+  color: #475569;
+  font-size: 11px;
+}
+.wf-param-label {
+  font-weight: 600;
+}
+.wf-param-type {
+  margin-left: auto;
+  color: #94a3b8;
+  font-size: 11px;
+}
+.wf-param-map {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wf-param-advanced {
+  margin: 4px 0 10px;
+  font-size: 12px;
+  color: #64748b;
+}
+.wf-param-advanced summary {
+  cursor: pointer;
+  margin-bottom: 6px;
 }
 .wf-output-box {
   margin-top: 10px;
