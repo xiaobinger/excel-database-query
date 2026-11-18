@@ -70,6 +70,16 @@ _TEMPLATE_RE = re.compile(r'\{\{\s*([^{}]+?)\s*\}\}')
 _NUMBER_RE = re.compile(r'^-?\d+(\.\d+)?$')
 
 
+def _error_text(exc):
+    """统一错误文案：异常无描述时至少给出异常类型，避免节点失败原因空白。"""
+    if exc is None:
+        return '节点执行失败（未返回错误信息）'
+    text = str(exc).strip()
+    if text:
+        return text
+    return f'{type(exc).__name__}（无详细信息）'
+
+
 # ---------------------------------------------------------------------------
 # 工作流 CRUD
 # ---------------------------------------------------------------------------
@@ -464,10 +474,11 @@ def _execute_run(run_id):
             result = _execute_node(node, ctx, run_id, run.created_by)
         except Exception as e:
             logger.error(f'节点执行失败 {node_name}: {e}', exc_info=True)
+            err_text = _error_text(e)
             node_exec.status = 'failed'
-            node_exec.error_message = str(e)
+            node_exec.error_message = err_text
             node_exec.completed_at = datetime.utcnow()
-            run.add_log(f'节点 {node_name} 执行失败：{e}', 'error')
+            run.add_log(f'节点 {node_name} 执行失败：{err_text}', 'error')
 
             next_id = _pick_edge(edges, current_id, 'fail')
             if next_id:
@@ -475,7 +486,7 @@ def _execute_run(run_id):
                 db.session.commit()
                 current_id = next_id
                 continue
-            _fail_run(run, f'节点「{node_name}」执行失败：{e}')
+            _fail_run(run, f'节点「{node_name}」执行失败：{err_text}')
             return
 
         if result.get('pending'):
@@ -497,17 +508,18 @@ def _execute_run(run_id):
         node_exec.completed_at = datetime.utcnow()
 
         if result.get('error'):
+            err_text = _error_text(result['error'])
             node_exec.status = 'failed'
-            node_exec.error_message = result['error']
+            node_exec.error_message = err_text
             node_exec.set_output(output)
-            run.add_log(f'节点 {node_name} 失败：{result["error"]}', 'error')
+            run.add_log(f'节点 {node_name} 失败：{err_text}', 'error')
             next_id = _pick_edge(edges, current_id, 'fail')
             if next_id:
                 run.current_node_id = next_id
                 db.session.commit()
                 current_id = next_id
                 continue
-            _fail_run(run, f'节点「{node_name}」失败：{result["error"]}')
+            _fail_run(run, f'节点「{node_name}」失败：{err_text}')
             return
 
         node_exec.status = 'completed'
@@ -909,7 +921,7 @@ def _execute_system_script(script, cfg, ctx):
     for conn_id in db_ids:
         conn_model = DatabaseConnection.query.get(conn_id)
         if not conn_model:
-            continue
+            return {'error': f'数据库连接不存在：{conn_id}'}
         connector = pool.get_connector_with_health_check(conn_id)
         if not connector:
             return {'error': f'数据库连接失败：{conn_model.name}'}
@@ -919,8 +931,11 @@ def _execute_system_script(script, cfg, ctx):
             for stmt_idx, stmt in enumerate(statements):
                 if not stmt.strip():
                     continue
-                result = (conn.execute(text(stmt), bind_params) if bind_params
-                          else conn.execute(text(stmt)))
+                try:
+                    result = (conn.execute(text(stmt), bind_params) if bind_params
+                              else conn.execute(text(stmt)))
+                except Exception as e:
+                    return {'error': f'数据库「{conn_model.name}」第 {stmt_idx + 1} 条 SQL 执行失败：{_error_text(e)}'}
 
                 if SystemTaskService._is_query_statement(stmt):
                     columns = list(result.keys()) if hasattr(result, 'keys') else []
@@ -983,6 +998,7 @@ def _execute_lookup_node(cfg, ctx):
 
 
 def _execute_email_node(cfg, ctx):
+    from app.models.system_config import SystemConfig
     from app.services.pay_flow_service import _send_email
 
     to_raw = cfg.get('to') or cfg.get('to_addresses') or []
@@ -992,6 +1008,14 @@ def _execute_email_node(cfg, ctx):
         to_addresses = [str(a).strip() for a in to_raw if str(a).strip()]
     if not to_addresses:
         return {'error': '邮件节点未配置收件人'}
+
+    # _send_email 在 SMTP 配置缺失时会静默返回，这里显式校验，避免节点"假成功"
+    host_cfg = SystemConfig.query.filter_by(config_key=SystemConfig.EMAIL_SMTP_HOST).first()
+    user_cfg = SystemConfig.query.filter_by(config_key=SystemConfig.EMAIL_SMTP_USER).first()
+    if not (host_cfg and host_cfg.config_value):
+        return {'error': '邮件发送失败：SMTP 主机未配置（系统配置 → 邮件配置）'}
+    if not (user_cfg and user_cfg.config_value):
+        return {'error': '邮件发送失败：SMTP 用户未配置（系统配置 → 邮件配置）'}
 
     subject = _render_string(cfg.get('subject') or '工作流通知', ctx)
     content = _render_string(cfg.get('content') or '', ctx)

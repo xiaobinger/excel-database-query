@@ -82,6 +82,7 @@
 
           <div v-for="node in graph.nodes" :key="node.id" class="wf-node" :class="nodeClass(node)"
                :data-node-id="node.id"
+               :title="nodeTitle(node)"
                :style="{ left: node.x + 'px', top: node.y + 'px' }"
                @mousedown.stop="startNodeDrag($event, node)">
             <div class="wf-node-icon" :style="{ background: meta(node.type).color }">
@@ -97,6 +98,10 @@
             <span v-if="nodeStatus[node.id] === 'completed'" class="wf-node-badge ok"><i class="fa fa-check"></i></span>
             <span v-else-if="nodeStatus[node.id] === 'failed'" class="wf-node-badge bad"><i class="fa fa-times"></i></span>
             <span v-else-if="nodeStatus[node.id] === 'waiting_approval'" class="wf-node-badge wait"><i class="fa fa-user-clock"></i></span>
+            <div v-if="nodeError(node.id)" class="wf-node-error" @mousedown.stop @click.stop="openRunsDrawer">
+              <i class="fa fa-exclamation-circle"></i>
+              <span>{{ nodeError(node.id) }}</span>
+            </div>
           </div>
         </div>
 
@@ -468,6 +473,24 @@
             </template>
           </el-form>
 
+          <div v-if="runNode(selectedNode.id)" class="wf-output-box wf-run-info-box">
+            <div class="wf-output-title">
+              最近运行
+              <span class="wf-run-badge small" :class="'st-' + runNode(selectedNode.id).status">
+                {{ statusLabel(runNode(selectedNode.id).status) }}
+              </span>
+              <span class="wf-run-info-time">{{ durationText(runNode(selectedNode.id)) }}</span>
+            </div>
+            <div v-if="nodeError(selectedNode.id)" class="wf-run-info-error">
+              <i class="fa fa-exclamation-triangle"></i>
+              <span>{{ nodeError(selectedNode.id) }}</span>
+            </div>
+            <div v-else-if="runNode(selectedNode.id).error_message" class="wf-run-info-error">
+              <i class="fa fa-exclamation-triangle"></i>
+              <span>{{ runNode(selectedNode.id).error_message }}</span>
+            </div>
+          </div>
+
           <div v-if="nodeOutput(selectedNode.id)" class="wf-output-box">
             <div class="wf-output-title">最近运行输出</div>
             <pre>{{ pretty(nodeOutput(selectedNode.id)) }}</pre>
@@ -581,6 +604,49 @@
         </div>
         <el-empty v-if="!runsList.length" description="暂无执行记录" :image-size="60" />
       </div>
+
+      <div v-if="activeRun" class="wf-run-detail">
+        <div class="wf-run-detail-head">
+          <span class="wf-run-badge" :class="'st-' + activeRun.status">{{ statusLabel(activeRun.status) }}</span>
+          <span class="wf-run-detail-id">{{ activeRun.run_id.slice(0, 8) }}</span>
+          <span class="wf-run-detail-time">{{ formatTime(activeRun.started_at) }} ~ {{ formatTime(activeRun.completed_at) || '进行中' }}</span>
+        </div>
+
+        <div v-if="activeRun.error_message" class="wf-run-detail-error">
+          <i class="fa fa-times-circle"></i> {{ activeRun.error_message }}
+        </div>
+
+        <div class="wf-run-detail-title">节点执行明细</div>
+        <div class="wf-run-detail-nodes">
+          <div v-for="n in activeRun.nodes || []" :key="n.id" class="wf-run-detail-node" :class="'st-' + n.status">
+            <div class="wf-run-detail-node-main">
+              <i :class="['fa', statusIcon(n.status)]" class="wf-run-detail-node-icon"></i>
+              <span class="wf-run-detail-node-name">{{ n.node_name }}</span>
+              <span class="wf-run-detail-node-type">{{ meta(n.node_type).label }}</span>
+              <span class="wf-run-badge small" :class="'st-' + n.status">{{ statusLabel(n.status) }}</span>
+              <span class="wf-run-detail-node-dur">{{ durationText(n) }}</span>
+            </div>
+            <div v-if="n.error_message" class="wf-run-detail-node-error">
+              <i class="fa fa-exclamation-triangle"></i>
+              <span>{{ n.error_message }}</span>
+            </div>
+            <details v-if="n.output !== null && n.output !== undefined" class="wf-run-detail-node-output">
+              <summary>查看输出</summary>
+              <pre>{{ pretty(n.output) }}</pre>
+            </details>
+          </div>
+          <div v-if="!(activeRun.nodes || []).length" class="wf-muted">暂无节点记录</div>
+        </div>
+
+        <div class="wf-run-detail-title">执行日志</div>
+        <div class="wf-run-detail-logs">
+          <div v-for="(l, i) in activeRun.logs || []" :key="i" class="wf-run-detail-log" :class="'lv-' + l.level">
+            <span class="wf-run-detail-log-time">{{ formatTime(l.time).slice(11) }}</span>
+            <span>{{ l.message }}</span>
+          </div>
+          <div v-if="!(activeRun.logs || []).length" class="wf-muted">暂无日志</div>
+        </div>
+      </div>
     </el-drawer>
   </div>
 </template>
@@ -645,6 +711,7 @@ const runsList = ref([])
 const activeRun = ref(null)
 const nodeStatus = reactive({})
 const nodeOutputs = reactive({})
+const runNodeRecords = reactive({})
 const approvalComment = ref('')
 
 const dragState = ref(null)
@@ -1430,6 +1497,7 @@ function applyRun(detail) {
   clearRunVisual()
   ;(detail.nodes || []).forEach(n => {
     nodeStatus[n.node_id] = n.status
+    runNodeRecords[n.node_id] = n
     if (n.output !== undefined && n.output !== null) nodeOutputs[n.node_id] = n.output
   })
 }
@@ -1437,6 +1505,7 @@ function applyRun(detail) {
 function clearRunVisual() {
   Object.keys(nodeStatus).forEach(k => delete nodeStatus[k])
   Object.keys(nodeOutputs).forEach(k => delete nodeOutputs[k])
+  Object.keys(runNodeRecords).forEach(k => delete runNodeRecords[k])
 }
 
 async function submitApproval(approved) {
@@ -1506,6 +1575,47 @@ const STATUS_LABELS = {
 
 function statusLabel(status) {
   return STATUS_LABELS[status] || status || ''
+}
+
+function statusIcon(status) {
+  const map = {
+    pending: 'fa-hourglass-start',
+    running: 'fa-spinner fa-spin',
+    waiting_approval: 'fa-user-clock',
+    completed: 'fa-check-circle',
+    failed: 'fa-times-circle',
+    cancelled: 'fa-ban',
+    skipped: 'fa-forward',
+  }
+  return map[status] || 'fa-info-circle'
+}
+
+function runNode(id) {
+  return runNodeRecords[id] || null
+}
+
+function nodeError(id) {
+  const rec = runNodeRecords[id]
+  if (!rec || rec.status !== 'failed') return ''
+  return rec.error_message || '节点执行失败（未返回错误信息）'
+}
+
+function nodeTitle(node) {
+  const rec = runNodeRecords[node.id]
+  if (!rec) return ''
+  if (rec.status === 'failed') return '执行失败：' + (rec.error_message || '未知原因')
+  return ''
+}
+
+function durationText(rec) {
+  if (!rec || !rec.started_at) return ''
+  const start = new Date(rec.started_at).getTime()
+  const end = rec.completed_at ? new Date(rec.completed_at).getTime() : Date.now()
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return ''
+  const sec = (end - start) / 1000
+  if (sec < 1) return Math.round(sec * 1000) + 'ms'
+  if (sec < 60) return sec.toFixed(1) + 's'
+  return Math.floor(sec / 60) + 'm' + Math.round(sec % 60) + 's'
 }
 
 function formatTime(time) {
@@ -2197,6 +2307,192 @@ onBeforeUnmount(() => {
   color: #dc2626;
   word-break: break-all;
 }
+
+/* 节点失败原因浮层 */
+.wf-node-error {
+  position: absolute;
+  left: 0;
+  top: 78px;
+  width: 260px;
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  font-size: 11px;
+  line-height: 1.5;
+  word-break: break-all;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.16);
+  max-height: 84px;
+  overflow: hidden;
+  cursor: pointer;
+  z-index: 60;
+}
+.wf-node-error i {
+  margin-top: 2px;
+}
+
+/* 属性栏最近运行 */
+.wf-run-info-box .wf-output-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wf-run-badge.small {
+  padding: 0 6px;
+  font-size: 10px;
+}
+.wf-run-badge.st-pending { background: #e0e7ff; color: #4338ca; }
+.wf-run-info-time {
+  margin-left: auto;
+  color: #94a3b8;
+}
+.wf-run-info-error {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-all;
+}
+
+/* 执行记录详情 */
+.wf-run-detail {
+  margin-top: 18px;
+  border-top: 1px solid #e5e7eb;
+  padding-top: 14px;
+}
+.wf-run-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: #475569;
+}
+.wf-run-detail-id {
+  font-family: Consolas, Monaco, monospace;
+  color: #64748b;
+}
+.wf-run-detail-time {
+  margin-left: auto;
+  color: #94a3b8;
+}
+.wf-run-detail-error {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-all;
+}
+.wf-run-detail-title {
+  margin: 16px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+}
+.wf-run-detail-nodes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wf-run-detail-node {
+  padding: 8px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #fff;
+}
+.wf-run-detail-node.st-failed {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+.wf-run-detail-node-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #475569;
+}
+.wf-run-detail-node-icon {
+  color: #94a3b8;
+}
+.wf-run-detail-node.st-completed .wf-run-detail-node-icon { color: #10b981; }
+.wf-run-detail-node.st-failed .wf-run-detail-node-icon { color: #ef4444; }
+.wf-run-detail-node.st-running .wf-run-detail-node-icon { color: #f59e0b; }
+.wf-run-detail-node-name {
+  font-weight: 600;
+  color: #1e293b;
+}
+.wf-run-detail-node-type {
+  color: #94a3b8;
+}
+.wf-run-detail-node-dur {
+  margin-left: auto;
+  color: #94a3b8;
+  font-size: 11px;
+}
+.wf-run-detail-node-error {
+  margin-top: 6px;
+  display: flex;
+  gap: 6px;
+  color: #b91c1c;
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-all;
+}
+.wf-run-detail-node-output {
+  margin-top: 6px;
+}
+.wf-run-detail-node-output summary {
+  cursor: pointer;
+  color: #2563eb;
+  font-size: 12px;
+}
+.wf-run-detail-node-output pre {
+  margin: 6px 0 0;
+  max-height: 200px;
+  overflow: auto;
+  background: #0f172a;
+  color: #cbd5e1;
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 10px;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.wf-run-detail-logs {
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #f8fafc;
+}
+.wf-run-detail-log {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.8;
+  color: #475569;
+  word-break: break-all;
+}
+.wf-run-detail-log-time {
+  flex: none;
+  color: #94a3b8;
+  font-family: Consolas, Monaco, monospace;
+}
+.wf-run-detail-log.lv-warning { color: #b45309; }
+.wf-run-detail-log.lv-error { color: #b91c1c; }
 
 @media (max-width: 1280px) {
   .wf-props { width: 280px; }
