@@ -40,6 +40,7 @@ NODE_TYPE_LABELS = {
     'system_task': '系统任务',
     'script': '脚本执行',
     'lookup': '信息查询',
+    'ai': '智能AI',
     'email': '邮件通知',
     'log_query': '查询日志',
     'file_generate': '生成文件',
@@ -51,7 +52,23 @@ NODE_TYPE_LABELS = {
 
 # 支持自循环的业务任务节点（开始/结束/条件/延时/审批等控制类节点除外）
 LOOPABLE_NODE_TYPES = {
-    'query', 'export', 'system_task', 'script', 'lookup', 'email', 'log_query', 'file_generate',
+    'query', 'export', 'system_task', 'script', 'lookup', 'ai', 'email', 'log_query', 'file_generate',
+}
+
+# 已归并为「智能AI」节点的旧节点类型：保留执行兼容与旧流程展示，但不再作为新节点提供
+DEPRECATED_NODE_TYPES = {'email', 'log_query', 'file_generate'}
+
+# 智能AI节点能力预设提示词
+_AI_CAPABILITY_PROMPTS = {
+    'auto': '请根据任务指令自行判断需要执行的操作；需要工具时直接调用。',
+    'email': ('本次任务是发送邮件通知。请根据任务指令与流程上下文确定收件人、主题和正文，'
+              '并调用 send_email 工具实际发送邮件；不得只在回复中描述邮件内容。'),
+    'log_query': ('本次任务是查询/分析系统日志。日志数据已随任务提供，请按任务指令完成筛选、统计、'
+                  '异常识别或汇总，并输出结论；如任务要求发送邮件或生成文件，可继续调用相应工具。'),
+    'file_generate': ('本次任务是生成文件。请整理任务指令要求的内容，并调用 create_file 工具实际生成文件；'
+                      '文件名与格式按指令要求确定，不得只在回复中贴出内容。'),
+    'summary': '本次任务是总结。请阅读任务指令与流程上下文，输出简洁准确的总结正文，不要调用任何工具。',
+    'custom': '请严格按照任务指令执行，必要时调用可用工具。',
 }
 
 _TEMPLATE_RE = re.compile(r'\{\{\s*([^{}]+?)\s*\}\}')
@@ -171,6 +188,7 @@ def delete_workflow(workflow_id):
 
 def get_capabilities():
     """返回编排面板可用的各类资源清单"""
+    from app.models.ai_agent import AiAgent
     from app.models.script import Script
     from app.models.database import DatabaseConnection
     from app.models.system_task import SystemTask
@@ -193,13 +211,18 @@ def get_capabilities():
                     for t in SystemTask.query.order_by(SystemTask.id.desc()).all()]
     approvers = [{'id': u.id, 'username': u.username, 'display_name': u.display_name or u.username}
                  for u in User.query.filter_by(is_active=True).order_by(User.id).all()]
+    agents = [{'id': a.id, 'name': a.name, 'agent_role': a.agent_role,
+               'description': a.description or ''}
+              for a in AiAgent.query.filter_by(is_active=True).order_by(AiAgent.id).all()]
 
     return {
         'scripts': scripts,
         'databases': databases,
         'system_tasks': system_tasks,
         'approvers': approvers,
-        'node_types': [{'type': k, 'label': v} for k, v in NODE_TYPE_LABELS.items()],
+        'agents': agents,
+        'node_types': [{'type': k, 'label': v} for k, v in NODE_TYPE_LABELS.items()
+                       if k not in DEPRECATED_NODE_TYPES],
     }
 
 
@@ -472,7 +495,7 @@ def _execute_run(run_id):
         db.session.commit()
 
         try:
-            result = _execute_node(node, ctx, run_id)
+            result = _execute_node(node, ctx, run_id, run.created_by)
         except Exception as e:
             logger.error(f'节点执行失败 {node_name}: {e}', exc_info=True)
             node_exec.status = 'failed'
@@ -629,7 +652,7 @@ def _pick_edge(edges, node_id, branch, fallback=('default',)):
 # 节点执行
 # ---------------------------------------------------------------------------
 
-def _execute_node(node, ctx, run_id):
+def _execute_node(node, ctx, run_id, user_id=None):
     node_type = node.get('type') or 'task'
     cfg = node.get('config') or {}
 
@@ -669,6 +692,9 @@ def _execute_node(node, ctx, run_id):
 
     if node_type == 'lookup':
         return _execute_lookup_node(cfg, ctx)
+
+    if node_type == 'ai':
+        return _execute_ai_node(cfg, ctx, user_id)
 
     if node_type == 'email':
         return _execute_email_node(cfg, ctx)
@@ -988,6 +1014,137 @@ def _execute_file_node(cfg, ctx):
     if isinstance(result, dict) and result.get('error'):
         return {'error': result['error']}
     return {'output': result}
+
+
+def _execute_ai_node(cfg, ctx, user_id=None):
+    """智能AI节点：按指定 Agent + 能力 + 白话文指令执行，支持工具调用循环。"""
+    from app.models.ai_agent import AiAgent
+    from app.services.ai_service import AiService, get_effective_tools
+
+    capability = (cfg.get('capability') or 'auto').strip()
+    instruction = _render_string(cfg.get('instruction') or '', ctx).strip()
+    if not instruction:
+        instruction = '请根据当前流程上下文完成合理处理，并输出处理结果。'
+
+    agent = None
+    agent_id = cfg.get('agent_id')
+    if agent_id:
+        try:
+            agent = AiAgent.query.get(int(agent_id))
+        except (TypeError, ValueError):
+            agent = None
+        if not agent:
+            return {'error': f'智能AI节点指定的 Agent 不存在：{agent_id}'}
+
+    # 日志能力：先按条件取数，随任务一并提供给AI
+    log_output = None
+    if capability == 'log_query':
+        log_output = _execute_log_query_node({
+            'log_type': cfg.get('log_type') or 'operation',
+            'keyword': cfg.get('keyword') or '',
+            'action': cfg.get('action') or '',
+            'limit': cfg.get('limit') or 50,
+        }, ctx)
+        if log_output.get('error'):
+            return log_output
+
+    # 系统提示词：Agent 自身提示词 + 节点角色 + 能力预设
+    parts = []
+    if agent and agent.system_prompt:
+        parts.append(agent.system_prompt.strip())
+    parts.append('你是混合工作流中的「智能AI」节点，负责完成当前流程节点交给你的任务。')
+    parts.append(_AI_CAPABILITY_PROMPTS.get(capability, _AI_CAPABILITY_PROMPTS['custom']))
+    parts.append('执行完成后请给出简明结论，结论会被写入流程上下文供后续节点使用。')
+    system_prompt = '\n'.join(p for p in parts if p)
+
+    user_parts = [f'任务指令：\n{instruction}']
+    if log_output:
+        rows = (log_output.get('output') or {}).get('rows') or []
+        log_text = json.dumps(rows, ensure_ascii=False, default=str)
+        if len(log_text) > 8000:
+            log_text = log_text[:8000] + '...(已截断)'
+        user_parts.append(f'日志数据（共 {len(rows)} 条）：\n{log_text}')
+    if cfg.get('include_context', True):
+        try:
+            context_limit = max(500, min(int(cfg.get('context_limit') or 6000), 20000))
+        except (TypeError, ValueError):
+            context_limit = 6000
+        digest = json.dumps(ctx, ensure_ascii=False, default=str)
+        if len(digest) > context_limit:
+            digest = digest[:context_limit] + '...(已截断)'
+        user_parts.append(f'流程上下文（JSON，供参考）：\n{digest}')
+
+    messages = [
+        {'role': 'system', 'content': system_prompt},
+        {'role': 'user', 'content': '\n\n'.join(user_parts)},
+    ]
+
+    try:
+        max_rounds = max(1, min(int(cfg.get('max_rounds') or 5), 10))
+    except (TypeError, ValueError):
+        max_rounds = 5
+
+    # 总结能力不需要工具，其余按 Agent 授权工具执行
+    tools = [] if capability == 'summary' else get_effective_tools(agent)
+
+    final_content = ''
+    tool_log = []
+    rounds_used = 0
+    try:
+        if not tools:
+            response = AiService.chat_with_failover(messages, use_tools=False, scope='workflow')
+            final_content = response[0] or ''
+            rounds_used = 1
+        else:
+            for round_idx in range(max_rounds):
+                rounds_used = round_idx + 1
+                response = AiService.chat_with_failover(
+                    messages, use_tools=True, tools=tools, scope='workflow')
+                content = (response.get('content') or '')
+                tool_calls = response.get('tool_calls') or []
+                if not tool_calls:
+                    final_content = content
+                    break
+
+                messages.append({'role': 'assistant', 'content': content, 'tool_calls': tool_calls})
+                for tc in tool_calls:
+                    func = tc.get('function') or {}
+                    func_name = func.get('name') or ''
+                    func_args = func.get('arguments') or ''
+                    result = AiService.execute_tool_call(
+                        func_name, func_args, user_id, agent_id=agent.id if agent else None)
+                    result_text = json.dumps(result, ensure_ascii=False, default=str)
+                    if len(result_text) > 6000:
+                        result_text = result_text[:6000] + '...(已截断)'
+                    messages.append({
+                        'role': 'tool',
+                        'tool_call_id': tc.get('id') or '',
+                        'content': result_text,
+                    })
+                    error = result.get('error') if isinstance(result, dict) else None
+                    tool_log.append({'name': func_name, 'arguments': func_args, 'error': error})
+
+            if not final_content:
+                # 达到轮次上限仍在调用工具，让AI基于已有结果归总
+                response = AiService.chat_with_failover(messages, use_tools=False, scope='workflow')
+                final_content = response[0] or ''
+    except Exception as e:
+        logger.error(f'智能AI节点执行失败: {e}', exc_info=True)
+        return {'error': f'智能AI节点执行失败：{e}'}
+
+    final_content = (final_content or '').strip() or 'AI 已完成处理，但未返回文本内容。'
+    output = {
+        'content': final_content,
+        'capability': capability,
+        'agent_id': agent.id if agent else None,
+        'agent_name': agent.name if agent else '默认AI',
+        'rounds': rounds_used,
+        'tool_calls': tool_log,
+    }
+    if log_output:
+        output['log_type'] = (log_output.get('output') or {}).get('log_type')
+        output['log_row_count'] = (log_output.get('output') or {}).get('row_count', 0)
+    return {'output': output}
 
 
 # ---------------------------------------------------------------------------

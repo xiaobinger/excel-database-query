@@ -261,6 +261,60 @@
               </el-form-item>
             </template>
 
+            <template v-else-if="selectedNode.type === 'ai'">
+              <el-form-item label="智能 Agent">
+                <el-select v-model="selectedNode.config.agent_id" clearable filterable
+                           placeholder="默认AI（不指定 Agent）" style="width: 100%" @change="dirty = true">
+                  <el-option v-for="a in agents" :key="a.id"
+                             :label="a.name + (a.agent_role ? ' (' + a.agent_role + ')' : '')" :value="a.id" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="能力">
+                <el-select v-model="selectedNode.config.capability" style="width: 100%" @change="dirty = true">
+                  <el-option label="自动判断" value="auto" />
+                  <el-option label="发送邮件" value="email" />
+                  <el-option label="查询分析日志" value="log_query" />
+                  <el-option label="生成文件" value="file_generate" />
+                  <el-option label="总结" value="summary" />
+                  <el-option label="自定义" value="custom" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="白话文指令">
+                <el-input type="textarea" :rows="6" v-model="selectedNode.config.instruction"
+                          placeholder="如：把上一个节点的查询结果整理成邮件，发送给 ops@example.com，并说明异常情况"
+                          @input="dirty = true" />
+              </el-form-item>
+              <template v-if="selectedNode.config.capability === 'log_query'">
+                <el-form-item label="日志类型">
+                  <el-select v-model="selectedNode.config.log_type" style="width: 100%" @change="dirty = true">
+                    <el-option label="操作日志" value="operation" />
+                    <el-option label="登录日志" value="login" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="用户名关键字">
+                  <el-input v-model="selectedNode.config.keyword" @input="dirty = true" />
+                </el-form-item>
+                <el-form-item v-if="selectedNode.config.log_type === 'operation'" label="操作类型">
+                  <el-input v-model="selectedNode.config.action" placeholder="精确匹配 action" @input="dirty = true" />
+                </el-form-item>
+                <el-form-item label="条数上限">
+                  <el-input-number v-model="selectedNode.config.limit" :min="1" :max="500" />
+                </el-form-item>
+              </template>
+              <el-form-item label="注入流程上下文">
+                <el-switch v-model="selectedNode.config.include_context" @change="dirty = true" />
+              </el-form-item>
+              <el-form-item v-if="selectedNode.config.include_context" label="上下文上限（字符）">
+                <el-input-number v-model="selectedNode.config.context_limit" :min="500" :max="20000" :step="500" />
+              </el-form-item>
+              <el-form-item label="工具调用轮次">
+                <el-input-number v-model="selectedNode.config.max_rounds" :min="1" :max="10" />
+              </el-form-item>
+              <div class="wf-hint">
+                AI 结论写入节点输出的 <code>content</code> 字段，后续节点可用 <code v-pre>{{ 节点ID.content }}</code> 引用；指令支持模板变量。
+              </div>
+            </template>
+
             <template v-else-if="selectedNode.type === 'email'">
               <el-form-item label="收件人">
                 <el-input v-model="selectedNode.config.to" placeholder="多个邮箱用逗号分隔" @input="dirty = true" />
@@ -517,6 +571,7 @@ const NODE_META = {
   system_task: { label: '系统任务', icon: 'fa-cogs', color: '#f59e0b' },
   script: { label: '脚本执行', icon: 'fa-terminal', color: '#0ea5e9' },
   lookup: { label: '信息查询', icon: 'fa-search-plus', color: '#06b6d4' },
+  ai: { label: '智能AI', icon: 'fa-robot', color: '#6366f1' },
   email: { label: '邮件通知', icon: 'fa-envelope', color: '#ec4899' },
   log_query: { label: '查询日志', icon: 'fa-clipboard-list', color: '#64748b' },
   file_generate: { label: '生成文件', icon: 'fa-file-alt', color: '#14b8a6' },
@@ -525,8 +580,8 @@ const NODE_META = {
   delay: { label: '延时等待', icon: 'fa-clock', color: '#94a3b8' },
   end: { label: '结束', icon: 'fa-flag-checkered', color: '#475569' },
 }
-const paletteTypes = ['query', 'export', 'system_task', 'script', 'lookup', 'email', 'log_query',
-  'file_generate', 'approval', 'condition', 'delay', 'start', 'end']
+const paletteTypes = ['query', 'export', 'system_task', 'script', 'lookup', 'ai',
+  'approval', 'condition', 'delay', 'start', 'end']
 const branchOptions = [
   { value: 'default', label: '默认' },
   { value: 'success', label: '成功' },
@@ -543,7 +598,7 @@ const current = ref(null)
 const graph = ref({ nodes: [], edges: [] })
 const selectedNodeId = ref(null)
 const selectedEdgeId = ref(null)
-const capabilities = ref({ scripts: [], databases: [], system_tasks: [], approvers: [] })
+const capabilities = ref({ scripts: [], databases: [], system_tasks: [], approvers: [], agents: [] })
 const scale = ref(1)
 const offsetX = ref(80)
 const offsetY = ref(60)
@@ -581,6 +636,7 @@ const lookupScripts = computed(() => capabilities.value.scripts.filter(s => s.ty
 const databases = computed(() => capabilities.value.databases)
 const systemTasks = computed(() => capabilities.value.system_tasks)
 const approvers = computed(() => capabilities.value.approvers)
+const agents = computed(() => capabilities.value.agents || [])
 const loopNodes = computed(() => graph.value.nodes.filter(
   n => isLoopable(n.type) && n.config && n.config.loop && n.config.loop.enabled))
 const isRunActive = computed(() => activeRun.value &&
@@ -631,6 +687,12 @@ function baseConfig(type) {
       }
     case 'lookup':
       return { script_id: null, param_values: {} }
+    case 'ai':
+      return {
+        agent_id: null, capability: 'auto', instruction: '',
+        include_context: true, context_limit: 6000, max_rounds: 5,
+        log_type: 'operation', keyword: '', action: '', limit: 50,
+      }
     case 'email':
       return { to: '', subject: '', content: '' }
     case 'log_query':
@@ -651,7 +713,7 @@ function baseConfig(type) {
 }
 
 // 业务任务节点支持自循环（开始/结束/条件/延时/审批等控制类节点除外）
-const LOOPABLE_TYPES = ['query', 'export', 'system_task', 'script', 'lookup', 'email', 'log_query', 'file_generate']
+const LOOPABLE_TYPES = ['query', 'export', 'system_task', 'script', 'lookup', 'ai', 'email', 'log_query', 'file_generate']
 
 function isLoopable(type) {
   return LOOPABLE_TYPES.includes(type)
