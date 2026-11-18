@@ -11,11 +11,6 @@ import json
 import logging
 import os
 import re
-import shlex
-import shutil
-import subprocess
-import sys
-import tempfile
 import threading
 import time
 import uuid
@@ -73,35 +68,6 @@ _AI_CAPABILITY_PROMPTS = {
 
 _TEMPLATE_RE = re.compile(r'\{\{\s*([^{}]+?)\s*\}\}')
 _NUMBER_RE = re.compile(r'^-?\d+(\.\d+)?$')
-
-# 脚本节点支持的预置脚本类型 -> 解释器命令前缀
-_SCRIPT_INTERPRETERS = {
-    'python': [sys.executable or 'python'],
-    'shell': ['bash'],
-    'bash': ['bash'],
-    'sh': ['bash'],
-    'bat': ['cmd', '/c'],
-    'cmd': ['cmd', '/c'],
-    'powershell': ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File'],
-    'ps1': ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File'],
-    'node': ['node'],
-    'javascript': ['node'],
-    'js': ['node'],
-}
-# 内联脚本写入临时文件时使用的后缀
-_SCRIPT_SUFFIXES = {
-    'python': '.py',
-    'shell': '.sh',
-    'bash': '.sh',
-    'sh': '.sh',
-    'bat': '.bat',
-    'cmd': '.bat',
-    'powershell': '.ps1',
-    'ps1': '.ps1',
-    'node': '.js',
-    'javascript': '.js',
-    'js': '.js',
-}
 
 
 # ---------------------------------------------------------------------------
@@ -842,97 +808,161 @@ def _execute_system_task_node(cfg, ctx):
 
 
 def _execute_script_node(cfg, ctx):
-    """脚本节点：支持 Python/Shell/Bat/PowerShell/Node 及自定义解释器脚本"""
-    script_type = (cfg.get('script_type') or 'python').strip().lower()
-    interpreter = _build_script_command(script_type, cfg.get('interpreter'))
-    if not interpreter:
-        return {'error': f'脚本节点解释器无效：{script_type}'}
+    """脚本节点：执行脚本库中的 SQL 脚本，按脚本类型调用对应的原服务。
 
-    script_source = cfg.get('script_source') or 'inline'
-    script_path = _render_string(cfg.get('script_path') or '', ctx).strip()
-    content = _render_string(cfg.get('script_content') or '', ctx)
-    if script_source == 'file' and not script_path:
-        return {'error': '脚本节点未配置脚本文件路径'}
-    if script_source != 'file' and not content.strip():
-        return {'error': '脚本节点未填写脚本内容'}
+    query -> 查询服务（需 Excel 参数文件）；export -> 导出服务；lookup -> 信息查询；system -> 执行 SQL。
+    """
+    from app.models.script import Script
+
+    script_id = cfg.get('script_id') or (cfg.get('script_ids') or [None])[0]
+    if not script_id:
+        return {'error': '脚本节点未选择 SQL 脚本'}
+    try:
+        script = Script.query.get(int(script_id))
+    except (TypeError, ValueError):
+        script = None
+    if not script:
+        return {'error': f'SQL 脚本不存在：{script_id}'}
+
+    script_type = (script.type or 'query').strip().lower()
+    if script_type == 'query':
+        return _execute_query_node(dict(cfg, script_ids=[script.id]), ctx)
+    if script_type == 'export':
+        return _execute_export_node(dict(cfg, script_ids=[script.id]), ctx)
+    if script_type == 'lookup':
+        return _execute_lookup_node(dict(cfg, script_id=script.id), ctx)
+    if script_type == 'system':
+        return _execute_system_script(script, cfg, ctx)
+    return {'error': f'脚本节点暂不支持的脚本类型：{script_type}'}
+
+
+def _execute_system_script(script, cfg, ctx):
+    """执行系统类 SQL 脚本（DML/DDL），支持参数替换、多语句与列表参数。"""
+    from sqlalchemy import text
+
+    from app.models.database import DatabaseConnection
+    from app.services.system_task_service import SystemTaskService
+    from app.utils.connection_pool import ConnectionPoolManager
+    from app.utils.sql_validator import SQLValidator
+
+    sql_text = script.sql_text or ''
+    if not sql_text.strip():
+        return {'error': 'SQL 脚本内容为空'}
 
     params_values = _render(cfg.get('param_values') or {}, ctx)
     if not isinstance(params_values, dict):
         params_values = {}
-    try:
-        timeout = int(cfg.get('timeout') or 300)
-    except (TypeError, ValueError):
-        timeout = 300
-    timeout = max(1, min(timeout, 3600))
+    for key, val in params_values.items():
+        sql_text = sql_text.replace(f'{{{{{key}}}}}', '' if val is None else str(val))
+    sql_text = _render_string(sql_text, ctx)
 
-    temp_dir = None
-    try:
-        if script_source == 'file':
-            if not os.path.isfile(script_path):
-                return {'error': f'脚本文件不存在：{script_path}'}
-            target_path = script_path
-            workdir = os.path.dirname(os.path.abspath(script_path)) or None
+    validation = SQLValidator().validate(sql_text, allow_dml=True)
+    if not validation.is_valid:
+        return {'error': f'SQL 校验失败：{validation.message}'}
+
+    # 过滤空值，并识别需要按 IN 展开的列表参数
+    bind_params = {}
+    list_params = {}
+    for key, val in params_values.items():
+        if val is None or val == '':
+            continue
+        if isinstance(val, (list, tuple)):
+            values = [str(v).strip() for v in val if str(v).strip()]
+            if values:
+                list_params[key] = values
+        elif isinstance(val, str) and re.search(r'[,，]', val):
+            parts = [p.strip() for p in re.split(r'[,，]', val) if p.strip()]
+            if len(parts) >= 2:
+                list_params[key] = parts
+            else:
+                bind_params[key] = val
         else:
-            temp_dir = tempfile.mkdtemp(prefix='wf_script_')
-            suffix = _SCRIPT_SUFFIXES.get(script_type, '.txt')
-            target_path = os.path.join(temp_dir, f'node_script{suffix}')
-            with open(target_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-            workdir = temp_dir
+            bind_params[key] = val
 
-        cmd = [*interpreter, target_path]
-        env = os.environ.copy()
-        for k, v in params_values.items():
-            key = str(k)
-            cmd.extend([f'--{key}', '' if v is None else str(v)])
-            env[f'SCRIPT_PARAM_{key.upper()}'] = '' if v is None else str(v)
+    statements = SystemTaskService._split_sql_statements(sql_text)
+    if not statements:
+        return {'error': '没有可执行的 SQL 语句'}
+    expanded = []
+    for stmt in statements:
+        for key, values in list_params.items():
+            pattern = rf'\bIN\s*\(\s*:{key}\s*\)'
+            if re.search(pattern, stmt, re.IGNORECASE):
+                placeholders = ', '.join(f':{key}_{i}' for i in range(len(values)))
+                stmt = re.sub(pattern, f'IN ({placeholders})', stmt, flags=re.IGNORECASE)
+                for i, val in enumerate(values):
+                    bind_params[f'{key}_{i}'] = val
+            elif f':{key}' in stmt:
+                bind_params[key] = values[0]
+        expanded.append(stmt)
+    statements = expanded
 
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                                    env=env, cwd=workdir)
-        except subprocess.TimeoutExpired:
-            return {'error': f'脚本执行超时（{timeout}秒）'}
-        except FileNotFoundError as e:
-            return {'error': f'脚本解释器未找到：{e}'}
+    db_ids = _as_int_list(cfg.get('database_ids') or cfg.get('database_id'))
+    if not db_ids:
+        db_ids = script.get_database_ids() or []
+    db_ids = list(dict.fromkeys(db_ids))
+    if not db_ids:
+        return {'error': 'SQL 脚本未配置数据库连接'}
 
-        stdout = result.stdout or ''
-        stderr = result.stderr or ''
-        output = {
-            'returncode': result.returncode,
-            'stdout': _parse_script_stdout(stdout),
-            'stderr': stderr,
-            'success': result.returncode == 0,
-        }
-        if result.returncode != 0:
-            detail = stderr.strip()[:500]
-            return {'output': output, 'error': f'脚本执行失败，返回码 {result.returncode}' + (f'：{detail}' if detail else '')}
-        return {'output': output}
-    finally:
-        if temp_dir:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+    pool = ConnectionPoolManager.get_instance()
+    results = []
+    total_affected = 0
+    for conn_id in db_ids:
+        conn_model = DatabaseConnection.query.get(conn_id)
+        if not conn_model:
+            continue
+        connector = pool.get_connector_with_health_check(conn_id)
+        if not connector:
+            return {'error': f'数据库连接失败：{conn_model.name}'}
 
+        db_statements = []
+        with connector.get_connection() as conn:
+            for stmt_idx, stmt in enumerate(statements):
+                if not stmt.strip():
+                    continue
+                result = (conn.execute(text(stmt), bind_params) if bind_params
+                          else conn.execute(text(stmt)))
 
-def _build_script_command(script_type, interpreter):
-    """根据脚本类型返回解释器命令前缀，自定义类型直接解析解释器命令"""
-    if script_type == 'custom':
-        command = (interpreter or '').strip()
-        return shlex.split(command) if command else None
-    prefix = _SCRIPT_INTERPRETERS.get(script_type)
-    if prefix is not None:
-        return list(prefix)
-    # 未预置的类型视为解释器名（如 ruby、php、perl）
-    command = (interpreter or script_type).strip()
-    return shlex.split(command) if command else None
+                if SystemTaskService._is_query_statement(stmt):
+                    columns = list(result.keys()) if hasattr(result, 'keys') else []
+                    rows = []
+                    for row in result.fetchall():
+                        if columns:
+                            rows.append({columns[i]: row[i] for i in range(min(len(columns), len(row)))})
+                        else:
+                            rows.append({f'col_{i}': val for i, val in enumerate(row)})
+                    db_statements.append({
+                        'statement_index': stmt_idx,
+                        'statement': stmt[:200],
+                        'type': 'query',
+                        'columns': columns,
+                        'row_count': len(rows),
+                        'rows': rows,
+                    })
+                else:
+                    rowcount = result.rowcount if hasattr(result, 'rowcount') else 0
+                    if rowcount and rowcount > 0:
+                        total_affected += rowcount
+                    conn.commit()
+                    db_statements.append({
+                        'statement_index': stmt_idx,
+                        'statement': stmt[:200],
+                        'type': 'command',
+                        'rowcount': rowcount,
+                    })
 
+        results.append({
+            'database_id': conn_id,
+            'database_name': conn_model.name,
+            'statements': db_statements,
+        })
 
-def _parse_script_stdout(stdout):
-    text = (stdout or '').strip()
-    if not text:
-        return ''
-    try:
-        return json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        return stdout
+    return {'output': {
+        'script_id': script.id,
+        'script_name': script.name,
+        'script_type': 'system',
+        'total_affected': total_affected,
+        'results': results,
+    }}
 
 
 def _execute_lookup_node(cfg, ctx):

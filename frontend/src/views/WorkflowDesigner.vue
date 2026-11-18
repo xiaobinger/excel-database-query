@@ -211,42 +211,56 @@
             </template>
 
             <template v-else-if="selectedNode.type === 'script'">
-              <el-form-item label="脚本类型">
-                <el-select v-model="selectedNode.config.script_type" style="width: 100%" @change="dirty = true">
-                  <el-option label="Python" value="python" />
-                  <el-option label="Shell / Bash" value="shell" />
-                  <el-option label="Windows Bat" value="bat" />
-                  <el-option label="PowerShell" value="powershell" />
-                  <el-option label="Node.js" value="node" />
-                  <el-option label="自定义解释器（ruby/php/perl 等）" value="custom" />
+              <el-form-item label="SQL 脚本">
+                <el-select v-model="selectedNode.config.script_id" filterable placeholder="选择脚本库中的脚本"
+                           style="width: 100%" @change="dirty = true">
+                  <el-option v-for="s in capabilities.scripts" :key="s.id"
+                             :label="s.name + ' (' + s.type + ')'" :value="s.id" />
                 </el-select>
               </el-form-item>
-              <el-form-item v-if="selectedNode.config.script_type === 'custom'" label="解释器命令">
-                <el-input v-model="selectedNode.config.interpreter" placeholder="如 ruby、php、go run" @input="dirty = true" />
-              </el-form-item>
-              <el-form-item label="脚本来源">
-                <el-radio-group v-model="selectedNode.config.script_source" @change="dirty = true">
-                  <el-radio-button label="inline">内联脚本</el-radio-button>
-                  <el-radio-button label="file">脚本文件</el-radio-button>
-                </el-radio-group>
-              </el-form-item>
-              <el-form-item v-if="selectedNode.config.script_source === 'file'" label="脚本文件路径">
-                <el-input v-model="selectedNode.config.script_path" placeholder="服务器上脚本的绝对路径" @input="dirty = true" />
-              </el-form-item>
-              <el-form-item v-else label="脚本内容">
-                <el-input type="textarea" :rows="10" v-model="selectedNode.config.script_content"
-                          placeholder="支持 {{ 变量 }} 模板渲染，如 {{ inputs.xxx }}" @input="dirty = true" />
-              </el-form-item>
-              <el-form-item label="超时时间（秒）">
-                <el-input-number v-model="selectedNode.config.timeout" :min="1" :max="3600" />
-              </el-form-item>
+              <div class="wf-hint">
+                按脚本自身类型调用原服务：query 执行查询、export 导出文件、lookup 信息查询、system 执行 SQL（DML/DDL，支持多语句）。
+              </div>
               <el-form-item label="脚本参数 (JSON)">
                 <el-input type="textarea" :rows="3" :model-value="jsonText(selectedNode.config.param_values)"
                           @change="setJson(selectedNode.config, 'param_values', $event)" />
               </el-form-item>
-              <div class="wf-hint">
-                脚本参数以 <code>--key value</code> 传入，并注入 <code>SCRIPT_PARAM_KEY</code> 环境变量；stdout 为 JSON 时自动解析，返回码非 0 视为节点失败。
-              </div>
+              <template v-if="selectedScriptType === 'query'">
+                <el-form-item label="输入文件路径">
+                  <el-input v-model="selectedNode.config.input_file" placeholder="参数 Excel 文件绝对路径" @input="dirty = true" />
+                </el-form-item>
+                <el-form-item label="数据库">
+                  <el-select v-model="selectedNode.config.database_ids" multiple filterable
+                             placeholder="默认取脚本绑定数据库" style="width: 100%">
+                    <el-option v-for="d in databases" :key="d.id" :label="d.name" :value="d.id" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="参数列（可选）">
+                  <el-input v-model="selectedNode.config.param_column" placeholder="按该列逐行执行查询" @input="dirty = true" />
+                </el-form-item>
+                <el-form-item label="合并方式">
+                  <el-select v-model="selectedNode.config.merge_strategy" style="width: 100%">
+                    <el-option label="合并为一个文件" value="concat" />
+                    <el-option label="分文件输出" value="separate" />
+                  </el-select>
+                </el-form-item>
+              </template>
+              <template v-else-if="selectedScriptType === 'export'">
+                <el-form-item label="输出格式">
+                  <el-select v-model="selectedNode.config.output_format" style="width: 100%">
+                    <el-option label="多工作表" value="sheets" />
+                    <el-option label="多文件压缩" value="zip" />
+                  </el-select>
+                </el-form-item>
+              </template>
+              <template v-else-if="selectedScriptType === 'system'">
+                <el-form-item label="数据库">
+                  <el-select v-model="selectedNode.config.database_ids" multiple filterable
+                             placeholder="默认取脚本绑定数据库" style="width: 100%">
+                    <el-option v-for="d in databases" :key="d.id" :label="d.name" :value="d.id" />
+                  </el-select>
+                </el-form-item>
+              </template>
             </template>
 
             <template v-else-if="selectedNode.type === 'lookup'">
@@ -629,6 +643,12 @@ const filteredWorkflows = computed(() => {
   return workflows.value.filter(w => (w.name || '').toLowerCase().includes(kw))
 })
 const selectedNode = computed(() => graph.value.nodes.find(n => n.id === selectedNodeId.value) || null)
+const selectedScriptType = computed(() => {
+  const id = selectedNode.value?.config?.script_id
+  if (!id) return ''
+  const s = capabilities.value.scripts.find(item => item.id === id)
+  return s ? s.type : ''
+})
 const selectedEdge = computed(() => graph.value.edges.find(e => e.id === selectedEdgeId.value) || null)
 const queryScripts = computed(() => capabilities.value.scripts.filter(s => s.type === 'query'))
 const exportScripts = computed(() => capabilities.value.scripts.filter(s => s.type === 'export'))
@@ -682,8 +702,9 @@ function baseConfig(type) {
       return { system_task_id: null, param_values: {} }
     case 'script':
       return {
-        script_type: 'python', interpreter: '', script_source: 'inline',
-        script_content: '', script_path: '', timeout: 300, param_values: {},
+        script_id: null, param_values: {},
+        input_file: '', database_ids: [], param_column: '', merge_strategy: 'concat',
+        output_format: 'sheets',
       }
     case 'lookup':
       return { script_id: null, param_values: {} }
