@@ -475,10 +475,58 @@
             <template v-else-if="selectedNode.type === 'condition'">
               <el-form-item label="条件表达式">
                 <el-input type="textarea" :rows="3" v-model="selectedNode.config.expression"
-                          placeholder="例如 lookup1.row_count > 0 或 inputs.threshold >= 100" @input="dirty = true" />
+                          placeholder="例如 nodes.lookup1.row_count > 0 或 vars.threshold >= 100" @input="dirty = true" />
               </el-form-item>
+
+              <el-divider content-position="left">快捷条件</el-divider>
+              <el-form-item label="取值来源">
+                <el-radio-group v-model="condQuick.source" size="small">
+                  <el-radio-button label="node">上游节点输出</el-radio-button>
+                  <el-radio-button label="var">流程变量</el-radio-button>
+                </el-radio-group>
+              </el-form-item>
+              <template v-if="condQuick.source === 'node'">
+                <el-form-item label="上游节点">
+                  <el-select v-model="condQuick.nodeId" filterable placeholder="选择上游节点" style="width: 100%"
+                             @change="onCondNodeChange">
+                    <el-option v-for="n in paramNodeOptions" :key="n.id" :label="n.name" :value="n.id" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="判断字段">
+                  <el-select v-model="condQuick.field" filterable allow-create default-first-option
+                             placeholder="选择字段，或手动输入路径" style="width: 100%">
+                    <el-option v-for="f in condFieldOptions" :key="f" :label="f" :value="f" />
+                  </el-select>
+                </el-form-item>
+              </template>
+              <el-form-item v-else label="流程变量">
+                <el-select v-model="condQuick.varName" filterable allow-create default-first-option
+                           placeholder="选择或输入变量名" style="width: 100%">
+                  <el-option v-for="v in paramVarOptions" :key="v" :label="v" :value="v" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="操作符">
+                <el-select v-model="condQuick.operator" style="width: 100%">
+                  <el-option v-for="op in condOperators" :key="op.value" :label="op.label" :value="op.value" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="比较值">
+                <el-input v-model="condQuick.value" placeholder="常量，或 vars.变量名 / nodes.节点.字段" />
+              </el-form-item>
+              <el-form-item label="连接方式">
+                <el-radio-group v-model="condQuick.connector" size="small">
+                  <el-radio-button label="and">并且</el-radio-button>
+                  <el-radio-button label="or">或者</el-radio-button>
+                </el-radio-group>
+              </el-form-item>
+              <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px">
+                <el-button size="small" type="primary" plain @click="appendCondition">
+                  <i class="fa fa-plus"></i> 添加到表达式
+                </el-button>
+                <span class="wf-tip">{{ condPreview }}</span>
+              </div>
               <div class="wf-hint">
-                支持 &gt;、&lt;、&gt;=、&lt;=、==、!=、contains，可用 and / or 组合。条件为真走「是」分支，否则走「否」分支。
+                快捷条件会按「并且(and) / 或者(or)」追加到上面的表达式。支持 &gt;、&lt;、&gt;=、&lt;=、==、!=、contains；条件为真走「是」分支，否则走「否」分支。
               </div>
             </template>
 
@@ -708,7 +756,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 
@@ -978,6 +1026,69 @@ function onParamVarChange(name, varName) {
 function onParamConstInput(name, value) {
   setParamRaw(name, value)
 }
+
+// ---- 条件判断快捷配置：上游节点输出 / 流程变量 → 表达式 ----
+const condOperators = [
+  { value: '>', label: '大于 >' },
+  { value: '>=', label: '大于等于 >=' },
+  { value: '==', label: '等于 ==' },
+  { value: '!=', label: '不等于 !=' },
+  { value: '<', label: '小于 <' },
+  { value: '<=', label: '小于等于 <=' },
+  { value: 'contains', label: '包含 contains' }
+]
+const condQuick = reactive({
+  source: 'node', nodeId: '', field: '', varName: '', operator: '==', value: '', connector: 'and'
+})
+const condFieldOptions = computed(() => (condQuick.nodeId ? paramFieldOptions(condQuick.nodeId) : []))
+const condLeftExpr = computed(() => {
+  if (condQuick.source === 'var') {
+    const name = String(condQuick.varName || '').trim()
+      .replace(/^\{\{\s*|\s*\}\}$/g, '').replace(/^vars\./, '').replace(/^inputs\./, '')
+    return name ? `vars.${name}` : ''
+  }
+  if (!condQuick.nodeId) return ''
+  const field = String(condQuick.field || '').trim().replace(/^\./, '')
+  return `nodes.${condQuick.nodeId}${field ? '.' + field : ''}`
+})
+const condPreview = computed(() => {
+  const left = condLeftExpr.value
+  if (!left) return '请选择上游节点或流程变量'
+  const value = String(condQuick.value ?? '').trim()
+  return value ? `${left} ${condQuick.operator} ${value}` : `${left} ${condQuick.operator} ？`
+})
+
+function initCondQuick() {
+  if (!selectedNode.value || selectedNode.value.type !== 'condition') return
+  condQuick.source = 'node'
+  condQuick.varName = ''
+  condQuick.operator = '=='
+  condQuick.value = ''
+  condQuick.connector = 'and'
+  const first = paramNodeOptions.value[0]
+  condQuick.nodeId = first ? first.id : ''
+  condQuick.field = first ? (paramFieldOptions(first.id)[0] || '') : ''
+}
+
+function onCondNodeChange(nodeId) {
+  const options = paramFieldOptions(nodeId)
+  if (!options.includes(condQuick.field)) condQuick.field = options[0] || ''
+}
+
+function appendCondition() {
+  const cfg = selectedNode.value?.config
+  if (!cfg) return
+  const left = condLeftExpr.value
+  if (!left) return ElMessage.warning('请先选择上游节点或流程变量')
+  const value = String(condQuick.value ?? '').trim()
+  if (!value) return ElMessage.warning('请填写比较值')
+  const expr = `${left} ${condQuick.operator} ${value}`
+  const current = String(cfg.expression || '').trim()
+  cfg.expression = current ? `${current} ${condQuick.connector} ${expr}` : expr
+  dirty.value = true
+}
+
+watch(() => selectedNode.value?.id, initCondQuick)
 const selectedEdge = computed(() => graph.value.edges.find(e => e.id === selectedEdgeId.value) || null)
 const queryScripts = computed(() => capabilities.value.scripts.filter(s => s.type === 'query'))
 const exportScripts = computed(() => capabilities.value.scripts.filter(s => s.type === 'export'))

@@ -1317,7 +1317,7 @@ def _operand_value(text, ctx):
     text = (text or '').strip()
     lowered = text.lower()
     if (ctx is not None and lowered not in ('true', 'false', 'null', 'none')
-            and re.match(r'^[A-Za-z_][\w.\[\]]*$', text)):
+            and re.match(r'^[A-Za-z_][\w.\-\[\]]*$', text)):
         resolved = _resolve_path(ctx, text)
         if resolved != '' and resolved is not None:
             return resolved
