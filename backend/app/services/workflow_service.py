@@ -11,6 +11,11 @@ import json
 import logging
 import os
 import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -33,6 +38,7 @@ NODE_TYPE_LABELS = {
     'query': '查询任务',
     'export': '导出任务',
     'system_task': '系统任务',
+    'script': '脚本执行',
     'lookup': '信息查询',
     'email': '邮件通知',
     'log_query': '查询日志',
@@ -45,11 +51,40 @@ NODE_TYPE_LABELS = {
 
 # 支持自循环的业务任务节点（开始/结束/条件/延时/审批等控制类节点除外）
 LOOPABLE_NODE_TYPES = {
-    'query', 'export', 'system_task', 'lookup', 'email', 'log_query', 'file_generate',
+    'query', 'export', 'system_task', 'script', 'lookup', 'email', 'log_query', 'file_generate',
 }
 
 _TEMPLATE_RE = re.compile(r'\{\{\s*([^{}]+?)\s*\}\}')
 _NUMBER_RE = re.compile(r'^-?\d+(\.\d+)?$')
+
+# 脚本节点支持的预置脚本类型 -> 解释器命令前缀
+_SCRIPT_INTERPRETERS = {
+    'python': [sys.executable or 'python'],
+    'shell': ['bash'],
+    'bash': ['bash'],
+    'sh': ['bash'],
+    'bat': ['cmd', '/c'],
+    'cmd': ['cmd', '/c'],
+    'powershell': ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File'],
+    'ps1': ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File'],
+    'node': ['node'],
+    'javascript': ['node'],
+    'js': ['node'],
+}
+# 内联脚本写入临时文件时使用的后缀
+_SCRIPT_SUFFIXES = {
+    'python': '.py',
+    'shell': '.sh',
+    'bash': '.sh',
+    'sh': '.sh',
+    'bat': '.bat',
+    'cmd': '.bat',
+    'powershell': '.ps1',
+    'ps1': '.ps1',
+    'node': '.js',
+    'javascript': '.js',
+    'js': '.js',
+}
 
 
 # ---------------------------------------------------------------------------
@@ -629,6 +664,9 @@ def _execute_node(node, ctx, run_id):
     if node_type == 'system_task':
         return _execute_system_task_node(cfg, ctx)
 
+    if node_type == 'script':
+        return _execute_script_node(cfg, ctx)
+
     if node_type == 'lookup':
         return _execute_lookup_node(cfg, ctx)
 
@@ -775,6 +813,100 @@ def _execute_system_task_node(cfg, ctx):
         'status': info.get('status'),
         'result': info.get('result_data'),
     }}
+
+
+def _execute_script_node(cfg, ctx):
+    """脚本节点：支持 Python/Shell/Bat/PowerShell/Node 及自定义解释器脚本"""
+    script_type = (cfg.get('script_type') or 'python').strip().lower()
+    interpreter = _build_script_command(script_type, cfg.get('interpreter'))
+    if not interpreter:
+        return {'error': f'脚本节点解释器无效：{script_type}'}
+
+    script_source = cfg.get('script_source') or 'inline'
+    script_path = _render_string(cfg.get('script_path') or '', ctx).strip()
+    content = _render_string(cfg.get('script_content') or '', ctx)
+    if script_source == 'file' and not script_path:
+        return {'error': '脚本节点未配置脚本文件路径'}
+    if script_source != 'file' and not content.strip():
+        return {'error': '脚本节点未填写脚本内容'}
+
+    params_values = _render(cfg.get('param_values') or {}, ctx)
+    if not isinstance(params_values, dict):
+        params_values = {}
+    try:
+        timeout = int(cfg.get('timeout') or 300)
+    except (TypeError, ValueError):
+        timeout = 300
+    timeout = max(1, min(timeout, 3600))
+
+    temp_dir = None
+    try:
+        if script_source == 'file':
+            if not os.path.isfile(script_path):
+                return {'error': f'脚本文件不存在：{script_path}'}
+            target_path = script_path
+            workdir = os.path.dirname(os.path.abspath(script_path)) or None
+        else:
+            temp_dir = tempfile.mkdtemp(prefix='wf_script_')
+            suffix = _SCRIPT_SUFFIXES.get(script_type, '.txt')
+            target_path = os.path.join(temp_dir, f'node_script{suffix}')
+            with open(target_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            workdir = temp_dir
+
+        cmd = [*interpreter, target_path]
+        env = os.environ.copy()
+        for k, v in params_values.items():
+            key = str(k)
+            cmd.extend([f'--{key}', '' if v is None else str(v)])
+            env[f'SCRIPT_PARAM_{key.upper()}'] = '' if v is None else str(v)
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                                    env=env, cwd=workdir)
+        except subprocess.TimeoutExpired:
+            return {'error': f'脚本执行超时（{timeout}秒）'}
+        except FileNotFoundError as e:
+            return {'error': f'脚本解释器未找到：{e}'}
+
+        stdout = result.stdout or ''
+        stderr = result.stderr or ''
+        output = {
+            'returncode': result.returncode,
+            'stdout': _parse_script_stdout(stdout),
+            'stderr': stderr,
+            'success': result.returncode == 0,
+        }
+        if result.returncode != 0:
+            detail = stderr.strip()[:500]
+            return {'output': output, 'error': f'脚本执行失败，返回码 {result.returncode}' + (f'：{detail}' if detail else '')}
+        return {'output': output}
+    finally:
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _build_script_command(script_type, interpreter):
+    """根据脚本类型返回解释器命令前缀，自定义类型直接解析解释器命令"""
+    if script_type == 'custom':
+        command = (interpreter or '').strip()
+        return shlex.split(command) if command else None
+    prefix = _SCRIPT_INTERPRETERS.get(script_type)
+    if prefix is not None:
+        return list(prefix)
+    # 未预置的类型视为解释器名（如 ruby、php、perl）
+    command = (interpreter or script_type).strip()
+    return shlex.split(command) if command else None
+
+
+def _parse_script_stdout(stdout):
+    text = (stdout or '').strip()
+    if not text:
+        return ''
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return stdout
 
 
 def _execute_lookup_node(cfg, ctx):

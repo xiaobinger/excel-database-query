@@ -3261,6 +3261,11 @@ AI回复：{ai_response[:500] if ai_response else ''}
                    'output_format': 'sheets 或 zip'},
         'system_task': {'system_task_id': '系统任务ID', 'param_values': '{参数名: 值}',
                         'database_id': '数据库ID'},
+        'script': {'script_type': 'python/shell/bat/powershell/node/custom',
+                   'interpreter': '自定义解释器命令，如 ruby、php（仅 custom 或未预置类型使用）',
+                   'script_source': 'inline 或 file', 'script_content': '内联脚本内容（可含模板）',
+                   'script_path': '脚本文件服务器绝对路径（script_source=file 时使用）',
+                   'timeout': '超时秒数，默认300，最大3600', 'param_values': '{参数名: 值}'},
         'lookup': {'script_id': '信息查询脚本ID', 'param_values': '{参数名: 值}'},
         'email': {'to': '收件人，多个用逗号分隔（可含模板）', 'subject': '主题（可含模板）',
                   'content': '正文（可含模板）'},
@@ -3329,7 +3334,7 @@ AI回复：{ai_response[:500] if ai_response else ''}
             'template_syntax': '用 {{节点ID.字段}} 引用节点输出，用 {{inputs.变量名}} 引用运行入参；节点输出默认写入与节点ID同名的上下文键，可用 output_key 覆盖。',
             'edge_branches': {'condition': ['true', 'false'], 'approval': ['approved', 'rejected'],
                               '任意节点失败': ['fail'], '普通连线': ['default']},
-            'loop_help': '业务任务节点（query/export/system_task/lookup/email/log_query/file_generate）支持自循环，在 config.loop 中配置：'
+            'loop_help': '业务任务节点（query/export/system_task/script/lookup/email/log_query/file_generate）支持自循环，在 config.loop 中配置：'
                          '{"enabled": true, "max_times": 3, "exit_condition": "节点ID.字段 > 0", "interval": 0}。'
                          '节点执行完成后判断跳出条件：为真或达到最大次数（1-100）后继续后续节点，否则重复执行本节点；interval 为每次间隔秒数（0-60）。',
         }

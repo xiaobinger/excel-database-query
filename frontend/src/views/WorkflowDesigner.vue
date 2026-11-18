@@ -210,6 +210,45 @@
               </el-form-item>
             </template>
 
+            <template v-else-if="selectedNode.type === 'script'">
+              <el-form-item label="脚本类型">
+                <el-select v-model="selectedNode.config.script_type" style="width: 100%" @change="dirty = true">
+                  <el-option label="Python" value="python" />
+                  <el-option label="Shell / Bash" value="shell" />
+                  <el-option label="Windows Bat" value="bat" />
+                  <el-option label="PowerShell" value="powershell" />
+                  <el-option label="Node.js" value="node" />
+                  <el-option label="自定义解释器（ruby/php/perl 等）" value="custom" />
+                </el-select>
+              </el-form-item>
+              <el-form-item v-if="selectedNode.config.script_type === 'custom'" label="解释器命令">
+                <el-input v-model="selectedNode.config.interpreter" placeholder="如 ruby、php、go run" @input="dirty = true" />
+              </el-form-item>
+              <el-form-item label="脚本来源">
+                <el-radio-group v-model="selectedNode.config.script_source" @change="dirty = true">
+                  <el-radio-button label="inline">内联脚本</el-radio-button>
+                  <el-radio-button label="file">脚本文件</el-radio-button>
+                </el-radio-group>
+              </el-form-item>
+              <el-form-item v-if="selectedNode.config.script_source === 'file'" label="脚本文件路径">
+                <el-input v-model="selectedNode.config.script_path" placeholder="服务器上脚本的绝对路径" @input="dirty = true" />
+              </el-form-item>
+              <el-form-item v-else label="脚本内容">
+                <el-input type="textarea" :rows="10" v-model="selectedNode.config.script_content"
+                          placeholder="支持 {{ 变量 }} 模板渲染，如 {{ inputs.xxx }}" @input="dirty = true" />
+              </el-form-item>
+              <el-form-item label="超时时间（秒）">
+                <el-input-number v-model="selectedNode.config.timeout" :min="1" :max="3600" />
+              </el-form-item>
+              <el-form-item label="脚本参数 (JSON)">
+                <el-input type="textarea" :rows="3" :model-value="jsonText(selectedNode.config.param_values)"
+                          @change="setJson(selectedNode.config, 'param_values', $event)" />
+              </el-form-item>
+              <div class="wf-hint">
+                脚本参数以 <code>--key value</code> 传入，并注入 <code>SCRIPT_PARAM_KEY</code> 环境变量；stdout 为 JSON 时自动解析，返回码非 0 视为节点失败。
+              </div>
+            </template>
+
             <template v-else-if="selectedNode.type === 'lookup'">
               <el-form-item label="信息查询脚本">
                 <el-select v-model="selectedNode.config.script_id" filterable placeholder="选择脚本" style="width: 100%">
@@ -476,6 +515,7 @@ const NODE_META = {
   query: { label: '查询任务', icon: 'fa-search', color: '#3b82f6' },
   export: { label: '导出任务', icon: 'fa-file-export', color: '#8b5cf6' },
   system_task: { label: '系统任务', icon: 'fa-cogs', color: '#f59e0b' },
+  script: { label: '脚本执行', icon: 'fa-terminal', color: '#0ea5e9' },
   lookup: { label: '信息查询', icon: 'fa-search-plus', color: '#06b6d4' },
   email: { label: '邮件通知', icon: 'fa-envelope', color: '#ec4899' },
   log_query: { label: '查询日志', icon: 'fa-clipboard-list', color: '#64748b' },
@@ -485,7 +525,7 @@ const NODE_META = {
   delay: { label: '延时等待', icon: 'fa-clock', color: '#94a3b8' },
   end: { label: '结束', icon: 'fa-flag-checkered', color: '#475569' },
 }
-const paletteTypes = ['query', 'export', 'system_task', 'lookup', 'email', 'log_query',
+const paletteTypes = ['query', 'export', 'system_task', 'script', 'lookup', 'email', 'log_query',
   'file_generate', 'approval', 'condition', 'delay', 'start', 'end']
 const branchOptions = [
   { value: 'default', label: '默认' },
@@ -584,6 +624,11 @@ function baseConfig(type) {
       return { script_ids: [], output_format: 'sheets', param_values: {} }
     case 'system_task':
       return { system_task_id: null, param_values: {} }
+    case 'script':
+      return {
+        script_type: 'python', interpreter: '', script_source: 'inline',
+        script_content: '', script_path: '', timeout: 300, param_values: {},
+      }
     case 'lookup':
       return { script_id: null, param_values: {} }
     case 'email':
@@ -606,7 +651,7 @@ function baseConfig(type) {
 }
 
 // 业务任务节点支持自循环（开始/结束/条件/延时/审批等控制类节点除外）
-const LOOPABLE_TYPES = ['query', 'export', 'system_task', 'lookup', 'email', 'log_query', 'file_generate']
+const LOOPABLE_TYPES = ['query', 'export', 'system_task', 'script', 'lookup', 'email', 'log_query', 'file_generate']
 
 function isLoopable(type) {
   return LOOPABLE_TYPES.includes(type)
