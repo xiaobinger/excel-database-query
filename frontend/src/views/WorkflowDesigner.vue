@@ -621,15 +621,23 @@
           <el-table-column label="默认值">
             <template #default="{ row }"><el-input v-model="row.default" size="small" /></template>
           </el-table-column>
+          <el-table-column label="必填" width="80" align="center">
+            <template #default="{ row }">
+              <el-switch v-model="row.required" size="small" />
+            </template>
+          </el-table-column>
           <el-table-column label="操作" width="80" align="center">
             <template #default="{ $index }">
               <el-button link type="danger" size="small" @click="variablesDraft.splice($index, 1)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
-        <el-button size="small" style="margin-top: 10px" @click="variablesDraft.push({ name: '', label: '', default: '' })">
+        <el-button size="small" style="margin-top: 10px" @click="variablesDraft.push({ name: '', label: '', default: '', required: true })">
           <i class="fa fa-plus"></i> 添加变量
         </el-button>
+        <div class="wf-hint" style="margin-top: 8px">
+          必填变量在 AI 触发执行时会先向用户确认参数；未开启时若填写了默认值则自动使用默认值。
+        </div>
       </div>
       <template #footer>
         <el-button size="small" @click="variablesDialog = false">取消</el-button>
@@ -1207,6 +1215,7 @@ async function removeWorkflow(row) {
 function openVariables() {
   variablesDraft.value = (current.value?.variables || []).map(v => ({
     name: v.name || '', label: v.label || '', default: v.default ?? '',
+    required: typeof v.required === 'boolean' ? v.required : (v.default === undefined || v.default === null || v.default === ''),
   }))
   variablesDialog.value = true
 }
@@ -1215,7 +1224,7 @@ function saveVariables() {
   if (!current.value) return
   current.value.variables = variablesDraft.value
     .filter(v => (v.name || '').trim())
-    .map(v => ({ name: v.name.trim(), label: v.label || v.name.trim(), default: v.default }))
+    .map(v => ({ name: v.name.trim(), label: v.label || v.name.trim(), default: v.default, required: !!v.required }))
   variablesDialog.value = false
   dirty.value = true
 }

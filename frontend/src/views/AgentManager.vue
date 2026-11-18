@@ -320,6 +320,8 @@ const toolOptions = [
   { name: 'generate_image', label: '生成图片' },
   { name: 'list_workflow_resources', label: '列出工作流可用资源' },
   { name: 'create_workflow', label: '生成/创建工作流' },
+  { name: 'list_workflows', label: '列出可执行工作流' },
+  { name: 'run_workflow', label: '执行混合工作流' },
 ]
 
 const defaultForm = {

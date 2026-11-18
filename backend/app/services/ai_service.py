@@ -671,7 +671,9 @@ AI_TOOLS = [
                             "type": "object",
                             "properties": {
                                 "name": {"type": "string", "description": "变量名"},
-                                "default": {"description": "默认值"}
+                                "label": {"type": "string", "description": "中文显示名称，用于AI向用户询问参数"},
+                                "default": {"description": "默认值"},
+                                "required": {"type": "boolean", "description": "是否必填：必填变量在 AI 触发执行时会先向用户确认"}
                             },
                             "required": ["name"]
                         }
@@ -710,8 +712,80 @@ AI_TOOLS = [
                 "required": ["name", "nodes"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_workflows",
+            "description": "列出可执行的混合工作流，包含名称、用途以及运行变量（变量名、中文标签、是否必填、是否有默认值）。当用户提到「执行/跑一下某个流程、工作流」时，先调用本工具确认流程与需要用户提供的参数。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {
+                        "type": "string",
+                        "description": "可选，按工作流名称或用途关键词筛选"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_workflow",
+            "description": "触发执行一个混合工作流。调用前先从用户指令中解析运行参数：params 的键可用变量名或中文标签。若缺少必填变量，本工具会返回 missing_params 和提示，此时必须向用户询问这些参数（说明用途），用户回复后再调用一次；不要编造参数，也不要用空白值占位。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "workflow_name": {
+                        "type": "string",
+                        "description": "要执行的工作流名称，支持模糊匹配"
+                    },
+                    "params": {
+                        "type": "object",
+                        "description": "运行变量键值对，如 {\"deviceSn\": \"0000730222525C001599\"}；键可用变量名或中文标签"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "可选，本次执行说明"
+                    }
+                },
+                "required": ["workflow_name"]
+            }
+        }
     }
 ]
+
+
+def _workflow_var_required(var: dict) -> bool:
+    """流程变量是否必填：显式 required 优先，未声明时无默认值即视为必填"""
+    if isinstance(var.get('required'), bool):
+        return var['required']
+    return var.get('default') in (None, '')
+
+
+def _norm_key(value) -> str:
+    return str(value or '').strip().lower().replace('_', '').replace('-', '').replace(' ', '')
+
+
+def _match_workflow_var(key, variables):
+    """把 AI 传入的参数键（变量名/中文标签）匹配到流程变量名"""
+    raw = str(key or '').strip()
+    if not raw:
+        return None
+    k = _norm_key(raw)
+    for v in variables:
+        if raw == v['name']:
+            return v['name']
+    for v in variables:
+        if k == _norm_key(v['name']) or k == _norm_key(v.get('label')):
+            return v['name']
+    for v in variables:
+        name, label = _norm_key(v['name']), _norm_key(v.get('label'))
+        if (name and (k in name or name in k)) or (label and (k in label or label in k)):
+            return v['name']
+    return None
 
 
 class AiService:
@@ -1496,6 +1570,10 @@ class AiService:
             return AiService._tool_list_workflow_resources(args, user_id)
         elif tool_name == 'create_workflow':
             return AiService._tool_create_workflow(args, user_id)
+        elif tool_name == 'list_workflows':
+            return AiService._tool_list_workflows(args, user_id)
+        elif tool_name == 'run_workflow':
+            return AiService._tool_run_workflow(args, user_id)
         else:
             return {'error': f'未知工具: {tool_name}'}
 
@@ -3452,7 +3530,8 @@ AI回复：{ai_response[:500] if ai_response else ''}
         if not any(n['type'] == 'end' for n in nodes):
             warnings.append('未包含结束节点，流程会在没有后继节点时自动结束')
 
-        variables = [{'name': v['name'], 'default': v.get('default')}
+        variables = [{'name': v['name'], 'label': v.get('label') or v['name'],
+                      'default': v.get('default'), 'required': bool(v.get('required'))}
                      for v in (args.get('variables') or [])
                      if isinstance(v, dict) and v.get('name')]
 
@@ -3479,6 +3558,131 @@ AI回复：{ai_response[:500] if ai_response else ''}
             'path': '/workflows',
             'warnings': warnings,
             'message': f'工作流「{name}」已创建，可在「混合工作流」页面查看、调整并一键运行。',
+        }
+
+    @staticmethod
+    def _tool_list_workflows(args: dict, user_id: int = None) -> dict:
+        """列出可执行的混合工作流及其运行变量"""
+        from app.services import workflow_service
+
+        keyword = (args.get('keyword') or '').strip()
+        result = workflow_service.get_workflows(page=1, per_page=200, keyword=keyword or None)
+        items = []
+        for w in result.get('items') or []:
+            if not w.get('is_enabled'):
+                continue
+            variables = []
+            for v in w.get('variables') or []:
+                if not isinstance(v, dict) or not v.get('name'):
+                    continue
+                variables.append({
+                    'name': v['name'],
+                    'label': v.get('label') or v['name'],
+                    'required': _workflow_var_required(v),
+                    'has_default': v.get('default') not in (None, ''),
+                })
+            items.append({
+                'id': w.get('id'),
+                'name': w.get('name'),
+                'description': w.get('description') or '',
+                'variables': variables,
+            })
+        return {
+            'workflows': items,
+            'total': len(items),
+            '_hint': '用户要求执行流程时调用 run_workflow，并从指令中解析变量值；缺少必填变量时先向用户询问。',
+        }
+
+    @staticmethod
+    def _tool_run_workflow(args: dict, user_id: int = None) -> dict:
+        """AI 触发执行混合工作流：解析参数，缺必填参数则让 AI 向用户确认"""
+        from app.models.workflow import Workflow
+        from app.services import workflow_service
+
+        name = (args.get('workflow_name') or args.get('name') or '').strip()
+        if not name:
+            return {'error': '请提供要执行的工作流名称 workflow_name', 'action_type': 'workflow',
+                    '_hint': '可先调用 list_workflows 查看可执行的流程。'}
+
+        params = args.get('params') or {}
+        if isinstance(params, str):
+            try:
+                params = json.loads(params)
+            except (json.JSONDecodeError, TypeError):
+                params = {}
+        if not isinstance(params, dict):
+            params = {}
+
+        wf = Workflow.query.filter_by(name=name, is_enabled=True).first()
+        if not wf:
+            wf = (Workflow.query.filter(Workflow.name.contains(name), Workflow.is_enabled == True)
+                  .order_by(Workflow.id.desc()).first())
+        if not wf:
+            return {'error': f'未找到名为"{name}"的可运行工作流', 'action_type': 'workflow',
+                    '_hint': '请告知用户没有匹配的流程，并调用 list_workflows 列出可执行流程供用户选择。'}
+
+        variables = [v for v in (wf.get_variables() or [])
+                     if isinstance(v, dict) and v.get('name')]
+        parsed = {}
+        for key, val in params.items():
+            if val is None or (isinstance(val, str) and not val.strip()):
+                continue
+            matched = _match_workflow_var(key, variables)
+            if matched:
+                parsed[matched] = val
+
+        missing = [v for v in variables
+                   if _workflow_var_required(v) and parsed.get(v['name']) in (None, '')]
+        if missing:
+            labels = [v.get('label') or v['name'] for v in missing]
+            return {
+                'action_type': 'workflow',
+                'workflow_id': wf.id,
+                'workflow_name': wf.name,
+                'variables': [{'name': v['name'], 'label': v.get('label') or v['name'],
+                               'required': _workflow_var_required(v)} for v in variables],
+                'parsed_params': parsed,
+                'missing_params': [{'name': v['name'], 'label': v.get('label') or v['name']}
+                                   for v in missing],
+                'missing_required': labels,
+                '_hint': (f'工作流「{wf.name}」缺少必填参数：{"、".join(labels)}。'
+                          '请先用一句中文向用户说明这些参数并询问取值，用户回复后再调用 run_workflow；'
+                          '不要编造参数或使用空值。'),
+            }
+
+        known_names = {v['name'] for v in variables}
+        inputs = {}
+        for v in variables:
+            if parsed.get(v['name']) not in (None, ''):
+                inputs[v['name']] = parsed[v['name']]
+            elif v.get('default') not in (None, ''):
+                inputs[v['name']] = v['default']
+        # 未声明但被传入的普通键也带入，兼容历史流程
+        for key, val in params.items():
+            if key in known_names or key in inputs:
+                continue
+            if isinstance(val, (str, int, float, bool)) and str(val).strip():
+                inputs[key] = val
+
+        try:
+            run = workflow_service.start_run(wf.id, inputs=inputs, created_by=user_id)
+        except Exception as e:
+            logger.error(f'AI 触发工作流失败: #{wf.id} {e}', exc_info=True)
+            return {'error': f'启动工作流失败: {str(e)}', 'action_type': 'workflow'}
+
+        run_id = run.get('run_id') or ''
+        logger.info(f'AI 触发工作流: #{wf.id} {wf.name} run={run_id} (user_id={user_id})')
+        return {
+            'action_type': 'workflow',
+            'auto_executed': True,
+            'workflow_id': wf.id,
+            'workflow_name': wf.name,
+            'run_id': run_id,
+            'status': run.get('status'),
+            'params_values': inputs,
+            'path': '/workflows',
+            '_hint': (f'工作流「{wf.name}」已启动（运行ID {run_id[:8]}）。'
+                      '请告知用户已开始执行，可在「混合工作流 → 执行记录」查看进度与结果。'),
         }
 
     @staticmethod
