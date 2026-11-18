@@ -320,6 +320,73 @@ class SystemTaskService:
         return global_enums.get(enum_param) or []
 
     @staticmethod
+    def _apply_param_enum_mapping(execution: SystemTaskExecution, system_task: SystemTask,
+                                  params_values: Dict[str, Any]) -> Dict[str, Any]:
+        """参数级枚举映射：枚举参数配置了来源参数时，取其值作为 key 映射枚举选项的实际值"""
+        merged = dict(params_values) if params_values else {}
+        if system_task.task_type != 'api':
+            return merged
+
+        param_config = system_task.get_params_config() or []
+        if not param_config:
+            return merged
+
+        global_enums = None
+        for p in param_config:
+            if not isinstance(p, dict) or p.get('type') != 'enum':
+                continue
+            target_param = (p.get('name') or '').strip()
+            source_param = (p.get('enum_source_param') or '').strip()
+            if not target_param or not source_param:
+                continue
+            source_value = merged.get(source_param)
+            if source_value is None or source_value == '' or source_value == []:
+                continue
+            source_value = str(source_value)
+
+            if global_enums is None:
+                global_enums = SystemTaskService._get_global_enums()
+            options = SystemTaskService._resolve_enum_options(system_task, target_param, global_enums)
+            if not options:
+                execution.add_log(f'枚举参数映射跳过：未找到枚举参数 {target_param} 的选项', 'warning')
+                continue
+
+            match_field = (p.get('enum_match_field') or 'auto').lower()
+            matched_value = None
+            matched_label = ''
+            for opt in options:
+                if not isinstance(opt, dict):
+                    continue
+                opt_value = '' if opt.get('value') is None else str(opt.get('value'))
+                opt_label = '' if opt.get('label') is None else str(opt.get('label'))
+                candidates = [opt_value, opt_label] if match_field == 'auto' \
+                    else ([opt_value] if match_field == 'value' else [opt_label])
+                if source_value in candidates:
+                    matched_value = opt_value
+                    matched_label = opt_label
+                    break
+
+            if matched_value is not None:
+                merged[target_param] = matched_value
+                execution.add_log(
+                    f'枚举参数映射：{source_param}={source_value} → 枚举参数 {target_param} 选项'
+                    f'{matched_label or matched_value} → 值 {matched_value}'
+                )
+            else:
+                execution.add_log(
+                    f'枚举参数映射未匹配：{source_param}={source_value} 不在枚举参数 {target_param} 的选项中',
+                    'warning'
+                )
+        return merged
+
+    @staticmethod
+    def _resolve_runtime_params(execution: SystemTaskExecution, system_task: SystemTask,
+                                params_values: Dict[str, Any]) -> Dict[str, Any]:
+        """执行前解析参数：先跑参数来源脚本，再做参数级枚举映射"""
+        resolved = SystemTaskService._resolve_param_source(execution, system_task, params_values)
+        return SystemTaskService._apply_param_enum_mapping(execution, system_task, resolved)
+
+    @staticmethod
     def _resolve_sign_secret(sign_key: str, params_values: Dict[str, Any]) -> str:
         """解析加签密钥中的参数占位符，如 {{app_secret}}"""
         secret = '' if sign_key is None else str(sign_key)
@@ -601,7 +668,7 @@ class SystemTaskService:
         if not system_task.api_url:
             raise ValueError('API地址未配置')
 
-        params_values = SystemTaskService._resolve_param_source(execution, system_task, params_values)
+        params_values = SystemTaskService._resolve_runtime_params(execution, system_task, params_values)
         execution.progress = 15
         db.session.commit()
         update_execution_progress(execution_id, 15, '参数已就绪，准备API请求')
@@ -1756,7 +1823,7 @@ class SystemTaskService:
         if not system_task.script_path:
             raise ValueError('本地脚本路径未配置')
 
-        params_values = SystemTaskService._resolve_param_source(execution, system_task, params_values)
+        params_values = SystemTaskService._resolve_runtime_params(execution, system_task, params_values)
         execution.progress = 15
         db.session.commit()
         update_execution_progress(execution_id, 15, '参数已就绪，准备执行脚本')
@@ -2035,7 +2102,7 @@ class SystemTaskService:
         db.session.commit()
 
         # 解析参数来源脚本
-        params_values = SystemTaskService._resolve_param_source(execution, system_task, params_values)
+        params_values = SystemTaskService._resolve_runtime_params(execution, system_task, params_values)
 
         url = system_task.api_url
         method = (system_task.api_method or 'POST').upper()
@@ -2252,7 +2319,7 @@ class SystemTaskService:
         db.session.commit()
 
         # 解析参数来源脚本
-        params_values = SystemTaskService._resolve_param_source(execution, system_task, params_values)
+        params_values = SystemTaskService._resolve_runtime_params(execution, system_task, params_values)
 
         script_path = system_task.script_path
         script_type = system_task.script_type or 'python'

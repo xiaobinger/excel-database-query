@@ -519,7 +519,7 @@
         <template v-if="form.task_type === 'api' || form.task_type === 'script'">
           <el-form-item label="参数配置">
             <div class="param-hint" style="margin-bottom: 8px; color: #909399; font-size: 12px;">
-              枚举类型参数常用于环境切换：在API地址中使用 <code v-pre>{{param_name}}</code> 占位符引用参数值，枚举的 value 即可作为不同环境的 BaseUrl。可在「枚举参数」中预设可复用的枚举列表。列表类型用于 <code>IN (:param)</code> 子句，执行时传入多个值。
+              枚举类型参数常用于环境切换：在API地址中使用 <code v-pre>{{param_name}}</code> 占位符引用参数值，枚举的 value 即可作为不同环境的 BaseUrl。可在「枚举参数」中预设可复用的枚举列表。枚举参数还可选择已有参数作为 key，执行时取该参数值自动映射枚举选项的实际值。列表类型用于 <code>IN (:param)</code> 子句，执行时传入多个值。
             </div>
             <div v-for="(param, idx) in form.params_config" :key="idx" class="param-row">
               <el-input v-model="param.name" placeholder="参数名" style="width: 140px" />
@@ -550,6 +550,31 @@
                   </el-select>
                   <span v-if="param.enum_ref" style="color: #67c23a; font-size: 12px; margin-left: 8px;">
                     <i class="fas fa-link"></i> 引用全局枚举，选项自动同步
+                  </span>
+                </div>
+                <!-- 来源参数映射（仅API任务）：取已有参数的值作为key映射枚举选项 -->
+                <div v-if="form.task_type === 'api'" class="param-row" style="margin-bottom: 6px;">
+                  <el-select
+                    v-model="param.enum_source_param"
+                    placeholder="来源参数key(可选)"
+                    clearable
+                    style="width: 280px"
+                    @change="onEnumSourceChange(param)"
+                  >
+                    <el-option
+                      v-for="p in enumSourceParamOptions(param)"
+                      :key="p.name"
+                      :label="`${p.label || p.name} (${p.name})`"
+                      :value="p.name"
+                    />
+                  </el-select>
+                  <el-select v-if="param.enum_source_param" v-model="param.enum_match_field" style="width: 140px">
+                    <el-option value="auto" label="自动匹配" />
+                    <el-option value="value" label="匹配选项值" />
+                    <el-option value="label" label="匹配显示名" />
+                  </el-select>
+                  <span v-if="param.enum_source_param" style="color: #409eff; font-size: 12px; margin-left: 8px;">
+                    <i class="fas fa-exchange-alt"></i> 执行时取该参数值作为 key 映射枚举选项的实际值
                   </span>
                 </div>
                 <!-- 自定义枚举选项（仅当未引用全局枚举时显示） -->
@@ -849,10 +874,14 @@
           </el-form-item>
           <el-form-item v-for="param in currentTaskParamsConfig" :key="param.name">
             <template #label>
-              <span v-if="currentTask.task_type === 'sql' || param.required" style="color: #f56c6c">* </span>{{ param.label || param.name }}
+              <span v-if="(currentTask.task_type === 'sql' || param.required) && !(param.type === 'enum' && param.enum_source_param)" style="color: #f56c6c">* </span>{{ param.label || param.name }}
             </template>
+            <div v-if="param.type === 'enum' && param.enum_source_param" style="width: 100%; color: #909399; font-size: 13px;">
+              <i class="fas fa-exchange-alt"></i>
+              由参数「{{ paramLabel(param.enum_source_param) }}」的值自动映射枚举选项，无需手动选择
+            </div>
             <el-select
-              v-if="param.type === 'enum'"
+              v-else-if="param.type === 'enum'"
               v-model="executeParams[param.name]"
               :placeholder="`请选择 ${param.label || param.name}`"
               style="width: 100%"
@@ -1089,6 +1118,12 @@ const currentTaskParamsConfig = computed(() => {
   })
 })
 
+// 参数名对应的显示名称
+function paramLabel(name) {
+  const param = currentTaskParamsConfig.value.find(p => p.name === name)
+  return param ? (param.label || param.name) : name
+}
+
 // 所有必填参数是否已填写（SQL类型任务所有参数必填，enum类型参数必填）
 const allParamsFilled = computed(() => {
   if (!currentTask.value) return false
@@ -1101,8 +1136,8 @@ const allParamsFilled = computed(() => {
       return v !== undefined && v !== null && v !== ''
     })
   }
-  // API类型：required字段 或 enum类型 视为必填
-  return params.filter(p => p.required || p.type === 'enum').every(p => {
+  // API类型：required字段 或 enum类型 视为必填（由来源参数自动映射的枚举无需手填）
+  return params.filter(p => (p.required || p.type === 'enum') && !(p.type === 'enum' && p.enum_source_param)).every(p => {
     const v = executeParams[p.name]
     if (p.type === 'list') return Array.isArray(v) && v.length > 0
     return v !== undefined && v !== null && v !== ''
@@ -1453,7 +1488,7 @@ function logLevelType(level) {
 
 function addParam() {
   if (!form.params_config) form.params_config = []
-  form.params_config.push({ name: '', label: '', type: 'text', options: [], enum_ref: '' })
+  form.params_config.push({ name: '', label: '', type: 'text', options: [], enum_ref: '', enum_source_param: '', enum_match_field: 'auto' })
 }
 
 function removeParam(idx) {
@@ -1469,6 +1504,18 @@ function addEnumOption(param) {
 function onEnumRefChange(param) {
   if (param.enum_ref) {
     param.options = []
+  }
+}
+
+// 枚举参数的来源参数候选：当前任务中已命名的其他非列表参数
+function enumSourceParamOptions(param) {
+  return (form.params_config || []).filter(p => p.name && p.name !== param.name && p.type !== 'list')
+}
+
+// 选择/清除来源参数时，补齐匹配方式
+function onEnumSourceChange(param) {
+  if (param.enum_source_param && !param.enum_match_field) {
+    param.enum_match_field = 'auto'
   }
 }
 
@@ -1600,6 +1647,8 @@ function openDialog(row) {
             ...p,
             options: p.options || [],
             enum_ref: p.enum_ref || '',
+            enum_source_param: p.enum_source_param || '',
+            enum_match_field: p.enum_match_field || 'auto',
           }))
         : [],
       response_mapping: (row.response_mapping && row.response_mapping.length > 0)
