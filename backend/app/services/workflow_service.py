@@ -80,6 +80,20 @@ def _error_text(exc):
     return f'{type(exc).__name__}（无详细信息）'
 
 
+def _object_param_error(params_values):
+    """参数取到整个对象时提前给出可定位的错误，避免底层绑定报 dict can not be used as parameter。"""
+    if not isinstance(params_values, dict):
+        return None
+    for key, val in params_values.items():
+        if isinstance(val, dict):
+            preview = json.dumps(val, ensure_ascii=False, default=str)
+            if len(preview) > 120:
+                preview = preview[:120] + '...'
+            return (f'参数 {key} 取到的是对象 {preview}，'
+                    f'请在参数映射中选择具体字段（如 nodes.<节点>.inputs.xxx）')
+    return None
+
+
 # ---------------------------------------------------------------------------
 # 工作流 CRUD
 # ---------------------------------------------------------------------------
@@ -258,12 +272,17 @@ def start_run(workflow_id, inputs=None, created_by=None):
     if not start_node_id:
         raise ValueError('工作流缺少开始节点')
 
+    inputs = inputs or {}
     ctx = {}
+    vars_ctx = {}
     for var in wf.get_variables():
         name = (var or {}).get('name')
         if name:
-            ctx[name] = (var or {}).get('default')
-    ctx['inputs'] = inputs or {}
+            vars_ctx[name] = inputs[name] if name in inputs else (var or {}).get('default')
+    # 流程变量同时以裸名与 vars 命名空间暴露：{{vars.x}} 不会被同名节点输出覆盖
+    ctx.update(vars_ctx)
+    ctx['vars'] = vars_ctx
+    ctx['inputs'] = inputs
     ctx['workflow'] = {'id': wf.id, 'name': wf.name}
 
     run = WorkflowRun(
@@ -501,7 +520,9 @@ def _execute_run(run_id):
 
         output = result.get('output')
         output_key = node.get('output_key') or current_id
-        ctx[output_key] = output
+        # 开始节点只登记到 nodes.<id>，避免其输出（{inputs: ...}）覆盖同名流程变量
+        if node_type != 'start':
+            ctx[output_key] = output
         ctx.setdefault('nodes', {})[current_id] = output
         ctx['last'] = output
         run.set_context(ctx)
@@ -864,6 +885,9 @@ def _execute_system_script(script, cfg, ctx):
     params_values = _render(cfg.get('param_values') or {}, ctx)
     if not isinstance(params_values, dict):
         params_values = {}
+    object_error = _object_param_error(params_values)
+    if object_error:
+        return {'error': object_error}
     for key, val in params_values.items():
         sql_text = sql_text.replace(f'{{{{{key}}}}}', '' if val is None else str(val))
     sql_text = _render_string(sql_text, ctx)
@@ -987,6 +1011,9 @@ def _execute_lookup_node(cfg, ctx):
     if not script_id:
         return {'error': '信息查询节点未选择脚本'}
     params_values = _render(cfg.get('param_values') or {}, ctx)
+    object_error = _object_param_error(params_values)
+    if object_error:
+        return {'error': object_error}
     result = LookupService.execute_lookup(int(script_id), params_values)
     if not result.get('success'):
         return {'error': result.get('error_message') or '信息查询失败'}

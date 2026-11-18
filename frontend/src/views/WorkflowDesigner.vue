@@ -263,18 +263,22 @@
                   </el-select>
                   <template v-if="paramSource(p.name) === 'node'">
                     <el-select :model-value="paramNodeId(p.name)" size="small" filterable style="width: 100%"
-                               placeholder="选择节点" @change="onParamNodeChange(p.name, $event)">
+                               placeholder="选择上游节点" @change="onParamNodeChange(p.name, $event)">
                       <el-option v-for="n in paramNodeOptions" :key="n.id"
                                  :label="(n.name || meta(n.type).label) + ' · ' + meta(n.type).label" :value="n.id" />
+                      <template #empty><span class="wf-tip">该节点没有上游节点（请先连线）</span></template>
                     </el-select>
                     <el-select :model-value="paramNodeField(p.name)" size="small" filterable allow-create
                                default-first-option clearable style="width: 100%"
-                               placeholder="输出字段（留空取整个输出）"
+                               placeholder="输出字段（如 inputs.deviceSn）"
                                @change="onParamFieldChange(p.name, $event)">
                       <el-option v-for="f in paramFieldOptions(paramNodeId(p.name))" :key="f" :label="f" :value="f" />
                     </el-select>
+                    <span v-if="paramNodeId(p.name) && !paramFieldOptions(paramNodeId(p.name)).length" class="wf-tip">
+                      该节点还没有运行输出，可先运行一次后选择字段，或直接输入字段路径
+                    </span>
                   </template>
-                  <el-select v-else-if="paramSource(p.name) === 'var'" :model-value="paramRef(p.name)" size="small"
+                  <el-select v-else-if="paramSource(p.name) === 'var'" :model-value="paramVarName(p.name)" size="small"
                              filterable allow-create default-first-option style="width: 100%"
                              placeholder="选择或输入变量名" @change="onParamVarChange(p.name, $event)">
                     <el-option v-for="v in paramVarOptions" :key="v" :label="v" :value="v" />
@@ -811,8 +815,29 @@ const selectedScript = computed(() => {
   return capabilities.value.scripts.find(s => String(s.id) === String(id)) || null
 })
 const selectedScriptParams = computed(() => selectedScript.value?.params_config || [])
-const paramNodeOptions = computed(() =>
-  graph.value.nodes.filter(n => n.id !== selectedNode.value?.id))
+// 上游节点集合：沿连线反向可达，只允许引用真正的上游输出
+const upstreamNodeIds = computed(() => {
+  const nodeId = selectedNode.value?.id
+  const ids = new Set()
+  if (!nodeId) return ids
+  const incoming = {}
+  ;(graph.value.edges || []).forEach(e => {
+    if (!e || !e.target) return
+    ;(incoming[e.target] = incoming[e.target] || []).push(e.source)
+  })
+  const stack = [...(incoming[nodeId] || [])]
+  while (stack.length) {
+    const id = stack.pop()
+    if (!id || id === nodeId || ids.has(id)) continue
+    ids.add(id)
+    ;(incoming[id] || []).forEach(src => { if (src && src !== nodeId && !ids.has(src)) stack.push(src) })
+  }
+  return ids
+})
+const paramNodeOptions = computed(() => {
+  const upstream = upstreamNodeIds.value
+  return graph.value.nodes.filter(n => upstream.has(n.id) && n.type !== 'end')
+})
 const paramVarOptions = computed(() => {
   const names = (current.value?.variables || []).map(v => v && v.name).filter(Boolean)
   return [...new Set(names)]
@@ -835,8 +860,15 @@ function paramRef(name) {
 function paramSource(name) {
   const ref = paramRef(name)
   if (ref.startsWith('nodes.')) return 'node'
-  if (ref && (ref.startsWith('inputs.') || paramVarOptions.value.includes(ref))) return 'var'
+  if (ref.startsWith('vars.') || ref.startsWith('inputs.')) return 'var'
+  if (ref && paramVarOptions.value.includes(ref)) return 'var'
   return 'const'
+}
+
+function paramVarName(name) {
+  const ref = paramRef(name)
+  if (ref.startsWith('vars.')) return ref.slice(5)
+  return ref
 }
 
 function paramNodeId(name) {
@@ -851,10 +883,43 @@ function paramNodeField(name) {
   return ref.split('.').slice(2).join('.')
 }
 
+// 展开输出对象的可取值路径：嵌套字段展平，数组取首行的字段（如 results.0.status）
+function flattenOutputPaths(obj, prefix = '', depth = 0) {
+  const paths = []
+  if (Array.isArray(obj)) {
+    const first = obj[0]
+    if (first && typeof first === 'object' && !Array.isArray(first) && depth < 3) {
+      Object.keys(first).forEach(k => paths.push(`${prefix}.0.${k}`))
+    } else if (prefix) {
+      paths.push(prefix)
+    }
+    return paths
+  }
+  if (!obj || typeof obj !== 'object') return paths
+  Object.keys(obj).forEach(k => {
+    const path = prefix ? `${prefix}.${k}` : k
+    const val = obj[k]
+    if (val && typeof val === 'object' && depth < 2) {
+      const before = paths.length
+      flattenOutputPaths(val, path, depth + 1).forEach(p => paths.push(p))
+      if (paths.length === before) paths.push(path)
+    } else {
+      paths.push(path)
+    }
+  })
+  return paths
+}
+
 function paramFieldOptions(nodeId) {
-  const out = nodeId ? nodeOutputs[nodeId] : null
-  if (!out || typeof out !== 'object' || Array.isArray(out)) return []
-  return Object.keys(out)
+  if (!nodeId) return []
+  const out = nodeOutputs[nodeId]
+  if (out && typeof out === 'object') return flattenOutputPaths(out)
+  // 还没运行过：开始节点的输出是 inputs，可直接按流程变量列出
+  const node = graph.value.nodes.find(n => n.id === nodeId)
+  if (node && node.type === 'start') {
+    return paramVarOptions.value.map(v => `inputs.${v}`)
+  }
+  return []
 }
 
 function setParamRaw(name, value) {
@@ -870,10 +935,12 @@ function setParamRaw(name, value) {
 function onParamSourceChange(name, source) {
   if (source === 'node') {
     const first = paramNodeOptions.value[0]
-    setParamRaw(name, first ? `{{nodes.${first.id}}}` : '')
+    if (!first) return setParamRaw(name, '')
+    const field = paramFieldOptions(first.id)[0]
+    setParamRaw(name, `{{nodes.${first.id}${field ? '.' + field : ''}}}`)
   } else if (source === 'var') {
     const first = paramVarOptions.value[0]
-    setParamRaw(name, first ? `{{${first}}}` : '')
+    setParamRaw(name, first ? `{{vars.${first}}}` : '')
   } else {
     setParamRaw(name, '')
   }
@@ -881,7 +948,9 @@ function onParamSourceChange(name, source) {
 
 function onParamNodeChange(name, nodeId) {
   if (!nodeId) return setParamRaw(name, '')
-  const field = paramNodeField(name)
+  const options = paramFieldOptions(nodeId)
+  let field = paramNodeField(name)
+  if (!field || (options.length && !options.includes(field))) field = options[0] || ''
   setParamRaw(name, `{{nodes.${nodeId}${field ? '.' + field : ''}}}`)
 }
 
@@ -893,8 +962,9 @@ function onParamFieldChange(name, field) {
 }
 
 function onParamVarChange(name, varName) {
-  const v = String(varName || '').trim().replace(/^\{\{\s*|\s*\}\}$/g, '')
-  setParamRaw(name, v ? `{{${v}}}` : '')
+  const v = String(varName || '').trim().replace(/^\{\{\s*|\s*\}\}$/g, '').replace(/^vars\./, '')
+  if (!v) return setParamRaw(name, '')
+  setParamRaw(name, v.startsWith('inputs.') ? `{{${v}}}` : `{{vars.${v}}}`)
 }
 
 function onParamConstInput(name, value) {
