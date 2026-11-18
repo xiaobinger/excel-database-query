@@ -76,12 +76,14 @@
               <text class="wf-edge-label wf-loop-label" :x="node.x + 232" :y="node.y + 44">{{ loopLabel(node) }}</text>
             </g>
             <path v-if="connecting" class="wf-edge temp" :d="connectingPath"></path>
+            <line v-if="guides.x !== null" class="wf-guide" :x1="guides.x" y1="0" :x2="guides.x" y2="4000" />
+            <line v-if="guides.y !== null" class="wf-guide" x1="0" :y1="guides.y" x2="6000" :y2="guides.y" />
           </svg>
 
           <div v-for="node in graph.nodes" :key="node.id" class="wf-node" :class="nodeClass(node)"
                :data-node-id="node.id"
                :style="{ left: node.x + 'px', top: node.y + 'px' }"
-               @mousedown.stop="startNodeDrag($event, node)" @click.stop="selectNode(node)">
+               @mousedown.stop="startNodeDrag($event, node)">
             <div class="wf-node-icon" :style="{ background: meta(node.type).color }">
               <i :class="['fa', meta(node.type).icon]"></i>
             </div>
@@ -104,7 +106,10 @@
             <el-button size="small" @click="resetView">{{ Math.round(scale * 100) }}%</el-button>
             <el-button size="small" @click="zoomBy(0.1)"><i class="fa fa-plus"></i></el-button>
           </el-button-group>
+          <span class="wf-canvas-hint">空白处拖拽框选 · Ctrl/Shift 加选 · Alt+拖拽或中键平移</span>
         </div>
+
+        <div v-if="boxRect" class="wf-select-box" :style="boxRect"></div>
 
         <div v-if="activeRun && activeRun.status === 'waiting_approval'" class="wf-approval-bar">
           <div class="wf-approval-main">
@@ -129,6 +134,9 @@
       </main>
 
       <aside class="wf-props">
+        <div v-if="selectedNodeIds.length > 1" class="wf-multi-tip">
+          <i class="fa fa-object-group"></i> 已选择 {{ selectedNodeIds.length }} 个节点，拖拽任一节点可整体移动
+        </div>
         <div v-if="selectedNode" class="wf-props-inner">
           <div class="wf-props-head">
             <span :style="{ color: meta(selectedNode.type).color }">
@@ -618,6 +626,7 @@ const workflows = ref([])
 const current = ref(null)
 const graph = ref({ nodes: [], edges: [] })
 const selectedNodeId = ref(null)
+const selectedNodeIds = ref([])
 const selectedEdgeId = ref(null)
 const capabilities = ref({ scripts: [], databases: [], system_tasks: [], approvers: [], agents: [] })
 const scale = ref(1)
@@ -640,6 +649,8 @@ const approvalComment = ref('')
 
 const dragState = ref(null)
 const panState = ref(null)
+const boxState = ref(null)
+const guides = ref({ x: null, y: null })
 const connecting = ref(null)
 let pollTimer = null
 
@@ -708,6 +719,17 @@ const runStatusIcon = computed(() => {
 const worldStyle = computed(() => ({
   transform: `translate(${offsetX.value}px, ${offsetY.value}px) scale(${scale.value})`,
 }))
+const boxRect = computed(() => {
+  const bs = boxState.value
+  const rect = canvasRef.value ? canvasRef.value.getBoundingClientRect() : null
+  if (!bs || !rect || !bs.moved) return null
+  return {
+    left: Math.min(bs.startX, bs.currentX) - rect.left + 'px',
+    top: Math.min(bs.startY, bs.currentY) - rect.top + 'px',
+    width: Math.abs(bs.currentX - bs.startX) + 'px',
+    height: Math.abs(bs.currentY - bs.startY) + 'px',
+  }
+})
 const connectingPath = computed(() => {
   if (!connecting.value) return ''
   const s = graph.value.nodes.find(n => n.id === connecting.value.source)
@@ -835,6 +857,7 @@ async function loadWorkflow(id) {
     offsetX.value = vp.offsetX ?? 80
     offsetY.value = vp.offsetY ?? 60
     selectedNodeId.value = null
+    selectedNodeIds.value = []
     selectedEdgeId.value = null
     dirty.value = false
     clearRunVisual()
@@ -894,6 +917,9 @@ async function removeWorkflow(row) {
     if (current.value && current.value.id === row.id) {
       current.value = null
       graph.value = { nodes: [], edges: [] }
+      selectedNodeId.value = null
+      selectedNodeIds.value = []
+      selectedEdgeId.value = null
       activeRun.value = null
     }
     await loadWorkflows()
@@ -916,7 +942,18 @@ function saveVariables() {
   dirty.value = true
 }
 
-function selectNode(node) {
+function selectNode(node, event) {
+  const additive = !!(event && (event.ctrlKey || event.metaKey || event.shiftKey))
+  if (additive) {
+    if (selectedNodeIds.value.includes(node.id)) {
+      selectedNodeIds.value = selectedNodeIds.value.filter(id => id !== node.id)
+      if (selectedNodeId.value === node.id) selectedNodeId.value = selectedNodeIds.value[0] || null
+      return
+    }
+    selectedNodeIds.value = [...selectedNodeIds.value, node.id]
+  } else if (!selectedNodeIds.value.includes(node.id)) {
+    selectedNodeIds.value = [node.id]
+  }
   selectedNodeId.value = node.id
   selectedEdgeId.value = null
 }
@@ -924,12 +961,18 @@ function selectNode(node) {
 function selectEdge(edge) {
   selectedEdgeId.value = edge.id
   selectedNodeId.value = null
+  selectedNodeIds.value = []
 }
 
 function deleteSelectedNode() {
-  if (!selectedNodeId.value) return
-  graph.value.nodes = graph.value.nodes.filter(n => n.id !== selectedNodeId.value)
-  graph.value.edges = graph.value.edges.filter(e => e.source !== selectedNodeId.value && e.target !== selectedNodeId.value)
+  const ids = selectedNodeIds.value.length
+    ? [...selectedNodeIds.value]
+    : (selectedNodeId.value ? [selectedNodeId.value] : [])
+  if (!ids.length) return
+  const idSet = new Set(ids)
+  graph.value.nodes = graph.value.nodes.filter(n => !idSet.has(n.id))
+  graph.value.edges = graph.value.edges.filter(e => !idSet.has(e.source) && !idSet.has(e.target))
+  selectedNodeIds.value = []
   selectedNodeId.value = null
   dirty.value = true
 }
@@ -946,7 +989,7 @@ function nodeClass(node) {
   return [
     'type-' + node.type,
     {
-      selected: selectedNodeId.value === node.id,
+      selected: selectedNodeIds.value.includes(node.id),
       running: status === 'running',
       success: status === 'completed',
       failed: status === 'failed',
@@ -1022,6 +1065,7 @@ function addNode(type, x, y) {
   }
   graph.value.nodes.push(node)
   selectedNodeId.value = node.id
+  selectedNodeIds.value = [node.id]
   selectedEdgeId.value = null
   dirty.value = true
   return node
@@ -1062,58 +1106,135 @@ function onDrop(event) {
 
 function startNodeDrag(event, node) {
   if (event.button !== 0) return
-  selectNode(node)
+  selectNode(node, event)
+  if (!selectedNodeIds.value.includes(node.id)) return
+  const origins = graph.value.nodes
+    .filter(n => selectedNodeIds.value.includes(n.id))
+    .map(n => ({ id: n.id, x: n.x, y: n.y }))
+  if (!origins.length) return
   dragState.value = {
-    nodeId: node.id,
     startX: event.clientX,
     startY: event.clientY,
-    x: node.x,
-    y: node.y,
+    origins,
     moved: false,
   }
 }
 
 function startConnect(event, node) {
   if (event.button !== 0) return
-  selectNode(node)
+  selectNode(node, event)
   const p = toGraphPoint(event.clientX, event.clientY)
   connecting.value = { source: node.id, x: p.x, y: p.y }
 }
 
+// 拖动时的对齐吸附：计算与其它节点左/中/右、上/中/下基准线最近的偏移
+const SNAP_DISTANCE = 6
+
+function snapDelta(origins, dx, dy) {
+  if (!origins.length) return { dx, dy, guideX: null, guideY: null }
+  const movingIds = new Set(origins.map(o => o.id))
+  const others = graph.value.nodes.filter(n => !movingIds.has(n.id))
+  if (!others.length) return { dx, dy, guideX: null, guideY: null }
+
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+  origins.forEach(o => {
+    minX = Math.min(minX, o.x)
+    maxX = Math.max(maxX, o.x)
+    minY = Math.min(minY, o.y)
+    maxY = Math.max(maxY, o.y)
+  })
+  const vMoves = [minX + dx, (minX + maxX + NODE_W) / 2 + dx, maxX + NODE_W + dx]
+  const hMoves = [minY + dy, (minY + maxY + NODE_H) / 2 + dy, maxY + NODE_H + dy]
+  const threshold = SNAP_DISTANCE / scale.value
+  let bestX = null
+  let bestY = null
+
+  others.forEach(n => {
+    [n.x, n.x + NODE_W / 2, n.x + NODE_W].forEach(target => {
+      vMoves.forEach(value => {
+        const diff = target - value
+        if (Math.abs(diff) <= threshold && (!bestX || Math.abs(diff) < Math.abs(bestX.diff))) {
+          bestX = { diff, line: target }
+        }
+      })
+    })
+    ;[n.y, n.y + NODE_H / 2, n.y + NODE_H].forEach(target => {
+      hMoves.forEach(value => {
+        const diff = target - value
+        if (Math.abs(diff) <= threshold && (!bestY || Math.abs(diff) < Math.abs(bestY.diff))) {
+          bestY = { diff, line: target }
+        }
+      })
+    })
+  })
+
+  return {
+    dx: dx + (bestX ? bestX.diff : 0),
+    dy: dy + (bestY ? bestY.diff : 0),
+    guideX: bestX ? bestX.line : null,
+    guideY: bestY ? bestY.line : null,
+  }
+}
+
 function onCanvasMouseDown(event) {
-  if (event.button !== 0) return
   const target = event.target
   if (target.closest('.wf-node') || target.closest('.wf-canvas-toolbar') ||
       target.closest('.wf-approval-bar') || target.closest('.wf-run-status') ||
       target.closest('.wf-edge-hit')) {
     return
   }
-  selectedNodeId.value = null
-  selectedEdgeId.value = null
-  panState.value = {
+  // 中键或 Alt+左键：平移画布；左键空白处：框选
+  if (event.button === 1 || (event.button === 0 && event.altKey)) {
+    event.preventDefault()
+    panState.value = {
+      startX: event.clientX,
+      startY: event.clientY,
+      ox: offsetX.value,
+      oy: offsetY.value,
+    }
+    return
+  }
+  if (event.button !== 0) return
+  boxState.value = {
     startX: event.clientX,
     startY: event.clientY,
-    ox: offsetX.value,
-    oy: offsetY.value,
+    currentX: event.clientX,
+    currentY: event.clientY,
+    additive: event.ctrlKey || event.metaKey || event.shiftKey,
+    baseIds: [...selectedNodeIds.value],
+    moved: false,
   }
 }
 
 function onWindowMouseMove(event) {
   if (dragState.value) {
     const ds = dragState.value
-    const node = graph.value.nodes.find(n => n.id === ds.nodeId)
-    if (!node) return
-    const dx = (event.clientX - ds.startX) / scale.value
-    const dy = (event.clientY - ds.startY) / scale.value
-    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) ds.moved = true
-    node.x = Math.round(ds.x + dx)
-    node.y = Math.round(ds.y + dy)
+    const rawDx = (event.clientX - ds.startX) / scale.value
+    const rawDy = (event.clientY - ds.startY) / scale.value
+    if (!ds.moved && (Math.abs(rawDx) > 1 || Math.abs(rawDy) > 1)) ds.moved = true
+    const snap = snapDelta(ds.origins, rawDx, rawDy)
+    ds.origins.forEach(o => {
+      const node = graph.value.nodes.find(n => n.id === o.id)
+      if (!node) return
+      node.x = Math.round(o.x + snap.dx)
+      node.y = Math.round(o.y + snap.dy)
+    })
+    guides.value = { x: snap.guideX, y: snap.guideY }
     return
   }
   if (panState.value) {
     const ps = panState.value
     offsetX.value = ps.ox + (event.clientX - ps.startX)
     offsetY.value = ps.oy + (event.clientY - ps.startY)
+    return
+  }
+  if (boxState.value) {
+    const bs = boxState.value
+    bs.currentX = event.clientX
+    bs.currentY = event.clientY
+    if (!bs.moved && (Math.abs(bs.currentX - bs.startX) > 3 || Math.abs(bs.currentY - bs.startY) > 3)) {
+      bs.moved = true
+    }
     return
   }
   if (connecting.value) {
@@ -1127,8 +1248,28 @@ function onWindowMouseUp(event) {
   if (dragState.value) {
     if (dragState.value.moved) dirty.value = true
     dragState.value = null
+    guides.value = { x: null, y: null }
   }
   if (panState.value) panState.value = null
+  if (boxState.value) {
+    const bs = boxState.value
+    boxState.value = null
+    if (bs.moved) {
+      const p1 = toGraphPoint(Math.min(bs.startX, bs.currentX), Math.min(bs.startY, bs.currentY))
+      const p2 = toGraphPoint(Math.max(bs.startX, bs.currentX), Math.max(bs.startY, bs.currentY))
+      const hits = graph.value.nodes
+        .filter(n => n.x < p2.x && n.x + NODE_W > p1.x && n.y < p2.y && n.y + NODE_H > p1.y)
+        .map(n => n.id)
+      const ids = bs.additive ? [...new Set([...bs.baseIds, ...hits])] : hits
+      selectedNodeIds.value = ids
+      selectedNodeId.value = ids[0] || null
+      if (ids.length) selectedEdgeId.value = null
+    } else if (!bs.additive) {
+      selectedNodeIds.value = []
+      selectedNodeId.value = null
+      selectedEdgeId.value = null
+    }
+  }
   if (connecting.value) {
     const sourceId = connecting.value.source
     const el = document.elementFromPoint(event.clientX, event.clientY)
@@ -1391,7 +1532,7 @@ function onKeyDown(event) {
   const tag = (event.target && event.target.tagName ? event.target.tagName : '').toLowerCase()
   if (['input', 'textarea', 'select'].includes(tag) || (event.target && event.target.isContentEditable)) return
   if (event.key === 'Delete' || event.key === 'Backspace') {
-    if (selectedNodeId.value) {
+    if (selectedNodeIds.value.length) {
       event.preventDefault()
       deleteSelectedNode()
     } else if (selectedEdgeId.value) {
@@ -1678,6 +1819,21 @@ onBeforeUnmount(() => {
   text-anchor: middle;
   pointer-events: none;
 }
+.wf-guide {
+  stroke: #f43f5e;
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.wf-select-box {
+  position: absolute;
+  border: 1px dashed #3b82f6;
+  background: rgba(59, 130, 246, 0.08);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 4;
+}
 .wf-node {
   position: absolute;
   width: 190px;
@@ -1792,7 +1948,21 @@ onBeforeUnmount(() => {
   position: absolute;
   right: 16px;
   bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
   z-index: 5;
+}
+.wf-canvas-hint {
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.55);
+  color: #e2e8f0;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+  pointer-events: none;
 }
 .wf-approval-bar {
   position: absolute;
@@ -1877,6 +2047,16 @@ onBeforeUnmount(() => {
 }
 .wf-props-inner {
   padding: 14px;
+}
+.wf-multi-tip {
+  margin: 10px 12px 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1d4ed8;
+  font-size: 12px;
+  line-height: 1.6;
 }
 .wf-props-head {
   display: flex;
