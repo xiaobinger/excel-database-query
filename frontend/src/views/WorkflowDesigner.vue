@@ -211,11 +211,18 @@
             </template>
 
             <template v-else-if="selectedNode.type === 'script'">
+              <el-form-item label="脚本类型">
+                <el-select :model-value="selectedNode.config.script_type || selectedScriptType"
+                           placeholder="先选择脚本类型" style="width: 100%" @change="onScriptTypeChange($event)">
+                  <el-option v-for="t in scriptTypeOptions" :key="t.value" :label="t.label" :value="t.value" />
+                </el-select>
+              </el-form-item>
               <el-form-item label="SQL 脚本">
-                <el-select v-model="selectedNode.config.script_id" filterable placeholder="选择脚本库中的脚本"
+                <el-select v-model="selectedNode.config.script_id" filterable
+                           :disabled="!(selectedNode.config.script_type || selectedScriptType)"
+                           :placeholder="(selectedNode.config.script_type || selectedScriptType) ? '选择该类型下的脚本' : '请先选择脚本类型'"
                            style="width: 100%" @change="dirty = true">
-                  <el-option v-for="s in capabilities.scripts" :key="s.id"
-                             :label="s.name + ' (' + s.type + ')'" :value="s.id" />
+                  <el-option v-for="s in scriptOptions" :key="s.id" :label="s.name" :value="s.id" />
                 </el-select>
               </el-form-item>
               <div class="wf-hint">
@@ -643,12 +650,37 @@ const filteredWorkflows = computed(() => {
   return workflows.value.filter(w => (w.name || '').toLowerCase().includes(kw))
 })
 const selectedNode = computed(() => graph.value.nodes.find(n => n.id === selectedNodeId.value) || null)
+const SCRIPT_TYPE_LABELS = {
+  query: '查询脚本', export: '导出脚本', system: '系统脚本', lookup: '信息查询', dashboard: '看板脚本',
+}
+const SCRIPT_TYPE_ORDER = ['query', 'export', 'lookup', 'system', 'dashboard']
 const selectedScriptType = computed(() => {
-  const id = selectedNode.value?.config?.script_id
-  if (!id) return ''
-  const s = capabilities.value.scripts.find(item => item.id === id)
+  const cfg = selectedNode.value?.config
+  if (!cfg) return ''
+  if (cfg.script_type) return cfg.script_type
+  const s = capabilities.value.scripts.find(item => item.id === cfg.script_id)
   return s ? s.type : ''
 })
+const scriptTypeOptions = computed(() => {
+  const types = [...new Set(capabilities.value.scripts.map(s => s.type).filter(Boolean))]
+  types.sort((a, b) => {
+    const ia = SCRIPT_TYPE_ORDER.indexOf(a)
+    const ib = SCRIPT_TYPE_ORDER.indexOf(b)
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib)
+  })
+  return types.map(t => ({ value: t, label: SCRIPT_TYPE_LABELS[t] || t }))
+})
+const scriptOptions = computed(() => {
+  const type = selectedScriptType.value
+  if (!type) return []
+  return capabilities.value.scripts.filter(s => s.type === type)
+})
+function onScriptTypeChange(type) {
+  if (!selectedNode.value) return
+  selectedNode.value.config.script_type = type
+  selectedNode.value.config.script_id = null
+  dirty.value = true
+}
 const selectedEdge = computed(() => graph.value.edges.find(e => e.id === selectedEdgeId.value) || null)
 const queryScripts = computed(() => capabilities.value.scripts.filter(s => s.type === 'query'))
 const exportScripts = computed(() => capabilities.value.scripts.filter(s => s.type === 'export'))
@@ -702,7 +734,7 @@ function baseConfig(type) {
       return { system_task_id: null, param_values: {} }
     case 'script':
       return {
-        script_id: null, param_values: {},
+        script_type: '', script_id: null, param_values: {},
         input_file: '', database_ids: [], param_column: '', merge_strategy: 'concat',
         output_format: 'sheets',
       }
