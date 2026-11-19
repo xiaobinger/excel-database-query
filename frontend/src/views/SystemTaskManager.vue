@@ -192,6 +192,173 @@
           </el-table>
           <el-empty v-if="!executionLoading && executionList.length === 0" description="暂无执行记录" />
         </el-tab-pane>
+
+        <el-tab-pane label="批量任务" name="batches">
+          <div style="margin-bottom: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+            <el-input
+              v-model="batchQueryKeyword"
+              placeholder="批次ID / 参数文件名"
+              clearable
+              style="width: 220px"
+              @keyup.enter="handleBatchSearch"
+              @clear="handleBatchSearch"
+            />
+            <el-select v-model="batchQueryStatus" placeholder="全部状态" clearable style="width: 130px" @change="handleBatchSearch">
+              <el-option label="等待中" value="pending" />
+              <el-option label="执行中" value="running" />
+              <el-option label="已完成" value="completed" />
+              <el-option label="失败" value="failed" />
+              <el-option label="已取消" value="cancelled" />
+            </el-select>
+            <el-button type="primary" plain @click="handleBatchSearch">
+              <i class="fas fa-search"></i> 查询
+            </el-button>
+            <el-button type="info" plain @click="fetchBatches">
+              <i class="fas fa-sync"></i> 刷新
+            </el-button>
+            <el-button
+              v-if="store.hasButtonPermission('system_task:delete_log')"
+              type="danger" plain
+              :disabled="selectedBatchRows.length === 0"
+              @click="handleDeleteBatches(selectedBatchRows)"
+            >
+              <i class="fas fa-trash-alt"></i> 批量删除
+              <span v-if="selectedBatchRows.length > 0">({{ selectedBatchRows.length }})</span>
+            </el-button>
+            <span v-if="batchHasRunning" style="color: #e6a23c; font-size: 12px;">
+              <i class="fas fa-spinner fa-spin"></i> 有批次执行中，每 3 秒自动刷新
+            </span>
+          </div>
+
+          <el-table :data="batchList" stripe v-loading="batchLoading" style="width: 100%" @selection-change="rows => selectedBatchRows = rows">
+            <el-table-column type="selection" width="45" :selectable="row => row.status !== 'running' && row.status !== 'pending'" />
+            <el-table-column prop="batch_id" label="批次ID" min-width="170" show-overflow-tooltip />
+            <el-table-column prop="system_task_name" label="任务名称" min-width="140" show-overflow-tooltip />
+            <el-table-column label="状态" width="90" align="center">
+              <template #default="{ row }">
+                <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="进度" min-width="200">
+              <template #default="{ row }">
+                <el-progress
+                  :percentage="row.progress"
+                  :stroke-width="12"
+                  :status="row.status === 'failed' ? 'exception' : row.status === 'completed' ? 'success' : ''"
+                />
+                <div style="color: #909399; font-size: 12px; margin-top: 2px;">
+                  {{ row.processed_rows }}/{{ row.total_rows }} 行 · 成功 {{ row.success_count }} · 失败 {{ row.failure_count }}
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column prop="created_by_name" label="创建人" width="100" />
+            <el-table-column prop="created_at" label="创建时间" width="165" />
+            <el-table-column label="操作" width="220" align="center" fixed="right">
+              <template #default="{ row }">
+                <el-button size="small" type="primary" text @click="openBatchDetail(row)">
+                  <i class="fas fa-eye"></i> 详情
+                </el-button>
+                <el-button
+                  size="small" type="success" text
+                  :disabled="!row.output_exists"
+                  @click="downloadBatchOutput(row.batch_id)"
+                >
+                  <i class="fas fa-download"></i> 下载
+                </el-button>
+                <el-popconfirm
+                  v-if="row.status !== 'running' && row.status !== 'pending'"
+                  title="确定删除该批量记录及结果文件吗？"
+                  confirm-button-text="确定"
+                  cancel-button-text="取消"
+                  @confirm="handleDeleteBatches([row])"
+                >
+                  <template #reference>
+                    <el-button size="small" type="danger" text>
+                      <i class="fas fa-trash"></i> 删除
+                    </el-button>
+                  </template>
+                </el-popconfirm>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-empty v-if="!batchLoading && batchList.length === 0" description="暂无批量执行记录" />
+          <div style="margin-top: 12px; display: flex; justify-content: flex-end;">
+            <el-pagination
+              background
+              layout="total, sizes, prev, pager, next"
+              :total="batchTotal"
+              v-model:current-page="batchPage"
+              v-model:page-size="batchPageSize"
+              :page-sizes="[10, 20, 50, 100]"
+              @current-change="fetchBatches"
+              @size-change="handleBatchSizeChange"
+            />
+          </div>
+
+          <el-drawer v-model="batchDetailVisible" title="批量任务详情" size="720px">
+            <div v-if="batchDetail">
+              <el-descriptions :column="2" border size="small">
+                <el-descriptions-item label="批次ID" :span="2">{{ batchDetail.batch_id }}</el-descriptions-item>
+                <el-descriptions-item label="任务名称">{{ batchDetailRow?.system_task_name || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="状态">
+                  <el-tag :type="statusType(batchDetail.status)" size="small">{{ statusLabel(batchDetail.status) }}</el-tag>
+                </el-descriptions-item>
+                <el-descriptions-item label="进度">{{ batchDetail.progress }}%</el-descriptions-item>
+                <el-descriptions-item label="行数统计">
+                  {{ batchDetail.processed_rows }}/{{ batchDetail.total_rows }} 行（成功 {{ batchDetail.success_count }}，失败 {{ batchDetail.failure_count }}）
+                </el-descriptions-item>
+                <el-descriptions-item label="参数文件" :span="2">{{ batchDetail.input_file_name || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="创建人">{{ batchDetailRow?.created_by_name || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="创建时间">{{ batchDetail.created_at || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="开始时间">{{ batchDetail.started_at || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="完成时间">{{ batchDetail.completed_at || '-' }}</el-descriptions-item>
+              </el-descriptions>
+
+              <el-alert
+                v-if="batchDetail.error_message"
+                type="error" :closable="false" show-icon
+                style="margin-top: 12px"
+                :title="batchDetail.error_message"
+              />
+
+              <div style="margin: 16px 0 8px; font-weight: 600;">字段映射</div>
+              <el-table :data="batchMappingRows" size="small" border>
+                <el-table-column prop="param" label="任务参数" min-width="140" />
+                <el-table-column prop="column" label="文件列" min-width="140">
+                  <template #default="{ row }">{{ row.column || '-' }}</template>
+                </el-table-column>
+                <el-table-column prop="fixed" label="固定值" min-width="160">
+                  <template #default="{ row }">{{ row.fixed === undefined || row.fixed === null || row.fixed === '' ? '-' : row.fixed }}</template>
+                </el-table-column>
+              </el-table>
+
+              <div style="margin: 16px 0 8px; font-weight: 600;">执行日志</div>
+              <el-timeline v-if="batchDetail.logs && batchDetail.logs.length">
+                <el-timeline-item
+                  v-for="(log, idx) in batchDetail.logs"
+                  :key="idx"
+                  :timestamp="log.time"
+                  :type="logLevelType(log.level)"
+                  placement="top"
+                >
+                  {{ log.message }}
+                </el-timeline-item>
+              </el-timeline>
+              <el-empty v-else description="暂无日志" :image-size="60" />
+
+              <div style="margin-top: 16px; text-align: right;">
+                <el-button
+                  type="success"
+                  :disabled="!batchDetail.output_file"
+                  @click="downloadBatchOutput(batchDetail.batch_id)"
+                >
+                  <i class="fas fa-download"></i> 下载结果文件
+                </el-button>
+              </div>
+            </div>
+            <el-empty v-else description="加载中..." />
+          </el-drawer>
+        </el-tab-pane>
       </el-tabs>
     </el-card>
 
@@ -1228,7 +1395,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onActivated, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onActivated, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
 import { useAppStore } from '../stores'
@@ -2336,9 +2503,11 @@ function startBatchStream(batchId) {
   }
 }
 
-function downloadBatchOutput() {
-  if (progressDownloadUrl.value) {
-    window.open(progressDownloadUrl.value, '_blank')
+// 下载结果文件：传入批次ID时下载指定批次，否则下载进度对话框中的结果
+function downloadBatchOutput(batchId) {
+  const url = batchId ? api.systemTask.downloadBatch(batchId) : progressDownloadUrl.value
+  if (url) {
+    window.open(url, '_blank')
   }
 }
 
@@ -2413,9 +2582,130 @@ async function handleCancelExecution(executionId) {
   }
 }
 
+// ── 批量任务管理 ──────────────────────────────────────────
+const batchList = ref([])
+const batchLoading = ref(false)
+const batchTotal = ref(0)
+const batchPage = ref(1)
+const batchPageSize = ref(20)
+const batchQueryStatus = ref('')
+const batchQueryKeyword = ref('')
+const selectedBatchRows = ref([])
+const batchDetailVisible = ref(false)
+const batchDetail = ref(null)
+const batchDetailRow = ref(null)
+let batchPollTimer = null
+
+const batchHasRunning = computed(() => batchList.value.some(r => r.status === 'running' || r.status === 'pending'))
+
+const batchMappingRows = computed(() => {
+  if (!batchDetail.value) return []
+  const mapping = batchDetail.value.param_mapping || {}
+  const defaults = batchDetail.value.params_defaults || {}
+  const names = [...new Set([...Object.keys(mapping), ...Object.keys(defaults)])]
+  return names.map(name => ({
+    param: name,
+    column: mapping[name] || '',
+    fixed: defaults[name],
+  }))
+})
+
+async function fetchBatches() {
+  batchLoading.value = true
+  try {
+    const res = await api.systemTask.listBatches({
+      page: batchPage.value,
+      page_size: batchPageSize.value,
+      status: batchQueryStatus.value || undefined,
+      keyword: batchQueryKeyword.value.trim() || undefined,
+    })
+    const data = res.data || {}
+    batchList.value = data.items || []
+    batchTotal.value = data.total || 0
+  } catch {
+    batchList.value = []
+    batchTotal.value = 0
+  } finally {
+    batchLoading.value = false
+  }
+}
+
+function handleBatchSearch() {
+  batchPage.value = 1
+  fetchBatches()
+}
+
+function handleBatchSizeChange() {
+  batchPage.value = 1
+  fetchBatches()
+}
+
+async function handleDeleteBatches(rows) {
+  const items = (rows || []).filter(r => r.status !== 'running' && r.status !== 'pending')
+  if (items.length === 0) return
+  if (items.length > 1) {
+    try {
+      await ElMessageBox.confirm(
+        `确定要删除选中的 ${items.length} 条批量任务记录及其结果文件吗？`,
+        '批量删除',
+        { type: 'warning', confirmButtonText: '确定删除', cancelButtonText: '取消' }
+      )
+    } catch {
+      return
+    }
+  }
+  try {
+    const res = await api.systemTask.deleteBatches(items.map(r => r.batch_id))
+    ElMessage.success(res.message || `已删除 ${res.deleted || 0} 条`)
+    if (res.skipped && res.skipped.length > 0) {
+      ElMessage.warning(`跳过 ${res.skipped.length} 条（执行中或无权删除）`)
+    }
+    selectedBatchRows.value = []
+    batchDetailVisible.value = false
+    fetchBatches()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '删除失败')
+  }
+}
+
+async function openBatchDetail(row) {
+  batchDetailRow.value = row
+  batchDetail.value = null
+  batchDetailVisible.value = true
+  try {
+    const res = await api.systemTask.getBatch(row.batch_id)
+    batchDetail.value = res.data || null
+  } catch {
+    batchDetailVisible.value = false
+  }
+}
+
+// 有批次在执行时每 3 秒自动刷新列表
+watch(batchHasRunning, (running) => {
+  if (running && !batchPollTimer) {
+    batchPollTimer = setInterval(fetchBatches, 3000)
+  } else if (!running && batchPollTimer) {
+    clearInterval(batchPollTimer)
+    batchPollTimer = null
+  }
+})
+
 watch(activeTab, (val) => {
   if (val === 'executions') {
     fetchExecutions()
+  } else if (val === 'batches') {
+    fetchBatches()
+  }
+})
+
+onUnmounted(() => {
+  if (batchPollTimer) {
+    clearInterval(batchPollTimer)
+    batchPollTimer = null
+  }
+  if (eventSource) {
+    eventSource.close()
+    eventSource = null
   }
 })
 

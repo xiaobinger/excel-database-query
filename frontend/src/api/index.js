@@ -311,6 +311,8 @@ const systemTask = {
     const sep = token ? `?token=${encodeURIComponent(token)}` : ''
     return `/api/system-tasks/batch/${batchId}/download${sep}`
   },
+  listBatches: (params) => http.get('/system-tasks/batches', { params }),
+  deleteBatches: (batchIds) => http.post('/system-tasks/batches/delete', { batch_ids: batchIds }),
 }
 
 const lookup = {

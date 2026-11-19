@@ -4,11 +4,13 @@ import os
 import time
 import uuid
 from flask import Blueprint, request, jsonify, Response, stream_with_context, current_app, send_file
+from sqlalchemy import or_
 from app import db
 from app.models.system_task import SystemTask, SystemTaskExecution, SystemTaskBatch
 from app.models.system_config import SystemConfig
 from app.models.script import Script
 from app.models.database import DatabaseConnection
+from app.models.user import User
 from app.services.system_task_service import SystemTaskService
 from app.services.system_task_batch_service import SystemTaskBatchService
 from app.utils.auth import login_required, get_current_user, admin_required
@@ -567,6 +569,98 @@ def batch_execute_system_task(task_id):
         logger.error(f'提交批量执行失败: {e}', exc_info=True)
         db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@system_task_bp.route('/batches', methods=['GET'])
+@login_required
+def list_batches():
+    """分页查询批量执行记录（非管理员仅能查看自己创建的批次）"""
+    current_user = get_current_user()
+    try:
+        page = max(int(request.args.get('page', 1) or 1), 1)
+        page_size = min(max(int(request.args.get('page_size', 20) or 20), 1), 100)
+    except (TypeError, ValueError):
+        page, page_size = 1, 20
+    status = (request.args.get('status') or '').strip()
+    keyword = (request.args.get('keyword') or '').strip()
+    system_task_id = request.args.get('system_task_id')
+
+    query = SystemTaskBatch.query
+    if current_user and not current_user.is_admin():
+        query = query.filter(SystemTaskBatch.created_by == current_user.id)
+    if status:
+        query = query.filter(SystemTaskBatch.status == status)
+    if system_task_id:
+        try:
+            query = query.filter(SystemTaskBatch.system_task_id == int(system_task_id))
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'message': 'system_task_id 参数无效'}), 400
+    if keyword:
+        like = f'%{keyword}%'
+        query = query.filter(or_(
+            SystemTaskBatch.batch_id.ilike(like),
+            SystemTaskBatch.input_file_name.ilike(like),
+        ))
+
+    total = query.count()
+    batches = query.order_by(SystemTaskBatch.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+
+    task_ids = {b.system_task_id for b in batches if b.system_task_id}
+    user_ids = {b.created_by for b in batches if b.created_by}
+    task_map = {}
+    if task_ids:
+        task_map = {t.id: t.name for t in SystemTask.query.filter(SystemTask.id.in_(task_ids)).all()}
+    user_map = {}
+    if user_ids:
+        for user in User.query.filter(User.id.in_(user_ids)).all():
+            user_map[user.id] = user.display_name or user.username
+
+    items = []
+    for batch in batches:
+        data = batch.to_dict()
+        data['system_task_name'] = task_map.get(batch.system_task_id) or '-'
+        data['created_by_name'] = user_map.get(batch.created_by) or '-'
+        data['output_file_name'] = os.path.basename(batch.output_file) if batch.output_file else None
+        data['output_exists'] = bool(batch.output_file and os.path.exists(batch.output_file))
+        data.pop('logs', None)  # 列表不返回完整日志，详情接口再取
+        items.append(data)
+
+    return jsonify({
+        'success': True,
+        'data': {'items': items, 'total': total, 'page': page, 'page_size': page_size}
+    })
+
+
+@system_task_bp.route('/batches/delete', methods=['POST'])
+@login_required
+def delete_batches():
+    """删除批量执行记录（执行中的批次不可删除）"""
+    payload = request.get_json(silent=True) or {}
+    batch_ids = payload.get('batch_ids') or []
+    if not isinstance(batch_ids, list) or not batch_ids:
+        return jsonify({'success': False, 'message': '请选择要删除的批量记录'}), 400
+
+    current_user = get_current_user()
+    batches = SystemTaskBatch.query.filter(SystemTaskBatch.batch_id.in_(batch_ids)).all()
+    deleted, skipped = 0, []
+    for batch in batches:
+        if current_user and not current_user.is_admin() and batch.created_by != current_user.id:
+            skipped.append(f'{batch.batch_id}：无权删除')
+            continue
+        if batch.status in ('pending', 'running'):
+            skipped.append(f'{batch.batch_id}：执行中不可删除')
+            continue
+        # 同步清理结果文件，避免留下孤儿文件
+        if batch.output_file and os.path.exists(batch.output_file):
+            try:
+                os.remove(batch.output_file)
+            except OSError as exc:
+                logger.warning(f'删除批量结果文件失败: {batch.output_file} - {exc}')
+        db.session.delete(batch)
+        deleted += 1
+
+    db.session.commit()
+    return jsonify({'success': True, 'deleted': deleted, 'skipped': skipped})
 
 
 @system_task_bp.route('/batch/<batch_id>', methods=['GET'])
