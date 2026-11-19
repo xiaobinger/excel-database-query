@@ -133,7 +133,7 @@ AI_TOOLS = [
                     },
                     "max_values": {
                         "type": "integer",
-                        "description": "可选，values_column 最多返回多少个非空值，默认200，最多1000"
+                        "description": "可选，values_column 最多返回多少个非空值，默认不限制（返回该列全部非空值）；传 0 也表示不限制"
                     },
                     "max_chars": {
                         "type": "integer",

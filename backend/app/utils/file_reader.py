@@ -280,16 +280,18 @@ def _read_table_with_pandas(file_path: str, ext: str, options: Dict[str, Any]) -
         if column_name is None:
             result['column_values'] = {'error': f'列 "{values_column}" 不存在'}
         else:
-            max_values = max(1, min(_to_int(options.get('max_values'), 200), 1000))
+            # <=0 表示不限制，返回该列全部非空值
+            max_values = _to_int(options.get('max_values'), 0)
             values = [
                 str(v).strip() for v in df[column_name].dropna().tolist()
                 if str(v).strip()
             ]
+            limited_values = values if max_values <= 0 else values[:max_values]
             result['column_values'] = {
                 'column': column_name,
-                'values': values[:max_values],
+                'values': limited_values,
                 'total_non_empty': len(values),
-                'truncated': len(values) > max_values,
+                'truncated': len(limited_values) < len(values),
             }
     return result
 
@@ -303,7 +305,8 @@ def _read_table(file_path: str, ext: str, options: Dict[str, Any]) -> Dict[str, 
         if isinstance(columns, str):
             columns = [c.strip() for c in columns.split(',') if c.strip()]
         values_column = (options.get('values_column') or '').strip() or None
-        max_values = max(1, min(_to_int(options.get('max_values'), 200), 1000))
+        # <=0 表示不限制，返回该列全部非空值
+        max_values = _to_int(options.get('max_values'), 0)
 
         data = ExcelService.parse_file(
             file_path,

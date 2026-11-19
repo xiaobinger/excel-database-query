@@ -132,12 +132,12 @@ class ExcelService:
     @staticmethod
     def parse_file(file_path: str, sheet_name: str = None, preview_rows: int = 5,
                    columns: List[str] = None, values_column: str = None,
-                   max_values: int = 200) -> Dict[str, Any]:
+                   max_values: int = 0) -> Dict[str, Any]:
         """解析Excel文件：返回工作表列表、当前工作表列名/行数及数据预览
 
         Args:
             values_column: 可选，需要提取「所有非空值」的列（表头名或列字母）
-            max_values: values_column 最多返回的值个数
+            max_values: values_column 最多返回的值个数，<=0 表示不限制（返回全部非空值）
         """
         reader = ExcelReader(file_path)
         if not reader.load():
