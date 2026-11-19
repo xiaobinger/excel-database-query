@@ -755,7 +755,7 @@ class SystemTaskService:
         """
         from urllib.parse import urlencode
 
-        url = system_task.api_url
+        url = (system_task.api_url or '').strip()
         method = (system_task.api_method or 'POST').upper()
         headers = dict(system_task.get_api_headers() or {})
         timeout = system_task.api_timeout or 30
@@ -1007,7 +1007,7 @@ class SystemTaskService:
                 if any(token in lower for token in ('authorization', 'cookie', 'token', 'secret', 'key', 'sign', 'password')):
                     headers[key] = '***'
 
-        url = prepared['url']
+        url = str(prepared['url'] or '').strip()
         timeout = int(prepared['timeout'] or 30)
         request_params = dict(prepared['request_params'] or {})
         request_body = prepared['request_body']
@@ -1735,6 +1735,8 @@ class SystemTaskService:
         )
         if exit_code != 0:
             detail = (err or out).strip()[:1000]
+            if 'not supported or disabled in libcurl' in detail:
+                detail += '（提示：请检查API地址是否含前导空格或换行；若地址正常，在目标机执行 curl -V 确认 Protocols 是否包含 https）'
             raise ValueError(f'目标机curl执行失败(exit={exit_code})：{detail or "无输出"}')
 
         status_code, content_type, elapsed, body_text = SystemTaskService._parse_curl_output(out)
@@ -2104,7 +2106,7 @@ class SystemTaskService:
         # 解析参数来源脚本
         params_values = SystemTaskService._resolve_runtime_params(execution, system_task, params_values)
 
-        url = system_task.api_url
+        url = (system_task.api_url or '').strip()
         method = (system_task.api_method or 'POST').upper()
         headers = system_task.get_api_headers()
         timeout = system_task.api_timeout or 30
