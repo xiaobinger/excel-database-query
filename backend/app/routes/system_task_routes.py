@@ -2,13 +2,15 @@ import json
 import logging
 import os
 import time
-from flask import Blueprint, request, jsonify, Response, stream_with_context, current_app
+import uuid
+from flask import Blueprint, request, jsonify, Response, stream_with_context, current_app, send_file
 from app import db
-from app.models.system_task import SystemTask, SystemTaskExecution
+from app.models.system_task import SystemTask, SystemTaskExecution, SystemTaskBatch
 from app.models.system_config import SystemConfig
 from app.models.script import Script
 from app.models.database import DatabaseConnection
 from app.services.system_task_service import SystemTaskService
+from app.services.system_task_batch_service import SystemTaskBatchService
 from app.utils.auth import login_required, get_current_user, admin_required
 from app.utils.behavior_tracker import track_behavior
 
@@ -433,6 +435,243 @@ def execute_system_task(task_id):
         })
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@system_task_bp.route('/batch/upload', methods=['POST'])
+@login_required
+def upload_batch_param_file():
+    """上传批量执行参数文件，返回列名与行数用于字段映射"""
+    file = request.files.get('file')
+    if not file or file.filename == '':
+        return jsonify({'success': False, 'message': '请选择要上传的参数文件'}), 400
+
+    allowed_ext = current_app.config.get('ALLOWED_UPLOAD_EXTENSIONS', {'xlsx', 'xls', 'csv'})
+    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+    if ext not in allowed_ext:
+        return jsonify({'success': False, 'message': f'仅支持 {", ".join(sorted(allowed_ext))} 格式'}), 400
+
+    upload_dir = current_app.config['UPLOAD_FOLDER']
+    os.makedirs(upload_dir, exist_ok=True)
+    stored_name = f"system_task_batch_{uuid.uuid4().hex[:8]}_{file.filename}"
+    file_path = os.path.join(upload_dir, stored_name)
+    file.save(file_path)
+
+    try:
+        columns, rows = SystemTaskBatchService.read_table(file_path)
+        return jsonify({
+            'success': True,
+            'data': {
+                'file_path': file_path,
+                'file_name': file.filename,
+                'columns': columns,
+                'row_count': len(rows),
+            }
+        })
+    except Exception as e:
+        logger.error(f'解析批量参数文件失败: {e}', exc_info=True)
+        return jsonify({'success': False, 'message': f'文件解析失败: {str(e)}'}), 400
+
+
+@system_task_bp.route('/<int:task_id>/batch-execute', methods=['POST'])
+@login_required
+def batch_execute_system_task(task_id):
+    """按上传文件的字段映射批量执行系统任务，结果汇总输出到 Excel"""
+    task = SystemTask.query.get(task_id)
+    if not task:
+        return jsonify({'success': False, 'message': '任务不存在'}), 404
+
+    current_user = get_current_user()
+    if current_user and not current_user.is_admin():
+        if task.id not in current_user.get_system_task_ids():
+            return jsonify({'success': False, 'message': '无权执行此任务'}), 403
+
+    if not task.is_enabled:
+        return jsonify({'success': False, 'message': '任务已禁用'}), 400
+
+    data = request.get_json() or {}
+    file_path = data.get('file_path')
+    param_mapping = data.get('param_mapping') or {}
+    params_defaults = data.get('params_defaults') or {}
+    database_id = data.get('database_id')
+    sheet_name = data.get('sheet_name') or None
+
+    if not file_path or not os.path.isfile(file_path):
+        return jsonify({'success': False, 'message': '参数文件不存在，请重新上传'}), 400
+
+    upload_root = os.path.realpath(current_app.config['UPLOAD_FOLDER'])
+    if not os.path.realpath(file_path).startswith(upload_root):
+        return jsonify({'success': False, 'message': '参数文件路径非法'}), 400
+
+    if not isinstance(param_mapping, dict) or not isinstance(params_defaults, dict):
+        return jsonify({'success': False, 'message': '字段映射参数格式不正确'}), 400
+
+    if not param_mapping and not params_defaults:
+        return jsonify({'success': False, 'message': '请至少配置一个字段映射或固定参数值'}), 400
+
+    try:
+        columns, _ = SystemTaskBatchService.read_table(file_path, sheet_name=sheet_name, limit=0)
+        invalid_columns = [col for col in param_mapping.values() if col not in columns]
+        if invalid_columns:
+            return jsonify({
+                'success': False,
+                'message': f'字段映射的文件列不存在: {", ".join(invalid_columns)}'
+            }), 400
+
+        # 校验必填参数已配置映射或固定值
+        missing_params = []
+        if not task.param_source_enabled:
+            for config in SystemTaskBatchService.get_param_configs(task):
+                name = config.get('name')
+                if not name:
+                    continue
+                if name in param_mapping or name in params_defaults:
+                    continue
+                if config.get('enum_ref') or config.get('enum_source_param'):
+                    continue
+                required = task.task_type in ('sql', 'script') or config.get('required')
+                if required:
+                    missing_params.append(config.get('label') or name)
+        if missing_params:
+            return jsonify({
+                'success': False,
+                'message': f'以下参数未映射文件列或设置固定值: {", ".join(missing_params)}'
+            }), 400
+
+        batch = SystemTaskBatchService.create_batch(
+            system_task=task,
+            file_path=file_path,
+            file_name=data.get('file_name') or os.path.basename(file_path),
+            param_mapping=param_mapping,
+            params_defaults=params_defaults,
+            database_id=database_id,
+            sheet_name=sheet_name,
+            created_by=current_user.id if current_user else None,
+        )
+
+        app = current_app._get_current_object()
+        SystemTaskBatchService.execute_async(app, batch.batch_id)
+
+        if current_user:
+            track_behavior(current_user.id, 'execute', 'system_task', task.id, {
+                'batch_id': batch.batch_id,
+                'type': task.task_type,
+                'mode': 'batch'
+            })
+
+        return jsonify({
+            'success': True,
+            'batch_id': batch.batch_id,
+            'message': '批量执行已提交'
+        })
+    except Exception as e:
+        logger.error(f'提交批量执行失败: {e}', exc_info=True)
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@system_task_bp.route('/batch/<batch_id>', methods=['GET'])
+@login_required
+def get_batch_status(batch_id):
+    batch = SystemTaskBatch.query.filter_by(batch_id=batch_id).first()
+    if not batch:
+        return jsonify({'success': False, 'message': '批量执行记录不存在'}), 404
+
+    current_user = get_current_user()
+    if current_user and not current_user.is_admin() and batch.created_by != current_user.id:
+        return jsonify({'success': False, 'message': '无权查看此批量执行记录'}), 403
+
+    return jsonify({'success': True, 'data': batch.to_dict()})
+
+
+@system_task_bp.route('/batch/<batch_id>/stream', methods=['GET'])
+@login_required
+def stream_batch_status(batch_id):
+    def generate():
+        last_progress = -1
+        last_log_count = 0
+        idle_count = 0
+
+        while True:
+            batch = SystemTaskBatch.query.filter_by(batch_id=batch_id).first()
+            if not batch:
+                yield f"data: {json.dumps({'error': '批量执行记录不存在'})}\n\n"
+                break
+
+            current_progress = batch.progress or 0
+            current_logs = batch.get_logs()
+            current_log_count = len(current_logs)
+
+            if current_progress != last_progress or current_log_count != last_log_count:
+                new_logs = current_logs[last_log_count:] if current_log_count > last_log_count else []
+                event_data = {
+                    'progress': current_progress,
+                    'status': batch.status,
+                    'processed_rows': batch.processed_rows or 0,
+                    'total_rows': batch.total_rows or 0,
+                    'success_count': batch.success_count or 0,
+                    'failure_count': batch.failure_count or 0,
+                    'error_message': batch.error_message,
+                    'new_logs': new_logs,
+                }
+                yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+                last_progress = current_progress
+                last_log_count = current_log_count
+                idle_count = 0
+            else:
+                idle_count += 1
+
+            if batch.status in ('completed', 'failed', 'cancelled'):
+                final_data = {
+                    'progress': 100,
+                    'status': batch.status,
+                    'total_rows': batch.total_rows or 0,
+                    'processed_rows': batch.processed_rows or 0,
+                    'success_count': batch.success_count or 0,
+                    'failure_count': batch.failure_count or 0,
+                    'error_message': batch.error_message,
+                    'output_file': batch.output_file,
+                    'no_data': not bool(batch.output_file),
+                    'done': True,
+                }
+                yield f"data: {json.dumps(final_data, ensure_ascii=False)}\n\n"
+                break
+
+            if idle_count > 300:
+                yield f"data: {json.dumps({'status': 'timeout', 'done': True})}\n\n"
+                break
+
+            time.sleep(1)
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive'
+        }
+    )
+
+
+@system_task_bp.route('/batch/<batch_id>/download', methods=['GET'])
+@login_required
+def download_batch_result(batch_id):
+    batch = SystemTaskBatch.query.filter_by(batch_id=batch_id).first()
+    if not batch:
+        return jsonify({'success': False, 'message': '批量执行记录不存在'}), 404
+
+    current_user = get_current_user()
+    if current_user and not current_user.is_admin() and batch.created_by != current_user.id:
+        return jsonify({'success': False, 'message': '无权下载此批量执行结果'}), 403
+
+    if not batch.output_file or not os.path.isfile(batch.output_file):
+        return jsonify({'success': False, 'message': '结果文件不存在或尚未生成'}), 404
+
+    return send_file(
+        batch.output_file,
+        as_attachment=True,
+        download_name=os.path.basename(batch.output_file)
+    )
 
 
 @system_task_bp.route('/executions', methods=['GET'])

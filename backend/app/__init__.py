@@ -45,7 +45,7 @@ def create_app(config_name='default'):
         from app.models.ai_skill import AiSkill
         from app.models.ai_chat import AiChat, AiChatMessage
         from app.models.business_system import BusinessSystem
-        from app.models.system_task import SystemTask, SystemTaskExecution
+        from app.models.system_task import SystemTask, SystemTaskExecution, SystemTaskBatch
         from app.models.ai_strategy import AiStrategy
         from app.models.tool_memory import ToolMemory
         from app.models.ai_agent import AiAgent

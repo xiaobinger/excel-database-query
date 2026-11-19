@@ -11,6 +11,9 @@
             <el-button type="warning" plain @click="openEnumsDialog">
               <i class="fas fa-list-ul"></i> 枚举参数
             </el-button>
+            <el-button v-if="store.hasButtonPermission('system_task:execute')" type="success" plain @click="openBatchDialog">
+              <i class="fas fa-file-excel"></i> 批量执行
+            </el-button>
             <el-button v-if="store.hasButtonPermission('system_task:create')" type="primary" @click="openDialog()">
               <i class="fas fa-plus"></i> 新建任务
             </el-button>
@@ -1007,10 +1010,136 @@
       </div>
     </el-dialog>
 
+    <!-- 批量执行对话框 -->
+    <el-dialog
+      v-model="batchDialogVisible"
+      title="批量执行系统任务"
+      width="760px"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <el-form label-width="100px">
+        <el-form-item label="系统任务" required>
+          <el-select
+            v-model="batchTaskId"
+            filterable
+            placeholder="请选择需要批量执行的任务"
+            style="width: 100%"
+            @change="handleBatchTaskChange"
+          >
+            <el-option
+              v-for="task in batchTaskOptions"
+              :key="task.id"
+              :label="`${task.name}（${taskTypeLabel(task.task_type)}）`"
+              :value="task.id"
+            />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="参数文件" required>
+          <div style="width: 100%">
+            <el-upload
+              ref="batchUploadRef"
+              drag
+              :auto-upload="false"
+              :show-file-list="false"
+              accept=".xlsx,.xls,.csv"
+              :on-change="handleBatchFileChange"
+              style="width: 100%"
+            >
+              <i class="fas fa-cloud-upload-alt" style="font-size: 32px; color: #c0c4cc"></i>
+              <div class="el-upload__text">将 Excel/CSV 文件拖到此处，或 <em>点击上传</em></div>
+            </el-upload>
+            <div style="margin-top: 6px; font-size: 12px; color: #909399">
+              支持 .xlsx / .xls / .csv，第一行为表头，每一行将执行一次该任务
+            </div>
+            <div v-if="batchUploading" style="margin-top: 8px; font-size: 12px; color: #409eff">
+              <i class="fas fa-spinner fa-spin"></i> 正在解析文件...
+            </div>
+            <div v-else-if="batchFileInfo" style="margin-top: 8px; font-size: 12px; color: #67c23a">
+              <i class="fas fa-check-circle"></i>
+              {{ batchFileInfo.file_name }}，共 {{ batchFileInfo.row_count }} 行，{{ batchFileInfo.columns.length }} 列
+            </div>
+          </div>
+        </el-form-item>
+
+        <el-form-item v-if="batchTaskDatabases.length" label="数据库连接">
+          <el-select v-model="batchDatabaseId" placeholder="请选择数据库连接" style="width: 100%">
+            <el-option
+              v-for="dbItem in batchTaskDatabases"
+              :key="dbItem.id"
+              :label="dbItem.name"
+              :value="dbItem.id"
+            />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item v-if="batchTaskId" label="字段映射">
+          <div style="width: 100%">
+            <div v-if="batchParamMappings.length === 0" style="font-size: 12px; color: #909399; margin-bottom: 8px">
+              该任务没有需要填写的参数，将按文件行数重复执行。
+            </div>
+            <el-table v-else :data="batchParamMappings" size="small" border style="width: 100%">
+              <el-table-column label="任务参数" min-width="160">
+                <template #default="{ row }">
+                  <span>{{ row.label }}</span>
+                  <el-tag v-if="row.required" type="danger" size="small" style="margin-left: 6px">必填</el-tag>
+                  <el-tag v-if="row.auto" type="info" size="small" style="margin-left: 6px">自动映射</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="映射文件列" min-width="180">
+                <template #default="{ row }">
+                  <el-select
+                    v-model="row.column"
+                    clearable
+                    filterable
+                    :disabled="row.auto"
+                    placeholder="选择列"
+                    style="width: 100%"
+                  >
+                    <el-option
+                      v-for="col in batchFileColumns"
+                      :key="col"
+                      :label="col"
+                      :value="col"
+                    />
+                  </el-select>
+                </template>
+              </el-table-column>
+              <el-table-column label="固定值" min-width="160">
+                <template #default="{ row }">
+                  <el-input
+                    v-model="row.value"
+                    :disabled="row.auto || !!row.column"
+                    :placeholder="row.column ? '已使用映射列' : '未映射时使用'"
+                  />
+                </template>
+              </el-table-column>
+            </el-table>
+            <div style="margin-top: 6px; font-size: 12px; color: #909399">
+              列表类型参数映射的单元格可用逗号分隔多个值；优先级：映射文件列 &gt; 固定值。
+            </div>
+          </div>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="batchDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="batchExecuting"
+          :disabled="!batchMappingValid"
+          @click="handleBatchExecute"
+        >
+          开始批量执行
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- Execution Progress Dialog -->
     <el-dialog
       v-model="progressDialogVisible"
-      title="执行中..."
+      :title="progressTitle"
       width="600px"
       :close-on-click-modal="false"
       :show-close="progressDone"
@@ -1021,12 +1150,29 @@
         <div class="progress-status">
           <el-tag :type="statusType(progressStatusText)" size="small">{{ statusLabel(progressStatusText) }}</el-tag>
         </div>
+        <div v-if="progressSummary" style="margin-top: 8px; font-size: 13px; color: #606266">
+          {{ progressSummary }}
+        </div>
         <div class="progress-logs">
           <div v-for="(log, idx) in progressLogs" :key="idx" class="log-item">
             <span class="log-time">{{ log.time }}</span>
             <el-tag :type="logLevelType(log.level)" size="small" style="margin: 0 8px">{{ log.level }}</el-tag>
             <span class="log-message">{{ log.message }}</span>
           </div>
+        </div>
+        <div v-if="progressNoData" style="margin-top: 12px">
+          <el-alert
+            title="未生成结果文件"
+            type="warning"
+            :closable="false"
+            show-icon
+            description="本次批量执行没有可汇总的数据（可能所有行均执行失败或未返回数据），请查看执行日志。"
+          />
+        </div>
+        <div v-if="progressDownloadUrl" style="margin-top: 12px; text-align: center">
+          <el-button type="success" @click="downloadBatchOutput">
+            <i class="fas fa-download"></i> 下载结果Excel
+          </el-button>
         </div>
       </div>
     </el-dialog>
@@ -1167,7 +1313,41 @@ const progressStatus = ref('')
 const progressStatusText = ref('pending')
 const progressLogs = ref([])
 const progressDone = ref(false)
+const progressTitle = ref('执行中...')
+const progressSummary = ref('')
+const progressNoData = ref(false)
+const progressDownloadUrl = ref('')
 let eventSource = null
+
+// 批量执行
+const batchDialogVisible = ref(false)
+const batchUploadRef = ref(null)
+const batchTaskId = ref(null)
+const batchFileInfo = ref(null)
+const batchUploading = ref(false)
+const batchExecuting = ref(false)
+const batchParamMappings = ref([])
+const batchDatabaseId = ref(null)
+const batchTaskOptions = computed(() => taskList.value.filter(t => t.is_enabled !== false))
+const batchSelectedTask = computed(() => taskList.value.find(t => t.id === batchTaskId.value) || null)
+const batchFileColumns = computed(() => batchFileInfo.value?.columns || [])
+const batchTaskDatabases = computed(() => {
+  if (!batchSelectedTask.value) return []
+  const dbIds = batchSelectedTask.value.database_ids || []
+  if (dbIds.length <= 1) return []
+  return databases.value.filter(d => dbIds.includes(d.id))
+})
+const batchMappingValid = computed(() => {
+  if (!batchTaskId.value || !batchFileInfo.value) return false
+  return batchParamMappings.value.every(row => {
+    if (row.auto || !row.required) return true
+    return !!row.column || String(row.value || '').trim() !== ''
+  })
+})
+
+function taskTypeLabel(type) {
+  return { sql: 'SQL查询', api: 'API请求', script: '脚本' }[type] || type
+}
 
 const defaultForm = {
   name: '',
@@ -1923,6 +2103,10 @@ function startProgressStream(executionId) {
   progressStatusText.value = 'pending'
   progressLogs.value = []
   progressDone.value = false
+  progressTitle.value = '执行中...'
+  progressSummary.value = ''
+  progressNoData.value = false
+  progressDownloadUrl.value = ''
   progressDialogVisible.value = true
 
   if (eventSource) {
@@ -1967,6 +2151,182 @@ function startProgressStream(executionId) {
     progressDone.value = true
     eventSource.close()
     fetchExecutions()
+  }
+}
+
+// ==================== 批量执行 ====================
+function openBatchDialog() {
+  batchTaskId.value = null
+  batchFileInfo.value = null
+  batchParamMappings.value = []
+  batchDatabaseId.value = null
+  batchUploading.value = false
+  batchExecuting.value = false
+  batchDialogVisible.value = true
+}
+
+function handleBatchTaskChange(taskId) {
+  const task = taskList.value.find(t => t.id === taskId)
+  batchDatabaseId.value = null
+  batchParamMappings.value = []
+  if (!task) return
+  batchParamMappings.value = getTaskParamsConfig(task).map(p => {
+    const auto = p.type === 'enum' && !!p.enum_source_param
+    const required = !auto && (
+      task.task_type === 'sql' || task.task_type === 'script' || !!p.required
+    )
+    let defaultValue = ''
+    if (p.default !== undefined && p.default !== null) {
+      defaultValue = Array.isArray(p.default) ? p.default.join(',') : String(p.default)
+    }
+    return {
+      name: p.name,
+      label: p.label || p.name,
+      type: p.type,
+      required,
+      auto,
+      column: '',
+      value: defaultValue,
+    }
+  })
+}
+
+async function handleBatchFileChange(uploadFile) {
+  const rawFile = uploadFile?.raw
+  if (!rawFile) return
+  const ext = (rawFile.name.split('.').pop() || '').toLowerCase()
+  if (!['xlsx', 'xls', 'csv'].includes(ext)) {
+    ElMessage.error('仅支持 .xlsx / .xls / .csv 文件')
+    batchUploadRef.value?.clearFiles()
+    return
+  }
+
+  const formData = new FormData()
+  formData.append('file', rawFile)
+  batchUploading.value = true
+  try {
+    const res = await api.systemTask.uploadBatchFile(formData)
+    batchFileInfo.value = res.data || null
+    if (batchFileInfo.value) {
+      ElMessage.success(`文件解析成功，共 ${batchFileInfo.value.row_count} 行`)
+    }
+  } catch {
+    batchFileInfo.value = null
+  } finally {
+    batchUploading.value = false
+    batchUploadRef.value?.clearFiles()
+  }
+}
+
+async function handleBatchExecute() {
+  if (!batchTaskId.value || !batchFileInfo.value) return
+
+  const paramMapping = {}
+  const paramsDefaults = {}
+  for (const row of batchParamMappings.value) {
+    if (row.auto) continue
+    if (row.column) {
+      paramMapping[row.name] = row.column
+    } else if (String(row.value ?? '').trim() !== '') {
+      paramsDefaults[row.name] = row.value
+    }
+  }
+
+  batchExecuting.value = true
+  try {
+    const res = await api.systemTask.batchExecute(batchTaskId.value, {
+      file_path: batchFileInfo.value.file_path,
+      file_name: batchFileInfo.value.file_name,
+      sheet_name: batchFileInfo.value.sheet_name,
+      param_mapping: paramMapping,
+      params_defaults: paramsDefaults,
+      database_id: batchDatabaseId.value || undefined,
+    })
+    batchDialogVisible.value = false
+    ElMessage.success(res.message || '批量执行已提交')
+    startBatchStream(res.batch_id)
+  } catch {
+  } finally {
+    batchExecuting.value = false
+  }
+}
+
+function startBatchStream(batchId) {
+  progressValue.value = 0
+  progressStatus.value = ''
+  progressStatusText.value = 'pending'
+  progressLogs.value = []
+  progressDone.value = false
+  progressTitle.value = '批量执行中...'
+  progressSummary.value = ''
+  progressNoData.value = false
+  progressDownloadUrl.value = ''
+  progressDialogVisible.value = true
+
+  if (eventSource) {
+    eventSource.close()
+    eventSource = null
+  }
+
+  eventSource = new EventSource(api.systemTask.streamBatch(batchId))
+  eventSource.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data)
+      if (data.error) {
+        ElMessage.error(data.error)
+        progressDone.value = true
+        eventSource.close()
+        return
+      }
+      if (data.progress !== undefined) {
+        progressValue.value = data.progress
+      }
+      if (data.status) {
+        progressStatusText.value = data.status
+        if (data.status === 'failed') {
+          progressStatus.value = 'exception'
+        } else if (data.status === 'completed') {
+          progressStatus.value = 'success'
+        }
+      }
+      if (data.new_logs && data.new_logs.length > 0) {
+        progressLogs.value.push(...data.new_logs)
+      }
+      if (data.total_rows !== undefined) {
+        progressSummary.value = `共 ${data.total_rows} 行，已处理 ${data.processed_rows || 0} 行，成功 ${data.success_count || 0} 行，失败 ${data.failure_count || 0} 行`
+      }
+      if (data.done) {
+        progressDone.value = true
+        progressNoData.value = !!data.no_data
+        if (data.output_file) {
+          progressDownloadUrl.value = api.systemTask.downloadBatch(batchId)
+        }
+        if (data.status === 'failed' && data.error_message) {
+          progressLogs.value.push({
+            time: new Date().toLocaleString(),
+            level: 'error',
+            message: data.error_message,
+          })
+        }
+        eventSource.close()
+        fetchList()
+        if (activeTab.value === 'executions') {
+          fetchExecutions()
+        }
+      }
+    } catch {
+    }
+  }
+
+  eventSource.onerror = () => {
+    progressDone.value = true
+    eventSource.close()
+  }
+}
+
+function downloadBatchOutput() {
+  if (progressDownloadUrl.value) {
+    window.open(progressDownloadUrl.value, '_blank')
   }
 }
 

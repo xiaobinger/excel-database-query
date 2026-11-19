@@ -263,3 +263,99 @@ class SystemTaskExecution(db.Model):
 
     def __repr__(self):
         return f'<SystemTaskExecution {self.execution_id}>'
+
+
+class SystemTaskBatch(db.Model):
+    """系统任务批量执行记录（上传参数文件 → 按字段映射逐行执行 → 汇总结果到Excel）"""
+    __tablename__ = 'system_task_batches'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    batch_id = db.Column(db.String(64), nullable=False, unique=True, comment='批量执行ID')
+    system_task_id = db.Column(db.Integer, db.ForeignKey('system_tasks.id'), comment='关联系统任务')
+    status = db.Column(db.String(20), default='pending', comment='状态: pending/running/completed/failed/cancelled')
+    progress = db.Column(db.Integer, default=0, comment='进度(0-100)')
+    total_rows = db.Column(db.Integer, default=0, comment='参数文件总行数')
+    processed_rows = db.Column(db.Integer, default=0, comment='已处理行数')
+    success_count = db.Column(db.Integer, default=0, comment='成功行数')
+    failure_count = db.Column(db.Integer, default=0, comment='失败行数')
+    input_file = db.Column(db.String(500), comment='参数文件路径')
+    input_file_name = db.Column(db.String(255), comment='参数文件原始文件名')
+    sheet_name = db.Column(db.String(100), comment='参数文件工作表')
+    param_mapping = db.Column(db.Text, comment='字段映射(JSON): {参数名: 文件列名}')
+    params_defaults = db.Column(db.Text, comment='固定参数值(JSON): {参数名: 固定值}')
+    database_id = db.Column(db.Integer, comment='执行使用的数据库连接ID')
+    output_file = db.Column(db.String(500), comment='汇总结果文件路径')
+    error_message = db.Column(db.Text, comment='错误信息')
+    logs = db.Column(db.Text, comment='执行日志(JSON)')
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'), comment='创建用户ID')
+    started_at = db.Column(db.DateTime, comment='开始时间')
+    completed_at = db.Column(db.DateTime, comment='完成时间')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, comment='创建时间')
+
+    def get_logs(self) -> list:
+        if self.logs:
+            try:
+                return json.loads(self.logs)
+            except (json.JSONDecodeError, TypeError):
+                return []
+        return []
+
+    def add_log(self, message: str, level: str = 'info'):
+        current_logs = self.get_logs()
+        current_logs.append({
+            'time': beijing_isoformat(datetime.utcnow()),
+            'level': level,
+            'message': message
+        })
+        self.logs = json.dumps(current_logs, ensure_ascii=False)
+
+    def get_param_mapping(self) -> dict:
+        if self.param_mapping:
+            try:
+                return json.loads(self.param_mapping)
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return {}
+
+    def set_param_mapping(self, mapping: dict):
+        self.param_mapping = json.dumps(mapping, ensure_ascii=False) if mapping else None
+
+    def get_params_defaults(self) -> dict:
+        if self.params_defaults:
+            try:
+                return json.loads(self.params_defaults)
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return {}
+
+    def set_params_defaults(self, values: dict):
+        self.params_defaults = json.dumps(values, ensure_ascii=False) if values else None
+
+    def to_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'batch_id': self.batch_id,
+            'system_task_id': self.system_task_id,
+            'status': self.status,
+            'progress': self.progress or 0,
+            'total_rows': self.total_rows or 0,
+            'processed_rows': self.processed_rows or 0,
+            'success_count': self.success_count or 0,
+            'failure_count': self.failure_count or 0,
+            'input_file': self.input_file,
+            'input_file_name': self.input_file_name,
+            'sheet_name': self.sheet_name,
+            'param_mapping': self.get_param_mapping(),
+            'params_defaults': self.get_params_defaults(),
+            'database_id': self.database_id,
+            'output_file': self.output_file,
+            'error_message': self.error_message,
+            'logs': self.get_logs(),
+            'created_by': self.created_by,
+            'started_at': beijing_isoformat(self.started_at),
+            'completed_at': beijing_isoformat(self.completed_at),
+            'created_at': beijing_isoformat(self.created_at),
+        }
+
+    def __repr__(self):
+        return f'<SystemTaskBatch {self.batch_id}>'

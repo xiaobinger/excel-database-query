@@ -12,7 +12,7 @@ from app.models.user_behavior import UserBehavior
 from app.models.ai_skill import AiSkill
 from app.models.ai_chat import AiChat, AiChatMessage
 from app.models.business_system import BusinessSystem
-from app.models.system_task import SystemTask, SystemTaskExecution
+from app.models.system_task import SystemTask, SystemTaskExecution, SystemTaskBatch
 from app.models.tool_memory import ToolMemory
 from app.models.ticket import Ticket, TicketComment
 from app.models.pay_config import PayConfig
@@ -23,7 +23,7 @@ from app.models.operation_log import OperationLog
 from app.models.workflow import Workflow, WorkflowRun, WorkflowRunNode
 
 __all__ = ['SshConfig', 'DatabaseConnection', 'Script', 'QueryTask', 'Role', 'User',
-           'SystemConfig', 'AutoExportTask', 'AiConfig', 'AiStrategy', 'UserBehavior', 'AiSkill',
+           'SystemConfig', 'AutoExportTask', 'AiConfig', 'AiStrategy', 'UserBehavior', 'AiSkill', 'SystemTaskBatch',
            'AiChat', 'AiChatMessage', 'BusinessSystem', 'SystemTask', 'SystemTaskExecution', 'ToolMemory',
            'Ticket', 'TicketComment', 'PayConfig', 'PayFlowTemplate', 'PayFlowExecution', 'PayFlowNodeExecution',
            'DashboardQuickQuery', 'LoginLog', 'OperationLog',

@@ -298,6 +298,19 @@ const systemTask = {
   getEnums: () => http.get('/system-tasks/enums'),
   saveEnums: (data) => http.put('/system-tasks/enums', data),
   uploadScript: (formData) => http.post('/system-tasks/upload-script', formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 300000 }),
+  uploadBatchFile: (formData) => http.post('/system-tasks/batch/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 300000 }),
+  batchExecute: (id, data) => http.post(`/system-tasks/${id}/batch-execute`, data),
+  getBatch: (batchId) => http.get(`/system-tasks/batch/${batchId}`),
+  streamBatch: (batchId) => {
+    const token = localStorage.getItem('token')
+    const sep = token ? `?token=${encodeURIComponent(token)}` : ''
+    return `/api/system-tasks/batch/${batchId}/stream${sep}`
+  },
+  downloadBatch: (batchId) => {
+    const token = localStorage.getItem('token')
+    const sep = token ? `?token=${encodeURIComponent(token)}` : ''
+    return `/api/system-tasks/batch/${batchId}/download${sep}`
+  },
 }
 
 const lookup = {
