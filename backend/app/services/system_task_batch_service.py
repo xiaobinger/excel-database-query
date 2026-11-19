@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 STATUS_COLUMN = '执行状态'
 ERROR_COLUMN = '错误信息'
 
+# SSH 远程 API 批量执行：单次 SSH 连接最多打包的 curl 条数与总字符数
+# 目标机通过跳板机交互式终端下发命令，单行过长可能被终端行缓冲截断，因此同时按字符数分批
+SSH_CURL_CHUNK_MAX_COMMANDS = 10
+SSH_CURL_CHUNK_MAX_CHARS = 2000
+
 
 class SystemTaskBatchService:
     """系统任务批量执行服务"""
@@ -161,14 +166,27 @@ class SystemTaskBatchService:
                 success_count = 0
                 failure_count = 0
 
-                for index, row in enumerate(rows, 1):
-                    params_values = SystemTaskBatchService._build_params(
-                        param_configs, mapping, defaults, row
+                # 远程 API 任务（配置了跳板机）走「分批打包 curl → 目标机批量执行」模式，
+                # 避免每行都建立一次 SSH 连接；其余任务保持本地逐行执行
+                ssh_api_mode = system_task.task_type == 'api' and bool(system_task.ssh_config_id)
+                if ssh_api_mode:
+                    jump_config, target_config = SystemTaskBatchService._load_ssh_configs(system_task)
+                    batch.add_log(
+                        f'检测到远程API任务，将分批打包curl后经跳板机[{jump_config.name}]'
+                        f'在目标机[{target_config.host}]批量执行'
                     )
-                    success, result_data, error = SystemTaskBatchService._execute_single(
-                        system_task, params_values, batch.database_id, batch.created_by
+                    db.session.commit()
+                    result_iter = SystemTaskBatchService._iter_api_ssh_results(
+                        batch, system_task, rows, param_configs, mapping, defaults,
+                        batch.created_by, jump_config, target_config
+                    )
+                else:
+                    result_iter = SystemTaskBatchService._iter_local_results(
+                        system_task, rows, param_configs, mapping, defaults,
+                        batch.database_id, batch.created_by
                     )
 
+                for index, (row, success, result_data, error) in enumerate(result_iter, 1):
                     flat_rows = SystemTaskBatchService._flatten_result(
                         system_task.task_type, result_data
                     )
@@ -247,6 +265,263 @@ class SystemTaskBatchService:
                     logger.exception('更新批量执行失败状态时出错')
             finally:
                 db.session.remove()
+
+    # ------------------------------------------------------------------
+    # 逐行结果迭代器（本地执行 / 远程分批 curl）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _iter_local_results(system_task: SystemTask, rows: List[Dict[str, str]],
+                            param_configs: List[Dict[str, Any]], mapping: Dict[str, str],
+                            defaults: Dict[str, Any], database_id: int = None,
+                            created_by: int = None):
+        """本地逐行执行，逐条产出 (原始行, 是否成功, 结果数据, 错误信息)"""
+        for row in rows:
+            params_values = SystemTaskBatchService._build_params(
+                param_configs, mapping, defaults, row
+            )
+            success, result_data, error = SystemTaskBatchService._execute_single(
+                system_task, params_values, database_id, created_by
+            )
+            yield row, success, result_data, error
+
+    @staticmethod
+    def _load_ssh_configs(system_task: SystemTask):
+        """加载并校验跳板机 / 目标机配置"""
+        from app.models.ssh_config import SshConfig
+
+        jump_config = SshConfig.query.get(system_task.ssh_config_id)
+        if not jump_config or not jump_config.is_active:
+            raise ValueError('SSH跳板机不存在或已停用')
+        if not system_task.target_ssh_config_id:
+            raise ValueError('未配置目标机器SSH配置')
+        target_config = SshConfig.query.get(system_task.target_ssh_config_id)
+        if not target_config or not target_config.is_active:
+            raise ValueError('目标机器SSH配置不存在或已停用')
+        return jump_config, target_config
+
+    @staticmethod
+    def _iter_api_ssh_results(batch: SystemTaskBatch, system_task: SystemTask,
+                              rows: List[Dict[str, str]], param_configs: List[Dict[str, Any]],
+                              mapping: Dict[str, str], defaults: Dict[str, Any],
+                              created_by: int, jump_config, target_config):
+        """远程 API 批量执行：先为每行构造 curl 命令，再分批在目标机一次性执行"""
+        chunk: List[Dict[str, Any]] = []
+        chunk_chars = 0
+        chunk_no = 0
+
+        for row in rows:
+            params_values = SystemTaskBatchService._build_params(
+                param_configs, mapping, defaults, row
+            )
+            item, error = SystemTaskBatchService._prepare_api_stage(
+                system_task, params_values, created_by, jump_config, target_config
+            )
+            if item is None:
+                yield row, False, {}, error
+                continue
+            item['row'] = row
+
+            # 达到条数或字符数上限时先下发当前批次，避免单行过长被终端截断
+            if chunk and (
+                len(chunk) >= SSH_CURL_CHUNK_MAX_COMMANDS
+                or chunk_chars + len(item['command']) > SSH_CURL_CHUNK_MAX_CHARS
+            ):
+                chunk_no += 1
+                yield from SystemTaskBatchService._run_ssh_curl_chunk(
+                    batch, system_task, jump_config, target_config, chunk, chunk_no
+                )
+                chunk = []
+                chunk_chars = 0
+
+            chunk.append(item)
+            chunk_chars += len(item['command'])
+
+        if chunk:
+            chunk_no += 1
+            yield from SystemTaskBatchService._run_ssh_curl_chunk(
+                batch, system_task, jump_config, target_config, chunk, chunk_no
+            )
+
+    @staticmethod
+    def _prepare_api_stage(system_task: SystemTask, params_values: Dict[str, Any],
+                           created_by: int, jump_config, target_config):
+        """准备单行请求：解析参数、构造请求、生成 curl 命令（不执行）"""
+        execution = SystemTaskService.create_execution(system_task.id, params_values, created_by)
+        execution.task_type = 'api'
+        db.session.commit()
+        execution_db_id = execution.id
+
+        try:
+            resolved = SystemTaskService._resolve_runtime_params(execution, system_task, params_values)
+            prepared = SystemTaskService._prepare_api_request(execution, system_task, resolved)
+            if not SystemTaskService._is_http_url(prepared['url']):
+                raise ValueError('API地址必须是 http/https 协议')
+
+            command, _ = SystemTaskService._build_curl_arguments(prepared, mask_sensitive=False)
+            preview, _ = SystemTaskService._build_curl_arguments(prepared, mask_sensitive=True)
+            prepared['request_info'].update({
+                'via': 'ssh-batch',
+                'ssh_config_id': jump_config.id,
+                'ssh_config_name': jump_config.name,
+                'target_ssh_config_id': target_config.id,
+                'target_ssh_config_name': target_config.name,
+                'target_host': target_config.host,
+                'target_port': target_config.port or 22,
+                'curl_preview': preview[:4000],
+            })
+
+            execution.progress = 40
+            execution.add_log(f'curl命令已打包(敏感头已脱敏): {preview[:2000]}')
+            execution.add_log('等待批量下发到目标机执行')
+            db.session.commit()
+            return {
+                'execution_db_id': execution_db_id,
+                'execution_id': execution.execution_id,
+                'prepared': prepared,
+                'command': command,
+                'timeout': int(prepared['timeout'] or 30),
+            }, ''
+        except Exception as exc:
+            error = str(exc)
+            db.session.rollback()
+            SystemTaskBatchService._mark_execution_failed(execution_db_id, error)
+            return None, error
+
+    @staticmethod
+    def _run_ssh_curl_chunk(batch: SystemTaskBatch, system_task: SystemTask,
+                            jump_config, target_config, chunk: List[Dict[str, Any]],
+                            chunk_no: int):
+        """一次 SSH 连接内批量执行多条 curl，并按标记解析每条响应"""
+        token = uuid.uuid4().hex[:10]
+        parts = []
+        timeout_total = 15
+        for position, item in enumerate(chunk):
+            item['start_mark'] = f'__BT_S_{token}_{position}__'
+            item['end_mark'] = f'__BT_E_{token}_{position}__'
+            parts.append(
+                f"echo {item['start_mark']}; {item['command']} 2>&1; __bt_ec=$?; "
+                f"echo; echo {item['end_mark']}$__bt_ec"
+            )
+            timeout_total += item['timeout'] + 5
+
+        batch.add_log(f'第 {chunk_no} 批：已打包 {len(chunk)} 条curl，开始下发目标机批量执行')
+        db.session.commit()
+
+        try:
+            out, err, exit_code = SystemTaskService._run_ssh_command_via_jump(
+                jump_config, target_config, '; '.join(parts), min(timeout_total, 3600)
+            )
+        except Exception as exc:
+            message = f'批量下发目标机失败: {str(exc)[:300]}'
+            batch.add_log(f'第 {chunk_no} 批：{message}', 'error')
+            db.session.commit()
+            for item in chunk:
+                SystemTaskBatchService._mark_execution_failed(item['execution_db_id'], message)
+                yield item['row'], False, {}, message
+            return
+
+        out = out or ''
+        batch.add_log(f'第 {chunk_no} 批：目标机执行完成，返回 {len(out)} 字节')
+        db.session.commit()
+
+        for item in chunk:
+            pattern = re.compile(
+                r'(?ms)^' + re.escape(item['start_mark']) + r'[ \t]*\r?\n'
+                r'(.*?)\r?\n' + re.escape(item['end_mark']) + r'(\d+)[ \t]*$'
+            )
+            match = pattern.search(out)
+            if not match:
+                message = f'第 {chunk_no} 批未收到该行响应（目标机可能中断输出）'
+                if err:
+                    message += f'：{str(err).strip()[:500]}'
+                SystemTaskBatchService._mark_execution_failed(item['execution_db_id'], message)
+                yield item['row'], False, {}, message
+                continue
+
+            section = match.group(1)
+            row_exit = int(match.group(2))
+            if row_exit != 0:
+                detail = (section or err or '').strip()[:1000] or '无输出'
+                if 'not supported or disabled in libcurl' in detail:
+                    detail += (
+                        '（提示：请检查API地址是否含前导空格或换行；若地址正常，'
+                        '在目标机执行 curl -V 确认 Protocols 是否包含 https）'
+                    )
+                message = f'目标机curl执行失败(exit={row_exit})：{detail}'
+                SystemTaskBatchService._mark_execution_failed(item['execution_db_id'], message)
+                yield item['row'], False, {}, message
+                continue
+
+            try:
+                status_code, content_type, elapsed, body_text = (
+                    SystemTaskService._parse_curl_output(section)
+                )
+            except Exception as exc:
+                message = f'解析目标机响应失败: {exc}'
+                SystemTaskBatchService._mark_execution_failed(item['execution_db_id'], message)
+                yield item['row'], False, {}, message
+                continue
+
+            success, result_data, error = SystemTaskBatchService._finalize_ssh_curl_row(
+                system_task, item, status_code, content_type, elapsed, body_text
+            )
+            yield item['row'], success, result_data, error
+
+    @staticmethod
+    def _finalize_ssh_curl_row(system_task: SystemTask, item: Dict[str, Any],
+                               status_code: int, content_type: str, elapsed: str,
+                               body_text: str):
+        """将目标机单条 curl 响应按既有 API 任务逻辑落库"""
+        execution_db_id = item['execution_db_id']
+        try:
+            execution = db.session.get(SystemTaskExecution, execution_db_id)
+            if not execution:
+                raise ValueError('执行记录不存在')
+
+            execution.progress = 80
+            execution.add_log(f'目标机响应状态码: {status_code}')
+            db.session.commit()
+
+            resp_headers = {'Content-Type': content_type} if content_type else {}
+            try:
+                resp_data = json.loads(body_text)
+                resp_text = json.dumps(resp_data, ensure_ascii=False)
+            except (json.JSONDecodeError, ValueError):
+                resp_data = body_text
+                resp_text = body_text
+
+            SystemTaskService._finalize_api_response(
+                execution, system_task, item['prepared'], status_code,
+                resp_headers, resp_data, resp_text, elapsed=elapsed,
+            )
+
+            execution = db.session.get(SystemTaskExecution, execution_db_id)
+            status = execution.status if execution else 'failed'
+            result_data = execution.get_result_data() if execution else {}
+            error = execution.error_message if execution and execution.error_message else ''
+            return status == 'completed', result_data or {}, error
+        except Exception as exc:
+            db.session.rollback()
+            message = f'处理目标机响应失败: {exc}'
+            SystemTaskBatchService._mark_execution_failed(execution_db_id, message)
+            return False, {}, message
+
+    @staticmethod
+    def _mark_execution_failed(execution_db_id: int, error: str):
+        """将执行记录标记为失败（不影响批次继续处理其他行）"""
+        try:
+            execution = db.session.get(SystemTaskExecution, execution_db_id)
+            if not execution:
+                return
+            execution.status = 'failed'
+            execution.progress = 100
+            execution.error_message = error
+            execution.completed_at = datetime.utcnow()
+            execution.add_log(f'执行失败: {error}', 'error')
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            logger.exception('标记执行记录失败状态时出错')
 
     @staticmethod
     def _build_params(param_configs: List[Dict[str, Any]], mapping: Dict[str, str],

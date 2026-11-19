@@ -1036,6 +1036,18 @@
           </el-select>
         </el-form-item>
 
+        <el-form-item
+          v-if="batchSelectedTask && batchSelectedTask.task_type === 'api' && batchSelectedTask.ssh_config_id"
+          label="远程执行"
+        >
+          <el-alert
+            type="success"
+            :closable="false"
+            show-icon
+            title="该任务需经跳板机远程执行：批量模式会先分批打包 curl 命令，再一次性下发目标机批量执行并回传每行响应，无需逐行建立 SSH 连接。"
+          />
+        </el-form-item>
+
         <el-form-item label="参数文件" required>
           <div style="width: 100%">
             <el-upload
