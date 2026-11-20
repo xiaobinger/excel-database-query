@@ -1287,7 +1287,25 @@
               </el-table-column>
               <el-table-column label="固定值" min-width="160">
                 <template #default="{ row }">
+                  <!-- 枚举类型参数：未映射文件列时用下拉选择枚举值 -->
+                  <el-select
+                    v-if="row.type === 'enum' && !row.auto && (row.options || []).length > 0"
+                    v-model="row.value"
+                    clearable
+                    filterable
+                    :disabled="!!row.column"
+                    :placeholder="row.column ? '已使用映射列' : '未映射时使用'"
+                    style="width: 100%"
+                  >
+                    <el-option
+                      v-for="opt in row.options"
+                      :key="opt.value"
+                      :label="opt.label || opt.value"
+                      :value="opt.value"
+                    />
+                  </el-select>
                   <el-input
+                    v-else
                     v-model="row.value"
                     :disabled="row.auto || !!row.column"
                     :placeholder="row.column ? '已使用映射列' : '未映射时使用'"
@@ -1520,7 +1538,8 @@ const batchMappingValid = computed(() => {
   if (!batchTaskId.value || !batchFileInfo.value) return false
   return batchParamMappings.value.every(row => {
     if (row.auto || !row.required) return true
-    return !!row.column || String(row.value || '').trim() !== ''
+    if (row.column) return true
+    return row.value !== null && row.value !== undefined && String(row.value).trim() !== ''
   })
 })
 
@@ -2356,12 +2375,18 @@ function handleBatchTaskChange(taskId) {
     )
     let defaultValue = ''
     if (p.default !== undefined && p.default !== null) {
-      defaultValue = Array.isArray(p.default) ? p.default.join(',') : String(p.default)
+      // 枚举参数保留原始类型，避免数字型选项与下拉值不匹配
+      if (p.type === 'enum') {
+        defaultValue = p.default
+      } else {
+        defaultValue = Array.isArray(p.default) ? p.default.join(',') : String(p.default)
+      }
     }
     return {
       name: p.name,
       label: p.label || p.name,
       type: p.type,
+      options: p.options || [],
       required,
       auto,
       column: '',
