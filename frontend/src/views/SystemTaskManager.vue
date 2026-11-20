@@ -2363,6 +2363,18 @@ function openBatchDialog() {
   batchDialogVisible.value = true
 }
 
+// 解析枚举参数的可选值：优先引用全局枚举，其次使用参数自带的 options
+function resolveEnumOptions(p) {
+  if (!p || p.type !== 'enum') return []
+  if (p.enum_ref) {
+    const refEnum = globalEnums.value.find(e => e.name === p.enum_ref)
+    if (refEnum && Array.isArray(refEnum.options) && refEnum.options.length > 0) {
+      return refEnum.options
+    }
+  }
+  return Array.isArray(p.options) ? p.options : []
+}
+
 function handleBatchTaskChange(taskId) {
   const task = taskList.value.find(t => t.id === taskId)
   batchDatabaseId.value = null
@@ -2386,7 +2398,7 @@ function handleBatchTaskChange(taskId) {
       name: p.name,
       label: p.label || p.name,
       type: p.type,
-      options: p.options || [],
+      options: resolveEnumOptions(p),
       required,
       auto,
       column: '',
