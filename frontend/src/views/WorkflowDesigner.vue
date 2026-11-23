@@ -55,7 +55,8 @@
         </div>
       </aside>
 
-      <main ref="canvasRef" class="wf-canvas" @mousedown="onCanvasMouseDown" @wheel.prevent="onWheel"
+      <main ref="canvasRef" class="wf-canvas" :class="{ 'panning': !!panState }"
+            @mousedown="onCanvasMouseDown" @wheel.prevent="onWheel"
             @dragover.prevent @drop="onDrop">
         <div class="wf-world" :style="worldStyle">
           <svg class="wf-edges" width="6000" height="4000">
@@ -111,7 +112,7 @@
             <el-button size="small" @click="resetView">{{ Math.round(scale * 100) }}%</el-button>
             <el-button size="small" @click="zoomBy(0.1)"><i class="fa fa-plus"></i></el-button>
           </el-button-group>
-          <span class="wf-canvas-hint">空白处拖拽框选 · Ctrl/Shift 加选 · Alt+拖拽或中键平移</span>
+          <span class="wf-canvas-hint">空白处拖拽平移画布 · Ctrl/Shift + 拖拽框选节点 · 滚轮缩放</span>
         </div>
 
         <div v-if="boxRect" class="wf-select-box" :style="boxRect"></div>
@@ -1581,7 +1582,7 @@ function onCanvasMouseDown(event) {
       target.closest('.wf-edge-hit')) {
     return
   }
-  // 中键或 Alt+左键：平移画布；左键空白处：框选
+  // 中键 / Alt+左键：平移画布
   if (event.button === 1 || (event.button === 0 && event.altKey)) {
     event.preventDefault()
     panState.value = {
@@ -1589,18 +1590,34 @@ function onCanvasMouseDown(event) {
       startY: event.clientY,
       ox: offsetX.value,
       oy: offsetY.value,
+      moved: false,
+      clearOnClick: false,
     }
     return
   }
   if (event.button !== 0) return
-  boxState.value = {
+  // Ctrl/Cmd/Shift + 左键：框选节点
+  if (event.ctrlKey || event.metaKey || event.shiftKey) {
+    boxState.value = {
+      startX: event.clientX,
+      startY: event.clientY,
+      currentX: event.clientX,
+      currentY: event.clientY,
+      additive: true,
+      baseIds: [...selectedNodeIds.value],
+      moved: false,
+    }
+    return
+  }
+  // 单纯左键：拖拽平移画布（未拖动则视为点击空白，清空选中）
+  event.preventDefault()
+  panState.value = {
     startX: event.clientX,
     startY: event.clientY,
-    currentX: event.clientX,
-    currentY: event.clientY,
-    additive: event.ctrlKey || event.metaKey || event.shiftKey,
-    baseIds: [...selectedNodeIds.value],
+    ox: offsetX.value,
+    oy: offsetY.value,
     moved: false,
+    clearOnClick: true,
   }
 }
 
@@ -1622,8 +1639,11 @@ function onWindowMouseMove(event) {
   }
   if (panState.value) {
     const ps = panState.value
-    offsetX.value = ps.ox + (event.clientX - ps.startX)
-    offsetY.value = ps.oy + (event.clientY - ps.startY)
+    const dx = event.clientX - ps.startX
+    const dy = event.clientY - ps.startY
+    if (!ps.moved && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) ps.moved = true
+    offsetX.value = ps.ox + dx
+    offsetY.value = ps.oy + dy
     return
   }
   if (boxState.value) {
@@ -1648,7 +1668,15 @@ function onWindowMouseUp(event) {
     dragState.value = null
     guides.value = { x: null, y: null }
   }
-  if (panState.value) panState.value = null
+  if (panState.value) {
+    const ps = panState.value
+    panState.value = null
+    if (ps.clearOnClick && !ps.moved) {
+      selectedNodeIds.value = []
+      selectedNodeId.value = null
+      selectedEdgeId.value = null
+    }
+  }
   if (boxState.value) {
     const bs = boxState.value
     boxState.value = null
@@ -2198,10 +2226,14 @@ onBeforeUnmount(() => {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  cursor: default;
+  cursor: grab;
   background-color: #f8fafc;
   background-image: radial-gradient(circle, #d7dee8 1px, transparent 1px);
   background-size: 20px 20px;
+}
+.wf-canvas.panning {
+  cursor: grabbing;
+  user-select: none;
 }
 .wf-world {
   position: absolute;
