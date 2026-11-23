@@ -683,9 +683,16 @@ def stream_batch_status(batch_id):
     def generate():
         last_progress = -1
         last_log_count = 0
-        idle_count = 0
+        idle_seconds = 0
 
         while True:
+            # MySQL 默认事务隔离级别为 REPEATABLE READ：若不在每次轮询前结束上一轮只读事务，
+            # 整个流会一直读到开始时的快照，导致进度/状态永不更新（进度条卡住、完成后弹窗不结束）
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+
             batch = SystemTaskBatch.query.filter_by(batch_id=batch_id).first()
             if not batch:
                 yield f"data: {json.dumps({'error': '批量执行记录不存在'})}\n\n"
@@ -698,6 +705,7 @@ def stream_batch_status(batch_id):
             if current_progress != last_progress or current_log_count != last_log_count:
                 new_logs = current_logs[last_log_count:] if current_log_count > last_log_count else []
                 event_data = {
+                    'type': 'update',
                     'progress': current_progress,
                     'status': batch.status,
                     'processed_rows': batch.processed_rows or 0,
@@ -710,12 +718,13 @@ def stream_batch_status(batch_id):
                 yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
                 last_progress = current_progress
                 last_log_count = current_log_count
-                idle_count = 0
+                idle_seconds = 0
             else:
-                idle_count += 1
+                idle_seconds += 1
 
             if batch.status in ('completed', 'failed', 'cancelled'):
                 final_data = {
+                    'type': 'done',
                     'progress': 100,
                     'status': batch.status,
                     'total_rows': batch.total_rows or 0,
@@ -730,9 +739,19 @@ def stream_batch_status(batch_id):
                 yield f"data: {json.dumps(final_data, ensure_ascii=False)}\n\n"
                 break
 
-            if idle_count > 300:
-                yield f"data: {json.dumps({'status': 'timeout', 'done': True})}\n\n"
-                break
+            # 长任务心跳：不再因长时间无进度变化强制中断，仅每 10 秒发一次心跳，
+            # 既避免代理/网关断开空闲连接，也让前端能识别连接是否存活
+            if idle_seconds > 0 and idle_seconds % 10 == 0:
+                heartbeat = {
+                    'type': 'ping',
+                    'status': batch.status,
+                    'progress': current_progress,
+                    'processed_rows': batch.processed_rows or 0,
+                    'total_rows': batch.total_rows or 0,
+                    'success_count': batch.success_count or 0,
+                    'failure_count': batch.failure_count or 0,
+                }
+                yield f"data: {json.dumps(heartbeat, ensure_ascii=False)}\n\n"
 
             time.sleep(1)
 
@@ -839,9 +858,15 @@ def stream_execution_status(execution_id):
     def generate():
         last_progress = -1
         last_log_count = 0
-        idle_count = 0
+        idle_seconds = 0
 
         while True:
+            # 结束上一轮只读事务，避免 REPEATABLE READ 快照导致进度/状态不更新
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+
             status = SystemTaskService.get_execution_status(execution_id)
             if not status:
                 yield f"data: {json.dumps({'error': '执行记录不存在'})}\n\n"
@@ -854,6 +879,7 @@ def stream_execution_status(execution_id):
             if current_progress != last_progress or current_log_count != last_log_count:
                 new_logs = current_logs[last_log_count:] if current_log_count > last_log_count else []
                 event_data = {
+                    'type': 'update',
                     'progress': current_progress,
                     'status': status.get('status'),
                     'error_message': status.get('error_message'),
@@ -862,12 +888,13 @@ def stream_execution_status(execution_id):
                 yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
                 last_progress = current_progress
                 last_log_count = current_log_count
-                idle_count = 0
+                idle_seconds = 0
             else:
-                idle_count += 1
+                idle_seconds += 1
 
             if status.get('status') in ('completed', 'failed', 'cancelled'):
                 final_data = {
+                    'type': 'done',
                     'progress': 100,
                     'status': status.get('status'),
                     'error_message': status.get('error_message'),
@@ -877,9 +904,14 @@ def stream_execution_status(execution_id):
                 yield f"data: {json.dumps(final_data, ensure_ascii=False)}\n\n"
                 break
 
-            if idle_count > 300:
-                yield f"data: {json.dumps({'status': 'timeout', 'done': True})}\n\n"
-                break
+            # 长任务心跳：不做强制超时，仅定期发送心跳保持连接
+            if idle_seconds > 0 and idle_seconds % 10 == 0:
+                heartbeat = {
+                    'type': 'ping',
+                    'status': status.get('status'),
+                    'progress': current_progress,
+                }
+                yield f"data: {json.dumps(heartbeat, ensure_ascii=False)}\n\n"
 
             time.sleep(1)
 

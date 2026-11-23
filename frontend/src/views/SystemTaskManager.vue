@@ -253,8 +253,15 @@
             </el-table-column>
             <el-table-column prop="created_by_name" label="创建人" width="100" />
             <el-table-column prop="created_at" label="创建时间" width="165" />
-            <el-table-column label="操作" width="220" align="center" fixed="right">
+            <el-table-column label="操作" width="280" align="center" fixed="right">
               <template #default="{ row }">
+                <el-button
+                  v-if="row.status === 'running' || row.status === 'pending'"
+                  size="small" type="warning" text
+                  @click="startBatchStream(row.batch_id)"
+                >
+                  <i class="fas fa-chart-line"></i> 进度
+                </el-button>
                 <el-button size="small" type="primary" text @click="openBatchDetail(row)">
                   <i class="fas fa-eye"></i> 详情
                 </el-button>
@@ -1339,13 +1346,18 @@
       :title="progressTitle"
       width="600px"
       :close-on-click-modal="false"
-      :show-close="progressDone"
-      :close-on-press-escape="progressDone"
+      @close="handleProgressDialogClose"
     >
       <div class="progress-content">
         <el-progress :percentage="progressValue" :status="progressStatus" />
         <div class="progress-status">
           <el-tag :type="statusType(progressStatusText)" size="small">{{ statusLabel(progressStatusText) }}</el-tag>
+          <span v-if="progressElapsed > 0" style="margin-left: 10px; font-size: 12px; color: #909399">
+            已耗时 {{ formatElapsed(progressElapsed) }}
+          </span>
+        </div>
+        <div v-if="progressHint" style="margin-top: 8px">
+          <el-alert :title="progressHint" type="info" :closable="false" show-icon />
         </div>
         <div v-if="progressSummary" style="margin-top: 8px; font-size: 13px; color: #606266">
           {{ progressSummary }}
@@ -1366,12 +1378,18 @@
             description="本次批量执行没有可汇总的数据（可能所有行均执行失败或未返回数据），请查看执行日志。"
           />
         </div>
-        <div v-if="progressDownloadUrl" style="margin-top: 12px; text-align: center">
-          <el-button type="success" @click="downloadBatchOutput">
+      </div>
+      <template #footer>
+        <div style="display: flex; justify-content: flex-end; gap: 8px;">
+          <el-button v-if="!progressDone" type="info" plain @click="hideProgressDialog">
+            后台运行（关闭窗口）
+          </el-button>
+          <el-button v-if="progressDone && progressDownloadUrl" type="success" @click="downloadBatchOutput()">
             <i class="fas fa-download"></i> 下载结果Excel
           </el-button>
+          <el-button v-if="progressDone" @click="progressDialogVisible = false">关闭</el-button>
         </div>
-      </div>
+      </template>
     </el-dialog>
 
     <!-- 枚举参数管理对话框 -->
@@ -1514,7 +1532,16 @@ const progressTitle = ref('执行中...')
 const progressSummary = ref('')
 const progressNoData = ref(false)
 const progressDownloadUrl = ref('')
+const progressElapsed = ref(0)
+const progressHint = ref('')
 let eventSource = null
+let progressClockTimer = null
+let progressWatchdogTimer = null
+let progressReconnectTimer = null
+let progressStartedAt = 0
+let progressLastMessageAt = 0
+let progressLastChangeAt = 0
+let progressRetryCount = 0
 
 // 批量执行
 const batchDialogVisible = ref(false)
@@ -1850,12 +1877,12 @@ const rules = {
 }
 
 function statusType(status) {
-  const map = { completed: 'success', failed: 'danger', running: 'warning', pending: 'info', cancelled: 'info', manual_cancelled: 'info' }
+  const map = { completed: 'success', failed: 'danger', running: 'warning', pending: 'info', cancelled: 'info', manual_cancelled: 'info', timeout: 'info', disconnected: 'danger' }
   return map[status] || 'info'
 }
 
 function statusLabel(status) {
-  const map = { completed: '成功', failed: '失败', running: '执行中', pending: '等待中', cancelled: '已取消', manual_cancelled: '手动终止' }
+  const map = { completed: '成功', failed: '失败', running: '执行中', pending: '等待中', cancelled: '已取消', manual_cancelled: '手动终止', timeout: '连接超时', disconnected: '连接中断' }
   return map[status] || status
 }
 
@@ -2295,60 +2322,203 @@ async function handleExecute() {
   }
 }
 
-function startProgressStream(executionId) {
+// ==================== 进度弹窗通用控制 ====================
+function formatElapsed(seconds) {
+  const total = Math.max(0, Math.floor(seconds || 0))
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const pad = n => String(n).padStart(2, '0')
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`
+}
+
+function resetProgressState(title) {
   progressValue.value = 0
   progressStatus.value = ''
   progressStatusText.value = 'pending'
   progressLogs.value = []
   progressDone.value = false
-  progressTitle.value = '执行中...'
+  progressTitle.value = title
   progressSummary.value = ''
   progressNoData.value = false
   progressDownloadUrl.value = ''
-  progressDialogVisible.value = true
+  progressHint.value = ''
+  progressElapsed.value = 0
+  progressRetryCount = 0
+}
 
+function closeEventSource() {
   if (eventSource) {
     eventSource.close()
     eventSource = null
   }
+}
 
-  const url = api.systemTask.streamExecution(executionId)
-  eventSource = new EventSource(url)
+function stopProgressTimers() {
+  if (progressClockTimer) {
+    clearInterval(progressClockTimer)
+    progressClockTimer = null
+  }
+  if (progressWatchdogTimer) {
+    clearInterval(progressWatchdogTimer)
+    progressWatchdogTimer = null
+  }
+  if (progressReconnectTimer) {
+    clearTimeout(progressReconnectTimer)
+    progressReconnectTimer = null
+  }
+}
+
+function startProgressClock() {
+  if (progressClockTimer) clearInterval(progressClockTimer)
+  progressStartedAt = Date.now()
+  progressLastMessageAt = Date.now()
+  progressLastChangeAt = Date.now()
+  progressElapsed.value = 0
+  progressClockTimer = setInterval(() => {
+    progressElapsed.value = Math.floor((Date.now() - progressStartedAt) / 1000)
+  }, 1000)
+}
+
+// 看门狗：超过 45 秒无任何消息视为连接假死并自动重连；
+// 长时间无进度变化只给出提示，不打断弹窗（长任务属正常情况）
+function startProgressWatchdog(reconnect) {
+  if (progressWatchdogTimer) clearInterval(progressWatchdogTimer)
+  progressWatchdogTimer = setInterval(() => {
+    if (progressDone.value || !progressDialogVisible.value) return
+    const now = Date.now()
+    if (now - progressLastMessageAt > 45000) {
+      progressHint.value = '与服务器的连接已中断，正在自动重连…'
+      scheduleProgressReconnect(reconnect)
+      return
+    }
+    if (now - progressLastChangeAt > 180000) {
+      progressHint.value = '任务仍在后台执行，已较长时间没有进度更新（长任务属正常情况），可关闭窗口稍后在列表中查看结果。'
+    }
+  }, 10000)
+}
+
+function scheduleProgressReconnect(reconnect) {
+  closeEventSource()
+  if (progressDone.value || !progressDialogVisible.value) return
+  if (progressReconnectTimer) return
+  if (progressRetryCount >= 60) {
+    progressHint.value = ''
+    progressDone.value = true
+    progressStatus.value = 'exception'
+    progressStatusText.value = 'disconnected'
+    ElMessage.warning('与服务器的连接已断开，任务可能仍在后台执行，可在批量任务列表查看最新进度')
+    fetchList()
+    fetchBatches()
+    return
+  }
+  progressRetryCount += 1
+  progressHint.value = `连接中断，3 秒后自动重连（第 ${progressRetryCount} 次）…`
+  progressReconnectTimer = setTimeout(() => {
+    progressReconnectTimer = null
+    if (!progressDone.value && progressDialogVisible.value) reconnect()
+  }, 3000)
+}
+
+// 关闭弹窗：仅停止前端监听，后台任务继续执行
+function handleProgressDialogClose() {
+  const wasRunning = !progressDone.value
+  closeEventSource()
+  stopProgressTimers()
+  progressDone.value = true
+  if (wasRunning) {
+    ElMessage.info('已关闭进度窗口，任务仍在后台执行，可在批量任务列表查看进度')
+    fetchList()
+    fetchBatches()
+  }
+}
+
+function hideProgressDialog() {
+  progressDialogVisible.value = false
+}
+
+function applyProgressStatus(status) {
+  if (!status) return
+  progressStatusText.value = status
+  if (status === 'failed') {
+    progressStatus.value = 'exception'
+  } else if (status === 'completed') {
+    progressStatus.value = 'success'
+  }
+}
+
+function startProgressStream(executionId) {
+  resetProgressState('执行中...')
+  progressDialogVisible.value = true
+  startProgressClock()
+  connectExecutionStream(executionId)
+  startProgressWatchdog(() => connectExecutionStream(executionId))
+}
+
+function connectExecutionStream(executionId) {
+  closeEventSource()
+  progressLastMessageAt = Date.now()
+  eventSource = new EventSource(api.systemTask.streamExecution(executionId))
 
   eventSource.onmessage = (event) => {
+    progressLastMessageAt = Date.now()
+    progressRetryCount = 0
+    let data
     try {
-      const data = JSON.parse(event.data)
-      if (data.error) {
-        ElMessage.error(data.error)
-        progressDone.value = true
-        eventSource.close()
-        return
-      }
-      if (data.progress !== undefined) {
-        progressValue.value = data.progress
-      }
-      if (data.status) {
-        progressStatusText.value = data.status
-        if (data.status === 'failed') {
-          progressStatus.value = 'exception'
-        }
-      }
-      if (data.new_logs && data.new_logs.length > 0) {
-        progressLogs.value.push(...data.new_logs)
-      }
-      if (data.done) {
-        progressDone.value = true
-        eventSource.close()
-        fetchExecutions()
-      }
+      data = JSON.parse(event.data)
     } catch {
+      return
+    }
+    if (data.type === 'ping') {
+      applyProgressStatus(data.status)
+      return
+    }
+    if (data.error) {
+      ElMessage.error(data.error)
+      progressDone.value = true
+      progressStatus.value = 'exception'
+      progressStatusText.value = 'failed'
+      closeEventSource()
+      stopProgressTimers()
+      return
+    }
+    if (data.progress !== undefined) {
+      if (data.progress !== progressValue.value) progressLastChangeAt = Date.now()
+      progressValue.value = data.progress
+    }
+    applyProgressStatus(data.status)
+    if (data.new_logs && data.new_logs.length > 0) {
+      progressLogs.value.push(...data.new_logs)
+      progressLastChangeAt = Date.now()
+    }
+    if (data.done) {
+      progressDone.value = true
+      progressValue.value = 100
+      progressHint.value = ''
+      if (data.status === 'failed') {
+        progressTitle.value = '执行失败'
+        if (data.error_message) {
+          progressLogs.value.push({
+            time: new Date().toLocaleString(),
+            level: 'error',
+            message: data.error_message,
+          })
+        }
+      } else if (data.status === 'completed') {
+        progressTitle.value = '执行完成'
+      } else if (data.status === 'cancelled') {
+        progressTitle.value = '执行已取消'
+      }
+      closeEventSource()
+      stopProgressTimers()
+      fetchExecutions()
     }
   }
 
   eventSource.onerror = () => {
-    progressDone.value = true
-    eventSource.close()
-    fetchExecutions()
+    closeEventSource()
+    if (progressDone.value) return
+    scheduleProgressReconnect(() => connectExecutionStream(executionId))
   }
 }
 
@@ -2468,75 +2638,90 @@ async function handleBatchExecute() {
 }
 
 function startBatchStream(batchId) {
-  progressValue.value = 0
-  progressStatus.value = ''
-  progressStatusText.value = 'pending'
-  progressLogs.value = []
-  progressDone.value = false
-  progressTitle.value = '批量执行中...'
-  progressSummary.value = ''
-  progressNoData.value = false
-  progressDownloadUrl.value = ''
+  resetProgressState('批量执行中...')
   progressDialogVisible.value = true
+  startProgressClock()
+  connectBatchStream(batchId)
+  startProgressWatchdog(() => connectBatchStream(batchId))
+}
 
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
-  }
-
+function connectBatchStream(batchId) {
+  closeEventSource()
+  progressLastMessageAt = Date.now()
   eventSource = new EventSource(api.systemTask.streamBatch(batchId))
+
   eventSource.onmessage = (event) => {
+    progressLastMessageAt = Date.now()
+    progressRetryCount = 0
+    let data
     try {
-      const data = JSON.parse(event.data)
-      if (data.error) {
-        ElMessage.error(data.error)
-        progressDone.value = true
-        eventSource.close()
-        return
+      data = JSON.parse(event.data)
+    } catch {
+      return
+    }
+    // 心跳：仅刷新连接存活时间与状态，不改变进度
+    if (data.type === 'ping') {
+      applyProgressStatus(data.status)
+      return
+    }
+    if (data.error) {
+      ElMessage.error(data.error)
+      progressDone.value = true
+      progressStatus.value = 'exception'
+      progressStatusText.value = 'failed'
+      closeEventSource()
+      stopProgressTimers()
+      return
+    }
+    if (data.progress !== undefined) {
+      if (data.progress !== progressValue.value) progressLastChangeAt = Date.now()
+      progressValue.value = data.progress
+    }
+    applyProgressStatus(data.status)
+    if (data.new_logs && data.new_logs.length > 0) {
+      progressLogs.value.push(...data.new_logs)
+      progressLastChangeAt = Date.now()
+    }
+    if (data.total_rows !== undefined) {
+      progressSummary.value = `共 ${data.total_rows} 行，已处理 ${data.processed_rows || 0} 行，成功 ${data.success_count || 0} 行，失败 ${data.failure_count || 0} 行`
+    }
+    if (data.done) {
+      progressDone.value = true
+      progressValue.value = 100
+      progressHint.value = ''
+      progressNoData.value = !!data.no_data
+      if (data.output_file) {
+        progressDownloadUrl.value = api.systemTask.downloadBatch(batchId)
       }
-      if (data.progress !== undefined) {
-        progressValue.value = data.progress
-      }
-      if (data.status) {
-        progressStatusText.value = data.status
-        if (data.status === 'failed') {
-          progressStatus.value = 'exception'
-        } else if (data.status === 'completed') {
-          progressStatus.value = 'success'
-        }
-      }
-      if (data.new_logs && data.new_logs.length > 0) {
-        progressLogs.value.push(...data.new_logs)
-      }
-      if (data.total_rows !== undefined) {
-        progressSummary.value = `共 ${data.total_rows} 行，已处理 ${data.processed_rows || 0} 行，成功 ${data.success_count || 0} 行，失败 ${data.failure_count || 0} 行`
-      }
-      if (data.done) {
-        progressDone.value = true
-        progressNoData.value = !!data.no_data
-        if (data.output_file) {
-          progressDownloadUrl.value = api.systemTask.downloadBatch(batchId)
-        }
-        if (data.status === 'failed' && data.error_message) {
+      if (data.status === 'failed') {
+        progressTitle.value = '批量执行失败'
+        if (data.error_message) {
           progressLogs.value.push({
             time: new Date().toLocaleString(),
             level: 'error',
             message: data.error_message,
           })
         }
-        eventSource.close()
-        fetchList()
-        if (activeTab.value === 'executions') {
-          fetchExecutions()
-        }
+      } else if (data.status === 'completed') {
+        progressTitle.value = '批量执行完成'
+      } else if (data.status === 'cancelled') {
+        progressTitle.value = '批量执行已取消'
       }
-    } catch {
+      closeEventSource()
+      stopProgressTimers()
+      fetchList()
+      fetchBatches()
+      if (activeTab.value === 'executions') {
+        fetchExecutions()
+      }
     }
   }
 
+  // 流中断（服务重启 / 网络抖动 / 代理断开）时自动重连，任务本身不受影响
   eventSource.onerror = () => {
-    progressDone.value = true
-    eventSource.close()
+    closeEventSource()
+    if (progressDone.value) return
+    scheduleProgressReconnect(() => connectBatchStream(batchId))
   }
 }
 
@@ -2740,10 +2925,8 @@ onUnmounted(() => {
     clearInterval(batchPollTimer)
     batchPollTimer = null
   }
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
-  }
+  closeEventSource()
+  stopProgressTimers()
 })
 
 onMounted(() => {
