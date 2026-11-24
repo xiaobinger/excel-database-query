@@ -160,16 +160,34 @@
                   <span class="per-file-name">{{ f.name }}</span>
                   <span class="per-file-cols">{{ fileColumnsSummary(f) }}</span>
                 </div>
-                <el-select
-                  v-model="f.scriptIds"
-                  multiple
-                  collapse-tags
-                  collapse-tags-tooltip
-                  placeholder="选择该文件要执行的查询选项"
-                  style="width: 100%"
-                >
-                  <el-option v-for="s in visibleScripts" :key="s.id" :label="s.name" :value="s.id" />
-                </el-select>
+                <div class="per-file-select-row">
+                  <el-select
+                    v-model="f.tag"
+                    placeholder="选择标签"
+                    style="width: 180px"
+                    @change="onPerFileTagChange(f)"
+                  >
+                    <el-option v-for="t in scriptTagOptions" :key="t" :label="t" :value="t" />
+                  </el-select>
+                  <el-select
+                    v-model="f.scriptIds"
+                    multiple
+                    collapse-tags
+                    collapse-tags-tooltip
+                    :disabled="!f.tag"
+                    placeholder="选择该标签下的查询选项"
+                    style="flex: 1; min-width: 220px"
+                  >
+                    <el-option
+                      v-for="s in scriptsUnderTag(f.tag)"
+                      :key="s.id"
+                      :label="s.name"
+                      :value="s.id"
+                    />
+                  </el-select>
+                  <el-button size="small" :disabled="!f.tag" @click="selectAllUnderTag(f)">全选</el-button>
+                  <el-button size="small" :disabled="!f.scriptIds || !f.scriptIds.length" @click="clearUnderTag(f)">全不选</el-button>
+                </div>
               </div>
             </div>
           </template>
@@ -604,6 +622,35 @@ function selectedScriptNamesOf(f) {
     .join(', ')
 }
 
+// 逐文件模式：按标签二级联动选择查询选项
+const NO_TAG_LABEL = '未分类'
+function tagOfScript(s) {
+  return (s.tag || '').trim() || NO_TAG_LABEL
+}
+const scriptTagOptions = computed(() => {
+  const tags = []
+  visibleScripts.value.forEach((s) => {
+    const t = tagOfScript(s)
+    if (!tags.includes(t)) tags.push(t)
+  })
+  return tags
+})
+function scriptsUnderTag(tag) {
+  if (!tag) return []
+  return visibleScripts.value.filter((s) => tagOfScript(s) === tag)
+}
+function onPerFileTagChange(f) {
+  // 切换标签后只保留新标签下的已选查询选项
+  const ids = scriptsUnderTag(f.tag).map((s) => s.id)
+  f.scriptIds = (f.scriptIds || []).filter((id) => ids.includes(id))
+}
+function selectAllUnderTag(f) {
+  f.scriptIds = scriptsUnderTag(f.tag).map((s) => s.id)
+}
+function clearUnderTag(f) {
+  f.scriptIds = []
+}
+
 function fileColumnsSummary(f) {
   const cols = fileDetectedColumns(f)
   if (!cols.length) return '未解析到列'
@@ -897,7 +944,11 @@ async function prefillPerFileScripts() {
         const ids = (res.matched_script_ids || []).filter((id) =>
           visibleScripts.value.some((s) => s.id === id)
         )
-        if (ids.length > 0) f.scriptIds = [ids[0]]
+        if (ids.length > 0) {
+          const matched = visibleScripts.value.find((s) => s.id === ids[0])
+          f.tag = tagOfScript(matched)
+          f.scriptIds = [matched.id]
+        }
       } catch {
         // 匹配失败不阻塞，用户手动选择
       }
@@ -907,6 +958,7 @@ async function prefillPerFileScripts() {
 
 function ensurePerFileConfig(f) {
   if (!f.scriptIds) f.scriptIds = []
+  if (f.tag === undefined) f.tag = ''
   if (f.paramColumn === undefined) f.paramColumn = ''
   if (f.newSheet === undefined) f.newSheet = true
   if (!f.sqlFields) f.sqlFields = []
@@ -2081,6 +2133,13 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.per-file-select-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .per-file-config-list {
