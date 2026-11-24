@@ -179,6 +179,7 @@
                 :file-list="attachmentFileList"
                 :auto-upload="true"
                 :http-request="customAttUpload"
+                :before-upload="beforeAttUpload"
                 :on-remove="handleAttRemove"
                 :accept="ticketAttachmentAccept"
                 :show-file-list="true"
@@ -861,17 +862,35 @@ async function autoSaveDraftIfNeeded() {
 }
 
 // 工单附件上传（选择文件即上传，暂存待提交时关联）
+const pendingAttKeys = new Set()
+
+function beforeAttUpload(file) {
+  const key = `${file.name}__${file.size}`
+  const duplicated = pendingAttKeys.has(key) || attachmentFileList.value.some(
+    (f) => f.name === file.name && f.size === file.size
+  )
+  if (duplicated) {
+    ElMessage.warning(`附件 ${file.name} 已上传，请勿重复添加`)
+    return false
+  }
+  pendingAttKeys.add(key)
+  return true
+}
+
 async function customAttUpload(option) {
   const formData = new FormData()
   formData.append('file', option.file)
+  const key = `${option.file.name}__${option.file.size}`
   try {
     const res = await api.tickets.uploadAttachment(formData)
     const att = res.data || res
     attachmentIds.value.push(att.id)
-    attachmentFileList.value.push({ name: att.file_name, uid: option.file.uid, attId: att.id })
+    attachmentFileList.value.push({ name: att.file_name, uid: option.file.uid, size: option.file.size, attId: att.id })
   } catch (e) {
     ElMessage.error(e?.response?.data?.message || '附件上传失败')
     attachmentFileList.value = attachmentFileList.value.filter(f => f.uid !== option.file.uid)
+  } finally {
+    pendingAttKeys.delete(key)
   }
 }
 

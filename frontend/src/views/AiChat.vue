@@ -2559,17 +2559,22 @@ function formatFileSize(size) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`
 }
 
+const pendingUploadKeys = new Set()
+
 async function handleFileUpload(file) {
   if (!currentChatId.value) {
     await createNewChat()
     if (!currentChatId.value) return false
   }
-  // 同名同大小文件不重复添加
-  const dup = uploadedFiles.value.find(f => f.filename === file.name && f.file_size === file.size)
+  // 同名同大小文件不重复添加（含本次批量选择中正在上传的文件）
+  const fileKey = `${file.name}__${file.size}`
+  const dup = pendingUploadKeys.has(fileKey) ||
+    uploadedFiles.value.some(f => f.filename === file.name && f.file_size === file.size)
   if (dup) {
     ElMessage.warning(`文件 ${file.name} 已添加`)
     return false
   }
+  pendingUploadKeys.add(fileKey)
   try {
     const formData = new FormData()
     formData.append('file', file)
@@ -2584,6 +2589,8 @@ async function handleFileUpload(file) {
     }
   } catch (e) {
     ElMessage.error('文件上传失败: ' + (e.message || '未知错误'))
+  } finally {
+    pendingUploadKeys.delete(fileKey)
   }
   return false // prevent default upload
 }

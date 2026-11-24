@@ -465,7 +465,16 @@ function onHiddenChange(field) {
 
 async function onFileChange(file) {
   if (!file || !file.raw) return
-  const entry = {
+  // 同一文件（文件名 + 大小）只允许上传一次
+  const duplicated = uploadFiles.value.some(
+    (f) => f.name === file.name && f.size === file.size
+  )
+  if (duplicated) {
+    ElMessage.warning(`文件 ${file.name} 已上传，请勿重复添加`)
+    return
+  }
+  // 使用 reactive 包装，解析过程中的字段变更才能触发视图更新
+  const entry = reactive({
     uid: `f_${Date.now()}_${fileUidSeq++}`,
     name: file.name,
     size: file.size,
@@ -474,7 +483,7 @@ async function onFileChange(file) {
     selectedSheets: [],
     parsing: true,
     error: ''
-  }
+  })
   uploadFiles.value.push(entry)
   expandedFileUids.value.push(entry.uid)
   await parseUploadFile(entry)
