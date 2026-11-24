@@ -130,6 +130,50 @@ class ExcelService:
             reader.close()
 
     @staticmethod
+    def merge_workbooks(file_paths: List[str], output_path: str,
+                        selected_sheets_map: Dict[str, List[str]] = None) -> str:
+        """将多个 Excel 文件合并为一个工作簿，供多文件查询任务使用
+
+        Args:
+            file_paths: 待合并的源文件路径列表
+            output_path: 合并后的输出路径
+            selected_sheets_map: {文件序号(字符串): [工作表名]}，仅复制选中的工作表；未指定则复制全部
+        """
+        from openpyxl import load_workbook, Workbook
+
+        merged = Workbook()
+        merged.remove(merged.active)
+        used_names = set()
+
+        for idx, path in enumerate(file_paths):
+            src = load_workbook(path, read_only=True, data_only=True)
+            try:
+                names = (selected_sheets_map or {}).get(str(idx))
+                if not names:
+                    names = list(src.sheetnames)
+                for name in names:
+                    if name not in src.sheetnames:
+                        continue
+                    title = name
+                    if title in used_names:
+                        base = os.path.splitext(os.path.basename(path))[0][:18]
+                        title = f"{base}_{name}"
+                        counter = 1
+                        while title in used_names:
+                            title = f"{base}_{name}_{counter}"
+                            counter += 1
+                    title = title[:31]
+                    target = merged.create_sheet(title=title)
+                    for row in src[name].iter_rows(values_only=True):
+                        target.append(list(row))
+                    used_names.add(title)
+            finally:
+                src.close()
+
+        merged.save(output_path)
+        return output_path
+
+    @staticmethod
     def parse_file(file_path: str, sheet_name: str = None, preview_rows: int = 5,
                    columns: List[str] = None, values_column: str = None,
                    max_values: int = 0) -> Dict[str, Any]:

@@ -19,57 +19,77 @@
           <el-upload
             ref="uploadRef"
             :auto-upload="false"
-            :limit="1"
+            multiple
             accept=".xlsx,.xls"
             :on-change="onFileChange"
-            :on-remove="onFileRemove"
-            :file-list="fileList"
+            :show-file-list="false"
             drag
             class="upload-area"
           >
             <i class="fas fa-cloud-upload-alt" style="font-size: 48px; color: #c0c4cc"></i>
             <div style="margin-top: 12px; font-size: 15px">将Excel文件拖到此处，或<em>点击上传</em></div>
             <template #tip>
-              <div class="el-upload__tip">仅支持 .xlsx / .xls 文件</div>
+              <div class="el-upload__tip">支持一次选择多个 .xlsx / .xls 文件，逐个解析</div>
             </template>
           </el-upload>
 
-          <div v-if="uploadedFileInfo" class="file-info-card">
-            <el-descriptions :column="2" border size="small">
-              <el-descriptions-item label="文件名">{{ uploadedFileInfo.name }}</el-descriptions-item>
-              <el-descriptions-item label="大小">{{ formatSize(uploadedFileInfo.size) }}</el-descriptions-item>
-            </el-descriptions>
-
-            <!-- Sheet选择 -->
-            <div v-if="sheetsInfo.length > 0" style="margin-top: 12px">
-              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-                <span style="font-size: 13px; font-weight: 600; color: #303133;">工作表</span>
-                <div>
-                  <el-button size="small" @click="selectAllSheets" text type="primary">全选</el-button>
-                  <el-button size="small" @click="deselectAllSheets" text>取消全选</el-button>
-                </div>
+          <div v-if="uploadFiles.length" class="file-info-card">
+            <div class="parse-header">
+              <span class="parse-title">解析结果（{{ uploadFiles.length }} 个文件）</span>
+              <div>
+                <el-button size="small" text type="primary" @click="toggleAllParse">{{ allExpanded ? '全部收起' : '全部展开' }}</el-button>
+                <el-button size="small" text @click="clearUploadFiles">清空文件</el-button>
               </div>
-              <el-table :data="sheetsInfo" border size="small" @selection-change="onSheetSelectionChange" ref="sheetTableRef" style="width: 100%">
-                <el-table-column type="selection" width="45" align="center" />
-                <el-table-column prop="sheet_name" label="工作表名称" min-width="140" />
-                <el-table-column prop="data_rows" label="数据行数" width="90" align="center" />
-                <el-table-column label="列名" min-width="260">
-                  <template #default="{ row }">
-                    <el-tag v-for="col in (row.column_names || []).slice(0, 8)" :key="col" size="small" type="primary" style="margin: 1px 3px">{{ col }}</el-tag>
-                    <el-tag v-if="(row.column_names || []).length > 8" size="small" type="info" style="margin: 1px 3px">+{{ row.column_names.length - 8 }}</el-tag>
-                  </template>
-                </el-table-column>
-              </el-table>
             </div>
-
-            <div v-if="detectedColumns.length > 0 && sheetsInfo.length === 0" style="margin-top: 12px">
-              <span style="font-size: 13px; color: #909399; margin-right: 8px">检测到的列:</span>
-              <el-tag v-for="col in detectedColumns" :key="col" size="small" type="primary" style="margin: 2px 4px">{{ col }}</el-tag>
+            <div class="parse-list">
+              <el-collapse v-model="expandedFileUids">
+                <el-collapse-item v-for="f in uploadFiles" :key="f.uid" :name="f.uid">
+                  <template #title>
+                    <div class="parse-file-title">
+                      <i class="fas fa-file-excel parse-file-icon"></i>
+                      <span class="parse-file-name">{{ f.name }}</span>
+                      <span class="parse-file-size">{{ formatSize(f.size) }}</span>
+                      <el-tag v-if="f.parsing" size="small" type="warning">解析中...</el-tag>
+                      <el-tag v-else-if="f.error" size="small" type="danger">解析失败</el-tag>
+                      <el-tag v-else-if="f.sheets.length" size="small" type="success">
+                        {{ f.sheets.length }} 个工作表 · 已选 {{ f.selectedSheets.length }}
+                      </el-tag>
+                      <el-tag v-else size="small" type="info">未解析到工作表</el-tag>
+                      <el-button class="parse-file-remove" size="small" text type="danger" @click.stop="removeUploadFile(f)">
+                        <i class="fas fa-times"></i> 移除
+                      </el-button>
+                    </div>
+                  </template>
+                  <div v-if="f.error" class="parse-error">{{ f.error }}</div>
+                  <template v-else-if="f.sheets.length">
+                    <div class="sheet-head">
+                      <span>工作表</span>
+                      <div>
+                        <el-button size="small" text type="primary" @click="selectAllSheets(f)">全选</el-button>
+                        <el-button size="small" text @click="deselectAllSheets(f)">取消全选</el-button>
+                      </div>
+                    </div>
+                    <el-checkbox-group v-model="f.selectedSheets" class="sheet-list">
+                      <div v-for="s in f.sheets" :key="s.sheet_name" class="sheet-row">
+                        <el-checkbox :value="s.sheet_name">
+                          <span class="sheet-name">{{ s.sheet_name }}</span>
+                        </el-checkbox>
+                        <span class="sheet-rows">{{ s.data_rows }} 行</span>
+                        <div class="sheet-cols">
+                          <el-tag v-for="col in (s.column_names || []).slice(0, 6)" :key="col" size="small" type="primary" style="margin: 1px 3px">{{ col }}</el-tag>
+                          <el-tag v-if="(s.column_names || []).length > 6" size="small" type="info" style="margin: 1px 3px">+{{ s.column_names.length - 6 }}</el-tag>
+                        </div>
+                      </div>
+                    </el-checkbox-group>
+                  </template>
+                  <div v-else class="parse-empty">未检测到有数据的工作表，执行时将使用该文件中的全部工作表</div>
+                </el-collapse-item>
+              </el-collapse>
             </div>
           </div>
 
           <div class="step-actions">
-            <el-button type="primary" :disabled="!uploadedFile" @click="afterUpload">下一步</el-button>
+            <el-button type="primary" :disabled="!canProceed" @click="afterUpload">下一步</el-button>
           </div>
         </div>
 
@@ -166,7 +186,7 @@
           <el-descriptions title="执行摘要" :column="2" border>
             <el-descriptions-item label="查询选项">{{ selectedScriptNames || '-' }}</el-descriptions-item>
             <el-descriptions-item label="关联数据库">{{ associatedDbNames || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="文件">{{ uploadedFile?.name || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="文件">{{ uploadFileNames || '-' }}</el-descriptions-item>
             <el-descriptions-item label="参数列">{{ options.param_column || '-' }}</el-descriptions-item>
             <el-descriptions-item label="自动新建工作表">{{ options.new_sheet ? '是' : '否' }}</el-descriptions-item>
             <el-descriptions-item v-if="!options.new_sheet && primaryKey" label="主键字段">{{ primaryKey }}</el-descriptions-item>
@@ -271,7 +291,7 @@
     >
       <div class="match-dialog-content">
         <div class="match-icon"><i class="fas fa-magic"></i></div>
-        <p class="match-tip">根据文件名 <strong>{{ uploadedFileInfo?.name }}</strong> 匹配到以下查询选项：</p>
+        <p class="match-tip">根据文件名 <strong>{{ uploadFileNames }}</strong> 匹配到以下查询选项：</p>
         <div class="match-list">
           <div v-for="s in matchedScripts" :key="s.id" class="match-item">
             <el-tag size="small" type="info" style="margin-right: 6px">{{ s.tag }}</el-tag>
@@ -304,14 +324,11 @@ const visibleScripts = computed(() => {
 })
 const currentStep = ref(0)
 const selectedScriptIds = ref([])
-const uploadedFile = ref(null)
-const uploadedFileInfo = ref(null)
-const detectedColumns = ref([])
+// 多文件上传：每个文件独立解析，可单独移除、勾选参与任务的工作表
+const uploadFiles = ref([])
+const expandedFileUids = ref([])
 const uploadRef = ref(null)
-const fileList = ref([])
-const sheetsInfo = ref([])
-const selectedSheets = ref([])
-const sheetTableRef = ref(null)
+let fileUidSeq = 0
 const submitting = ref(false)
 const executing = ref(false)
 const taskId = ref(null)
@@ -340,6 +357,31 @@ const primaryKey = ref('')
 
 const selectedScripts = computed(() =>
   visibleScripts.value.filter((s) => selectedScriptIds.value.includes(s.id))
+)
+
+// 所有已选工作表的列名并集，作为参数列/列映射的可选列
+const detectedColumns = computed(() => {
+  const cols = []
+  uploadFiles.value.forEach((f) => {
+    f.sheets.forEach((s) => {
+      if (f.selectedSheets.includes(s.sheet_name)) {
+        ;(s.column_names || []).forEach((c) => {
+          if (c && !cols.includes(c)) cols.push(c)
+        })
+      }
+    })
+  })
+  return cols
+})
+
+const uploadFileNames = computed(() => uploadFiles.value.map((f) => f.name).join(', '))
+
+const canProceed = computed(() =>
+  uploadFiles.value.length > 0 && uploadFiles.value.every((f) => !f.parsing && !f.error)
+)
+
+const allExpanded = computed(() =>
+  uploadFiles.value.length > 0 && uploadFiles.value.every((f) => expandedFileUids.value.includes(f.uid))
 )
 
 
@@ -421,42 +463,65 @@ function onHiddenChange(field) {
   }
 }
 
-function onFileChange(file) {
-  uploadedFile.value = file.raw
-  uploadedFileInfo.value = { name: file.name, size: file.size }
-  fileList.value = [file]
-  detectedColumns.value = []
-  sheetsInfo.value = []
-  selectedSheets.value = []
-  // 文件上传完成后自动触发智能匹配
-  autoSmartMatch(file.name)
-}
-
-function onFileRemove() {
-  uploadedFile.value = null
-  uploadedFileInfo.value = null
-  fileList.value = []
-  detectedColumns.value = []
-  sheetsInfo.value = []
-  selectedSheets.value = []
-}
-
-function onSheetSelectionChange(selection) {
-  selectedSheets.value = selection
-}
-
-function selectAllSheets() {
-  if (sheetTableRef.value) {
-    sheetsInfo.value.forEach(row => {
-      sheetTableRef.value.toggleRowSelection(row, true)
-    })
+async function onFileChange(file) {
+  if (!file || !file.raw) return
+  const entry = {
+    uid: `f_${Date.now()}_${fileUidSeq++}`,
+    name: file.name,
+    size: file.size,
+    raw: file.raw,
+    sheets: [],
+    selectedSheets: [],
+    parsing: true,
+    error: ''
+  }
+  uploadFiles.value.push(entry)
+  expandedFileUids.value.push(entry.uid)
+  await parseUploadFile(entry)
+  // 仅单个文件时触发智能匹配，多文件由用户手动选择查询选项
+  if (uploadFiles.value.length === 1) {
+    autoSmartMatch(entry.name)
   }
 }
 
-function deselectAllSheets() {
-  if (sheetTableRef.value) {
-    sheetTableRef.value.clearSelection()
+async function parseUploadFile(entry) {
+  entry.parsing = true
+  entry.error = ''
+  try {
+    const formData = new FormData()
+    formData.append('file', entry.raw)
+    const res = await api.query.uploadInfo(formData)
+    entry.sheets = Array.isArray(res.sheets) ? res.sheets : []
+    entry.selectedSheets = entry.sheets.map((s) => s.sheet_name)
+  } catch (e) {
+    entry.sheets = []
+    entry.selectedSheets = []
+    entry.error = e?.response?.data?.message || '文件解析失败'
+  } finally {
+    entry.parsing = false
   }
+}
+
+function removeUploadFile(entry) {
+  uploadFiles.value = uploadFiles.value.filter((f) => f.uid !== entry.uid)
+  expandedFileUids.value = expandedFileUids.value.filter((uid) => uid !== entry.uid)
+}
+
+function clearUploadFiles() {
+  uploadFiles.value = []
+  expandedFileUids.value = []
+}
+
+function toggleAllParse() {
+  expandedFileUids.value = allExpanded.value ? [] : uploadFiles.value.map((f) => f.uid)
+}
+
+function selectAllSheets(entry) {
+  entry.selectedSheets = entry.sheets.map((s) => s.sheet_name)
+}
+
+function deselectAllSheets(entry) {
+  entry.selectedSheets = []
 }
 
 function formatSize(bytes) {
@@ -468,9 +533,6 @@ function formatSize(bytes) {
 }
 
 async function autoSmartMatch(filename) {
-  // 先解析上传文件信息
-  await fetchUploadInfo()
-
   try {
     const res = await api.query.smartMatch(filename)
     const ids = res.matched_script_ids || []
@@ -542,18 +604,21 @@ async function directConfirmAndExecute() {
 }
 
 async function afterUpload() {
-  if (!uploadedFile.value) {
+  if (!uploadFiles.value.length) {
     ElMessage.warning('请先上传Excel文件')
+    return
+  }
+  if (uploadFiles.value.some((f) => f.parsing)) {
+    ElMessage.warning('文件正在解析，请稍候')
+    return
+  }
+  if (uploadFiles.value.some((f) => f.error)) {
+    ElMessage.warning('存在解析失败的文件，请移除后再继续')
     return
   }
 
   // 如果已经有智能匹配结果且弹窗已显示，不需要再处理
   if (matchDialogVisible.value) return
-
-  // 如果还没解析文件信息，先解析
-  if (detectedColumns.value.length === 0) {
-    await fetchUploadInfo()
-  }
 
   // 直接进入手动选择步骤
   currentStep.value = 1
@@ -630,33 +695,6 @@ function goToStep3() {
     return
   }
   currentStep.value = 3
-}
-
-async function fetchUploadInfo() {
-  try {
-    const formData = new FormData()
-    formData.append('file', uploadedFile.value)
-    const res = await api.query.uploadInfo(formData)
-    if (res.columns && Array.isArray(res.columns)) {
-      detectedColumns.value = res.columns
-    } else if (res.data && res.data.column_names && Array.isArray(res.data.column_names)) {
-      detectedColumns.value = res.data.column_names
-    } else if (res.data && res.data.columns && Array.isArray(res.data.columns)) {
-      detectedColumns.value = res.data.columns
-    }
-    // 存储sheet信息
-    if (res.sheets && Array.isArray(res.sheets) && res.sheets.length > 0) {
-      sheetsInfo.value = res.sheets
-      // 自动全选所有sheet
-      await nextTick()
-      selectAllSheets()
-    } else {
-      sheetsInfo.value = []
-    }
-  } catch {
-    detectedColumns.value = []
-    sheetsInfo.value = []
-  }
 }
 
 async function loadSqlFields() {
@@ -758,15 +796,17 @@ async function executeQuery() {
   try {
     const formData = new FormData()
     formData.append('script_ids', JSON.stringify(selectedScriptIds.value))
-    formData.append('file', uploadedFile.value)
+    // 多文件按顺序提交，并附带每个文件勾选的工作表
+    const selectedSheetsMap = {}
+    uploadFiles.value.forEach((f, idx) => {
+      formData.append('files', f.raw, f.name)
+      if (f.selectedSheets.length) {
+        selectedSheetsMap[idx] = [...f.selectedSheets]
+      }
+    })
+    formData.append('file_selected_sheets', JSON.stringify(selectedSheetsMap))
     formData.append('param_column', options.param_column)
     formData.append('new_sheet', options.new_sheet)
-
-    // 传入选中的sheet列表
-    if (selectedSheets.value.length > 0) {
-      const sheetNames = selectedSheets.value.map(s => s.sheet_name)
-      formData.append('selected_sheets', JSON.stringify(sheetNames))
-    }
 
     if (!options.new_sheet) {
       const mapping = buildColumnMappingPayload()
@@ -965,12 +1005,8 @@ async function downloadResult() {
 function resetAll() {
   currentStep.value = 0
   selectedScriptIds.value = []
-  uploadedFile.value = null
-  uploadedFileInfo.value = null
-  detectedColumns.value = []
-  fileList.value = []
-  sheetsInfo.value = []
-  selectedSheets.value = []
+  uploadFiles.value = []
+  expandedFileUids.value = []
   taskId.value = null
   executing.value = false
   progress.value = 0
@@ -1071,6 +1107,137 @@ onUnmounted(() => {
   border-radius: 10px;
   padding: 16px;
   margin-top: 16px;
+}
+
+.parse-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.parse-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+}
+
+/* 文件较多时可滚动查看解析结果 */
+.parse-list {
+  max-height: 380px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.parse-list :deep(.el-collapse) {
+  border: none;
+  background: transparent;
+}
+
+.parse-list :deep(.el-collapse-item) {
+  margin-bottom: 8px;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.parse-list :deep(.el-collapse-item__header) {
+  padding: 0 12px;
+  border-bottom: none;
+  background: #fff;
+  height: 44px;
+}
+
+.parse-list :deep(.el-collapse-item__wrap) {
+  border-bottom: none;
+}
+
+.parse-list :deep(.el-collapse-item__content) {
+  padding: 0 12px 12px;
+}
+
+.parse-file-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.parse-file-icon {
+  color: #67c23a;
+}
+
+.parse-file-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.parse-file-size {
+  font-size: 12px;
+  color: #909399;
+}
+
+.parse-file-remove {
+  margin-left: auto;
+}
+
+.parse-error {
+  font-size: 13px;
+  color: #f56c6c;
+}
+
+.parse-empty {
+  font-size: 13px;
+  color: #909399;
+}
+
+.sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #606266;
+}
+
+.sheet-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sheet-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.sheet-name {
+  font-size: 13px;
+  color: #303133;
+}
+
+.sheet-rows {
+  font-size: 12px;
+  color: #909399;
+  white-space: nowrap;
+}
+
+.sheet-cols {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
 }
 
 .select-all-bar {

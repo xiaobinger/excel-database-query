@@ -74,30 +74,51 @@ def execute_query():
         if not script_ids:
             return jsonify({'success': False, 'message': 'No permission to use the selected query options'}), 403
 
-    if 'file' not in request.files and not request.form.get('file_path'):
+    # 文件来源：1.多文件上传 files 2.单文件上传 file 3.已上传到服务器的文件路径
+    file_path_param = request.form.get('file_path', '')
+    upload_dir = current_app.config['UPLOAD_FOLDER']
+    os.makedirs(upload_dir, exist_ok=True)
+    allowed_ext = current_app.config.get('ALLOWED_UPLOAD_EXTENSIONS', {'xlsx', 'xls', 'csv'})
+
+    # 多文件上传时按文件顺序提交 {"0": ["Sheet1"], ...}，用于筛选参与任务的工作表
+    try:
+        file_selected_sheets = json.loads(request.form.get('file_selected_sheets', '') or '{}')
+        if not isinstance(file_selected_sheets, dict):
+            file_selected_sheets = {}
+    except (json.JSONDecodeError, TypeError):
+        file_selected_sheets = {}
+
+    upload_files = [f for f in request.files.getlist('files') if f and f.filename]
+    if not upload_files and 'file' in request.files and request.files['file'].filename:
+        upload_files = [request.files['file']]
+
+    uploaded_paths = []
+    if upload_files:
+        for f in upload_files:
+            ext = f.filename.rsplit('.', 1)[-1].lower() if '.' in f.filename else ''
+            if ext not in allowed_ext:
+                return jsonify({'success': False, 'message': f'仅支持 {", ".join(sorted(allowed_ext))} 格式'}), 400
+            filename = f"{uuid.uuid4().hex[:8]}_{f.filename}"
+            path = os.path.join(upload_dir, filename)
+            f.save(path)
+            uploaded_paths.append(path)
+    elif file_path_param and os.path.isfile(file_path_param):
+        uploaded_paths = [file_path_param]
+        file_selected_sheets = {}
+    else:
         return jsonify({'success': False, 'message': '未上传文件'}), 400
 
-    # 文件来源：1.新上传的文件 2.已上传到服务器的文件路径
-    file_path_param = request.form.get('file_path', '')
-    if file_path_param and os.path.isfile(file_path_param):
-        input_path = file_path_param
+    if len(uploaded_paths) > 1:
+        # 多文件先合并为一个工作簿，按文件顺序复制用户勾选的工作表
+        merged_path = os.path.join(upload_dir, f"merged_{uuid.uuid4().hex[:8]}.xlsx")
+        try:
+            ExcelService.merge_workbooks(uploaded_paths, merged_path, file_selected_sheets)
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'多文件合并失败: {e}'}), 400
+        input_path = merged_path
+        selected_sheets = []
     else:
-        if 'file' not in request.files:
-            return jsonify({'success': False, 'message': '未上传文件'}), 400
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({'success': False, 'message': '未选择文件'}), 400
-
-        allowed_ext = current_app.config.get('ALLOWED_UPLOAD_EXTENSIONS', {'xlsx', 'xls', 'csv'})
-        ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
-        if ext not in allowed_ext:
-            return jsonify({'success': False, 'message': f'仅支持 {", ".join(sorted(allowed_ext))} 格式'}), 400
-
-        upload_dir = current_app.config['UPLOAD_FOLDER']
-        os.makedirs(upload_dir, exist_ok=True)
-        filename = f"{uuid.uuid4().hex[:8]}_{file.filename}"
-        input_path = os.path.join(upload_dir, filename)
-        file.save(input_path)
+        input_path = uploaded_paths[0]
 
     try:
         output_dir = current_app.config['OUTPUT_FOLDER']

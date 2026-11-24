@@ -712,14 +712,16 @@
                 </span>
               </el-tag>
             </div>
-            <div v-if="uploadedFile" class="file-attachment">
-              <i :class="fileIconClass(uploadedFile)"></i>
-              <span class="file-name">{{ uploadedFile.filename }}</span>
-              <span class="file-info">
-                <template v-if="isTableFile(uploadedFile)">{{ uploadedFile.row_count }} 行 · {{ (uploadedFile.columns || []).length }} 列</template>
-                <template v-else>{{ uploadedFile.file_type_label || '文件' }} · {{ formatFileSize(uploadedFile.file_size) }}</template>
-              </span>
-              <i class="fas fa-times file-remove" @click="uploadedFile = null"></i>
+            <div v-if="uploadedFiles.length" class="file-attachment-list">
+              <div v-for="(f, idx) in uploadedFiles" :key="f.file_path || f.filename + idx" class="file-attachment">
+                <i :class="fileIconClass(f)"></i>
+                <span class="file-name">{{ f.filename }}</span>
+                <span class="file-info">
+                  <template v-if="isTableFile(f)">{{ f.row_count }} 行 · {{ (f.columns || []).length }} 列</template>
+                  <template v-else>{{ f.file_type_label || '文件' }} · {{ formatFileSize(f.file_size) }}</template>
+                </span>
+                <i class="fas fa-times file-remove" @click="removeUploadedFile(idx)"></i>
+              </div>
             </div>
             <div class="input-text-wrapper">
               <el-input
@@ -846,8 +848,9 @@
                   :show-file-list="false"
                   :before-upload="handleFileUpload"
                   :accept="aiUploadAccept"
+                  multiple
                 >
-                  <el-button size="small" :disabled="loading" :title="`上传附件（${aiUploadExts.join('/')}）`">
+                  <el-button size="small" :disabled="loading" :title="`上传附件（支持多选，${aiUploadExts.join('/')}）`">
                     <i class="fas fa-paperclip"></i>
                   </el-button>
                 </el-upload>
@@ -1535,7 +1538,7 @@ const isEditingQueue = ref(false)
 const queueEditText = ref('')
 const queueEditInput = ref(null)
 const messagesRef = ref(null)
-const uploadedFile = ref(null)
+const uploadedFiles = ref([])
 // AI聊天附件允许的格式（由系统配置「文件上传」维护）
 const aiUploadExts = ref(['xlsx', 'xls', 'xlsm', 'csv', 'txt', 'md', 'json', 'xml', 'log', 'yaml', 'yml', 'pdf', 'doc', 'docx', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'zip'])
 const aiUploadAccept = computed(() => aiUploadExts.value.map(e => `.${e}`).join(','))
@@ -1971,7 +1974,7 @@ const paramDialogCanConfirm = computed(() => {
 })
 
 const canSend = computed(() => {
-  return (inputText.value.trim() || uploadedFile.value) && !loading.value
+  return (inputText.value.trim() || uploadedFiles.value.length) && !loading.value
 })
 
 // 监督者复核通过后给出的后续操作建议（仅取最后一条AI文本回复的建议）
@@ -2561,22 +2564,32 @@ async function handleFileUpload(file) {
     await createNewChat()
     if (!currentChatId.value) return false
   }
+  // 同名同大小文件不重复添加
+  const dup = uploadedFiles.value.find(f => f.filename === file.name && f.file_size === file.size)
+  if (dup) {
+    ElMessage.warning(`文件 ${file.name} 已添加`)
+    return false
+  }
   try {
     const formData = new FormData()
     formData.append('file', file)
     const res = await api.ai.uploadFile(formData)
     if (res.data) {
-      uploadedFile.value = res.data
+      uploadedFiles.value.push(res.data)
       if (isTableFile(res.data)) {
-        ElMessage.success(`文件解析成功：${res.data.row_count} 行，${(res.data.columns || []).length} 列`)
+        ElMessage.success(`${res.data.filename} 解析成功：${res.data.row_count} 行，${(res.data.columns || []).length} 列`)
       } else {
-        ElMessage.success(`文件上传成功：${res.data.file_type_label || '文件'} ${res.data.filename}`)
+        ElMessage.success(`${res.data.filename} 上传成功`)
       }
     }
   } catch (e) {
     ElMessage.error('文件上传失败: ' + (e.message || '未知错误'))
   }
   return false // prevent default upload
+}
+
+function removeUploadedFile(idx) {
+  uploadedFiles.value.splice(idx, 1)
 }
 
 // 判断用户消息是否包含查询意图
@@ -2863,7 +2876,7 @@ async function sendInterruptMessage(text) {
 
 async function sendMessage() {
   const text = inputText.value.trim()
-  if (!text && !uploadedFile.value) return
+  if (!text && !uploadedFiles.value.length) return
   
   // 如果正在loading，将消息保存到排队队列
   if (loading.value) {
@@ -2880,16 +2893,15 @@ async function sendMessage() {
 
   // Build message content with file info if uploaded
   let content = text
-  if (uploadedFile.value) {
-    const fileInfo = uploadedFile.value
-    const baseDesc = `用户上传了文件 "${fileInfo.filename}"（${fileInfo.file_type_label || '文件'}，${formatFileSize(fileInfo.file_size) || '大小未知'}），文件路径：${fileInfo.file_path || '无'}`
-    let fileDesc
-    if (isTableFile(fileInfo)) {
-      fileDesc = `${baseDesc}，${fileInfo.row_count} 行，${(fileInfo.columns || []).length} 列，列名：${(fileInfo.columns || []).join(', ')}。如需执行查询任务，请把该 file_path 传给 request_query 的 file_path 参数`
-    } else {
-      fileDesc = `${baseDesc}。该文件不是表格，请调用 parse_uploaded_file 工具读取文件内容，再按用户需求处理`
-    }
-    content = text ? `${content}\n\n[${fileDesc}]` : fileDesc
+  if (uploadedFiles.value.length) {
+    const fileDescs = uploadedFiles.value.map((fileInfo) => {
+      const baseDesc = `用户上传了文件 "${fileInfo.filename}"（${fileInfo.file_type_label || '文件'}，${formatFileSize(fileInfo.file_size) || '大小未知'}），文件路径：${fileInfo.file_path || '无'}`
+      if (isTableFile(fileInfo)) {
+        return `${baseDesc}，${fileInfo.row_count} 行，${(fileInfo.columns || []).length} 列，列名：${(fileInfo.columns || []).join(', ')}。如需执行查询任务，请把该 file_path 传给 request_query 的 file_path 参数`
+      }
+      return `${baseDesc}。该文件不是表格，请调用 parse_uploaded_file 工具读取文件内容，再按用户需求处理`
+    })
+    content = [content, ...fileDescs.map(d => `[${d}]`)].filter(Boolean).join('\n\n')
   }
 
   const currentModelId = selectedModel.value?.id || null
@@ -2909,27 +2921,30 @@ async function sendMessage() {
   messages.value.push(userMsg)
 
   // Show file as separate bubble
-  const currentUploadedFile = uploadedFile.value ? { ...uploadedFile.value } : null
-  if (uploadedFile.value) {
+  const currentUploadedFiles = uploadedFiles.value.map(f => ({ ...f }))
+  currentUploadedFiles.forEach((fileData, idx) => {
     messages.value.push({
-      id: Date.now() + 1,
+      id: Date.now() + 1 + idx,
       role: 'user',
       content: '',
       _type: 'file',
       _dismissed: false,
-      _file_data: { ...uploadedFile.value },
+      _file_data: fileData,
     })
-  }
+  })
 
   // 清除上传文件状态
-  uploadedFile.value = null
+  uploadedFiles.value = []
 
   await nextTick()
   scrollToBottom()
 
-  // 智能匹配：仅表格附件且消息包含查询意图时，尝试智能匹配查询选项
-  if (currentUploadedFile && isTableFile(currentUploadedFile) && isQueryIntent(text)) {
-    const smartMatchResult = await trySmartMatchQuery(currentUploadedFile, text)
+  // 智能匹配：仅单个表格附件且消息包含查询意图时，尝试智能匹配查询选项
+  const soleTableFile = currentUploadedFiles.length === 1 && isTableFile(currentUploadedFiles[0])
+    ? currentUploadedFiles[0]
+    : null
+  if (soleTableFile && isQueryIntent(text)) {
+    const smartMatchResult = await trySmartMatchQuery(soleTableFile, text)
     if (smartMatchResult) {
       loading.value = false
       emitPetEvent('chat_end', { ok: true })
@@ -2975,7 +2990,7 @@ async function sendMessage() {
   } finally {
     loading.value = false
     emitPetEvent('chat_end', { ok: true })
-    uploadedFile.value = null
+    uploadedFiles.value = []
     // 任务完成后，自动发送排队消息
     if (queuedMessage.value) {
       const queued = queuedMessage.value
@@ -6863,6 +6878,13 @@ onActivated(() => {
 .follow-up-chip:disabled {
   cursor: not-allowed;
   opacity: 0.6;
+}
+
+.file-attachment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-self: stretch;
 }
 
 .file-attachment {
