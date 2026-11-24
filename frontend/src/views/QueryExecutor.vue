@@ -9,8 +9,8 @@
 
       <el-steps :active="currentStep" finish-status="success" align-center class="steps">
         <el-step title="上传文件" />
-        <el-step title="选择查询选项" />
-        <el-step title="配置选项" />
+        <el-step :title="isPerFileMode ? '逐文件选查询选项' : '选择查询选项'" />
+        <el-step :title="isPerFileMode ? '逐文件配置' : '配置选项'" />
         <el-step title="执行查询" />
       </el-steps>
 
@@ -94,88 +94,176 @@
         </div>
 
         <div v-if="currentStep === 1" class="step-panel">
-          <div class="select-all-bar">
-            <el-button size="small" @click="selectAllScripts">全选</el-button>
-            <el-button size="small" @click="deselectAllScripts">取消全选</el-button>
-            <span class="selected-count">已选择 {{ selectedScriptIds.length }} 个查询选项</span>
-          </div>
-          <div class="script-card-grid">
-            <el-tooltip
-              v-for="s in visibleScripts"
-              :key="s.id"
-              :content="s.description || '暂无描述'"
-              placement="top"
-              :show-after="300"
-            >
-              <div
-                class="script-card"
-                :class="{ selected: selectedScriptIds.includes(s.id) }"
-                @click="toggleScript(s.id)"
+          <!-- 单文件，或多文件列一致：统一选择查询选项，最后汇总为一个结果文件 -->
+          <template v-if="!isPerFileMode">
+            <div class="select-all-bar">
+              <el-button size="small" @click="selectAllScripts">全选</el-button>
+              <el-button size="small" @click="deselectAllScripts">取消全选</el-button>
+              <span class="selected-count">已选择 {{ selectedScriptIds.length }} 个查询选项</span>
+            </div>
+            <div class="script-card-grid">
+              <el-tooltip
+                v-for="s in visibleScripts"
+                :key="s.id"
+                :content="s.description || '暂无描述'"
+                placement="top"
+                :show-after="300"
               >
-                <div class="script-card-header">
-                  <span class="check-box"><i class="fas fa-check"></i></span>
-                  <span class="script-card-name">{{ s.name }}</span>
+                <div
+                  class="script-card"
+                  :class="{ selected: selectedScriptIds.includes(s.id) }"
+                  @click="toggleScript(s.id)"
+                >
+                  <div class="script-card-header">
+                    <span class="check-box"><i class="fas fa-check"></i></span>
+                    <span class="script-card-name">{{ s.name }}</span>
+                  </div>
+                  <div class="script-card-body">
+                    <el-tag v-if="s.tag" size="small" type="info" style="margin-right: 6px">{{ s.tag }}</el-tag>
+                    <el-tag :type="s.query_mode === 'in' ? 'primary' : 'success'" size="small">
+                      {{ s.query_mode === 'in' ? '批量' : '逐行' }}
+                    </el-tag>
+                  </div>
+                  <div class="script-card-dbs">
+                    <el-tag
+                      v-for="dbId in (s.database_ids || [])"
+                      :key="dbId"
+                      size="small"
+                      type="success"
+                      effect="plain"
+                      style="margin: 2px 4px 2px 0"
+                    >
+                      <i class="fas fa-database" style="margin-right: 2px"></i> {{ getDbName(dbId) }}
+                    </el-tag>
+                  </div>
+                  <div v-if="s.description" class="script-card-desc">{{ s.description }}</div>
                 </div>
-                <div class="script-card-body">
-                  <el-tag v-if="s.tag" size="small" type="info" style="margin-right: 6px">{{ s.tag }}</el-tag>
-                  <el-tag :type="s.query_mode === 'in' ? 'primary' : 'success'" size="small">
-                    {{ s.query_mode === 'in' ? '批量' : '逐行' }}
-                  </el-tag>
+              </el-tooltip>
+            </div>
+            <el-empty v-if="visibleScripts.length === 0" description="暂无查询选项，请先在查询选项管理中创建" />
+          </template>
+
+          <!-- 多文件且列不一致：为每个文件单独选择查询选项 -->
+          <template v-else>
+            <el-alert
+              type="info"
+              :closable="false"
+              show-icon
+              title="检测到多个文件的列不一致"
+              description="将为每个文件单独选择查询选项并分别配置，执行后按文件各生成一个结果文件。"
+              style="margin-bottom: 12px"
+            />
+            <div class="per-file-script-list">
+              <div v-for="f in uploadFiles" :key="f.uid" class="per-file-script-row">
+                <div class="per-file-meta">
+                  <i class="fas fa-file-excel"></i>
+                  <span class="per-file-name">{{ f.name }}</span>
+                  <span class="per-file-cols">{{ fileColumnsSummary(f) }}</span>
                 </div>
-                <div class="script-card-dbs">
-                  <el-tag
-                    v-for="dbId in (s.database_ids || [])"
-                    :key="dbId"
-                    size="small"
-                    type="success"
-                    effect="plain"
-                    style="margin: 2px 4px 2px 0"
-                  >
-                    <i class="fas fa-database" style="margin-right: 2px"></i> {{ getDbName(dbId) }}
-                  </el-tag>
-                </div>
-                <div v-if="s.description" class="script-card-desc">{{ s.description }}</div>
+                <el-select
+                  v-model="f.scriptIds"
+                  multiple
+                  collapse-tags
+                  collapse-tags-tooltip
+                  placeholder="选择该文件要执行的查询选项"
+                  style="width: 100%"
+                >
+                  <el-option v-for="s in visibleScripts" :key="s.id" :label="s.name" :value="s.id" />
+                </el-select>
               </div>
-            </el-tooltip>
-          </div>
-          <el-empty v-if="visibleScripts.length === 0" description="暂无查询选项，请先在查询选项管理中创建" />
+            </div>
+          </template>
+
           <div class="step-actions">
             <el-button @click="currentStep = 0">上一步</el-button>
-            <el-button type="primary" :disabled="selectedScriptIds.length === 0" @click="goToStep2">下一步</el-button>
+            <el-button
+              type="primary"
+              :disabled="isPerFileMode ? !perFileScriptReady : selectedScriptIds.length === 0"
+              @click="goToStep2"
+            >
+              下一步
+            </el-button>
           </div>
         </div>
 
         <div v-if="currentStep === 2" class="step-panel">
-          <el-form label-width="130px">
-            <el-form-item label="参数列">
-              <el-select v-model="options.param_column" placeholder="请选择参数列" style="width: 100%">
-                <el-option v-for="col in detectedColumns" :key="col" :label="col" :value="col" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="自动新建工作表">
-              <el-switch v-model="options.new_sheet" active-text="开" inactive-text="关" />
-            </el-form-item>
+          <!-- 统一模式：一份配置应用于所有文件（合并后统一查询） -->
+          <template v-if="!isPerFileMode">
+            <el-form label-width="130px">
+              <el-form-item label="参数列">
+                <el-select v-model="options.param_column" placeholder="请选择参数列" style="width: 100%">
+                  <el-option v-for="col in detectedColumns" :key="col" :label="col" :value="col" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="自动新建工作表">
+                <el-switch v-model="options.new_sheet" active-text="开" inactive-text="关" />
+              </el-form-item>
 
-            <template v-if="!options.new_sheet">
-              <el-divider content-position="left">列映射配置</el-divider>
-              <div class="column-mapping-config">
-                <div v-for="field in sqlFields" :key="field" class="mapping-row">
-                  <span class="mapping-sql-field">{{ field }}</span>
-                  <span class="mapping-arrow"><i class="fas fa-arrow-right"></i></span>
-                  <el-select
-                    v-model="columnMapping[field]"
-                    placeholder="选择Excel列"
-                    style="width: 200px"
-                    :disabled="hiddenFields[field]"
-                  >
-                    <el-option v-for="col in detectedColumns" :key="col" :label="col" :value="col" />
-                  </el-select>
-                  <el-checkbox v-model="hiddenFields[field]" class="mapping-hidden" @change="onHiddenChange(field)">隐藏</el-checkbox>
-                  <el-radio v-model="primaryKey" :value="field" class="mapping-pk" :disabled="hiddenFields[field]">主键</el-radio>
+              <template v-if="!options.new_sheet">
+                <el-divider content-position="left">列映射配置</el-divider>
+                <div class="column-mapping-config">
+                  <div v-for="field in sqlFields" :key="field" class="mapping-row">
+                    <span class="mapping-sql-field">{{ field }}</span>
+                    <span class="mapping-arrow"><i class="fas fa-arrow-right"></i></span>
+                    <el-select
+                      v-model="columnMapping[field]"
+                      placeholder="选择Excel列"
+                      style="width: 200px"
+                      :disabled="hiddenFields[field]"
+                    >
+                      <el-option v-for="col in detectedColumns" :key="col" :label="col" :value="col" />
+                    </el-select>
+                    <el-checkbox v-model="hiddenFields[field]" class="mapping-hidden" @change="onHiddenChange(field)">隐藏</el-checkbox>
+                    <el-radio v-model="primaryKey" :value="field" class="mapping-pk" :disabled="hiddenFields[field]">主键</el-radio>
+                  </div>
                 </div>
+              </template>
+            </el-form>
+          </template>
+
+          <!-- 逐文件模式：每个文件分别配置参数列与列映射 -->
+          <template v-else>
+            <div class="per-file-config-list">
+              <div v-for="f in uploadFiles" :key="f.uid" class="per-file-config-card">
+                <div class="per-file-config-head">
+                  <i class="fas fa-file-excel"></i>
+                  <span class="per-file-name">{{ f.name }}</span>
+                  <el-tag size="small" type="info">{{ selectedScriptNamesOf(f) || '未选择查询选项' }}</el-tag>
+                </div>
+                <el-form label-width="130px">
+                  <el-form-item label="参数列">
+                    <el-select v-model="f.paramColumn" placeholder="请选择参数列" style="width: 100%">
+                      <el-option v-for="col in fileDetectedColumns(f)" :key="col" :label="col" :value="col" />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="自动新建工作表">
+                    <el-switch v-model="f.newSheet" active-text="开" inactive-text="关" />
+                  </el-form-item>
+
+                  <template v-if="!f.newSheet">
+                    <el-divider content-position="left">列映射配置</el-divider>
+                    <div class="column-mapping-config">
+                      <div v-for="field in f.sqlFields" :key="field" class="mapping-row">
+                        <span class="mapping-sql-field">{{ field }}</span>
+                        <span class="mapping-arrow"><i class="fas fa-arrow-right"></i></span>
+                        <el-select
+                          v-model="f.columnMapping[field]"
+                          placeholder="选择Excel列"
+                          style="width: 200px"
+                          :disabled="f.hiddenFields[field]"
+                        >
+                          <el-option v-for="col in fileDetectedColumns(f)" :key="col" :label="col" :value="col" />
+                        </el-select>
+                        <el-checkbox v-model="f.hiddenFields[field]" class="mapping-hidden" @change="onPerFileHiddenChange(f, field)">隐藏</el-checkbox>
+                        <el-radio v-model="f.primaryKey" :value="field" class="mapping-pk" :disabled="f.hiddenFields[field]">主键</el-radio>
+                      </div>
+                    </div>
+                  </template>
+                </el-form>
               </div>
-            </template>
-          </el-form>
+            </div>
+          </template>
+
           <div class="step-actions">
             <el-button @click="currentStep = 1">上一步</el-button>
             <el-button type="primary" @click="goToStep3">下一步</el-button>
@@ -183,7 +271,9 @@
         </div>
 
         <div v-if="currentStep === 3" class="step-panel">
-          <el-descriptions title="执行摘要" :column="2" border>
+          <!-- 统一模式：所有文件合并执行，产出一个结果文件 -->
+          <template v-if="!isPerFileMode">
+            <el-descriptions title="执行摘要" :column="2" border>
             <el-descriptions-item label="查询选项">{{ selectedScriptNames || '-' }}</el-descriptions-item>
             <el-descriptions-item label="关联数据库">{{ associatedDbNames || '-' }}</el-descriptions-item>
             <el-descriptions-item label="文件">{{ uploadFileNames || '-' }}</el-descriptions-item>
@@ -273,11 +363,83 @@
                 <i class="fas fa-redo"></i> 重新执行
               </el-button>
             </div>
-          </div>
+            </div>
+          </template>
+
+          <!-- 逐文件模式：每个文件独立执行，分别产出结果文件 -->
+          <template v-else>
+            <el-descriptions title="执行摘要" :column="2" border>
+              <el-descriptions-item label="执行模式">逐文件独立执行（列不一致）</el-descriptions-item>
+              <el-descriptions-item label="文件数">{{ uploadFiles.length }}</el-descriptions-item>
+            </el-descriptions>
+
+            <el-table :data="perFileSummaryData" border size="small" style="margin-top: 12px">
+              <el-table-column prop="name" label="文件" min-width="200" show-overflow-tooltip />
+              <el-table-column prop="scriptNames" label="查询选项" min-width="200" show-overflow-tooltip />
+              <el-table-column prop="paramColumn" label="参数列" width="150" show-overflow-tooltip />
+              <el-table-column prop="newSheet" label="自动新建工作表" width="130" align="center" />
+            </el-table>
+
+            <div class="execute-area">
+              <el-button
+                v-if="!perFileExecuting && perFileResults.length === 0"
+                type="success"
+                size="large"
+                @click="executeQuery"
+              >
+                <i class="fas fa-play"></i> 开始执行（{{ uploadFiles.length }} 个文件）
+              </el-button>
+              <el-button v-if="perFileExecuting" type="danger" size="large" @click="cancelPerFileQueries">
+                <i class="fas fa-stop"></i> 终止全部任务
+              </el-button>
+              <el-button
+                v-if="!perFileExecuting && perFileResults.length > 0"
+                type="primary"
+                size="large"
+                @click="executeQuery"
+              >
+                <i class="fas fa-redo"></i> 重新执行
+              </el-button>
+            </div>
+
+            <div v-if="perFileResults.length > 0" class="progress-area">
+              <el-divider content-position="left">
+                执行进度（{{ perFileResults.filter(isPerFileResultFinal).length }}/{{ perFileResults.length }} 个文件已完成）
+              </el-divider>
+              <div v-for="r in perFileResults" :key="r.uid" class="per-file-result">
+                <div class="per-file-result-head">
+                  <i class="fas fa-file-excel"></i>
+                  <span class="per-file-result-name">{{ r.name }}</span>
+                  <el-tag size="small" :type="perFileStatusType(r.status)">{{ perFileStatusLabel(r.status) }}</el-tag>
+                </div>
+                <el-progress
+                  :percentage="r.progress"
+                  :status="r.status === 'completed' ? 'success' : (r.status === 'failed' ? 'exception' : undefined)"
+                  :stroke-width="10"
+                />
+                <div class="per-file-result-actions">
+                  <el-button
+                    v-if="r.status === 'completed' && r.outputFile"
+                    size="small"
+                    type="primary"
+                    @click="downloadPerFileResult(r)"
+                  >
+                    <i class="fas fa-download"></i> 下载结果
+                  </el-button>
+                  <span v-else-if="r.status === 'completed'" class="per-file-empty">未查询到匹配数据，未生成结果文件</span>
+                  <span v-else-if="r.status === 'failed'" class="per-file-error">{{ r.error || '执行失败' }}</span>
+                  <span v-else-if="r.status === 'running'" class="per-file-empty">查询执行中...</span>
+                </div>
+              </div>
+              <div class="retention-tip">
+                <i class="fas fa-exclamation-triangle"></i> 结果文件将保留 {{ fileRetentionHours }} 小时，请及时下载
+              </div>
+            </div>
+          </template>
 
           <div class="step-actions" style="margin-top: 20px">
-            <el-button @click="currentStep = 2" :disabled="!!taskId">上一步</el-button>
-            <el-button @click="resetAll" :disabled="executing">重新开始</el-button>
+            <el-button @click="currentStep = 2" :disabled="isPerFileMode ? perFileExecuting : !!taskId">上一步</el-button>
+            <el-button @click="resetAll" :disabled="isPerFileMode ? perFileExecuting : executing">重新开始</el-button>
           </div>
         </div>
       </div>
@@ -339,6 +501,11 @@ const logLines = ref([])
 const logContentRef = ref(null)
 const retrying = ref(false)
 let eventSource = null
+// 逐文件模式（多文件且列不一致）：每个文件独立提交，可能生成多个结果文件
+const perFileResults = ref([])
+const perFileExecuting = ref(false)
+const perFileEventSources = {}
+let perFileRetryTimers = {}
 
 const matchDialogVisible = ref(false)
 const matchedScripts = ref([])
@@ -376,6 +543,44 @@ const detectedColumns = computed(() => {
 
 const uploadFileNames = computed(() => uploadFiles.value.map((f) => f.name).join(', '))
 
+// 单个文件（按已勾选工作表）解析到的列名并集
+function fileDetectedColumns(f) {
+  const cols = []
+  ;(f.sheets || []).forEach((s) => {
+    if (f.selectedSheets.includes(s.sheet_name)) {
+      ;(s.column_names || []).forEach((c) => {
+        if (c && !cols.includes(c)) cols.push(c)
+      })
+    }
+  })
+  return cols
+}
+
+// 列签名：忽略大小写、空格与顺序，用于判断多文件之间列是否一致
+function fileColumnsSignature(f) {
+  const normalized = fileDetectedColumns(f).map((c) => String(c).trim().toLowerCase())
+  return [...new Set(normalized)].sort().join('|')
+}
+
+// 多文件且解析到的列不一致：改为逐文件选择查询选项、分别配置并分别生成结果
+const isPerFileMode = computed(() => {
+  if (uploadFiles.value.length <= 1) return false
+  return new Set(uploadFiles.value.map(fileColumnsSignature)).size > 1
+})
+
+const perFileScriptReady = computed(() =>
+  uploadFiles.value.length > 0 && uploadFiles.value.every((f) => (f.scriptIds || []).length > 0)
+)
+
+const perFileSummaryData = computed(() =>
+  uploadFiles.value.map((f) => ({
+    name: f.name,
+    scriptNames: selectedScriptNamesOf(f) || '-',
+    paramColumn: f.paramColumn || '-',
+    newSheet: f.newSheet ? '是' : '否'
+  }))
+)
+
 const canProceed = computed(() =>
   uploadFiles.value.length > 0 && uploadFiles.value.every((f) => !f.parsing && !f.error)
 )
@@ -391,6 +596,33 @@ const selectedScriptNames = computed(() => {
     .map((s) => s.name)
     .join(', ')
 })
+
+function selectedScriptNamesOf(f) {
+  return visibleScripts.value
+    .filter((s) => (f.scriptIds || []).includes(s.id))
+    .map((s) => s.name)
+    .join(', ')
+}
+
+function fileColumnsSummary(f) {
+  const cols = fileDetectedColumns(f)
+  if (!cols.length) return '未解析到列'
+  return `${cols.length} 列：${cols.slice(0, 5).join('、')}${cols.length > 5 ? ' 等' : ''}`
+}
+
+function perFileStatusType(status) {
+  const map = { pending: 'info', running: 'warning', completed: 'success', failed: 'danger', cancelled: 'info', manual_cancelled: 'info' }
+  return map[status] || 'info'
+}
+
+function perFileStatusLabel(status) {
+  const map = { pending: '等待中', running: '执行中', completed: '已完成', failed: '失败', cancelled: '已取消', manual_cancelled: '手动终止' }
+  return map[status] || status
+}
+
+function isPerFileResultFinal(r) {
+  return ['completed', 'failed', 'cancelled', 'manual_cancelled'].includes(r.status)
+}
 
 const associatedDbIds = computed(() => {
   const ids = new Set()
@@ -486,6 +718,12 @@ async function onFileChange(file) {
   })
   uploadFiles.value.push(entry)
   expandedFileUids.value.push(entry.uid)
+  // 多文件时关闭单文件智能匹配弹窗，避免误入统一配置流程
+  if (uploadFiles.value.length > 1) {
+    matchDialogVisible.value = false
+    matchedScripts.value = []
+    matchedDefaultParamColumn.value = []
+  }
   await parseUploadFile(entry)
   // 仅单个文件时触发智能匹配，多文件由用户手动选择查询选项
   if (uploadFiles.value.length === 1) {
@@ -514,11 +752,22 @@ async function parseUploadFile(entry) {
 function removeUploadFile(entry) {
   uploadFiles.value = uploadFiles.value.filter((f) => f.uid !== entry.uid)
   expandedFileUids.value = expandedFileUids.value.filter((uid) => uid !== entry.uid)
+  resetPerFileState()
 }
 
 function clearUploadFiles() {
   uploadFiles.value = []
   expandedFileUids.value = []
+  resetPerFileState()
+}
+
+function resetPerFileState() {
+  perFileExecuting.value = false
+  perFileResults.value = []
+  Object.values(perFileEventSources).forEach((es) => es.close())
+  Object.keys(perFileEventSources).forEach((uid) => delete perFileEventSources[uid])
+  Object.values(perFileRetryTimers).forEach((timer) => clearTimeout(timer))
+  perFileRetryTimers = {}
 }
 
 function toggleAllParse() {
@@ -631,6 +880,68 @@ async function afterUpload() {
 
   // 直接进入手动选择步骤
   currentStep.value = 1
+
+  if (isPerFileMode.value) {
+    uploadFiles.value.forEach(ensurePerFileConfig)
+    await prefillPerFileScripts()
+  }
+}
+
+// 逐文件模式：为每个文件预填智能匹配到的查询选项（默认取最匹配的一个，用户可修改）
+async function prefillPerFileScripts() {
+  await Promise.all(
+    uploadFiles.value.map(async (f) => {
+      if ((f.scriptIds || []).length > 0) return
+      try {
+        const res = await api.query.smartMatch(f.name)
+        const ids = (res.matched_script_ids || []).filter((id) =>
+          visibleScripts.value.some((s) => s.id === id)
+        )
+        if (ids.length > 0) f.scriptIds = [ids[0]]
+      } catch {
+        // 匹配失败不阻塞，用户手动选择
+      }
+    })
+  )
+}
+
+function ensurePerFileConfig(f) {
+  if (!f.scriptIds) f.scriptIds = []
+  if (f.paramColumn === undefined) f.paramColumn = ''
+  if (f.newSheet === undefined) f.newSheet = true
+  if (!f.sqlFields) f.sqlFields = []
+  if (!f.columnMapping) f.columnMapping = {}
+  if (!f.hiddenFields) f.hiddenFields = {}
+  if (f.primaryKey === undefined) f.primaryKey = ''
+}
+
+function onPerFileHiddenChange(f, field) {
+  if (f.hiddenFields[field] && f.primaryKey === field) f.primaryKey = ''
+}
+
+// 逐文件模式：按每个文件选择的查询选项加载字段并自动映射该文件的列
+async function loadPerFileConfigs() {
+  await Promise.all(
+    uploadFiles.value.map(async (f) => {
+      ensurePerFileConfig(f)
+      const script = visibleScripts.value.find((s) => (f.scriptIds || []).includes(s.id))
+      const fields = await fetchScriptFields(script)
+      f.sqlFields = fields
+      Object.keys(f.columnMapping).forEach((k) => delete f.columnMapping[k])
+      Object.keys(f.hiddenFields).forEach((k) => delete f.hiddenFields[k])
+      fields.forEach((field) => {
+        f.columnMapping[field] = ''
+        f.hiddenFields[field] = false
+      })
+      if (script) {
+        f.newSheet = script.new_sheet !== false
+        f.primaryKey = script.primary_key || ''
+      }
+      const cols = fileDetectedColumns(f)
+      f.paramColumn = cols[0] || ''
+      await autoMapColumnsFor(fields, cols, f.columnMapping)
+    })
+  )
 }
 
 async function confirmMatch() {
@@ -669,6 +980,15 @@ function cancelMatch() {
 }
 
 async function goToStep2() {
+  if (isPerFileMode.value) {
+    if (!perFileScriptReady.value) {
+      ElMessage.warning('请为每个文件选择查询选项')
+      return
+    }
+    currentStep.value = 2
+    await loadPerFileConfigs()
+    return
+  }
   if (selectedScriptIds.value.length === 0) {
     ElMessage.warning('请至少选择一个查询选项')
     return
@@ -699,6 +1019,15 @@ async function goToStep2() {
 }
 
 function goToStep3() {
+  if (isPerFileMode.value) {
+    const missing = uploadFiles.value.find((f) => !f.paramColumn)
+    if (missing) {
+      ElMessage.warning(`请为文件「${missing.name}」选择参数列`)
+      return
+    }
+    currentStep.value = 3
+    return
+  }
   if (!options.param_column) {
     ElMessage.warning('请选择参数列')
     return
@@ -706,86 +1035,95 @@ function goToStep3() {
   currentStep.value = 3
 }
 
+// 提取查询选项的 SQL 字段名（模板选项先渲染再提取）
+async function fetchScriptFields(script) {
+  if (!script) return []
+  let sqlToExtract = script.sql_text
+  if (script.is_template && script.sql_template) {
+    try {
+      const renderRes = await api.scripts.renderTemplate({
+        template: script.sql_template,
+        template_config: script.template_config || []
+      })
+      if (renderRes.success && renderRes.rendered_sql) {
+        sqlToExtract = renderRes.rendered_sql
+      }
+    } catch {}
+  }
+  try {
+    const res = await api.scripts.extractColumns({ sql: sqlToExtract })
+    return res.columns || []
+  } catch {
+    return []
+  }
+}
+
 async function loadSqlFields() {
   const firstScript = visibleScripts.value.find((s) => s.id === selectedScriptIds.value[0])
   if (!firstScript) return
 
-  try {
-    // 如果是模板模式，先渲染模板再提取字段
-    let sqlToExtract = firstScript.sql_text
-    if (firstScript.is_template && firstScript.sql_template) {
-      try {
-        const renderRes = await api.scripts.renderTemplate({
-          template: firstScript.sql_template,
-          template_config: firstScript.template_config || []
-        })
-        if (renderRes.success && renderRes.rendered_sql) {
-          sqlToExtract = renderRes.rendered_sql
-        }
-      } catch {}
-    }
-    const res = await api.scripts.extractColumns({ sql: sqlToExtract })
-    const fields = res.columns || []
-    sqlFields.value = fields
+  const fields = await fetchScriptFields(firstScript)
+  sqlFields.value = fields
 
-    Object.keys(columnMapping).forEach((k) => delete columnMapping[k])
-    Object.keys(hiddenFields).forEach((k) => delete hiddenFields[k])
-    primaryKey.value = ''
+  Object.keys(columnMapping).forEach((k) => delete columnMapping[k])
+  Object.keys(hiddenFields).forEach((k) => delete hiddenFields[k])
+  primaryKey.value = ''
 
-    fields.forEach((f) => {
-      columnMapping[f] = ''
-      hiddenFields[f] = false
-    })
+  fields.forEach((f) => {
+    columnMapping[f] = ''
+    hiddenFields[f] = false
+  })
 
-    if (matchedDefaultParamColumn.value.length > 0) {
-      const matched = matchedDefaultParamColumn.value.find(kw =>
-        detectedColumns.value.some(col => col.includes(kw))
-      )
-      if (matched) {
-        options.param_column = detectedColumns.value.find(col => col.includes(matched))
-      } else if (detectedColumns.value.length > 0) {
-        options.param_column = detectedColumns.value[0]
-      }
+  if (matchedDefaultParamColumn.value.length > 0) {
+    const matched = matchedDefaultParamColumn.value.find(kw =>
+      detectedColumns.value.some(col => col.includes(kw))
+    )
+    if (matched) {
+      options.param_column = detectedColumns.value.find(col => col.includes(matched))
     } else if (detectedColumns.value.length > 0) {
       options.param_column = detectedColumns.value[0]
     }
-
-    autoMapColumns()
-  } catch {
-    sqlFields.value = []
+  } else if (detectedColumns.value.length > 0) {
+    options.param_column = detectedColumns.value[0]
   }
+
+  autoMapColumns()
 }
 
-async function autoMapColumns() {
+async function autoMapColumnsFor(fields, columns, mapping) {
   // 先做简单匹配（忽略大小写和空格）
-  sqlFields.value.forEach((field) => {
+  fields.forEach((field) => {
     const lowerField = field.toLowerCase()
-    const match = detectedColumns.value.find(
+    const match = columns.find(
       (col) => col.toLowerCase() === lowerField || col.toLowerCase().replace(/\s+/g, '') === lowerField.replace(/\s+/g, '')
     )
     if (match) {
-      columnMapping[field] = match
+      mapping[field] = match
     }
   })
 
   // 对未匹配的字段调用后端模糊匹配API
-  const unmapped = sqlFields.value.filter(f => !columnMapping[f])
-  if (unmapped.length > 0 && detectedColumns.value.length > 0) {
+  const unmapped = fields.filter((f) => !mapping[f])
+  if (unmapped.length > 0 && columns.length > 0) {
     try {
       const res = await api.query.fuzzyMatchColumns({
         sql_fields: unmapped,
-        excel_columns: detectedColumns.value
+        excel_columns: columns
       })
       const fuzzyMapping = res.mapping || {}
       for (const [sqlField, excelCol] of Object.entries(fuzzyMapping)) {
-        if (excelCol && !columnMapping[sqlField]) {
-          columnMapping[sqlField] = excelCol
+        if (excelCol && !mapping[sqlField]) {
+          mapping[sqlField] = excelCol
         }
       }
     } catch {
       // 模糊匹配失败不影响流程
     }
   }
+}
+
+function autoMapColumns() {
+  return autoMapColumnsFor(sqlFields.value, detectedColumns.value, columnMapping)
 }
 
 function buildColumnMappingPayload() {
@@ -801,6 +1139,10 @@ function buildColumnMappingPayload() {
 }
 
 async function executeQuery() {
+  if (isPerFileMode.value) {
+    await executePerFile()
+    return
+  }
   submitting.value = true
   try {
     const formData = new FormData()
@@ -837,6 +1179,158 @@ async function executeQuery() {
   } catch {
   } finally {
     submitting.value = false
+  }
+}
+
+// 逐文件模式的列映射（隐藏字段记为“隐藏”）
+function buildPerFileMappingPayload(f) {
+  const mapping = {}
+  ;(f.sqlFields || []).forEach((field) => {
+    if (f.hiddenFields[field]) {
+      mapping[field] = '隐藏'
+    } else if (f.columnMapping[field]) {
+      mapping[field] = f.columnMapping[field]
+    }
+  })
+  return mapping
+}
+
+// 逐文件模式：每个文件独立提交一个查询任务，各自产出结果文件
+async function executePerFile() {
+  resetPerFileState()
+  perFileResults.value = uploadFiles.value.map((f) => ({
+    uid: f.uid,
+    name: f.name,
+    scriptNames: selectedScriptNamesOf(f),
+    taskId: null,
+    status: 'pending',
+    progress: 0,
+    outputFile: '',
+    error: ''
+  }))
+  perFileExecuting.value = true
+  emitPetEvent('operation', { type: 'query', label: '' })
+  await Promise.all(uploadFiles.value.map((f) => submitPerFileQuery(f)))
+  maybeFinishPerFile()
+}
+
+async function submitPerFileQuery(f) {
+  const result = perFileResults.value.find((r) => r.uid === f.uid)
+  if (!result) return
+  try {
+    const formData = new FormData()
+    formData.append('script_ids', JSON.stringify(f.scriptIds))
+    formData.append('files', f.raw, f.name)
+    if (f.selectedSheets.length) {
+      formData.append('selected_sheets', JSON.stringify(f.selectedSheets))
+    }
+    formData.append('param_column', f.paramColumn)
+    formData.append('new_sheet', f.newSheet)
+    if (!f.newSheet) {
+      formData.append('column_mapping', JSON.stringify(buildPerFileMappingPayload(f)))
+      if (f.primaryKey) {
+        formData.append('primary_key', f.primaryKey)
+      }
+    }
+
+    const res = await api.query.execute(formData)
+    const data = res.data || res
+    result.taskId = data.task_id || data.id
+    result.status = 'running'
+    startPerFileSSE(result)
+  } catch (e) {
+    result.status = 'failed'
+    result.error = e?.response?.data?.message || '任务提交失败'
+  }
+}
+
+function startPerFileSSE(result) {
+  if (!result.taskId) return
+  if (perFileEventSources[result.uid]) {
+    perFileEventSources[result.uid].close()
+  }
+  const es = new EventSource(api.query.streamStatus(result.taskId))
+  perFileEventSources[result.uid] = es
+
+  es.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data)
+      if (data.progress !== undefined) result.progress = Math.round(data.progress)
+      if (data.status) result.status = data.status
+      if (data.output_file) result.outputFile = data.output_file
+      if (['completed', 'failed', 'cancelled', 'manual_cancelled'].includes(data.status)) {
+        if (data.status === 'completed') result.progress = 100
+        if (data.status === 'failed' && data.error_message) result.error = data.error_message
+        es.close()
+        delete perFileEventSources[result.uid]
+        if (data.status === 'completed') {
+          emitPetEvent('file_ready', { type: 'query', label: result.outputFile ? '查询结果' : '' })
+        }
+        store.notifyTaskChanged()
+        maybeFinishPerFile()
+      }
+    } catch {
+      // 忽略非 JSON 心跳
+    }
+  }
+
+  es.onerror = () => {
+    es.close()
+    delete perFileEventSources[result.uid]
+    fetchPerFileStatus(result)
+  }
+}
+
+async function fetchPerFileStatus(result) {
+  try {
+    const res = await api.query.status(result.taskId)
+    const data = res.data || res
+    if (data.progress !== undefined) result.progress = Math.round(data.progress)
+    if (data.output_file) result.outputFile = data.output_file
+    if (['completed', 'failed', 'cancelled', 'manual_cancelled'].includes(data.status)) {
+      result.status = data.status
+      if (data.status === 'completed') result.progress = 100
+      if (data.status === 'failed' && data.error_message) result.error = data.error_message
+      store.notifyTaskChanged()
+      maybeFinishPerFile()
+      return
+    }
+    schedulePerFileResubscribe(result, 3000)
+  } catch {
+    schedulePerFileResubscribe(result, 5000)
+  }
+}
+
+function schedulePerFileResubscribe(result, delay) {
+  if (perFileRetryTimers[result.uid]) return
+  perFileRetryTimers[result.uid] = setTimeout(() => {
+    delete perFileRetryTimers[result.uid]
+    if (perFileExecuting.value && !isPerFileResultFinal(result)) {
+      startPerFileSSE(result)
+    }
+  }, delay)
+}
+
+function maybeFinishPerFile() {
+  if (!perFileResults.value.length) return
+  if (perFileResults.value.every(isPerFileResultFinal)) {
+    perFileExecuting.value = false
+  }
+}
+
+async function cancelPerFileQueries() {
+  const running = perFileResults.value.filter((r) => r.taskId && !isPerFileResultFinal(r))
+  if (!running.length) return
+  try {
+    await ElMessageBox.confirm(`确定要终止 ${running.length} 个正在执行的任务吗？`, '终止任务', {
+      confirmButtonText: '确定终止',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    await Promise.all(running.map((r) => api.query.cancel(r.taskId).catch(() => {})))
+    ElMessage.success('已提交终止请求')
+  } catch {
+    // 用户取消
   }
 }
 
@@ -956,8 +1450,17 @@ async function handleRetry() {
 
 async function downloadResult() {
   if (!taskId.value) return
-  const url = api.download.file(taskId.value)
-  const defaultName = `result_${taskId.value}.xlsx`
+  return downloadTaskResult(taskId.value, `result_${taskId.value}.xlsx`)
+}
+
+function downloadPerFileResult(result) {
+  if (!result.taskId) return
+  const base = result.name.replace(/\.(xlsx|xls|csv)$/i, '')
+  return downloadTaskResult(result.taskId, `${base}_查询结果.xlsx`)
+}
+
+async function downloadTaskResult(tid, defaultName) {
+  const url = api.download.file(tid)
   try {
     const check = await fetch(url, { method: 'HEAD' })
     if (!check.ok) {
@@ -1030,6 +1533,7 @@ function resetAll() {
   primaryKey.value = ''
   matchedScripts.value = []
   matchedDefaultParamColumn.value = []
+  resetPerFileState()
   if (eventSource) {
     eventSource.close()
     eventSource = null
@@ -1052,6 +1556,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  resetPerFileState()
   if (eventSource) {
     eventSource.close()
     eventSource = null
@@ -1532,5 +2037,122 @@ onUnmounted(() => {
   padding: 6px 0;
   font-size: 14px;
   color: var(--text-primary, #303133);
+}
+
+/* 逐文件模式：多文件且列不一致 */
+.per-file-script-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.per-file-script-row {
+  border: 1px solid #eef2f7;
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: #fff;
+}
+
+.per-file-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.per-file-meta > i {
+  color: #67c23a;
+}
+
+.per-file-name {
+  font-weight: 600;
+  color: var(--text-primary, #303133);
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.per-file-cols {
+  color: var(--text-muted, #909399);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.per-file-config-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.per-file-config-card {
+  border: 1px solid #eef2f7;
+  border-radius: 10px;
+  padding: 14px 16px 2px;
+  background: #fafcff;
+}
+
+.per-file-config-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.per-file-config-head > i {
+  color: #67c23a;
+}
+
+.per-file-result {
+  border: 1px solid #eef2f7;
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background: #fff;
+}
+
+.per-file-result-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.per-file-result-head > i {
+  color: #67c23a;
+}
+
+.per-file-result-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--text-primary, #303133);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.per-file-result-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.per-file-empty {
+  font-size: 12px;
+  color: var(--text-muted, #909399);
+}
+
+.per-file-error {
+  font-size: 12px;
+  color: #f56c6c;
 }
 </style>
