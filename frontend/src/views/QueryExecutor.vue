@@ -8,8 +8,7 @@
       </template>
 
       <el-steps :active="currentStep" finish-status="success" align-center class="steps">
-        <el-step title="上传文件" />
-        <el-step :title="isPerFileMode ? '逐文件选查询选项' : '选择查询选项'" />
+        <el-step title="上传文件与选择查询任务" />
         <el-step :title="isPerFileMode ? '逐文件配置' : '配置选项'" />
         <el-step title="执行查询" />
       </el-steps>
@@ -69,7 +68,7 @@
                         <el-button size="small" text @click="deselectAllSheets(f)">取消全选</el-button>
                       </div>
                     </div>
-                    <el-checkbox-group v-model="f.selectedSheets" class="sheet-list">
+                    <el-checkbox-group v-model="f.selectedSheets" class="sheet-list" @change="onSheetsChange">
                       <div v-for="s in f.sheets" :key="s.sheet_name" class="sheet-row">
                         <el-checkbox :value="s.sheet_name">
                           <span class="sheet-name">{{ s.sheet_name }}</span>
@@ -88,123 +87,105 @@
             </div>
           </div>
 
-          <div class="step-actions">
-            <el-button type="primary" :disabled="!canProceed" @click="afterUpload">下一步</el-button>
-          </div>
-        </div>
-
-        <div v-if="currentStep === 1" class="step-panel">
-          <!-- 单文件，或多文件列一致：统一选择查询选项，最后汇总为一个结果文件 -->
-          <template v-if="!isPerFileMode">
-            <div class="select-all-bar">
-              <el-button size="small" @click="selectAllScripts">全选</el-button>
-              <el-button size="small" @click="deselectAllScripts">取消全选</el-button>
-              <span class="selected-count">已选择 {{ selectedScriptIds.length }} 个查询选项</span>
+          <!-- 解析完成后直接选择查询任务：列一致的文件共用一次选择，列不一致时按文件分组分别选择 -->
+          <div v-if="uploadFiles.length && canProceed" class="query-select-section">
+            <div class="parse-header">
+              <span class="parse-title">选择查询任务</span>
+              <span class="select-hint" v-if="isPerFileMode">
+                检测到文件的列不一致，已按列分组，{{ fileGroups.length }} 组分别选择
+              </span>
+              <span class="select-hint" v-else>文件的列一致，统一选择一次</span>
             </div>
-            <div class="script-card-grid">
-              <el-tooltip
-                v-for="s in visibleScripts"
-                :key="s.id"
-                :content="s.description || '暂无描述'"
-                placement="top"
-                :show-after="300"
-              >
-                <div
-                  class="script-card"
-                  :class="{ selected: selectedScriptIds.includes(s.id) }"
-                  @click="toggleScript(s.id)"
-                >
-                  <div class="script-card-header">
-                    <span class="check-box"><i class="fas fa-check"></i></span>
-                    <span class="script-card-name">{{ s.name }}</span>
-                  </div>
-                  <div class="script-card-body">
-                    <el-tag v-if="s.tag" size="small" type="info" style="margin-right: 6px">{{ s.tag }}</el-tag>
-                    <el-tag :type="s.query_mode === 'in' ? 'primary' : 'success'" size="small">
-                      {{ s.query_mode === 'in' ? '批量' : '逐行' }}
-                    </el-tag>
-                  </div>
-                  <div class="script-card-dbs">
-                    <el-tag
-                      v-for="dbId in (s.database_ids || [])"
-                      :key="dbId"
-                      size="small"
-                      type="success"
-                      effect="plain"
-                      style="margin: 2px 4px 2px 0"
-                    >
-                      <i class="fas fa-database" style="margin-right: 2px"></i> {{ getDbName(dbId) }}
-                    </el-tag>
-                  </div>
-                  <div v-if="s.description" class="script-card-desc">{{ s.description }}</div>
-                </div>
-              </el-tooltip>
-            </div>
-            <el-empty v-if="visibleScripts.length === 0" description="暂无查询选项，请先在查询选项管理中创建" />
-          </template>
 
-          <!-- 多文件且列不一致：为每个文件单独选择查询选项 -->
-          <template v-else>
-            <el-alert
-              type="info"
-              :closable="false"
-              show-icon
-              title="检测到多个文件的列不一致"
-              description="将为每个文件单独选择查询选项并分别配置，执行后按文件各生成一个结果文件。"
-              style="margin-bottom: 12px"
-            />
-            <div class="per-file-script-list">
-              <div v-for="f in uploadFiles" :key="f.uid" class="per-file-script-row">
+            <!-- 统一模式：所有文件合并执行 -->
+            <div v-if="!isPerFileMode" class="per-file-script-list">
+              <div class="per-file-script-row">
                 <div class="per-file-meta">
-                  <i class="fas fa-file-excel"></i>
-                  <span class="per-file-name">{{ f.name }}</span>
-                  <span class="per-file-cols">{{ fileColumnsSummary(f) }}</span>
+                  <i class="fas fa-list-check"></i>
+                  <span class="per-file-name">{{ fileGroups.length ? groupFileNames(fileGroups[0]) : '' }}</span>
+                  <span class="per-file-cols">{{ fileGroups.length ? groupColumnsSummary(fileGroups[0]) : '' }}</span>
                 </div>
                 <div class="per-file-select-row">
                   <el-select
-                    v-model="f.tag"
+                    v-model="selectionTag"
                     placeholder="选择标签"
                     style="width: 180px"
-                    @change="onPerFileTagChange(f)"
+                    @change="onUnifiedTagChange"
                   >
                     <el-option v-for="t in scriptTagOptions" :key="t" :label="t" :value="t" />
                   </el-select>
                   <el-select
-                    v-model="f.scriptIds"
+                    v-model="selectedScriptIds"
                     multiple
                     collapse-tags
                     collapse-tags-tooltip
-                    :disabled="!f.tag"
+                    :disabled="!selectionTag"
                     placeholder="选择该标签下的查询选项"
                     style="flex: 1; min-width: 220px"
                   >
+                    <el-option v-for="s in scriptsUnderTag(selectionTag)" :key="s.id" :label="s.name" :value="s.id" />
+                  </el-select>
+                  <el-button size="small" :disabled="!selectionTag" @click="selectAllUnified">全选</el-button>
+                  <el-button size="small" :disabled="!selectedScriptIds.length" @click="clearUnified">全不选</el-button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 逐文件模式：同列文件归为一组，每组选择一次 -->
+            <div v-else class="per-file-script-list">
+              <div v-for="g in fileGroups" :key="g.sig" class="per-file-script-row">
+                <div class="per-file-meta">
+                  <i class="fas fa-file-excel"></i>
+                  <span class="per-file-name">{{ groupFileNames(g) }}</span>
+                  <span class="per-file-cols">{{ groupColumnsSummary(g) }}</span>
+                </div>
+                <div class="per-file-select-row">
+                  <el-select
+                    v-model="g.lead.tag"
+                    placeholder="选择标签"
+                    style="width: 180px"
+                    @change="onGroupTagChange(g)"
+                  >
+                    <el-option v-for="t in scriptTagOptions" :key="t" :label="t" :value="t" />
+                  </el-select>
+                  <el-select
+                    v-model="g.lead.scriptIds"
+                    multiple
+                    collapse-tags
+                    collapse-tags-tooltip
+                    :disabled="!g.lead.tag"
+                    placeholder="选择该标签下的查询选项"
+                    style="flex: 1; min-width: 220px"
+                    @change="syncGroupSelection(g)"
+                  >
                     <el-option
-                      v-for="s in scriptsUnderTag(f.tag)"
+                      v-for="s in scriptsUnderTag(g.lead.tag)"
                       :key="s.id"
                       :label="s.name"
                       :value="s.id"
                     />
                   </el-select>
-                  <el-button size="small" :disabled="!f.tag" @click="selectAllUnderTag(f)">全选</el-button>
-                  <el-button size="small" :disabled="!f.scriptIds || !f.scriptIds.length" @click="clearUnderTag(f)">全不选</el-button>
+                  <el-button size="small" :disabled="!g.lead.tag" @click="selectAllUnderTag(g.lead); syncGroupSelection(g)">全选</el-button>
+                  <el-button size="small" :disabled="!g.lead.scriptIds || !g.lead.scriptIds.length" @click="clearUnderTag(g.lead); syncGroupSelection(g)">全不选</el-button>
                 </div>
               </div>
             </div>
-          </template>
+
+            <el-empty v-if="visibleScripts.length === 0" description="暂无查询选项，请先在查询选项管理中创建" />
+          </div>
 
           <div class="step-actions">
-            <el-button @click="currentStep = 0">上一步</el-button>
             <el-button
               type="primary"
-              :disabled="isPerFileMode ? !perFileScriptReady : selectedScriptIds.length === 0"
-              @click="goToStep2"
+              :disabled="!canProceed || (isPerFileMode ? !perFileScriptReady : selectedScriptIds.length === 0)"
+              @click="afterUpload"
             >
               下一步
             </el-button>
           </div>
         </div>
 
-        <div v-if="currentStep === 2" class="step-panel">
+        <div v-if="currentStep === 1" class="step-panel">
           <!-- 统一模式：一份配置应用于所有文件（合并后统一查询） -->
           <template v-if="!isPerFileMode">
             <el-form label-width="130px">
@@ -283,12 +264,12 @@
           </template>
 
           <div class="step-actions">
-            <el-button @click="currentStep = 1">上一步</el-button>
-            <el-button type="primary" @click="goToStep3">下一步</el-button>
+            <el-button @click="currentStep = 0">上一步</el-button>
+            <el-button type="primary" @click="goToExecute">下一步</el-button>
           </div>
         </div>
 
-        <div v-if="currentStep === 3" class="step-panel">
+        <div v-if="currentStep === 2" class="step-panel">
           <!-- 统一模式：所有文件合并执行，产出一个结果文件 -->
           <template v-if="!isPerFileMode">
             <el-descriptions title="执行摘要" :column="2" border>
@@ -456,7 +437,7 @@
           </template>
 
           <div class="step-actions" style="margin-top: 20px">
-            <el-button @click="currentStep = 2" :disabled="isPerFileMode ? perFileExecuting : !!taskId">上一步</el-button>
+            <el-button @click="currentStep = 1" :disabled="isPerFileMode ? perFileExecuting : !!taskId">上一步</el-button>
             <el-button @click="resetAll" :disabled="isPerFileMode ? perFileExecuting : executing">重新开始</el-button>
           </div>
         </div>
@@ -504,6 +485,8 @@ const visibleScripts = computed(() => {
 })
 const currentStep = ref(0)
 const selectedScriptIds = ref([])
+// 统一模式（单文件或列一致）下的查询任务标签
+const selectionTag = ref('')
 // 多文件上传：每个文件独立解析，可单独移除、勾选参与任务的工作表
 const uploadFiles = ref([])
 const expandedFileUids = ref([])
@@ -539,10 +522,6 @@ const sqlFields = ref([])
 const columnMapping = reactive({})
 const hiddenFields = reactive({})
 const primaryKey = ref('')
-
-const selectedScripts = computed(() =>
-  visibleScripts.value.filter((s) => selectedScriptIds.value.includes(s.id))
-)
 
 // 所有已选工作表的列名并集，作为参数列/列映射的可选列
 const detectedColumns = computed(() => {
@@ -585,6 +564,25 @@ const isPerFileMode = computed(() => {
   if (uploadFiles.value.length <= 1) return false
   return new Set(uploadFiles.value.map(fileColumnsSignature)).size > 1
 })
+
+// 按列签名对文件分组：列一致的文件共用一次查询任务选择
+const fileGroups = computed(() => {
+  const map = new Map()
+  uploadFiles.value.forEach((f) => {
+    const sig = fileColumnsSignature(f)
+    if (!map.has(sig)) map.set(sig, { sig, files: [] })
+    map.get(sig).files.push(f)
+  })
+  return [...map.values()].map((g) => ({ ...g, lead: g.files[0] }))
+})
+
+function groupFileNames(g) {
+  return g.files.map((f) => f.name).join('、')
+}
+
+function groupColumnsSummary(g) {
+  return fileColumnsSummary(g.lead)
+}
 
 const perFileScriptReady = computed(() =>
   uploadFiles.value.length > 0 && uploadFiles.value.every((f) => (f.scriptIds || []).length > 0)
@@ -651,6 +649,47 @@ function clearUnderTag(f) {
   f.scriptIds = []
 }
 
+// 统一模式：标签联动选择
+function onUnifiedTagChange() {
+  const ids = scriptsUnderTag(selectionTag.value).map((s) => s.id)
+  selectedScriptIds.value = selectedScriptIds.value.filter((id) => ids.includes(id))
+}
+function selectAllUnified() {
+  selectedScriptIds.value = scriptsUnderTag(selectionTag.value).map((s) => s.id)
+}
+function clearUnified() {
+  selectedScriptIds.value = []
+}
+// 智能匹配后同步标签，使匹配到的选项在联动列表中可见
+function syncUnifiedTagFromSelection() {
+  if (!selectedScriptIds.value.length) {
+    selectionTag.value = ''
+    return
+  }
+  const first = visibleScripts.value.find((s) => s.id === selectedScriptIds.value[0])
+  if (first) {
+    selectionTag.value = tagOfScript(first)
+    onUnifiedTagChange()
+  }
+}
+
+// 同列分组：组内选择同步到每个文件
+function syncGroupSelection(g) {
+  const lead = g.lead
+  g.files.forEach((f) => {
+    if (f === lead) return
+    f.tag = lead.tag
+    f.scriptIds = [...(lead.scriptIds || [])]
+  })
+}
+function syncAllGroups() {
+  fileGroups.value.forEach(syncGroupSelection)
+}
+function onGroupTagChange(g) {
+  onPerFileTagChange(g.lead)
+  syncGroupSelection(g)
+}
+
 function fileColumnsSummary(f) {
   const cols = fileDetectedColumns(f)
   if (!cols.length) return '未解析到列'
@@ -714,28 +753,6 @@ const statusLabel = computed(() => {
   return map[taskStatus.value.status] || '-'
 })
 
-function getDbName(dbId) {
-  const db = store.databases.find((d) => d.id === dbId)
-  return db ? db.name : `ID:${dbId}`
-}
-
-function toggleScript(id) {
-  const idx = selectedScriptIds.value.indexOf(id)
-  if (idx === -1) {
-    selectedScriptIds.value.push(id)
-  } else {
-    selectedScriptIds.value.splice(idx, 1)
-  }
-}
-
-function selectAllScripts() {
-  selectedScriptIds.value = visibleScripts.value.map(s => s.id)
-}
-
-function deselectAllScripts() {
-  selectedScriptIds.value = []
-}
-
 function onHiddenChange(field) {
   if (hiddenFields[field] && primaryKey.value === field) {
     primaryKey.value = ''
@@ -772,9 +789,12 @@ async function onFileChange(file) {
     matchedDefaultParamColumn.value = []
   }
   await parseUploadFile(entry)
-  // 仅单个文件时触发智能匹配，多文件由用户手动选择查询选项
+  // 仅单个文件时触发智能匹配弹窗；多文件在下方按列分组选择查询任务
   if (uploadFiles.value.length === 1) {
     autoSmartMatch(entry.name)
+  } else {
+    uploadFiles.value.forEach(ensurePerFileConfig)
+    await prefillPerFileScripts()
   }
 }
 
@@ -799,13 +819,40 @@ async function parseUploadFile(entry) {
 function removeUploadFile(entry) {
   uploadFiles.value = uploadFiles.value.filter((f) => f.uid !== entry.uid)
   expandedFileUids.value = expandedFileUids.value.filter((uid) => uid !== entry.uid)
+  // 回到单文件时，沿用该文件已选的查询任务
+  if (uploadFiles.value.length === 1) {
+    const f = uploadFiles.value[0]
+    selectedScriptIds.value = [...(f.scriptIds || [])]
+    selectionTag.value = f.tag || ''
+  }
   resetPerFileState()
 }
 
 function clearUploadFiles() {
   uploadFiles.value = []
   expandedFileUids.value = []
+  selectedScriptIds.value = []
+  selectionTag.value = ''
   resetPerFileState()
+}
+
+// 勾选工作表可能改变列签名与分组，重新同步组内选择
+async function onSheetsChange() {
+  if (uploadFiles.value.length <= 1) return
+  if (isPerFileMode.value) {
+    uploadFiles.value.forEach(ensurePerFileConfig)
+    if (fileGroups.value.some((g) => !(g.lead.scriptIds || []).length)) {
+      await prefillPerFileScripts()
+      return
+    }
+  } else if (!selectedScriptIds.value.length) {
+    const lead = fileGroups.value[0]?.lead
+    if (lead && (lead.scriptIds || []).length) {
+      selectedScriptIds.value = [...lead.scriptIds]
+      selectionTag.value = lead.tag || ''
+    }
+  }
+  syncAllGroups()
 }
 
 function resetPerFileState() {
@@ -865,8 +912,9 @@ async function autoSmartMatch(filename) {
 async function directConfirmAndExecute() {
   // 自动确认匹配结果，设置选中项
   selectedScriptIds.value = matchedScripts.value.map((s) => s.id)
+  syncUnifiedTagFromSelection()
   matchDialogVisible.value = false
-  currentStep.value = 2
+  currentStep.value = 1
   await loadSqlFields()
 
   const scripts = selectedScriptIds.value.map(id => visibleScripts.value.find(s => s.id === id)).filter(Boolean)
@@ -901,7 +949,7 @@ async function directConfirmAndExecute() {
 
   // 跳到最后一步并触发执行
   if (options.param_column) {
-    currentStep.value = 3
+    currentStep.value = 2
     await nextTick()
     directMode.value = true
     executeQuery()
@@ -925,19 +973,15 @@ async function afterUpload() {
   // 如果已经有智能匹配结果且弹窗已显示，不需要再处理
   if (matchDialogVisible.value) return
 
-  // 直接进入手动选择步骤
-  currentStep.value = 1
-
-  if (isPerFileMode.value) {
-    uploadFiles.value.forEach(ensurePerFileConfig)
-    await prefillPerFileScripts()
-  }
+  await goToConfig()
 }
 
-// 逐文件模式：为每个文件预填智能匹配到的查询选项（默认取最匹配的一个，用户可修改）
+// 逐文件模式：为每个分组预填智能匹配到的查询选项（默认取最匹配的一个，用户可修改）
 async function prefillPerFileScripts() {
+  const leaders = fileGroups.value.map((g) => g.lead)
   await Promise.all(
-    uploadFiles.value.map(async (f) => {
+    leaders.map(async (f) => {
+      ensurePerFileConfig(f)
       if ((f.scriptIds || []).length > 0) return
       try {
         const res = await api.query.smartMatch(f.name)
@@ -954,6 +998,15 @@ async function prefillPerFileScripts() {
       }
     })
   )
+  syncAllGroups()
+  // 列一致（统一模式）时，把智能匹配结果带入统一下拉
+  if (!isPerFileMode.value) {
+    const lead = fileGroups.value[0]?.lead
+    if (!selectedScriptIds.value.length && lead && (lead.scriptIds || []).length) {
+      selectedScriptIds.value = [...lead.scriptIds]
+      selectionTag.value = lead.tag || ''
+    }
+  }
 }
 
 function ensurePerFileConfig(f) {
@@ -998,8 +1051,9 @@ async function loadPerFileConfigs() {
 
 async function confirmMatch() {
   selectedScriptIds.value = matchedScripts.value.map((s) => s.id)
+  syncUnifiedTagFromSelection()
   matchDialogVisible.value = false
-  currentStep.value = 2
+  currentStep.value = 1
   await loadSqlFields()
 
   const scripts = selectedScriptIds.value.map(id => visibleScripts.value.find(s => s.id === id)).filter(Boolean)
@@ -1014,7 +1068,7 @@ async function confirmMatch() {
     if (!firstNewSheet && firstPrimaryKey) {
       primaryKey.value = firstPrimaryKey
     }
-    currentStep.value = 3
+    currentStep.value = 2
     await nextTick()
     executeQuery()
   } else if (!allSameConfig) {
@@ -1028,16 +1082,16 @@ async function confirmMatch() {
 
 function cancelMatch() {
   matchDialogVisible.value = false
-  currentStep.value = 1
+  currentStep.value = 0
 }
 
-async function goToStep2() {
+async function goToConfig() {
   if (isPerFileMode.value) {
     if (!perFileScriptReady.value) {
-      ElMessage.warning('请为每个文件选择查询选项')
+      ElMessage.warning('请为每个文件分组选择查询选项')
       return
     }
-    currentStep.value = 2
+    currentStep.value = 1
     await loadPerFileConfigs()
     return
   }
@@ -1046,7 +1100,7 @@ async function goToStep2() {
     return
   }
   matchedDefaultParamColumn.value = []
-  currentStep.value = 2
+  currentStep.value = 1
   await loadSqlFields()
 
   const scripts = selectedScriptIds.value.map(id => visibleScripts.value.find(s => s.id === id)).filter(Boolean)
@@ -1070,21 +1124,21 @@ async function goToStep2() {
   }
 }
 
-function goToStep3() {
+function goToExecute() {
   if (isPerFileMode.value) {
     const missing = uploadFiles.value.find((f) => !f.paramColumn)
     if (missing) {
       ElMessage.warning(`请为文件「${missing.name}」选择参数列`)
       return
     }
-    currentStep.value = 3
+    currentStep.value = 2
     return
   }
   if (!options.param_column) {
     ElMessage.warning('请选择参数列')
     return
   }
-  currentStep.value = 3
+  currentStep.value = 2
 }
 
 // 提取查询选项的 SQL 字段名（模板选项先渲染再提取）
@@ -1569,6 +1623,7 @@ async function downloadTaskResult(tid, defaultName) {
 function resetAll() {
   currentStep.value = 0
   selectedScriptIds.value = []
+  selectionTag.value = ''
   uploadFiles.value = []
   expandedFileUids.value = []
   taskId.value = null
@@ -1680,6 +1735,17 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 8px;
+}
+
+.query-select-section {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border-color, #e4e7ed);
+}
+
+.select-hint {
+  font-size: 12px;
+  color: var(--text-muted, #909399);
 }
 
 .parse-title {
