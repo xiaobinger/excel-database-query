@@ -976,7 +976,11 @@ class MultiAgentService:
         ticket.processed_at = datetime.utcnow()
         ticket.last_activity_at = datetime.utcnow()
         _add_comment(ticket, None, ticket.ai_result, 'ai_process', is_ai=True)
-        _add_comment(ticket, None, 'AI已完成处理并通过监督者验收，等待提交人核实', 'status_change', is_ai=True)
+        if force:
+            # 轮次耗尽强制收尾不等于验收通过，对外文案必须如实标注
+            _add_comment(ticket, None, 'AI已达最大处理轮数，未通过监督者验收，已转人工核实', 'status_change', is_ai=True)
+        else:
+            _add_comment(ticket, None, 'AI已完成处理并通过监督者验收，等待提交人核实', 'status_change', is_ai=True)
         db.session.commit()
 
         # 触发监督者自动验收（如授权）

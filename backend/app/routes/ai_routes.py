@@ -3240,11 +3240,30 @@ def send_message_stream(chat_id):
                         yield f"data: {json.dumps({'type': 'supervision', 'status': 'retry', 'content': _sup_feedback, 'review_record': _review_record}, ensure_ascii=False)}\n\n"
                         if _sup_round >= _sup_max_rounds:
                             mark_message(msg_id, _verdict, _sup_id)
-                            yield f"data: {json.dumps({'type': 'supervision', 'status': 'flagged', 'content': f'⚠️ 监督者复核{_sup_round}轮仍未通过，已标记需人工复核：{_sup_feedback}'}, ensure_ascii=False)}\n\n"
+                            yield f"data: {json.dumps({'type': 'supervision', 'status': 'flagged', 'content': f'⚠️ 监督者复核{_sup_round}轮仍未通过验收，已转人工复核：{_sup_feedback}'}, ensure_ascii=False)}\n\n"
                             break
                         continue
                 except Exception as sup_err:
-                    logger.warning(f'监督者复核执行失败，按通过处理: chat_id={chat_id}, err={sup_err}')
+                    logger.warning(f'监督者复核执行失败，转人工复核: chat_id={chat_id}, err={sup_err}')
+                    # 无有效裁决 → 不按通过处理，标记为待人工复核
+                    try:
+                        _err_verdict = {
+                            'verdict': 'flag_human',
+                            'feedback': f'监督者复核异常，需人工复核：{sup_err}',
+                            'suggestions': [],
+                        }
+                        mark_message(msg_id, _err_verdict, _sup_id)
+                        _err_record = {
+                            'round': _sup_round,
+                            'verdict': 'flag_human',
+                            'feedback': _err_verdict['feedback'],
+                            'error': str(sup_err),
+                            'timestamp': datetime.utcnow().isoformat(),
+                        }
+                        _save_review_record(msg_id, _err_record, _sup_id)
+                        yield f"data: {json.dumps({'type': 'supervision', 'status': 'flagged', 'content': f'⚠️ 监督者复核异常，已标记需人工复核：{sup_err}', 'review_record': _err_record}, ensure_ascii=False)}\n\n"
+                    except Exception as mark_err:
+                        logger.warning(f'监督者复核异常标记失败: chat_id={chat_id}, err={mark_err}')
                     break
 
             # ── 收尾：清理活跃流 + 发送完成信号 ──

@@ -115,34 +115,86 @@ def _parse_suggestions(raw) -> list:
     return result
 
 
-def _parse_verdict(content: str) -> dict:
-    """解析监督者输出的判定JSON，解析失败时按关键词兜底"""
-    verdict = {'verdict': 'approved', 'feedback': '', 'suggestions': [], 'raw': content or ''}
+def _extract_first_json_object(content: str):
+    """从文本中提取第一个完整且可解析的 JSON 对象，失败返回 None。
+
+    采用花括号配平扫描，而不是正则：
+    - 贪婪 `\\{[\\s\\S]*\\}` 会从首个 `{` 一直吞到最后一个 `}`，遇到多个 JSON 对象或
+      正文含花括号就整段解析失败；
+    - 非贪婪 `\\{[\\s\\S]*?\\}` 会在嵌套对象的第一个 `}` 处提前截断。
+    截断输出（花括号未闭合）或所有候选均解析失败时返回 None，交由调用方走保守分支。
+    """
     if not content:
+        return None
+    start = content.find('{')
+    while start != -1:
+        depth = 0
+        in_string = False
+        escaped = False
+        for i in range(start, len(content)):
+            ch = content[i]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == '\\':
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+            elif ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    try:
+                        parsed = json.loads(content[start:i + 1])
+                    except (json.JSONDecodeError, TypeError):
+                        break
+                    if isinstance(parsed, dict):
+                        return parsed
+                    break
+        start = content.find('{', start + 1)
+    return None
+
+
+def _parse_verdict(content: str) -> dict:
+    """解析监督者输出的判定JSON（fail-closed）。
+
+    无有效裁决一律返回 flag_human（待人工）：空输出、截断 JSON、未知文本、格式错误
+    都不会被判为 approved。approved 只能来自完整合法 JSON 的 verdict 字段。
+    """
+    raw = content or ''
+    verdict = {'verdict': 'flag_human', 'feedback': '', 'suggestions': [], 'raw': raw}
+    if not raw.strip():
+        verdict['feedback'] = '监督者无有效输出，待人工复核'
         return verdict
-    # 提取第一个JSON对象
-    m = re.search(r'\{[\s\S]*\}', content)
-    if m:
-        try:
-            parsed = json.loads(m.group(0))
-            v = str(parsed.get('verdict', '')).strip().lower()
-            if v in ('approved', 'retry', 'flag_human', 'flag'):
-                verdict['verdict'] = 'flag_human' if v == 'flag' else v
+
+    parsed = _extract_first_json_object(raw)
+    if isinstance(parsed, dict):
+        v = str(parsed.get('verdict', '') or '').strip().lower()
+        if v in ('approved', 'retry', 'flag_human', 'flag'):
+            verdict['verdict'] = 'flag_human' if v == 'flag' else v
             verdict['feedback'] = str(parsed.get('feedback', '') or '').strip()
             verdict['suggestions'] = _parse_suggestions(parsed.get('suggestions'))
             return verdict
-        except (json.JSONDecodeError, TypeError):
-            pass
-    # 关键词兜底
-    if any(k in content for k in ('retry', '重新生成', '不通过', '不合格')):
-        verdict['verdict'] = 'retry'
-        verdict['feedback'] = content.strip()
-    elif any(k in content for k in ('人工', 'flag_human', '人工复核')):
+        # JSON 合法但 verdict 缺失/非法 → 无有效裁决
+        verdict['feedback'] = (str(parsed.get('feedback', '') or '').strip()
+                               or '监督者未给出有效结论，待人工复核')
+        return verdict
+
+    # 关键词兜底：只允许转人工/返工两个非批准方向，绝不推断 approved
+    text = raw.strip()
+    if any(k in text for k in ('人工复核', '转人工', '需要人工', 'flag_human')):
         verdict['verdict'] = 'flag_human'
-        verdict['feedback'] = content.strip()
+        verdict['feedback'] = text
+    elif any(k in text for k in ('retry', '重新生成', '不通过', '不合格', '需要返工')):
+        verdict['verdict'] = 'retry'
+        verdict['feedback'] = text
     else:
-        verdict['verdict'] = 'approved'
-        verdict['feedback'] = ''
+        verdict['verdict'] = 'flag_human'
+        verdict['feedback'] = text or '监督者未给出有效结论，待人工复核'
     return verdict
 
 
@@ -351,30 +403,30 @@ def evaluate_tool_action(supervisor_prompt: str, user_content: str, tool_result:
 
 
 def _parse_tool_eval(content: str) -> dict:
-    """解析监督者工具评估输出的JSON，解析失败时按关键词兜底"""
-    result = {'approved': False, 'feedback': '', 'raw': content or ''}
-    if not content:
+    """解析监督者工具评估输出的JSON（风险门禁 fail-closed）。
+
+    只有完整合法 JSON 且 approved 为布尔 true 才放行；空输出、截断 JSON、
+    未知文本、格式错误、非布尔值一律 approved=False（需人工确认）。
+    关键词不参与裁决：裸 `approved` 会命中截断的 `{"approved": false`，导致误放行。
+    """
+    raw = content or ''
+    result = {'approved': False, 'feedback': '', 'raw': raw}
+    if not raw.strip():
+        result['feedback'] = '监督者无有效输出，默认不执行，需人工确认'
         return result
-    # 提取第一个JSON对象
-    m = re.search(r'\{[\s\S]*\}', content)
-    if m:
-        try:
-            parsed = json.loads(m.group(0))
-            result['approved'] = bool(parsed.get('approved', False))
-            result['feedback'] = str(parsed.get('feedback', '') or '').strip()
-            return result
-        except (json.JSONDecodeError, TypeError):
-            pass
-    # 关键词兜底
-    content_lower = content.lower()
-    if any(k in content_lower for k in ('approved', '可以执行', '安全', '通过', '允许')):
-        result['approved'] = True
-        result['feedback'] = content.strip()
-    elif any(k in content_lower for k in ('rejected', '拒绝', '风险', '不建议', '禁止', '危险')):
-        result['approved'] = False
-        result['feedback'] = content.strip()
-    else:
-        # 默认不通过，需人工确认
-        result['approved'] = False
-        result['feedback'] = content.strip()
+
+    parsed = _extract_first_json_object(raw)
+    if isinstance(parsed, dict):
+        approved = parsed.get('approved')
+        if isinstance(approved, bool):
+            result['approved'] = approved
+        else:
+            result['approved'] = False
+        result['feedback'] = str(parsed.get('feedback', '') or '').strip()
+        if not isinstance(approved, bool) and not result['feedback']:
+            result['feedback'] = '监督者未给出布尔型 approved，默认不执行，需人工确认'
+        return result
+
+    result['approved'] = False
+    result['feedback'] = raw.strip() or '监督者输出无法解析，默认不执行，需人工确认'
     return result

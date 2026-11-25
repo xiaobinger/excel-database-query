@@ -23,6 +23,60 @@ PROCESSING_TIMEOUT_SECONDS = 10 * 60  # 10分钟
 # 检查间隔（秒）
 CHECK_INTERVAL_SECONDS = 30
 
+# 验收结论的标记与关键词（文本判定采用"否定优先"，避免"未通过验收"被当成通过）
+_ACCEPT_REJECT_MARKERS = ('【需要返工】', '【验收不通过】', '【不通过】')
+_ACCEPT_PASS_MARKERS = ('【验收通过】',)
+_ACCEPT_PASS_KEYWORDS = (
+    '验收通过', '通过验收', '【通过】', '验收结论：通过', '验收结论:通过',
+    '同意关闭', '可以关闭', '应关闭', '同意结束', '可以结束', '应结束',
+)
+_ACCEPT_REJECT_KEYWORDS = (
+    '验收不通过', '不通过', '未通过', '未能通过', '无法通过', '尚未通过',
+    '不予关闭', '不同意关闭', '不应关闭', '不应结束', '不允许关闭',
+    '需要返工', '补充处理', '任务遗漏', '执行不完整', '结果不完整', '未完成', '不满足',
+)
+_NEGATION_WORDS = ('不', '未', '无法', '尚未', '不予', '不能', '没有', '并非', '勿')
+
+
+def _is_negated_at(text, idx):
+    """判断 text[idx] 处的关键词是否被前置否定词修饰（如"未通过验收"中的"通过验收"）"""
+    prefix = text[max(0, idx - 4):idx]
+    return any(prefix.endswith(neg) for neg in _NEGATION_WORDS)
+
+
+def _has_unnegated_keyword(text, keywords):
+    """判断文本中是否存在未被否定的关键词"""
+    for kw in keywords:
+        start = 0
+        while True:
+            idx = text.find(kw, start)
+            if idx == -1:
+                break
+            if not _is_negated_at(text, idx):
+                return True
+            start = idx + len(kw)
+    return False
+
+
+def _classify_acceptance(decision):
+    """对监督者验收输出分类：'pass' / 'reject' / None（无有效裁决）
+
+    规则：开头标记优先；否定关键词优先于肯定关键词；未被否定的肯定关键词才算通过。
+    无有效裁决返回 None，调用方应保持原状态并转人工，不做任何关闭操作。
+    """
+    text = (decision or '').strip()
+    if not text:
+        return None
+    if text.startswith(_ACCEPT_REJECT_MARKERS):
+        return 'reject'
+    if text.startswith(_ACCEPT_PASS_MARKERS):
+        return 'pass'
+    if _has_unnegated_keyword(text, _ACCEPT_REJECT_KEYWORDS):
+        return 'reject'
+    if _has_unnegated_keyword(text, _ACCEPT_PASS_KEYWORDS):
+        return 'pass'
+    return None
+
 
 def start_supervisor_monitor(app):
     """启动监督者监控调度器"""
@@ -275,8 +329,8 @@ def trigger_supervisor_evaluate_before_retry(ticket_id, app):
         decision = (content or '').strip()
         logger.info(f'工单 {ticket.ticket_no} 监督者评估结果: {decision[:100]}')
 
-        if '已执行完成' in decision or '需要验收' in decision:
-            # 已执行完成，直接触发验收
+        if decision.startswith('【已执行完成，需要验收】') or decision.startswith('【已执行完成】'):
+            # 已执行完成，直接触发验收（必须命中开头标记，避免"尚未执行完成，需要验收"被误判）
             logger.info(f'工单 {ticket.ticket_no} 监督者判定已执行完成，触发验收')
             ticket.status = 'processed'
             ticket.processed_at = datetime.utcnow()
@@ -285,11 +339,9 @@ def trigger_supervisor_evaluate_before_retry(ticket_id, app):
             db.session.commit()
             trigger_auto_close(ticket.id, app)
             return False, None
-        elif '需要补充执行' in decision:
+        elif decision.startswith('【需要补充执行】'):
             # 有遗漏，返回反馈供执行者使用
-            feedback = decision
-            if decision.startswith('【需要补充执行】'):
-                feedback = decision[len('【需要补充执行】'):].strip() or decision
+            feedback = decision[len('【需要补充执行】'):].strip() or decision
             logger.info(f'工单 {ticket.ticket_no} 监督者判定需要补充执行')
             _add_comment(ticket, None, f'📋 监督者评估：工单有遗漏任务需要补充执行\n\n{decision}', 'status_change', is_ai=True)
             db.session.commit()
@@ -472,26 +524,14 @@ def _do_auto_close(ticket_id, app):
         ticket.final_score = final_score
         logger.info(f'工单 {ticket.ticket_no} 监督者综合评分: {final_score}')
     
-    # 放宽格式判断：检查关键词而非严格格式（覆盖多种表达方式）
-    has_pass = (
-        '验收通过' in decision or '通过验收' in decision or '【通过】' in decision or
-        '验收结论：通过' in decision or '验收结论:通过' in decision or
-        '同意关闭' in decision or '可以关闭' in decision or '应关闭' in decision or
-        '同意结束' in decision or '可以结束' in decision or '应结束' in decision
-    )
-    has_close = '结束工单' in decision or '自动结束' in decision or '可以结束' in decision or '应结束' in decision
-    has_reject = (
-        '验收不通过' in decision or '不通过' in decision or '【不通过】' in decision or
-        '不应结束' in decision or '不应关闭' in decision or '不同意关闭' in decision or
-        '需要返工' in decision or '补充处理' in decision or '任务遗漏' in decision or
-        '执行不完整' in decision or '结果不完整' in decision
-    )
-    
+    # 验收判定：开头标记优先、否定优先，避免"未通过验收"被误判为通过
+    accept_verdict = _classify_acceptance(decision)
+
     # 调试日志
-    logger.info(f'工单 {ticket.ticket_no} 监督者验收决策: has_pass={has_pass}, has_close={has_close}, has_reject={has_reject}, score={final_score}')
+    logger.info(f'工单 {ticket.ticket_no} 监督者验收决策: verdict={accept_verdict}, score={final_score}')
     logger.info(f'工单 {ticket.ticket_no} 监督者输出前100字: {decision[:100]}')
 
-    if has_pass and not has_reject:
+    if accept_verdict == 'pass':
         # 监督者验收通过（且没有明确说不通过），自动结束工单
         # "验收通过"本身就隐含应该结束
         score_text = f'，综合评分：{final_score}分' if final_score is not None else ''
@@ -506,7 +546,7 @@ def _do_auto_close(ticket_id, app):
             notify_ticket_completed(ticket)
         except Exception as e:
             logger.warning(f'钉钉AI完成通知发送失败 ticket_id={ticket.id}: {e}')
-    elif has_reject:
+    elif accept_verdict == 'reject':
         # 监督者验收不通过，检查是否需要重新执行
         score_text = f'，综合评分：{final_score}分' if final_score is not None else ''
         
@@ -533,20 +573,21 @@ def _do_auto_close(ticket_id, app):
             # 触发执行者重新处理（带监督者反馈）
             _trigger_executor_retry_with_feedback(ticket.id, feedback, app)
         else:
-            # 超过最大轮数，强制结束并记录
+            # 超过最大轮数，强制结束并记录（强制结束不等于验收通过）
             logger.info(f'工单 {ticket.ticket_no} 已达最大补充处理轮数({max_retry_rounds}轮)，强制结束')
             ticket.status = 'closed'
             ticket.closed_at = datetime.utcnow()
-            _add_comment(ticket, None, f'⚠️ 已达最大补充处理轮数({max_retry_rounds}轮)，工单强制结束\n\n监督者最终意见：{decision}', 'status_change', is_ai=True)
+            ticket.ai_result = f'{ticket.ai_result or ""}\n\n【未验收·轮次耗尽】'
+            _add_comment(ticket, None, f'⚠️ 已达最大补充处理轮数({max_retry_rounds}轮)，监督者未验收通过，工单强制结束，请人工核实\n\n监督者最终意见：{decision}', 'status_change', is_ai=True)
             db.session.commit()
-            # 强制结束时也通知提交人
+            # 强制结束不发"完成"通知，改发"待核实"通知，避免把未验收当成完成
             try:
-                from app.services.dingtalk_service import notify_ticket_completed
-                notify_ticket_completed(ticket)
+                from app.services.dingtalk_service import notify_ticket_processed
+                notify_ticket_processed(ticket)
             except Exception as e:
-                logger.warning(f'钉钉AI完成通知发送失败 ticket_id={ticket.id}: {e}')
+                logger.warning(f'钉钉AI待核实通知发送失败 ticket_id={ticket.id}: {e}')
     else:
-        # 未按格式输出，保守处理：不结束，记录监督者意见
-        logger.warning(f'工单 {ticket.ticket_no} 监督者验收输出格式异常: {decision[:100]}')
-        _add_comment(ticket, None, f'监督者最终验收意见：{decision}', 'ai_process', is_ai=True)
+        # 无有效裁决，保守处理：不结束、不关闭，记录监督者意见待人工
+        logger.warning(f'工单 {ticket.ticket_no} 监督者验收无有效裁决: {decision[:100]}')
+        _add_comment(ticket, None, f'监督者最终验收意见（无有效裁决，待人工核实）：{decision}', 'ai_process', is_ai=True)
         db.session.commit()
