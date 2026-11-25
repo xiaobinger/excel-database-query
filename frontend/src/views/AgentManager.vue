@@ -135,6 +135,14 @@
             </div>
           </div>
         </el-form-item>
+        <el-form-item label="最大工具调用轮次">
+          <div style="width: 100%">
+            <el-input-number v-model="form.max_tool_rounds" :min="1" :max="50" :step="1" step-strictly style="width: 180px" />
+            <div style="font-size: 12px; color: #999; line-height: 1.4; margin-top: 4px;">
+              单次对话中AI连续调用工具的最大轮数，超过后停止执行并提示用户（默认8轮，建议8-15轮）
+            </div>
+          </div>
+        </el-form-item>
         <el-form-item v-if="form.agent_role === 'executor'" label="对话复核">
           <div style="width: 100%">
             <el-switch v-model="form.enable_chat_review" />
@@ -334,6 +342,7 @@ const defaultForm = {
   enable_chat_review: false,
   review_rules: '',
   max_supervisor_rounds: 3,
+  max_tool_rounds: 8,
   default_supervisor_id: null,
   system_prompt: '',
   enabled_tools: null,
@@ -378,6 +387,7 @@ function openDialog(row) {
       enable_chat_review: !!row.enable_chat_review,
       review_rules: row.review_rules || '',
       max_supervisor_rounds: row.max_supervisor_rounds || 3,
+      max_tool_rounds: row.max_tool_rounds || 8,
       default_supervisor_id: row.default_supervisor_id || null,
       system_prompt: row.system_prompt || '',
       enabled_tools: row.enabled_tools ? [...row.enabled_tools] : null,

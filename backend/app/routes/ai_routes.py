@@ -2508,7 +2508,9 @@ def send_message_stream(chat_id):
                         any_card_created = False
                         request_failed = False
                         _tool_phase_started = True  # 标记已进入工具阶段：此后失败不再安全故障转移（避免重复执行工具副作用）
-                        MAX_TOOL_ROUNDS = 8
+                        _rounds_agent = agent or AiAgent.query.filter_by(is_default=True, is_active=True).first()
+                        MAX_TOOL_ROUNDS = (_rounds_agent.max_tool_rounds
+                                           if _rounds_agent and _rounds_agent.max_tool_rounds else 8)
                         round_num = 0
                         round_content = full_content  # 最近一轮AI回复文本（与工具调用一起回传API）
 

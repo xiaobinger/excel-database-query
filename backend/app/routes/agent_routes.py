@@ -20,6 +20,17 @@ def _parse_max_rounds(raw):
     return v if 1 <= v <= 20 else None
 
 
+def _parse_tool_rounds(raw):
+    """解析并校验最大工具调用轮次（合法范围1-50，非法/未提供返回None回退默认8）"""
+    if raw is None or raw == '':
+        return None
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return v if 1 <= v <= 50 else None
+
+
 def _validate_mcp_server_ids(ids):
     """校验授予的MCP Server ID列表，返回错误信息或None"""
     from app.models.mcp_server import McpServer
@@ -132,6 +143,7 @@ def create_agent():
             enable_chat_review=bool(data.get('enable_chat_review', False)),
             review_rules=data.get('review_rules', ''),
             max_supervisor_rounds=_parse_max_rounds(data.get('max_supervisor_rounds')),
+            max_tool_rounds=_parse_tool_rounds(data.get('max_tool_rounds')),
             default_supervisor_id=data.get('default_supervisor_id'),
             system_prompt=data['system_prompt'],
             is_default=data.get('is_default', False),
@@ -193,6 +205,8 @@ def update_agent(agent_id):
             agent.review_rules = data.get('review_rules', '')
         if 'max_supervisor_rounds' in data:
             agent.max_supervisor_rounds = _parse_max_rounds(data.get('max_supervisor_rounds'))
+        if 'max_tool_rounds' in data:
+            agent.max_tool_rounds = _parse_tool_rounds(data.get('max_tool_rounds'))
         if 'default_supervisor_id' in data:
             agent.default_supervisor_id = data.get('default_supervisor_id')
         if 'system_prompt' in data:
